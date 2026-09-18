@@ -70,6 +70,17 @@
       "target": [
         "AppImage"
       ]
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "Palbudir",
+        "repo": "dsh-px",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

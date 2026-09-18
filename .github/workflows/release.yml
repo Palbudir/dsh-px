@@ -1,0 +1,58 @@
+name: release
+
+# 打 tag（v*）时构建 Windows 安装包并发布到 GitHub Releases。
+#
+# 为什么单独一个 workflow 而不是塞进 verify：
+#   verify 是"能不能用"的门禁，跑在每次 push 上，需要快；
+#   release 是"发出去"的动作，只在 tag 上跑，需要产出安装包。
+#   两者需要的 runner 与耗时差一个量级，混在一起会让门禁变慢。
+#
+# electron-updater 需要三样东西同时出现在 Release 里，缺一不可：
+#   1. 安装包本身（`dsh-px Setup <版本>.exe`）
+#   2. `latest.yml` —— 版本清单，updater 靠它判断"有没有新版"
+#   3. `*.blockmap` —— 差分块索引，有了它才能只下载变化的块而不是整个安装包
+# electron-builder 会自动生成 2 和 3，前提是**不能**用 --publish never
+# 把它们丢掉 —— 所以这里显式用 --publish always，由 CI 的 GITHUB_TOKEN 授权。
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: 安装开发依赖
+        run: npm install
+
+      # 先跑门禁：beta 的发布前提是能力平价成立。
+      - name: 装配运行时
+        run: npm run stage -- --with-plugins
+
+      - name: 验证能力平价
+        run: npm run verify -- --boot
+
+      - name: 生成图标
+        run: node scripts/build-icon.mjs
+
+      # --publish always：让 electron-builder 生成并上传 latest.yml 与 blockmap。
+      # GITHUB_TOKEN 由 actions 环境自动提供，electron-builder 会认。
+      - name: 构建并发布
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win --publish always

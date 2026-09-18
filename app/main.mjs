@@ -15,8 +15,27 @@ import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage } from 'elec
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, cpSync, writeFileSync, readdirSync, realpathSync, readFileSync } from 'node:fs'
 import { createServer } from 'node:net'
+import { createRequire } from 'node:module'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+/**
+ * electron-updater 是 CJS 包，从 ESM 里用 createRequire 加载最稳。
+ *
+ * 分工很重要，别把两件事搞混：
+ *   - **外壳自身**（Electron 二进制 + app.asar）由 electron-updater 更新，
+ *     它是这块的业界标准，自带差分下载（blockmap）、校验与回滚。
+ *   - **随附的 dsh 核心与插件**由 dsh 侧的插件负责（生态规范内的做法）。
+ * 两者通道不同、节奏不同，混在一起就会互相踩。
+ */
+const require = createRequire(import.meta.url)
+let autoUpdater = null
+try {
+  ({ autoUpdater } = require('electron-updater'))
+} catch (err) {
+  // 开发态（未打包）下通常拿不到 app-update.yml，属正常，不应致命。
+  process.stdout.write(`[dsh-px] electron-updater 不可用（开发态正常）：${err?.message ?? err}\n`)
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url))          // <app>/app
 const APP_ROOT = resolve(HERE, '..')                          // <app>
@@ -385,12 +404,100 @@ function createWindow (url) {
   return win
 }
 
+/** 最近一次检查到的更新状态，供托盘菜单显示。 */
+let updateState = { status: '未检查', version: null }
+
+/**
+ * 配置并触发外壳自身的更新检查。
+ *
+ * 这里刻意把"检查"与"安装"分开：检查是静默的、后台的；安装必须由用户确认，
+ * 因为它会重启应用。这也是主流桌面应用的做法。
+ * @returns {void}
+ */
+function setupAutoUpdate () {
+  if (!autoUpdater) return
+  // 不自动下载：让用户先看到"有新版本 + 更新内容"，再决定是否下载安装。
+  autoUpdater.autoDownload = false
+  autoUpdater.autoInstallOnAppQuit = true
+
+  autoUpdater.on('checking-for-update', () => {
+    updateState = { status: '正在检查更新…', version: null }
+  })
+  autoUpdater.on('update-not-available', (info) => {
+    updateState = { status: '已是最新版本', version: info?.version ?? app.getVersion() }
+    process.stdout.write('[dsh-px] 已是最新版本\n')
+  })
+  autoUpdater.on('update-available', async (info) => {
+    updateState = { status: `有新版本 ${info.version}`, version: info.version }
+    process.stdout.write(`[dsh-px] 发现新版本 ${info.version}\n`)
+    const { response } = await dialog.showMessageBox({
+      type: 'info',
+      title: 'DSH-PX 有新版本',
+      message: `发现新版本 ${info.version}（当前 ${app.getVersion()}）`,
+      detail: '是否现在下载？下载采用差分方式，只获取变化的文件块。\n下载完成后可选择重启安装，或退出时自动安装。',
+      buttons: ['下载并安装', '稍后'],
+      defaultId: 0,
+      cancelId: 1
+    })
+    if (response === 1) return
+
+    autoUpdater.on('download-progress', (p) => {
+      updateState = { status: `正在下载 ${Math.round(p.percent)}%`, version: info.version }
+      process.stdout.write(`\r[dsh-px] 下载 ${p.percent.toFixed(1)}% (${(p.transferred / 1048576).toFixed(1)}MB/${(p.total / 1048576).toFixed(1)}MB)`)
+    })
+    autoUpdater.on('update-downloaded', async (done) => {
+      process.stdout.write('\n')
+      updateState = { status: `已下载 ${done.version}，待安装`, version: done.version }
+      const r = await dialog.showMessageBox({
+        type: 'info',
+        title: '更新已就绪',
+        message: `新版本 ${done.version} 已下载完成`,
+        detail: '重启后生效。也可以选择在退出应用时自动安装。',
+        buttons: ['立即重启安装', '退出时安装'],
+        defaultId: 0,
+        cancelId: 1
+      })
+      if (r.response === 0) {
+        quitting = true
+        if (harness && harness.exitCode === null) harness.kill()
+        autoUpdater.quitAndInstall()
+      }
+    })
+    autoUpdater.on('error', (err) => {
+      updateState = { status: '更新失败', version: null }
+      process.stderr.write(`[dsh-px] 更新出错：${err?.message ?? err}\n`)
+    })
+
+    try {
+      await autoUpdater.downloadUpdate()
+    } catch (err) {
+      dialog.showErrorBox('下载更新失败', String(err?.message ?? err))
+    }
+  })
+
+  // 打包态才有 app-update.yml；开发态直接跳过，避免噪音报错。
+  if (!app.isPackaged) {
+    process.stdout.write('[dsh-px] 开发态，跳过自动更新检查\n')
+    return
+  }
+  // 启动后延后 8 秒再查，避免和 harness 启动抢资源/抢网络。
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch((err) => {
+      process.stdout.write(`[dsh-px] 检查更新失败：${err?.message ?? err}\n`)
+    })
+  }, 8000)
+}
+
 function createTray (url) {
   try {
     tray = new Tray(nativeImage.createEmpty())
-    tray.setToolTip('dsh-px')
+    tray.setToolTip(`DSH-PX ${app.getVersion()}`)
     tray.setContextMenu(Menu.buildFromTemplate([
-      { label: '打开 dsh-px', click: () => { if (win) { win.show(); win.focus() } else { createWindow(url) } } },
+      { label: `DSH-PX ${app.getVersion()}`, enabled: false },
+      { label: updateState.status, enabled: false },
+      { label: '手动检查更新', click: () => void checkUpdatesManually() },
+      { type: 'separator' },
+      { label: '打开 DSH-PX', click: () => { if (win) { win.show(); win.focus() } else { createWindow(url) } } },
       { type: 'separator' },
       { label: '重启 harness', click: () => void restartHarness() },
       { type: 'separator' },
@@ -401,6 +508,31 @@ function createTray (url) {
     tray.on('double-click', () => { win?.show(); win?.focus() })
   } catch {
     // 托盘是尽力而为的；无头/CI 环境没有通知区域。
+  }
+}
+
+/**
+ * 用户主动触发的更新检查。与后台检查的区别只在于反馈方式：
+ * 无论结果如何都要给一个明确回执，不能"点了没反应"。
+ * @returns {Promise<void>}
+ */
+async function checkUpdatesManually () {
+  if (!autoUpdater) {
+    dialog.showMessageBox({ type: 'info', message: '开发态不支持自动更新', detail: '打包后的应用才会启用此功能。' })
+    return
+  }
+  if (!app.isPackaged) {
+    dialog.showMessageBox({ type: 'info', message: '开发态不支持自动更新', detail: `当前版本 ${app.getVersion()}。请使用打包后的应用。` })
+    return
+  }
+  try {
+    const res = await autoUpdater.checkForUpdates()
+    if (!res?.updateInfo) {
+      dialog.showMessageBox({ type: 'info', message: '已是最新版本', detail: `当前版本 ${app.getVersion()}` })
+    }
+    // 有新版本时由 update-available 事件接管并弹下载确认。
+  } catch (err) {
+    dialog.showErrorBox('检查更新失败', String(err?.message ?? err))
   }
 }
 
@@ -510,6 +642,7 @@ async function main () {
 
   createWindow(openUrl)
   createTray(cleanUrl)
+  setupAutoUpdate()
 }
 
 app.on('window-all-closed', () => {
