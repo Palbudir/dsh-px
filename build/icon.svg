@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" fill="none">
+  <!--
+    dsh-px 应用图标 —— 原创绘制。
+
+    为什么是"原创"而不是直接用官方 favicon：
+    DeepSeek Harness 的《品牌素材使用规范》明确写道
+      ·"请避免直接使用完整的 'DeepSeek Harness' 商标"
+      ·"避免…以容易引起误解的方式使用官方品牌素材，以免让用户产生
+        官方背书、合作或授权等不实印象"
+    因此这里只取"鲸鱼"这一通用意象，自行绘制轮廓与配色，
+    不复用官方路径数据，也不做官方认同的暗示。
+    规范同时建议关联项目使用缩写 "DSH"，项目名 dsh-px 正是如此。
+  -->
+  <defs>
+    <linearGradient id="bg" x1="40" y1="20" x2="470" y2="500" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5B9BFF"/>
+      <stop offset="0.5" stop-color="#2E6BE6"/>
+      <stop offset="1" stop-color="#1A47B8"/>
+    </linearGradient>
+    <linearGradient id="body" x1="150" y1="170" x2="340" y2="360" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#E6EFFF"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <!-- ===== 喷气（贴在头顶上方）===== -->
+  <g fill="#FFFFFF">
+    <path d="M212 138c-9-10-12-24-8-40 12 8 24 10 36 6-8 10-8 22 0 34-9-3-19-3-28 0Z" fill-opacity="0.85"/>
+    <circle cx="200" cy="92" r="8" fill-opacity="0.7"/>
+    <circle cx="232" cy="80" r="5.5" fill-opacity="0.55"/>
+    <circle cx="258" cy="98" r="4.5" fill-opacity="0.45"/>
+  </g>
+
+  <!-- ===== 身体（压扁的椭圆 + 向右收窄的尾柄）===== -->
+  <path d="M96 262c0-58 62-102 142-102 78 0 132 38 138 92 20 4 36 12 48 24-16 10-28 24-36 42-8-24-22-40-42-48-14 40-62 68-128 68-74 0-122-32-122-76Z"
+        fill="url(#body)"/>
+
+  <!-- 尾鳍：双叶，从尾柄末端张开 -->
+  <path d="M386 250c26-14 44-34 52-58 6 26 20 46 42 58-28 4-52 14-72 30-2-12-9-22-22-30Z"
+        fill="#FFFFFF" fill-opacity="0.9"/>
+
+  <!-- 下颌浅色 -->
+  <path d="M112 288c22 32 70 48 126 44 32-2 60-12 80-26-22 30-68 48-118 48-58 0-98-26-98-66Z"
+        fill="#BBD5FF" fill-opacity="0.5"/>
+
+  <!-- 胸鳍 -->
+  <path d="M226 330c10 26 8 46-4 60-18-18-36-32-54-42 22-4 42-10 58-18Z"
+        fill="#12224A" fill-opacity="0.78"/>
+
+  <!-- 眼睛 -->
+  <circle cx="188" cy="240" r="17" fill="#12224A"/>
+  <circle cx="194" cy="233" r="6" fill="#FFFFFF"/>
+
+  <!-- ===== 文字标：DSH（品牌规范推荐使用缩写）===== -->
+  <text x="256" y="446" text-anchor="middle"
+        font-family="Segoe UI, Helvetica, Arial, sans-serif"
+        font-size="62" font-weight="700" letter-spacing="8"
+        fill="#FFFFFF" fill-opacity="0.92">DSH</text>
+</svg>

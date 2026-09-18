@@ -63,14 +63,31 @@ function dump (nodeExe, dshEntry, home) {
   return parseRows(out)
 }
 
-/** 定位这台机器在用的官方 dsh，用作能力平价的基线。 */
+/**
+ * 定位用作能力平价基线的"官方 dsh"。
+ *
+ * 两条来源，按顺序：
+ *   1. `runtime/_dsh-install` —— stage 脚本从 npm 安装的**锁定版本**。
+ *      这是 CI / 干净机器上唯一的来源（它们没有全局 dsh），
+ *      而且它比全局安装更权威：版本由 DSH_PX_DSH_VERSION 固定。
+ *   2. 全局安装 —— 开发机上顺手可用。
+ *
+ * 早期只查全局安装，于是 CI 上基线永远缺失、平价检查被跳过；
+ * 后来那条路径又直接失败。这两处都必须修掉，否则"能力平价"在 CI 里等于没验。
+ */
 function officialDsh () {
-  const root = execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['root', '-g'], {
-    encoding: 'utf8',
-    shell: process.platform === 'win32'
-  }).trim()
-  const dir = join(root, '@deepseek-ai', 'dsh')
-  return existsSync(join(dir, 'lib', 'bin.js')) ? dir : null
+  const fromNpmInstall = join(RUNTIME, '_dsh-install', 'node_modules', '@deepseek-ai', 'dsh')
+  if (existsSync(join(fromNpmInstall, 'lib', 'bin.js'))) return fromNpmInstall
+
+  try {
+    const root = execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['root', '-g'], {
+      encoding: 'utf8',
+      shell: process.platform === 'win32'
+    }).trim()
+    const dir = join(root, '@deepseek-ai', 'dsh')
+    if (existsSync(join(dir, 'lib', 'bin.js'))) return dir
+  } catch { /* 没有全局 npm/dsh 也正常 */ }
+  return null
 }
 
 async function bootProbe (nodeExe, dshEntry, home) {

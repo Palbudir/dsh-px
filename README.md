@@ -1,5 +1,9 @@
 # dsh-px
 
+> **非官方项目。** 本项目与深度求索（DeepSeek）公司**无任何从属、合作或授权关系**，
+> 是一个基于 DeepSeek Harness 构建的第三方客户端。项目名使用官方品牌规范建议的缩写
+> "DSH"。详见 [NOTICE.md](./NOTICE.md)。
+
 一个**把 DeepSeek Harness（`dsh`）完整打包进单个应用的 Electron 桌面客户端**。
 
 不需要终端，不需要用户在本地 `npm install`，不需要单独安装 Node、pnpm 或 dsh。

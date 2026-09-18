@@ -284,10 +284,26 @@ function stageDsh () {
   // 开发机上若已装全局 dsh，就复用它（快、且离线）；
   // 否则（CI / 干净机器）从 npm 安装**锁定版本**。
   // 这两条路径必须都在，否则 CI 永远构建不出东西。
-  const src = findGlobalDsh() ?? installDshFromNpm()
-  log(`正在从 ${src} 复制 dsh ${DSH_VERSION}（自包含，可能需要一分钟）`)
-  mkdirSync(OUT, { recursive: true })
+  const globalSrc = findGlobalDsh()
+  if (globalSrc) {
+    log(`正在从 ${globalSrc} 复制 dsh ${DSH_VERSION}（自包含，可能需要一分钟）`)
+    mkdirSync(OUT, { recursive: true })
+    cpSync(globalSrc, dest, { recursive: true, dereference: true })
+    log(`已装配 dsh -> ${dest}`)
+    return dest
+  }
+
+  // npm 路径：npm 会**提升**安装，239 个包平铺在 prefix 的 node_modules 下，
+  // 而不是嵌套进 dsh 内部。所以只复制 dsh 一个目录不够 ——
+  // 实测会报 `Cannot find package '@deepseek-ai/dsh-app-boot' imported from
+  // <runtime>/dsh/lib/bin.js`。必须把整棵 node_modules 一起带上，
+  // 复现"自包含"的布局（这也正是全局安装长成的样子）。
+  const src = installDshFromNpm()
+  const prefixModules = join(OUT, '_dsh-install', 'node_modules')
+  log('正在组装自包含的 dsh 目录（提升安装 -> 嵌套布局）')
+  mkdirSync(dest, { recursive: true })
   cpSync(src, dest, { recursive: true, dereference: true })
+  copyTree(prefixModules, join(dest, 'node_modules'), { skip: new Set(), skipEntry: null })
   log(`已装配 dsh -> ${dest}`)
   return dest
 }
