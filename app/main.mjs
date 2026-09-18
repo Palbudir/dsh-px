@@ -35,6 +35,15 @@ let tray = null
 let quitting = false
 
 /**
+ * 拉起 harness 所需的全部状态。重启 harness 时要重新求值，
+ * 所以单独存起来而不是散落在 main 里。
+ * @type {{runtime:any, home:string, port:number}|null}
+ */
+let ctxState = null
+/** 当前窗口应加载的干净 URL（重启后端口可能变，所以要跟着更新）。 */
+let currentCleanUrl = null
+
+/**
  * 解析已装配的运行时。支持两种布局，使同一份代码在开发态和安装后都能跑：
  *   打包后：  <resources>/runtime/{node,dsh,dsh-home}
  *   开发态：  <仓库>/runtime/{node,dsh,dsh-home}
@@ -235,13 +244,74 @@ function createTray (url) {
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: '打开 dsh-px', click: () => { if (win) { win.show(); win.focus() } else { createWindow(url) } } },
       { type: 'separator' },
-      { label: '在浏览器中打开', click: () => void shell.openExternal(url) },
+      { label: '重启 harness', click: () => void restartHarness() },
+      { type: 'separator' },
+      { label: '在浏览器中打开', click: () => void shell.openExternal(currentCleanUrl ?? url) },
       { type: 'separator' },
       { label: '退出', click: () => { quitting = true; app.quit() } }
     ]))
     tray.on('double-click', () => { win?.show(); win?.focus() })
   } catch {
     // 托盘是尽力而为的；无头/CI 环境没有通知区域。
+  }
+}
+
+/**
+ * 关掉当前 harness 并重新拉起一个，然后把窗口重新指向新的鉴权 URL。
+ *
+ * 为什么必须有这个功能：组合包成员的变动**只在启动时生效**
+ * （见 docs/PACKAGING.md 约束 5）。从市场里装完插件后，插件已经是"看得见但不起作用"，
+ * 只有重启 harness 才会真正挂载。
+ *
+ * 这里刻意不复用旧端口：旧进程释放端口有延迟，
+ * 重新探测端口比跟 TIME_WAIT 抢更可靠。
+ * @returns {Promise<boolean>} 是否重启成功
+ */
+async function restartHarness () {
+  if (!ctxState) return false
+  const { runtime, home } = ctxState
+
+  process.stdout.write('[dsh-px] 正在重启 harness\n')
+  if (harness && harness.exitCode === null) {
+    const dying = harness
+    dying.removeAllListeners('exit')
+    dying.kill()
+    // 给旧进程一点时间释放句柄，避免新旧实例互相干扰。
+    await new Promise((res) => {
+      const t = setTimeout(res, 4000)
+      dying.once('exit', () => { clearTimeout(t); res() })
+    })
+  }
+
+  const port = await findPort(DEFAULT_PORT)
+  ctxState = { runtime, home, port }
+  const cleanUrl = `http://${HOST}:${port}/`
+  currentCleanUrl = cleanUrl
+
+  const started = startHarness({ runtime, home, port })
+  harness = started.child
+
+  try {
+    const status = await waitForReady(cleanUrl, READY_TIMEOUT_MS)
+    process.stdout.write(`[dsh-px] 新 harness 已监听（HTTP ${status}）于 ${cleanUrl}\n`)
+    const authUrl = await Promise.race([
+      started.authUrl,
+      new Promise((res) => setTimeout(() => res(null), 20_000))
+    ])
+    if (!authUrl) {
+      process.stdout.write('[dsh-px] 警告：未捕获到宣告的 URL；加载干净 URL（预期会撞 401 围栏）\n')
+      return false
+    }
+    if (win) {
+      await win.loadURL(authUrl)
+      win.show()
+      win.focus()
+    }
+    createTray(cleanUrl)
+    return true
+  } catch (err) {
+    dialog.showErrorBox('dsh-px —— 重启 harness 失败', String(err?.message ?? err))
+    return false
   }
 }
 
@@ -259,6 +329,8 @@ async function main () {
   const home = resolveHarnessHome(runtime)
   const port = await findPort(DEFAULT_PORT)
   const cleanUrl = `http://${HOST}:${port}/`
+  ctxState = { runtime, home, port }
+  currentCleanUrl = cleanUrl
 
   process.stdout.write(`[dsh-px] node=${runtime.node}\n[dsh-px] dsh=${runtime.dshEntry}\n[dsh-px] DSH_HOME=${home}\n[dsh-px] url=${cleanUrl}\n`)
 
@@ -308,7 +380,24 @@ app.on('will-quit', () => {
   }
 })
 
-app.whenReady().then(main).catch((err) => {
-  dialog.showErrorBox('dsh-px —— 启动异常', String(err?.stack ?? err))
-  app.exit(1)
-})
+/**
+ * 单实例锁：第二次启动时聚焦已有窗口，而不是再起一个 harness。
+ * 两个 harness 共享同一份 DSH_HOME 会导致会话互相踩，所以这个必须拦住。
+ */
+if (!app.requestSingleInstanceLock()) {
+  process.stdout.write('[dsh-px] 已经有一个实例在运行，退出本次启动\n')
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (win) {
+      if (win.isMinimized()) win.restore()
+      win.show()
+      win.focus()
+    }
+  })
+
+  app.whenReady().then(main).catch((err) => {
+    dialog.showErrorBox('dsh-px —— 启动异常', String(err?.stack ?? err))
+    app.exit(1)
+  })
+}
