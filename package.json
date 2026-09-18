@@ -5,6 +5,8 @@
   "description": "dsh-px: a self-contained Electron desktop client that packages DeepSeek Harness (dsh) into one app.",
   "license": "MIT",
   "author": "Palbudir",
+  "main": "app/main.mjs",
+  "type": "module",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Palbudir/dsh-px.git"
@@ -19,7 +21,7 @@
     "verify": "node scripts/verify-capabilities.mjs",
     "start": "electron app/main.mjs",
     "pack": "electron-builder --dir",
-    "dist": "electron-builder",
+    "dist": "electron-builder --publish never",
     "clean": "node -e \"require('node:fs').rmSync('runtime',{recursive:true,force:true});require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "devDependencies": {

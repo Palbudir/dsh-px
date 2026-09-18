@@ -13,9 +13,9 @@
  */
 import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage } from 'electron'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, cpSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, cpSync, writeFileSync, readdirSync, realpathSync } from 'node:fs'
 import { createServer } from 'node:net'
-import { dirname, join, resolve } from 'node:path'
+import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))          // <app>/app
@@ -68,26 +68,132 @@ function resolveRuntime () {
 }
 
 /**
+ * 判定某个目录项是否是"dsh 自己管理的 fallback 链接"，这类链接**绝不能复制**。
+ *
+ * 实测背景：开发机上 `profiles/node_modules` 有 **164 个 Junction 全部指向
+ * `runtime/dsh/node_modules`**（dsh 自己的包树），另有 23 个实体目录才是真三方依赖。
+ * dsh 启动时会断言这些 fallback 必须是链接或它自己管理的 proxy，
+ * 一旦被解引用成真目录就拒绝启动：
+ *
+ *   dsh: <home>/profiles/node_modules/commander exists and is not a symlink or
+ *        dsh-managed module proxy
+ *
+ * 不能只按名字猜（`@deepseek-ai` 只是其中一部分，`commander`、`accepts` 等同样是），
+ * 要按**链接目标**判断。也正因如此不能笼统地"排除所有 node_modules" ——
+ * pnpm 的 `.pnpm` 内部链接指向 profile 自己的 store，那是真依赖，必须复制。
+ * @param {string|null} dshDir 随附的 dsh 安装目录
+ * @returns {(entry: import('node:fs').Dirent, fullPath: string) => boolean}
+ */
+function makeDshFallbackFilter (dshDir) {
+  if (!dshDir) return () => false
+  const prefix = (join(dshDir, 'node_modules') + sep).toLowerCase()
+  return (entry, fullPath) => {
+    // dsh / 插件自己的状态目录一律不复制。它们都是生成物，首次启动会自行重建，
+    // 而复制它们会把 Junction 解引用成真目录，从而让 dsh 拒绝启动：
+    //   .dsh-module-fallback —— profile 内的 module fallback 树，其 Junction 指向
+    //     profile 自己的 node_modules；
+    //   .dsh-market —— 插件市场状态。
+    if (entry.name.startsWith('.dsh-')) return true
+
+    if (!entry.isSymbolicLink()) return false
+    let target
+    try { target = realpathSync(fullPath) } catch { return true } // 悬空链接一律跳过
+    return (target + sep).toLowerCase().startsWith(prefix)
+  }
+}
+
+/**
+ * 递归复制 `src` 到 `dest`，跳过 `skip` 里的名字，以及 `skipEntry` 判定为
+ * dsh 管理 fallback 的链接。
+ *
+ * 这是本次开发中**同一个错误犯的第二次**（第一次在装配脚本里，见
+ * docs/PACKAGING.md 约束 2），所以在这里也写清楚为什么必须这样做。
+ */
+function copyProfileTree (src, dest, { skip, skipEntry = null }) {
+  mkdirSync(dest, { recursive: true })
+  for (const entry of readdirSync(src, { withFileTypes: true })) {
+    if (skip.has(entry.name)) continue
+    const from = join(src, entry.name)
+    if (skipEntry && skipEntry(entry, from)) continue
+    const to = join(dest, entry.name)
+    if (entry.isDirectory()) {
+      copyProfileTree(from, to, { skip, skipEntry })
+    } else {
+      // recursive:true 是必须的：Dirent 报的是链接本身，
+      // 而实际源可能是目录（实测 '@agentclientprotocol/sdk/' 就是这种情况），
+      // 少了它 cpSync 会以 "Recursive option not enabled" 直接失败。
+      cpSync(from, to, { recursive: true, dereference: true, force: true })
+    }
+  }
+}
+
+/** dsh 自己管理的 fallback 命名空间；见 makeDshFallbackFilter 的说明。 */
+const SKIP_IN_PROFILE_TREE = new Set(['@deepseek-ai'])
+
+/**
  * 选定 harness home。优先级：
  *   1. DSH_PX_HOME —— 显式覆盖（也是在开发插件时，把外壳指向你现有 ~/.dsh 的方式）。
  *   2. <userData>/dsh-home —— 应用自己的 home：首次运行从随附的树播种，
  *      此后归用户所有。
+ *
+ * 首启播种的实测数据：随附种子树约 30 万文件，同步复制耗时**约 3 分钟**。
+ * 因此这里：先写认领标记、逐项检查可续传、并且把失败如实报出来 ——
+ * 而不是让应用带着一个空壳 profile 启动、再表现出一堆莫名其妙的症状。
+ * @param {any} runtime
  * @returns {string}
  */
 function resolveHarnessHome (runtime) {
   if (process.env.DSH_PX_HOME) return resolve(process.env.DSH_PX_HOME)
 
   const home = join(app.getPath('userData'), 'dsh-home')
-  const seeded = join(home, '.dsh-px-seeded')
-  if (!existsSync(seeded)) {
-    if (runtime.seedHome) {
-      mkdirSync(home, { recursive: true })
-      cpSync(runtime.seedHome, home, { recursive: true, dereference: true, force: false, errorOnExist: false })
-    } else {
-      mkdirSync(join(home, 'profiles'), { recursive: true })
-    }
-    writeFileSync(seeded, `seeded from ${runtime.seedHome ?? '(empty)'} at ${new Date().toISOString()}\n`)
+  const marker = join(home, '.dsh-px-seed-claimed')
+  const profileManifest = join(home, 'profiles', PROFILE_NAME, 'package.json')
+
+  // 已经播种完整：直接用。
+  if (existsSync(profileManifest)) return home
+
+  // 认领这次播种。先落盘，这样即便中途被打断也能看出这是哪一次尝试。
+  mkdirSync(home, { recursive: true })
+  writeFileSync(marker, `claimed at ${new Date().toISOString()}\nseedSource=${runtime.seedHome ?? '(none)'}\n`)
+
+  if (!runtime.seedHome) {
+    mkdirSync(join(home, 'profiles'), { recursive: true })
+    process.stdout.write('[dsh-px] 警告：随附运行时里没有种子 home，profile 需要自行初始化\n')
+    return home
   }
+
+  // 逐个子项复制并记录：中断后可精确续传，也便于在日志里定位卡在哪一项。
+  const items = ['profiles', 'settings.yaml', '.credentials.yaml']
+  for (const item of items) {
+    const from = join(runtime.seedHome, item)
+    if (!existsSync(from)) continue
+    const to = join(home, item)
+    process.stdout.write(`[dsh-px] 首次运行：正在准备 ${item}（首次约需数分钟，请稍候）…\n`)
+    try {
+      if (item === 'profiles') {
+        // profiles/ 下混着两种东西：三方插件依赖（要复制）与 dsh 自己管理的
+        // fallback 链接（绝不能复制，解引用后 dsh 会拒绝启动）。
+        // 见 makeDshFallbackFilter。
+        const isDshFallback = makeDshFallbackFilter(join(runtime.root, 'dsh'))
+        copyProfileTree(from, to, { skip: SKIP_IN_PROFILE_TREE, skipEntry: isDshFallback })
+      } else {
+        cpSync(from, to, { recursive: true, dereference: true, force: false, errorOnExist: false })
+      }
+    } catch (err) {
+      // 不吞掉：把真实原因告诉用户，否则应用会以一个空壳 profile 启动。
+      const detail = err instanceof Error ? err.message : String(err)
+      process.stderr.write(`[dsh-px] 准备 ${item} 失败：${detail}\n`)
+      dialog.showErrorBox(
+        'dsh-px —— 首次运行准备失败',
+        `无法把随附的运行时复制到：\n${home}\n\n失败项：${item}\n原因：${detail}\n\n` +
+        '可尝试：删除该目录后重新启动；或检查磁盘空间与杀毒软件拦截。'
+      )
+      throw err
+    }
+  }
+
+  writeFileSync(join(home, '.dsh-px-seeded'), `seeded from ${runtime.seedHome} at ${new Date().toISOString()}\n`)
+  process.stdout.write('[dsh-px] 首次运行准备完成\n')
   return home
 }
 

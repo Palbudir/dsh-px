@@ -23,8 +23,8 @@
  *                                                  # 而不是从零安装
  */
 import { execFileSync, spawnSync } from 'node:child_process'
-import { createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, statSync, cpSync, writeFileSync, readFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
+import { createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, statSync, cpSync, writeFileSync, readFileSync, realpathSync } from 'node:fs'
+import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
@@ -80,23 +80,60 @@ function shim (name) {
  *     而且它也是冗余的：随附的 `runtime/dsh` 已经带了全部 239 个嵌套的
  *     `@deepseek-ai` 包，而组合包名称的解析优先走 dsh 安装目录。
  */
-function copyTree (src, dest, { skip = SKIP_IN_PROFILE_TREE } = {}) {
+function copyTree (src, dest, { skip = SKIP_IN_PROFILE_TREE, skipEntry = null } = {}) {
   mkdirSync(dest, { recursive: true })
   for (const entry of readdirSync(src, { withFileTypes: true })) {
     if (skip.has(entry.name)) continue
     const from = join(src, entry.name)
+    if (skipEntry && skipEntry(entry, from)) continue
     const to = join(dest, entry.name)
     if (entry.isDirectory()) {
-      copyTree(from, to, { skip })
+      copyTree(from, to, { skip, skipEntry })
     } else {
-      // dereference：源在活的 harness home 里是 Junction / 符号链接。
-      cpSync(from, to, { dereference: true, force: true })
+      // recursive:true 是必须的：Dirent 报的是链接本身，实际源可能是目录
+      // （实测 '@agentclientprotocol/sdk/' 就是），少了它会以
+      // "Recursive option not enabled" 直接失败。
+      cpSync(from, to, { recursive: true, dereference: true, force: true })
     }
   }
 }
 
-/** dsh 自己管理的 fallback 命名空间；见 copyTree 的说明。 */
+/** dsh 自己管理的 fallback 命名空间；见 copyProfileTree 的说明。 */
 const SKIP_IN_PROFILE_TREE = new Set(['@deepseek-ai'])
+
+/**
+ * 建立"哪些目录项是 dsh 管理的 fallback 链接"的判定函数。
+ *
+ * 背景（实测数据）：开发机上 `profiles/node_modules` 里有 **164 个 Junction 全部指向
+ * `runtime/dsh/node_modules`**（即 dsh 自己的包树），另有 **23 个实体目录**才是真正的
+ * 三方依赖。dsh 启动时会校验这些 fallback 必须是"链接或 dsh 管理的 module proxy"，
+ * 一旦被解引用变成真目录就拒绝启动。所以：**指向 dsh 自身包树的链接绝不能复制**。
+ *
+ * 不能只按名字判断（`@deepseek-ai` 只是其中一部分，`commander`、`accepts` 等
+ * 也都是这种链接），要按**链接目标**判断。同时注意：pnpm 的 `.pnpm` 内部链接
+ * 指向的是 profile 自己的 store，那是真依赖，必须复制 —— 所以只认 dsh 包树这个前缀。
+ * @param {string|null} dshDir
+ * @returns {(entry: import('node:fs').Dirent, fullPath: string) => boolean}
+ */
+function makeDshFallbackFilter (dshDir) {
+  if (!dshDir) return () => false
+  const prefix = (join(dshDir, 'node_modules') + sep).toLowerCase()
+  return (entry, fullPath) => {
+    // dsh 自己的状态目录一律不复制：
+    //   .dsh-module-fallback —— 每个 profile 内的 module fallback 树，
+    //     其 Junction 指向 profile 自己的 node_modules（实测 @codemirror/commands
+    //     指向 profiles/web/node_modules/@codemirror/commands）。解引用后同样会让
+    //     dsh 以 "exists and is not a symlink or dsh-managed module proxy" 拒绝启动。
+    //   .dsh-market —— 插件市场的状态目录。
+    // 这些都是 dsh/插件生成物，首次启动会自行重建。
+    if (entry.name.startsWith('.dsh-')) return true
+
+    if (!entry.isSymbolicLink()) return false
+    let target
+    try { target = realpathSync(fullPath) } catch { return true } // 悬空链接一律跳过
+    return (target + sep).toLowerCase().startsWith(prefix)
+  }
+}
 
 /**
  * 对从活 profile 复制来的树，`rmSync` 会因为某些包带只读文件而失败。
@@ -246,13 +283,27 @@ function stageHome (nodeExe, dshDir, { withPlugins, fromExisting }) {
         const from = join(srcHome, 'profiles', PROFILE, f)
         if (existsSync(from)) cpSync(from, join(profileDir, f), { force: true })
       }
-      // 再复制插件树，并去掉 dsh 自己管理的 fallback 命名空间。
+      // 再复制两处插件树。都用 skipEntry 滤掉"指向 dsh 自己包树的 Junction" ——
+      // 那些是 dsh 管理的 fallback，解引用后会让 dsh 拒绝启动。
+      const isDshFallback = makeDshFallbackFilter(dshDir)
       const srcWebModules = join(srcHome, 'profiles', PROFILE, 'node_modules')
       if (existsSync(srcWebModules)) {
-        copyTree(srcWebModules, join(profileDir, 'node_modules'))
+        copyTree(srcWebModules, join(profileDir, 'node_modules'), { skipEntry: isDshFallback })
+      }
+      const srcTopModules = join(srcHome, 'profiles', 'node_modules')
+      if (existsSync(srcTopModules)) {
+        copyTree(srcTopModules, join(home, 'profiles', 'node_modules'), { skipEntry: isDshFallback })
       }
     } else {
       log(`种子 home 已填充，保留现状：${profileDir}`)
+    }
+    // 兜底清理：无论走哪条路径，都不允许种子树里残留 dsh 的 fallback 目录。
+    // 若这里的目录还在，说明它是被解引用过的实体目录（而非链接），
+    // dsh 会以 "exists and is not a symlink or dsh-managed module proxy" 拒绝启动。
+    const strayProxy = join(home, 'profiles', 'node_modules', '@deepseek-ai')
+    if (existsSync(strayProxy)) {
+      rmTree(strayProxy)
+      log('已从种子 home 移除残留的 @deepseek-ai fallback 树（dsh 会自行重建）')
     }
   } else if (existsSync(join(profileDir, 'package.json'))) {
     log(`种子 home 已填充：${profileDir}`)
