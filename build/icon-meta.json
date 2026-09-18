@@ -1,0 +1,10 @@
+{
+  "generatedAt": "2026-09-18T18:38:42.816Z",
+  "sourceUrl": "https://raw.githubusercontent.com/GarfieldZhung/DeepSeek-Whale-Girl/main/assets/whale/whale-maid.png",
+  "sha256": "20b8c0d6b580e23c88de1f01f68a1326c568edc7951f5f45ae98da3cae3c8ee6",
+  "license": "MIT（仓库）；美术素材来源与署名见 NOTICE.md",
+  "outputs": [
+    "build/icon.png",
+    "build/icon-256.png"
+  ]
+}
