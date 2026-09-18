@@ -23,3 +23,7 @@
 .DS_Store
 Thumbs.db
 *.log
+
+# npm 安装的 dsh（CI/干净机器的构建输入）
+/runtime/_dsh-install/
+

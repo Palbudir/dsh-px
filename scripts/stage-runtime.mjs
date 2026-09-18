@@ -153,7 +153,31 @@ function rmTree (target) {
   }
 }
 
-/** 解析出这台机器当前在用的那份 dsh 安装。 */
+/**
+ * 解析出一个可用的 pnpm 调用方式，并返回 [命令, 前置参数]。
+ *
+ * `dsh plugin add` 内部会调用 pnpm，所以 pnpm 必须在 PATH 上；
+ * 但"必须在 PATH 上"不该成为构建的前提 —— CI 和干净机器上未必有。
+ * 实测这里的探测顺序：
+ *   1. PATH 上的 pnpm（开发机通常有）
+ *   2. `npx --yes pnpm@<PIN>`（从 npm 拉取固定版本，任何有 npm 的机器都能用）
+ * 注：`corepack enable` 需要管理员权限（实测 EPERM），所以不作依赖。
+ */
+function resolvePnpm () {
+  if (process.env.DSH_PX_PNPM) return { cmd: process.env.DSH_PX_PNPM, pre: [] }
+  const probe = spawnSync(shim('pnpm'), ['--version'], {
+    encoding: 'utf8',
+    shell: process.platform === 'win32'
+  })
+  if (probe.status === 0) return { cmd: shim('pnpm'), pre: [] }
+  log(`PATH 上没有可用的 pnpm，回退到 npx pnpm@${PNPM_VERSION}`)
+  return { cmd: shim('npx'), pre: ['--yes', `pnpm@${PNPM_VERSION}`] }
+}
+
+/** 锁定的 pnpm 版本（`dsh plugin` 依赖它）。 */
+const PNPM_VERSION = process.env.DSH_PX_PNPM_VERSION ?? '10'
+
+/** 解析出这台机器当前在用的那份 dsh 安装（开发态优先）。 */
 function findGlobalDsh () {
   // `npm root -g` 是全局安装位置的权威来源。
   const root = execFileSync(shim('npm'), ['root', '-g'], {
@@ -162,7 +186,44 @@ function findGlobalDsh () {
   }).trim()
   const candidate = join(root, '@deepseek-ai', 'dsh')
   if (existsSync(join(candidate, 'lib', 'bin.js'))) return candidate
-  throw new Error(`在 ${root} 下找不到全局 dsh 安装`)
+  return null
+}
+
+/**
+ * 从 npm 安装**锁定版本**的 dsh 到 runtime/_dsh-install，并返回其路径。
+ *
+ * 为什么必须有这条路径：CI（以及任何干净机器）上**没有全局 dsh**。
+ * 最初的实现只走 `findGlobalDsh()`，于是 CI 每次都在这一步失败 ——
+ * 也就是说那个 workflow 从来没有真正构建过任何东西。
+ * 而且即便"能找到全局 dsh"也不该用：那会让构建产物取决于**本机装了哪一版**，
+ * 与 `DSH_PX_DSH_VERSION` 声明的版本可能不一致。
+ *
+ * 用 `npm install --prefix` 而不是 `npm install -g`：
+ * 不污染宿主环境，且位置确定、可缓存。
+ * 注意 npm 会**提升**安装（239 个包平铺在 `node_modules/@deepseek-ai/` 下，
+ * 而不是嵌套进 dsh 内部）。这对我们是好事 —— dsh 因此自包含，
+ * 前面的装配逻辑无需改动。
+ * @returns {string} dsh 安装目录
+ */
+function installDshFromNpm () {
+  const prefix = join(OUT, '_dsh-install')
+  const dshDir = join(prefix, 'node_modules', '@deepseek-ai', 'dsh')
+  if (existsSync(join(dshDir, 'lib', 'bin.js'))) {
+    log(`已从 npm 安装 dsh ${DSH_VERSION}：${dshDir}`)
+    return dshDir
+  }
+  log(`正在从 npm 安装 dsh@${DSH_VERSION}（干净机器/CI 的路径）`)
+  mkdirSync(prefix, { recursive: true })
+  run(shim('npm'), [
+    'install', '--prefix', prefix,
+    '--no-audit', '--no-fund', '--loglevel', 'error',
+    `@deepseek-ai/dsh@${DSH_VERSION}`
+  ], { cwd: prefix })
+  if (!existsSync(join(dshDir, 'lib', 'bin.js'))) {
+    throw new Error(`npm 安装后仍找不到 ${join(dshDir, 'lib', 'bin.js')}`)
+  }
+  log(`已从 npm 安装 dsh -> ${dshDir}`)
+  return dshDir
 }
 
 async function downloadNode () {
@@ -220,7 +281,10 @@ function stageDsh () {
     log(`dsh 已装配：${dest}`)
     return dest
   }
-  const src = findGlobalDsh()
+  // 开发机上若已装全局 dsh，就复用它（快、且离线）；
+  // 否则（CI / 干净机器）从 npm 安装**锁定版本**。
+  // 这两条路径必须都在，否则 CI 永远构建不出东西。
+  const src = findGlobalDsh() ?? installDshFromNpm()
   log(`正在从 ${src} 复制 dsh ${DSH_VERSION}（自包含，可能需要一分钟）`)
   mkdirSync(OUT, { recursive: true })
   cpSync(src, dest, { recursive: true, dereference: true })
@@ -239,27 +303,81 @@ function stageHome (nodeExe, dshDir, { withPlugins, fromExisting }) {
   const dshEntry = join(dshDir, 'lib', 'bin.js')
   const env = { ...process.env, DSH_HOME: home }
 
+  /**
+   * 读取已安装依赖里声明了 `dsh.bundle` 的包，用于协调 profile 的 bundles 列表。
+   *
+   * `dsh plugin add` 本来会做这件事，但它内部把 pnpm 当作子进程调用，
+   * 在 CI 里更容易受环境影响；这里自己读一遍其实更确定、也更透明 ——
+   * 判据就是官方规范本身：包 manifest 里有没有 `dsh.bundle.patch`。
+   * @returns {string[]} 需要加入 bundles 的包名（按名称排序，保证可复现）
+   */
+  const installedBundles = (dir) => {
+    const names = []
+    const scan = (base, prefix) => {
+      if (!existsSync(base)) return
+      for (const entry of readdirSync(base, { withFileTypes: true })) {
+        if (!entry.isDirectory()) continue
+        if (entry.name.startsWith('@')) {
+          scan(join(base, entry.name), entry.name + '/')
+          continue
+        }
+        const full = prefix + entry.name
+        if (full.startsWith('@deepseek-ai/')) continue // 内置组合包由 dsh 自己解析
+        try {
+          const manifest = JSON.parse(readFileSync(join(base, entry.name, 'package.json'), 'utf8'))
+          if (manifest?.dsh?.bundle?.patch) names.push(full)
+        } catch { /* 不是包目录，忽略 */ }
+      }
+    }
+    scan(dir, '')
+    return [...new Set(names)].sort()
+  }
+
   /** 从随附模板填充一个空的种子 home，然后安装插件。 */
   const buildFresh = () => {
-    if (withPlugins) {
-      log(`正在安装插件：${DEFAULT_PLUGINS.join('、')}`)
-      // `dsh plugin` 会同时做两件事：从随附模板初始化缺失的 profile，
-      // 以及根据已安装的包协调 dsh.profile.bundles。
-      run(nodeExe, [dshEntry, 'plugin', '--profile', PROFILE, 'add', ...DEFAULT_PLUGINS], { env })
-    } else {
-      log('正在从随附模板初始化 profile')
-      // 没有参数的 pnpm 子命令无法执行，所以这里直接播种 profile 契约要求的几个文件。
-      // 这与 `dsh plugin` 的初始化行为一致。
+    mkdirSync(profileDir, { recursive: true })
+    if (!withPlugins) {
+      log('正在从随附模板初始化 profile（不含插件）')
       writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
         name: `dsh-profile-${PROFILE}`,
         private: true,
         dependencies: {},
         dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'], patchReload: 'live' } }
       }, null, 2) + '\n')
-      writeFileSync(join(profileDir, 'cordis.patch.yml'),
-        '# dsh-px profile 补丁层；在每个组合包层之后应用。\n[]\n')
-      writeFileSync(join(profileDir, 'cordis.yml'),
-        '# dsh profile 根 —— 一个空的条目列表。整棵树是由补丁组合出来的。\n[]\n')
+    } else {
+      // 一步到位写出 profile 清单（依赖 + 从模板来的基础组合包），
+      // 再由 pnpm 安装，最后按 manifest 协调 bundles。
+      // 这样就不依赖 `dsh plugin add` 内部的 pnpm 子进程调用，确定性更好。
+      log(`正在安装插件：${DEFAULT_PLUGINS.join('、')}`)
+      writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
+        name: `dsh-profile-${PROFILE}`,
+        private: true,
+        dependencies: Object.fromEntries(DEFAULT_PLUGINS.map((p) => [p, 'latest'])),
+        dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'], patchReload: 'live' } }
+      }, null, 2) + '\n')
+      writeFileSync(join(profileDir, 'pnpm-workspace.yaml'),
+        'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n' +
+        '# pnpm >= 10 会拦截依赖的构建脚本；node-pty 需要它的 conpty postinstall，\n' +
+        '# 否则侧栏终端会在运行时静默失败。\n' +
+        'allowBuilds:\n  node-pty: true\n')
+      const pnpm = resolvePnpm()
+      run(pnpm.cmd, [...pnpm.pre, 'install'], { cwd: profileDir, env })
+      // 显式重建原生模块，避免"install 静默跳过构建脚本、终端运行时才失败"。
+      run(pnpm.cmd, [...pnpm.pre, 'rebuild', 'node-pty'], { cwd: profileDir, env })
+
+      // 依官方规范协调 bundles：谁声明了 dsh.bundle.patch，谁就进层栈。
+      const pkgPath = join(profileDir, 'package.json')
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf8'))
+      const found = installedBundles(join(profileDir, 'node_modules'))
+      pkg.dsh.profile.bundles = [...new Set([...pkg.dsh.profile.bundles, ...found])]
+      writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n')
+      log(`bundles 已协调：${pkg.dsh.profile.bundles.join('、')}`)
+    }
+    writeFileSync(join(profileDir, 'cordis.patch.yml'),
+      '# dsh-px profile 补丁层；在每个组合包层之后应用。\n[]\n')
+    writeFileSync(join(profileDir, 'cordis.yml'),
+      '# dsh profile 根 —— 一个空的条目列表。整棵树是由补丁组合出来的。\n[]\n')
+    if (!existsSync(join(profileDir, 'pnpm-workspace.yaml'))) {
       writeFileSync(join(profileDir, 'pnpm-workspace.yaml'),
         'packages:\n  - .\n\nnodeLinker: hoisted\nautoInstallPeers: false\n')
     }
@@ -323,20 +441,8 @@ function stageHome (nodeExe, dshDir, { withPlugins, fromExisting }) {
     buildFresh()
   }
 
-  // pnpm >= 10 在获批前会拦截依赖的构建脚本。node-pty 需要它的 conpty
-  // postinstall，否则侧栏终端会在运行时静默失败。只有全新安装那条路径需要这一步；
-  // 复制来的树里已经带着构建好的二进制。
-  if (withPlugins && !fromExisting) {
-    const ws = join(profileDir, 'pnpm-workspace.yaml')
-    if (existsSync(ws)) {
-      const text = readFileSync(ws, 'utf8')
-      if (!/^\s*allowBuilds:/m.test(text)) {
-        writeFileSync(ws, text + '\nallowBuilds:\n  node-pty: true\n')
-        log('已写入 node-pty 的 allowBuilds')
-      }
-      run(shim('pnpm'), ['approve-builds', '--all'], { cwd: profileDir, env })
-    }
-  }
+  // 全新安装路径已在 buildFresh 内处理构建脚本（写 allowBuilds + 显式 rebuild
+  // node-pty），这里不再重复。复制路径的树里已经带着构建好的二进制。
 
   return home
 }

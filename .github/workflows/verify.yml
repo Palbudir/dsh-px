@@ -3,8 +3,13 @@ name: verify
 # beta 门禁。这个工作流正是"至少达到官方 dsh 能力"从一个口号变成一条可检查主张的原因：
 # 它从零装配一份运行时，然后把组合出的插件树与官方安装的树逐行 diff。
 #
-# 注意：平价检查针对的是 scripts/stage-runtime.mjs 里锁定的那个 dsh 版本。
-# 请有意地去改 DSH_PX_DSH_VERSION；如果某次升级导致行数减少，这个工作流就会失败 ——
+# 重要教训：这个 workflow 在最初几版里**从未真正构建过任何东西** ——
+# stage 脚本那时依赖"本机已装全局 dsh"，而 CI 上根本没有，
+# 于是每次都在这步失败。现在 stage 脚本会在缺少全局 dsh 时
+# **从 npm 安装锁定版本**（`installDshFromNpm`），CI 才真正跑起来。
+#
+# 注意：平价检查针对 scripts/stage-runtime.mjs 里锁定的 dsh 版本。
+# 请有意地去改 DSH_PX_DSH_VERSION；若某次升级导致行数减少，这个工作流就会失败 ——
 # 这正是它存在的意义。
 
 on:
@@ -27,8 +32,11 @@ jobs:
         with:
           node-version: '24'
 
-      - name: 安装 pnpm
-        run: npm install -g pnpm@10
+      # 用官方 action 固定 pnpm 版本，而不是 `npm install -g pnpm`
+      # （后者会往全局前缀写文件，在托管 runner 上偶发权限问题）。
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
 
       - name: 安装开发依赖
         run: npm install
