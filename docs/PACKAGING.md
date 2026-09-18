@@ -253,6 +253,53 @@ function makeDshFallbackFilter (dshDir) {
 - `scripts/stage-runtime.mjs` —— 构建随附的种子树时；
 - `app/main.mjs` —— 首启把种子树复制进用户 `userData` 时。
 
+### 关键结论：`profiles/` 下的两棵 `node_modules` 必须区别对待
+
+这是整件事的**真正根因**，也是本次开发中最难定位的一处。
+
+| 路径 | 处理 | 实测依据 |
+|---|---|---|
+| `profiles/node_modules` | **整体跳过** | 开发机上 164 个 Junction 全部指向 `runtime/dsh/node_modules`，另 23 个实体目录**全是 dsh 自己的依赖作用域**（`@aws-sdk`、`@octokit`、`@opentelemetry`、`@anthropic-ai`、`@deepseek-ai` …）。整棵就是 dsh 托管的 fallback，**不含任何插件依赖** |
+| `profiles/<name>/node_modules` | **有选择地复制** | 这里才混着真插件依赖（`mermaid`、`@codemirror`、`node-pty`、`react`）与 dsh 管理的链接 |
+
+### 为什么"按名字过滤"行不通
+
+曾试图只跳过 dsh 的**直接依赖**（从 `runtime/dsh/package.json` 读）。这个判据不完备：
+dsh 的**传递**依赖闭包很大，而 `profiles/node_modules` 里的 fallback 覆盖整个闭包。
+实测就漏在 `argparse` 上 —— 它不在 dsh 的直接依赖清单里，但同样是 dsh 托管的 fallback。
+逐个枚举传递闭包等于重实现 npm，且必然随上游版本漂移而失效。
+
+**结论：整棵树跳过。** dsh 首次启动会自行重建（实测重建出 187 个条目）。
+
+### 为什么需要"链接目标"和"整体跳过"两套判据
+
+同一条路径会经历**两次解引用**，单靠任何一套都会漏：
+
+1. **开发态** —— `profiles/node_modules/*` 还是 Junction，此时"按链接目标判断"最准确，
+   而且这一套在 `profiles/<name>/node_modules` 上**始终必要**（那里真假混杂）。
+2. **打包态** —— `electron-builder` 打包 `extraResources` 时**会再次解引用** Junction，
+   于是应用运行时看到的 `commander`、`argparse` 已经是真目录，
+   "按链接目标判断"完全失效。此时只有"整体跳过顶层 `node_modules`"才管用。
+
+这也是为什么第一次修完开发态通过、打包版仍然失败 —— 判据 1 在打包后不再成立。
+
+### 判定函数（`app/main.mjs` 与 `scripts/stage-runtime.mjs` 各一份）
+
+```js
+// 判据 1：按链接目标（开发态有效；对 profiles/<name>/node_modules 始终必要）
+if (entry.isSymbolicLink()) {
+  const target = realpathSync(fullPath)            // 悬空链接 → 跳过
+  if ((target + sep).toLowerCase().startsWith(dshNodeModulesPrefix)) return true
+}
+// 判据 2：整体跳过顶层 profiles/node_modules（打包态唯一有效）
+if (entry.name === 'node_modules' && dirname(fullPath) === profilesDir) return true
+// 判据 3：dsh/插件自己的状态目录
+if (entry.name.startsWith('.dsh-')) return true
+```
+
+**不能笼统排除所有 `node_modules`**：pnpm 的 `.pnpm` 内部链接指向 profile 自己的
+store，那是真依赖，必须复制。
+
 ### 顺带修掉的两个连带 bug
 
 - `copyProfileTree` 的文件分支必须带 `recursive: true`。`Dirent` 报告的是链接本身，
