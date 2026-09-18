@@ -191,6 +191,89 @@ harness 跑在一个**被 spawn 出来的** Node 进程里，**从不**跑在 El
 其推论：子进程上设置了 `ELECTRON_RUN_AS_NODE`，
 并且子进程使用的是随附的 `runtime/node/node.exe` —— 而不是 `process.execPath`。
 
+## 约束 9 —— 首启播种：不能复制的三类"dsh 自管理 proxy"
+
+这是整个项目里**最难定位的一类问题**：同一个根因以三种不同面貌出现三次，
+而且**只在"全新 userData 首启"这条路径上暴露** ——
+开发机一直在用既有的 `~/.dsh`，所以最初完全没踩到。
+
+### 为什么会踩到
+
+`profiles` 树里混着两类外观相似、处理方式却完全相反的东西：
+
+| 内容 | 处理 | 原因 |
+|---|---|---|
+| 真三方依赖（`@codemirror`、`mermaid`、`node-pty`、react 等） | **复制**，解引用 | 别处找不到 |
+| dsh 自己管理的 module proxy / fallback | **绝不复制** | dsh 启动时会断言它必须是链接 |
+
+dsh 在启动时会校验这些 fallback。用 `cpSync({dereference:true})` 复制会把 Junction
+变成真目录，于是它直接拒绝启动：
+
+```
+Error: dsh: <home>/profiles/node_modules/<X> exists and is not a symlink or
+dsh-managed module proxy; remove it so dsh can manage the installation fallback
+```
+
+### 实测命中的三处（都真实踩过）
+
+| # | 路径 | 说明 |
+|---|---|---|
+| 1 | `profiles/node_modules/@deepseek-ai/*` | 名字看着像"该排除的包"，但绝非全部 |
+| 2 | `profiles/node_modules/commander`、`accepts` … | **同一类链接，只是不在 `@deepseek-ai` 下** —— 只按名字判断必然漏 |
+| 3 | `profiles/web/.dsh-module-fallback/*` | 每个 profile 内的 fallback 树，其 Junction 指向 **profile 自己的** `node_modules` |
+
+实测数据（开发机）：`profiles/node_modules` 里 **164 个 Junction 全部指向
+`runtime/dsh/node_modules`**，另有 **23 个实体目录**才是真依赖。
+
+### 正确的判定方式：按链接目标，而不是按名字
+
+```js
+function makeDshFallbackFilter (dshDir) {
+  const prefix = (join(dshDir, 'node_modules') + sep).toLowerCase()
+  return (entry, fullPath) => {
+    if (entry.name.startsWith('.dsh-')) return true          // dsh/插件生成物
+    if (!entry.isSymbolicLink()) return false
+    let target
+    try { target = realpathSync(fullPath) } catch { return true }  // 悬空链接
+    return (target + sep).toLowerCase().startsWith(prefix)   // 指向 dsh 包树
+  }
+}
+```
+
+三个要点：
+
+1. **不能笼统排除 `node_modules`。** pnpm 的 `.pnpm` 内部链接指向 profile 自己的
+   store，那是真依赖，必须复制。只有指向 **dsh 包树**的链接才是 fallback。
+2. **不能只认 `@deepseek-ai`。** `commander`、`accepts` 等同样是被 dsh 接管的 fallback。
+3. **`.dsh-` 前缀一律跳过。** `.dsh-module-fallback`（profile 内 fallback）与
+   `.dsh-market`（市场状态）都是生成物，首启会自行重建。
+
+同一套过滤在**两个地方**都要用，缺一处就会在另一条路径上复发：
+
+- `scripts/stage-runtime.mjs` —— 构建随附的种子树时；
+- `app/main.mjs` —— 首启把种子树复制进用户 `userData` 时。
+
+### 顺带修掉的两个连带 bug
+
+- `copyProfileTree` 的文件分支必须带 `recursive: true`。`Dirent` 报告的是链接本身，
+  而实际源可能是目录（实测 `@agentclientprotocol/sdk/`），少了它会以
+  **`Recursive option not enabled, cannot copy a directory`** 直接失败。
+- **播种标记必须在复制之前写。** 原来的顺序是"复制 → 写标记"，于是一次中断就留下
+  一个既没有标记、又不完整的 home，下次启动仍会看到"没有标记"而重来 —— 永远无法自愈。
+  现在改为先写认领标记，并且把失败**如实弹窗报出**，而不是让应用带着空壳 profile
+  启动、再表现出一堆莫名其妙的症状。
+
+### 首启实测数据
+
+| 项 | 实测值 |
+|---|---|
+| 种子树大小 | 约 690 MB（约 30 万文件） |
+| 首次播种耗时 | **约 4–5 分钟**（同步复制，期间主进程被占用） |
+| 之后每次启动 | 秒级（检测到 `profiles/<name>/package.json` 即直接复用） |
+| 打包后安装包 | 约 373 MB（NSIS） |
+
+首次启动的等待是目前 beta 最大的体验短板，`docs/ROADMAP.md` 记录了改进方向。
+
 ## 如何验证一次装配
 
 ```sh

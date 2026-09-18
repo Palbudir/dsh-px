@@ -112,15 +112,19 @@ npm run dist                      # electron-builder -> dist/
 
 ## 已知限制（beta）
 
+- **首次启动需要等待约 4–5 分钟。** 应用会把随附的运行时（约 690 MB、30 万文件）
+  复制进自己的数据目录。这是一次性的，之后每次启动都是秒级。
+  这同时也是目前 beta 最大的体验短板，`docs/ROADMAP.md` 写了改进方向。
 - **Windows 是首要目标**；macOS / Linux 的打包目标已配置但未实测。
 - **尚无自动更新。** `docs/ROADMAP.md` 写了设计意图，以及为什么它要复用现成且经过验证的
   更新插件，而不是自己造一个。
-- Electron 构建**未签名**。
-- 鉴权沿用 dsh 自己的浏览器信任围栏；外壳不再叠加第二层登录。
+- Electron 构建**未签名**，Windows SmartScreen 会提示。
+- 鉴权沿用 dsh 自己的浏览器信任围栏（进程启动令牌 → 签名 cookie）；
+  外壳不再叠加第二层登录。**注意干净 URL 会返回 401**，外壳加载的是 harness
+  自己宣告的那个 URL，详见 `docs/PACKAGING.md` 约束 6。
 - **在应用内安装插件需要 PATH 上有 `pnpm`。** 初始插件集已预装在随附 profile 里，
   所以应用开箱可用；但要从市场添加更多插件目前需要 pnpm（市场在检测到缺失时会提供一键安装引导）。
-- 装配后的运行时约 620 MB（Node 100 MB + dsh 213 MB + 插件树 309 MB），
-  所以装出来的体积偏大。`electron-builder` 会压缩，但确实还有明显的裁剪空间。
+- 安装包约 373 MB（NSIS），安装后约 946 MB —— 自包含 Node 与全套插件的代价。
 
 ### 在 Windows 上验证 Electron 本身
 

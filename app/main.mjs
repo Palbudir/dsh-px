@@ -13,7 +13,7 @@
  */
 import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage } from 'electron'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, cpSync, writeFileSync, readdirSync, realpathSync } from 'node:fs'
+import { existsSync, mkdirSync, cpSync, writeFileSync, readdirSync, realpathSync, readFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -68,7 +68,7 @@ function resolveRuntime () {
 }
 
 /**
- * 判定某个目录项是否是"dsh 自己管理的 fallback 链接"，这类链接**绝不能复制**。
+ * 建立"哪些目录项是 dsh 自己管理的 fallback"的判定函数，这类项**绝不能复制**。
  *
  * 实测背景：开发机上 `profiles/node_modules` 有 **164 个 Junction 全部指向
  * `runtime/dsh/node_modules`**（dsh 自己的包树），另有 23 个实体目录才是真三方依赖。
@@ -78,16 +78,40 @@ function resolveRuntime () {
  *   dsh: <home>/profiles/node_modules/commander exists and is not a symlink or
  *        dsh-managed module proxy
  *
- * 不能只按名字猜（`@deepseek-ai` 只是其中一部分，`commander`、`accepts` 等同样是），
- * 要按**链接目标**判断。也正因如此不能笼统地"排除所有 node_modules" ——
- * pnpm 的 `.pnpm` 内部链接指向 profile 自己的 store，那是真依赖，必须复制。
+ * **两套判据缺一不可**，因为同一条路径会经历两次解引用：
+ *
+ *   1. 按链接目标判断（`targetName` / `isSymbolicLink`）—— 覆盖**开发态**。
+ *      开发时这些项确实还是 Junction，按目标判断最准确。
+ *   2. 按"名字是否出现在 dsh 自己的直接依赖清单里"判断 —— 覆盖**打包态**。
+ *      electron-builder 打包 `extraResources` 时会**再次解引用** Junction，
+ *      于是应用看到的 `commander` 已经是真目录，判据 1 完全失效（实测踩到）。
+ *      dsh 的直接依赖清单随附在 `runtime/dsh/package.json` 里，确定且可读。
+ *
+ * 注意不能笼统排除 `node_modules`：pnpm 的 `.pnpm` 内部链接指向 profile 自己的
+ * store，那是真依赖，必须复制。也正因如此，真实的插件依赖（如 `react`）
+ * 不在 dsh 的直接依赖清单里，会被正确保留。
  * @param {string|null} dshDir 随附的 dsh 安装目录
- * @returns {(entry: import('node:fs').Dirent, fullPath: string) => boolean}
+ * @returns {{ skipEntry: (entry: import('node:fs').Dirent, fullPath: string) => boolean, skipName: Set<string> }}
  */
 function makeDshFallbackFilter (dshDir) {
-  if (!dshDir) return () => false
-  const prefix = (join(dshDir, 'node_modules') + sep).toLowerCase()
-  return (entry, fullPath) => {
+  // 判据 2 的数据源：dsh 自己的直接依赖名。
+  const dshOwnDeps = new Set()
+  if (dshDir) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(dshDir, 'package.json'), 'utf8'))
+      for (const name of Object.keys(manifest.dependencies ?? {})) {
+        // 依赖名可能是 '@scope/pkg'；顶层条目按 scope 目录出现，所以两种形式都收。
+        dshOwnDeps.add(name)
+        if (name.startsWith('@')) dshOwnDeps.add(name.split('/')[0])
+      }
+    } catch (err) {
+      process.stderr.write(`[dsh-px] 警告：无法读取 dsh 依赖清单，打包态判据将退化：${err?.message ?? err}\n`)
+    }
+  }
+
+  const prefix = dshDir ? (join(dshDir, 'node_modules') + sep).toLowerCase() : null
+
+  const skipEntry = (entry, fullPath) => {
     // dsh / 插件自己的状态目录一律不复制。它们都是生成物，首次启动会自行重建，
     // 而复制它们会把 Junction 解引用成真目录，从而让 dsh 拒绝启动：
     //   .dsh-module-fallback —— profile 内的 module fallback 树，其 Junction 指向
@@ -95,11 +119,15 @@ function makeDshFallbackFilter (dshDir) {
     //   .dsh-market —— 插件市场状态。
     if (entry.name.startsWith('.dsh-')) return true
 
-    if (!entry.isSymbolicLink()) return false
-    let target
-    try { target = realpathSync(fullPath) } catch { return true } // 悬空链接一律跳过
-    return (target + sep).toLowerCase().startsWith(prefix)
+    if (entry.isSymbolicLink() && prefix) {
+      let target
+      try { target = realpathSync(fullPath) } catch { return true } // 悬空链接
+      if ((target + sep).toLowerCase().startsWith(prefix)) return true
+    }
+    return false
   }
+
+  return { skipEntry, skipName: dshOwnDeps }
 }
 
 /**
@@ -171,11 +199,25 @@ function resolveHarnessHome (runtime) {
     process.stdout.write(`[dsh-px] 首次运行：正在准备 ${item}（首次约需数分钟，请稍候）…\n`)
     try {
       if (item === 'profiles') {
-        // profiles/ 下混着两种东西：三方插件依赖（要复制）与 dsh 自己管理的
-        // fallback 链接（绝不能复制，解引用后 dsh 会拒绝启动）。
-        // 见 makeDshFallbackFilter。
-        const isDshFallback = makeDshFallbackFilter(join(runtime.root, 'dsh'))
-        copyProfileTree(from, to, { skip: SKIP_IN_PROFILE_TREE, skipEntry: isDshFallback })
+        // profiles/ 下有两棵 node_modules，处理方式完全不同：
+        //
+        //   profiles/node_modules          —— **整体跳过**。实测开发机上它有 164 个
+        //     Junction（全部指向 dsh 包树）+ 23 个实体目录，而那 23 个全是 dsh 自己的
+        //     依赖作用域（@aws-sdk、@octokit、@opentelemetry、@anthropic-ai、
+        //     @deepseek-ai …）。也就是说它整棵就是 dsh 托管的 fallback 树，
+        //     不含任何插件依赖；dsh 首启会自行重建。
+        //     （曾试图按名字过滤：不可行 —— dsh 的传递依赖闭包很大，
+        //       `argparse` 这类不在其直接依赖清单里，逐个枚举必然漏。）
+        //
+        //   profiles/<name>/node_modules   —— **有选择地复制**。这里才混着真插件依赖
+        //     （mermaid、@codemirror、node-pty、react…）与 dsh 管理的链接。
+        const { skipEntry, skipName } = makeDshFallbackFilter(join(runtime.root, 'dsh'))
+        const isTopLevelModules = (entry, fullPath) =>
+          entry.name === 'node_modules' && dirname(fullPath) === from
+        copyProfileTree(from, to, {
+          skip: new Set([...SKIP_IN_PROFILE_TREE, ...skipName]),
+          skipEntry: (entry, fullPath) => isTopLevelModules(entry, fullPath) || skipEntry(entry, fullPath)
+        })
       } else {
         cpSync(from, to, { recursive: true, dereference: true, force: false, errorOnExist: false })
       }

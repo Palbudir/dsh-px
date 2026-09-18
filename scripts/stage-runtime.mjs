@@ -283,16 +283,27 @@ function stageHome (nodeExe, dshDir, { withPlugins, fromExisting }) {
         const from = join(srcHome, 'profiles', PROFILE, f)
         if (existsSync(from)) cpSync(from, join(profileDir, f), { force: true })
       }
-      // 再复制两处插件树。都用 skipEntry 滤掉"指向 dsh 自己包树的 Junction" ——
-      // 那些是 dsh 管理的 fallback，解引用后会让 dsh 拒绝启动。
+      // 再复制插件树。
+      //
+      //   profiles/<name>/node_modules  —— 复制，但滤掉 dsh 管理的链接。
+      //     这里才混着真插件依赖（mermaid、@codemirror、node-pty、react…）。
+      //
+      //   profiles/node_modules         —— **整体跳过**。实测开发机上它有 164 个
+      //     Junction（全部指向 dsh 包树）+ 23 个实体目录，而那 23 个全是 dsh 自己的
+      //     依赖作用域（@aws-sdk、@octokit、@opentelemetry、@anthropic-ai、
+      //     @deepseek-ai …）。整棵就是 dsh 托管的 fallback 树，不含插件依赖，
+      //     dsh 首启会自行重建。（曾试图按名字过滤：不可行，dsh 的传递依赖闭包很大，
+      //     `argparse` 这类不在其直接依赖清单里，逐个枚举必然漏。）
       const isDshFallback = makeDshFallbackFilter(dshDir)
       const srcWebModules = join(srcHome, 'profiles', PROFILE, 'node_modules')
       if (existsSync(srcWebModules)) {
         copyTree(srcWebModules, join(profileDir, 'node_modules'), { skipEntry: isDshFallback })
       }
-      const srcTopModules = join(srcHome, 'profiles', 'node_modules')
-      if (existsSync(srcTopModules)) {
-        copyTree(srcTopModules, join(home, 'profiles', 'node_modules'), { skipEntry: isDshFallback })
+      // 兜底：确保种子树里没有顶层 fallback 树残留。
+      const strayTop = join(home, 'profiles', 'node_modules')
+      if (existsSync(strayTop)) {
+        rmTree(strayTop)
+        log('已移除顶层 profiles/node_modules（dsh 托管的 fallback 树，会自行重建）')
       }
     } else {
       log(`种子 home 已填充，保留现状：${profileDir}`)
