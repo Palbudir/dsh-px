@@ -1,0 +1,61 @@
+{
+  "name": "dsh-px",
+  "version": "0.1.0-beta.0",
+  "private": true,
+  "description": "dsh-px: a self-contained Electron desktop client that packages DeepSeek Harness (dsh) into one app.",
+  "license": "MIT",
+  "author": "Palbudir",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Palbudir/dsh-px.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "stage": "node scripts/stage-runtime.mjs",
+    "stage:plugins": "node scripts/stage-runtime.mjs --with-plugins",
+    "verify": "node scripts/verify-capabilities.mjs",
+    "start": "electron app/main.mjs",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder",
+    "clean": "node -e \"require('node:fs').rmSync('runtime',{recursive:true,force:true});require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "devDependencies": {
+    "electron": "^38.0.0",
+    "electron-builder": "^26.0.0"
+  },
+  "build": {
+    "appId": "com.palbudir.dshpx",
+    "productName": "dsh-px",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "app/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "runtime",
+        "to": "runtime"
+      }
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ]
+    }
+  }
+}

@@ -1,0 +1,49 @@
+name: verify
+
+# The beta gate. This workflow is the reason "at least official dsh capability"
+# is a checkable claim rather than a slogan: it stages a runtime from scratch and
+# then diffs the composed plugin tree against the official install's tree.
+#
+# NOTE: the parity check runs against the dsh version pinned in
+# scripts/stage-runtime.mjs. Bump DSH_PX_DSH_VERSION deliberately; a bump that
+# drops rows will fail this workflow, which is the point.
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Install pnpm
+        run: npm install -g pnpm@10
+
+      - name: Install dev dependencies
+        run: npm install
+
+      - name: Stage runtime (node + dsh + profile from npm)
+        run: npm run stage -- --with-plugins
+
+      - name: Verify capability parity
+        run: npm run verify -- --boot --json
+
+      - name: Upload staged manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-manifest-${{ matrix.os }}
+          path: runtime/runtime-manifest.json
+          if-no-files-found: warn

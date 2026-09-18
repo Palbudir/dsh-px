@@ -1,0 +1,20 @@
+# Staged runtime: the bundled Node + dsh install + profile tree.
+# Assembled by `npm run stage`; never committed (hundreds of MB of third-party code).
+/runtime/
+
+# Build output
+/dist/
+/out/
+
+# Dependencies
+/node_modules/
+
+# Local env / secrets
+.env
+.env.*
+*.local
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.log

@@ -1,0 +1,21 @@
+# Normalise line endings. The repo is developed on Windows but CI runs Linux,
+# and the shell scripts plus the GitHub workflow must not arrive with CRLF.
+* text=auto eol=lf
+
+# Windows-specific files keep CRLF for native tooling.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Binary artefacts.
+*.png binary
+*.jpg binary
+*.ico binary
+*.icns binary
+*.zip binary
+*.exe binary
+*.dll binary
+*.node binary
+
+# Generated runtime is never tracked, but be explicit if it is ever forced in.
+/runtime/** -text -diff
