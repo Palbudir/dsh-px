@@ -22,17 +22,17 @@ SOFTWARE.
 
 ---
 
-## Third-party notices
+## 第三方声明
 
-`dsh-px` bundles, at build time, third-party software that is **not** covered by
-the license above:
+（以下为中文说明；上方英文 MIT 正文是适用于本仓库自身代码的许可证。）
 
-- **DeepSeek Harness (`@deepseek-ai/dsh`)** and its transitive `@deepseek-ai/*`
-  packages — MIT. https://github.com/deepseek-ai/deepseek-harness
-- **Node.js** — MIT and other licenses. https://nodejs.org
-- The plugins listed in `scripts/stage-runtime.mjs` (`DEFAULT_PLUGINS`), each
-  under its own license.
+`dsh-px` 在构建时会把下列第三方软件装配进生成的 `runtime/` 目录，
+它们**不受**上述许可证覆盖，各自适用其上游许可证：
 
-Those components are assembled into the generated `runtime/` directory, which is
-not committed to this repository. A packaged build redistributes them, so review
-each upstream license before distributing binaries.
+- **DeepSeek Harness（`@deepseek-ai/dsh`）** 及其全部 `@deepseek-ai/*` 传递依赖 —— MIT。
+  https://github.com/deepseek-ai/deepseek-harness
+- **Node.js** —— MIT 及其他许可证。https://nodejs.org
+- `scripts/stage-runtime.mjs` 中 `DEFAULT_PLUGINS` 列出的插件，各自适用其自身许可证。
+
+上述组件被装配进生成的 `runtime/` 目录，而该目录**不入库**。
+但打包产物会再分发这些组件，因此在分发二进制之前，请逐一核对各上游许可证的要求。

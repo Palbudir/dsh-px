@@ -1,26 +1,24 @@
-# Packaging notes — assembling the dsh-px runtime
+# 打包笔记 —— dsh-px 运行时是如何装配的
 
-These are the non-obvious constraints discovered while building `scripts/stage-runtime.mjs`.
-They are recorded because every one of them was learned by hitting it.
+这些是在编写 `scripts/stage-runtime.mjs` 过程中发现的、不那么显然的约束。
+把它们记下来，是因为**每一条都是撞上去才学到的**。
 
-## What gets bundled
+## 装配了什么
 
-`runtime/` has three parts:
+`runtime/` 由三部分组成：
 
-| Part | Source | Why |
+| 部分 | 来源 | 为什么需要 |
 |---|---|---|
-| `runtime/node/` | standalone Node build from `nodejs.org/dist` | The user installs nothing. Pinned by `DSH_PX_NODE_VERSION`. |
-| `runtime/dsh/` | the official `@deepseek-ai/dsh` install | The harness itself. Pinned by `DSH_PX_DSH_VERSION`. |
-| `runtime/dsh-home/` | a seed Harness home: `profiles/<name>/` + plugin tree | So the app starts with a working, plugin-complete profile. |
+| `runtime/node/` | 来自 `nodejs.org/dist` 的独立 Node 构建 | 让用户什么都不用装。由 `DSH_PX_NODE_VERSION` 锁定版本。 |
+| `runtime/dsh/` | 官方 `@deepseek-ai/dsh` 安装 | harness 本体。由 `DSH_PX_DSH_VERSION` 锁定版本。 |
+| `runtime/dsh-home/` | 一份种子 Harness home：`profiles/<名称>/` + 插件树 | 让应用一启动就有一份可用、且插件完整的 profile。 |
 
-## Constraint 1 — the dsh install is already self-contained
+## 约束 1 —— dsh 安装本身已经是自包含的
 
-A global dsh install carries **239 nested `@deepseek-ai/*` packages** inside its
-own `node_modules` (~213 MB on this machine). It does **not** rely on a hoisted
-sibling tree to resolve its bundle layers.
+一份全局 dsh 安装会把它自己的 `node_modules` 里的 **239 个 `@deepseek-ai/*` 嵌套包**带着走
+（在这台机器上约 213 MB）。它**并不**依赖外部的提升（hoisted）同级树来解析自己的组合包层。
 
-Consequence: copying the dsh install directory whole is sufficient for bundle
-resolution. There is no need to reconstruct a `@deepseek-ai` fallback tree.
+推论：整体复制 dsh 安装目录就足以支撑组合包解析，不需要重建任何 `@deepseek-ai` fallback 树。
 
 ```js
 // stage-runtime.mjs
@@ -28,18 +26,15 @@ const src = join(execFileSync('npm', ['root', '-g']).trim(), '@deepseek-ai', 'ds
 cpSync(src, dest, { recursive: true, dereference: true })
 ```
 
-## Constraint 2 — dsh's `@deepseek-ai` fallback tree must NOT be materialised
+## 约束 2 —— 绝不能把 dsh 的 `@deepseek-ai` fallback 树实体化
 
-`$DSH_HOME/profiles/node_modules/@deepseek-ai/*` are **Windows junctions**
-pointing back into the global dsh install. Two opposite mistakes are possible
-here, and both were made while building this:
+`$DSH_HOME/profiles/node_modules/@deepseek-ai/*` 是指回全局 dsh 安装的 **Windows Junction**。
+这里有两种方向相反的错法，而构建过程中**两种都犯过**：
 
-**(a) A plain copy loses them.** Without `dereference: true` the junctions come
-across as dead links, and the bundle silently depends on this machine's global
-dsh.
+**（甲）普通复制会把它们丢掉。** 不加 `dereference: true`，Junction 会变成死链接，
+于是这个包就悄悄依赖上了本机的全局 dsh。
 
-**(b) Dereferencing them breaks the boot.** With `dereference: true` the
-junctions become real directories, and dsh then refuses to start:
+**（乙）解引用它们会让启动直接失败。** 加上 `dereference: true` 后 Junction 变成真目录，dsh 随即拒绝启动：
 
 ```
 Error: dsh: <home>/profiles/node_modules/@deepseek-ai/dsh exists and is not a
@@ -47,166 +42,161 @@ symlink or dsh-managed module proxy; remove it so dsh can manage the
 installation fallback
 ```
 
-That tree is not ours to copy. It is **dsh's own managed module-proxy fallback**,
-and dsh asserts ownership of its shape at boot. It is also **redundant**: the
-bundled `runtime/dsh` already carries all 239 nested `@deepseek-ai` packages, and
-bundle names resolve against the dsh installation first.
+那棵树不是我们的东西，不能复制。它是 **dsh 自己管理的 module proxy fallback**，
+dsh 在启动时会断言自己拥有它的形态。而且它也是**冗余的**：
+随附的 `runtime/dsh` 已经带了全部 239 个 `@deepseek-ai` 嵌套包，
+而组合包名称的解析**优先**走 dsh 安装目录。
 
-The resolution is selective copying. `profiles/node_modules` contains two very
-different things, and they need opposite treatment:
+正确的解法是**有选择地复制**。`profiles/node_modules` 里装着两种截然不同的东西，
+它们需要相反的处理：
 
-| Contents | Treatment | Why |
+| 内容 | 处理 | 原因 |
 |---|---|---|
-| `node_modules/@deepseek-ai/**` (246 MB) | **exclude** | dsh-managed proxy; redundant with `runtime/dsh`; breaks boot if materialised |
-| `node_modules/<everything else>` (react, mermaid, `@codemirror`, `node-pty`, …) | **copy, dereferenced** | third-party plugin dependencies; exist nowhere else in the bundle |
+| `node_modules/@deepseek-ai/**`（246 MB） | **排除** | dsh 自己管理的 proxy；与 `runtime/dsh` 冗余；实体化会导致启动失败 |
+| `node_modules/<其他一切>`（react、mermaid、`@codemirror`、`node-pty` 等） | **复制，且解引用** | 第三方插件的依赖；在这个包里别处找不到 |
 
 ```js
 const SKIP_IN_PROFILE_TREE = new Set(['@deepseek-ai'])
 copyTree(srcWebModules, join(profileDir, 'node_modules'), { skip: SKIP_IN_PROFILE_TREE })
 ```
 
-`cpSync` has no exclude option, hence the small `copyTree` helper in
-`stage-runtime.mjs`. Pruning that one directory also removes ~246 MB — it is the
-single largest size win available.
+`cpSync` 没有排除选项，这就是 `stage-runtime.mjs` 里那个小 `copyTree` 辅助函数的由来。
+剪掉这一个目录同时也省下约 246 MB —— 这是**目前能找到的最大一笔体积收益**。
 
-If you ever see the "not a symlink or dsh-managed module proxy" error from a
-staged build, this constraint has been violated again.
+如果你在某个装配产物上再次看到 "not a symlink or dsh-managed module proxy" 这个错误，
+说明这条约束又被违反了。
 
-## Constraint 3 — `profiles/node_modules` is a *junction* tree
+## 约束 3 —— `profiles/node_modules` 是 Junction 树
 
-The remaining entries under `profiles/node_modules` (and the plugin tree under
-`profiles/<profile>/node_modules`) are junctions too, so `dereference: true` is
-still required for the parts being copied:
+`profiles/node_modules` 下剩余的条目（以及 `profiles/<profile>/node_modules` 下的插件树）
+同样是 Junction，所以被复制的那部分**仍然需要** `dereference: true`：
 
 ```js
 cpSync(from, to, { dereference: true, force: true })
 ```
 
-There are two staging paths:
+因此有两条装配路径：
 
-- `--from-existing` — copy the profile this machine already runs. Fast, offline,
-  and it reproduces a configuration you have personally verified.
-- `--with-plugins` — build the profile from scratch with the staged dsh itself
-  (`dsh plugin --profile <name> add ...`). Slower, needs network, but fully
-  reproducible in CI from a clean checkout.
+- `--from-existing` —— 复制本机已经在跑的那份 profile。快、可离线，
+  而且复现的是一份**你亲手验证过的**配置。
+- `--with-plugins` —— 用装配好的 dsh 本身从零构建 profile
+  （`dsh plugin --profile <名称> add ...`）。慢、需要网络，但从干净检出开始完全可复现，适合 CI。
 
-Re-doing the install through `dsh plugin add` rather than hand-copying is not
-optional on that path: `dsh plugin` is what reconciles `dsh.profile.bundles`.
-Hand-editing that list is how you get a bundle installed but never mounted.
+在那条路径上，**用 `dsh plugin add` 重做安装而不是手工复制，不是可选项**：
+`dsh plugin` 才是负责协调 `dsh.profile.bundles` 的东西。
+手工去编辑那个列表，就是"包装上了但从未被挂载"的成因。
 
-## Constraint 4 — pnpm ≥ 10 blocks dependency build scripts
+## 约束 4 —— pnpm ≥ 10 会拦截依赖的构建脚本
 
-Installing `dsh-better-sidebar` prints:
+安装 `dsh-better-sidebar` 时会打印：
 
 ```
 Ignored build scripts: node-pty@1.1.0.
 ```
 
-`node-pty` needs its postinstall to place `conpty.dll` and `OpenConsole.exe`.
-Skipped, the sidebar's terminal fails **at runtime**, long after a green install.
+`node-pty` 需要它的 postinstall 来放置 `conpty.dll` 和 `OpenConsole.exe`。
+一旦被跳过，侧栏终端会在**运行时**才失败 —— 而这距离那次一路绿灯的安装已经很久了。
 
-The profile's `pnpm-workspace.yaml` must therefore carry:
+因此 profile 的 `pnpm-workspace.yaml` 必须带上：
 
 ```yaml
 allowBuilds:
   node-pty: true
 ```
 
-then approve:
+然后批准：
 
 ```sh
 pnpm approve-builds --all
 ```
 
-The exact key matters. `onlyBuiltDependencies` is the older spelling; pnpm
-10.34 accepts `allowBuilds`, which is what `pnpm approve-builds` writes. Verify
-with `pnpm approve-builds --help` rather than trusting a blog post.
+**键名本身很关键。** `onlyBuiltDependencies` 是较早的写法；
+pnpm 10.34 接受的是 `allowBuilds`，这也正是 `pnpm approve-builds` 会写下的键。
+请用 `pnpm approve-builds --help` 确认，而不是相信某篇博客。
 
-## Constraint 5 — bundle membership changes need a restart
+## 约束 5 —— 组合包成员的变动需要重启
 
-A profile with `patchReload: live` hot-applies edits to `cordis.patch.yml`. It
-does **not** hot-apply **bundle membership** changes.
+带 `patchReload: live` 的 profile 会热应用对 `cordis.patch.yml` 的编辑，
+但它**不会**热应用**组合包成员**的变动。
 
-Measured behaviour on this machine: after `dsh plugin add`, `--dump-config`
-immediately showed the four new layers, but the *running* host still answered
-`404` on those plugins' routes until restarted.
+本机实测行为：执行 `dsh plugin add` 之后，`--dump-config` 立刻就能看到新的四层，
+但**正在运行**的宿主在重启之前一直对这些插件的路由返回 `404`。
 
-Consequence for the desktop app: installing a plugin from the market can leave
-it visible-but-inert until the harness process is restarted. The shell must be
-able to restart the harness on request, and the UI should say so.
+对桌面应用的推论：从市场里安装插件，可能让它在重启 harness 进程之前处于"看得见但不起作用"的状态。
+外壳必须能够按请求重启 harness，界面也应该把这件事讲清楚。
 
-## Constraint 6 — the shell must load the harness-*announced* URL, not the clean one
+## 约束 6 —— 外壳必须加载 harness **宣告**的 URL，而不是干净 URL
 
-`dsh web` fences its browser surface with a **per-process launch token**. Measured
-on this machine:
+`dsh web` 用一个**进程级启动令牌**围栏它的浏览器面。本机实测：
 
-| Request | Result |
+| 请求 | 结果 |
 |---|---|
-| `GET http://127.0.0.1:<port>/` (clean) | **401** — `dsh web authentication required; reopen the URL printed by dsh web.` |
-| `GET http://127.0.0.1:<port>/?token=<launch-token>` | **200**, redirects to the clean URL and mints a signed browser-session cookie |
-| `GET http://127.0.0.1:<port>/` with that cookie | **200** |
+| `GET http://127.0.0.1:<端口>/`（干净） | **401** —— `dsh web authentication required; reopen the URL printed by dsh web.` |
+| `GET http://127.0.0.1:<端口>/?token=<启动令牌>` | **200**，重定向到干净 URL，并签发签名 cookie |
+| 带该 cookie 访问 `GET http://127.0.0.1:<端口>/` | **200** |
 
-The mechanism is `connection.authenticatedUrl(baseUrl)`: it appends the process
-launch token, and the index handler exchanges a valid root query token for a
-persistent signed cookie (secret loaded by the credential provider).
+其机制是 `connection.authenticatedUrl(baseUrl)`：它把进程启动令牌追加到 URL 上，
+而 index 处理器会把一个有效的根查询令牌换成持久化的签名 cookie（密钥由凭据提供方加载）。
 
-Consequence for any embedder — Electron, Tauri, or a custom shell: **do not
-navigate to the URL you constructed.** Let `printUrl` (on by default) emit the
-announced URL on stdout, capture it, and load *that*:
+对任何嵌入方（Electron、Tauri，或自研外壳）的推论是：
+**不要导航到你拼出来的那个 URL。** 让 `printUrl`（默认开启）把宣告的 URL 输出到 stdout，
+捕获它，然后加载**它**：
 
 ```
 dsh web: http://127.0.0.1:3099/?token=bQKvr5kOK4MxQUaD_cJm36aDNlbOnRggdwzj7QRUi34
 ```
 
-`app/main.mjs` therefore treats the clean URL only as a **readiness probe** (any
-HTTP status, including 401, proves the socket is bound) and loads the announced
-URL. A shell that loads the clean URL shows a bare 401 page and looks broken.
+因此 `app/main.mjs` 只把干净 URL 当作**就绪探针**（任何 HTTP 状态码，包括 401，
+都证明套接字已经绑定），而加载的是宣告出来的 URL。
+一个加载干净 URL 的外壳会显示一个光秃秃的 401 页面，看起来就像坏了。
 
-Corollary: `--no-open` must be passed so the harness does not also launch a
-system browser, but `printUrl` must stay enabled. Do not disable both.
+推论：必须传 `--no-open`，以免 harness 又去拉起系统浏览器；
+但 `printUrl` 必须保持开启。**不要两个都关掉。**
 
-## Constraint 7 — Electron's own install can fail silently; verify it
+## 约束 7 —— Electron 自己的安装可能静默失败，务必验证
 
-`npm install` can leave `node_modules/electron/dist/` holding a **single file**
-(observed: `locales/sr.pak` out of 75 archive entries) while the package still
-reports a successful install. `require('electron')` then throws
-*"Electron failed to install correctly"*, and re-running `install.js` no-ops
-because `@electron/get` reports a **cache hit** — the zip is fine, the
-*extraction* is what failed.
+`npm install` 有可能让 `node_modules/electron/dist/` 里只剩**一个文件**
+（实测：75 个归档条目里只落下了 `locales/sr.pak`），而包本身依然报告安装成功。
+此时 `require('electron')` 会抛 *"Electron failed to install correctly"*，
+而重跑 `install.js` 会直接空转，因为 `@electron/get` 报告 **cache hit** ——
+zip 是好的，**解压**才是失败的那一步。
 
-Diagnose and repair without re-downloading:
+不必重新下载即可诊断和修复：
 
 ```sh
-# 1. The cached zip is complete; confirm it.
+# 1. 缓存里的 zip 是完整的，先确认
 ls "$LOCALAPPDATA/electron/Cache"/*/electron-v*-win32-x64.zip
-tar -xf <that-zip> -C node_modules/electron/dist      # extraction is what failed
-# 2. electron reads the binary path from this file; a manual extract must write it.
+tar -xf <那个 zip> -C node_modules/electron/dist      # 失败的其实是解压
+# 2. electron 从这个文件读取二进制路径；手工解压必须自己写它
 printf 'electron.exe' > node_modules/electron/path.txt
 npx electron --version
 ```
 
-`path.txt` is the step that is easy to miss: `index.js` reads it to locate the
-binary, and `install.js` is what normally writes it.
+`path.txt` 是最容易漏掉的一步：`index.js` 靠它定位二进制，
+而正常情况写它的是 `install.js`。
 
-## Constraint 8 — Electron's Node is not the harness's Node
+仓库里的 `scripts/repair-electron.mjs` 已经把这一切自动化，并挂在 `postinstall` 上，
+因此新克隆的仓库会自愈。
 
-The harness runs in a **spawned** Node process, never inside Electron's runtime.
-This is deliberate:
+## 约束 8 —— Electron 的 Node 不是 harness 的 Node
 
-- Native modules (`node-pty`) match the staged Node's ABI, not Electron's.
-- Harness crashes cannot take the shell down; the shell can report and restart.
-- The child environment is explicit (`DSH_HOME`, `NODE_OPTIONS: ''`) rather than
-  inherited from whatever launched Electron.
+harness 跑在一个**被 spawn 出来的** Node 进程里，**从不**跑在 Electron 的运行时之内。
+这是刻意的：
 
-The corollary: `ELECTRON_RUN_AS_NODE` is set on the child, and the child uses the
-bundled `runtime/node/node.exe` binary — not `process.execPath`.
+- 原生模块（`node-pty`）匹配的是装配的 Node 的 ABI，而不是 Electron 的。
+- harness 崩溃不会带走外壳；外壳可以报告它、重启它。
+- 子进程环境是显式构造的（`DSH_HOME`、`NODE_OPTIONS: ''`），
+  而不是从启动 Electron 的那个环境继承来的。
 
-## Verifying a staging run
+其推论：子进程上设置了 `ELECTRON_RUN_AS_NODE`，
+并且子进程使用的是随附的 `runtime/node/node.exe` —— 而不是 `process.execPath`。
+
+## 如何验证一次装配
 
 ```sh
 npm run verify -- --boot
 ```
 
-Structure + parity + spawn. `--json` for CI. The parity check diffs the staged
-composed tree against the official install's tree and **fails on any missing
-row**; extra rows from bundled plugins are expected and reported, not penalised.
+结构 + 能力平价 + 启动。`--json` 供 CI 使用。
+平价检查会把装配出的组合树与官方安装的树做 diff，并在**任何缺失的行**上失败；
+随附插件带来的额外行是预期内的，会被报告，但不会因此扣分。

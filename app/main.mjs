@@ -1,20 +1,19 @@
 /**
- * dsh-px — Electron main process.
+ * dsh-px —— Electron 主进程。
  *
- * Responsibility split (deliberate, keep it this way):
- *   - Electron owns ONLY the desktop shell: window, tray, menus, lifecycle.
- *   - The bundled `dsh` CLI owns ALL harness capability: agent, tools, sessions,
- *     plugin composition, settings. We never reimplement harness behaviour here.
+ * 职责划分（这是刻意的，请保持这样）：
+ *   - Electron 只拥有桌面外壳：窗口、托盘、菜单、生命周期。
+ *   - 随附的 `dsh` CLI 拥有全部 harness 能力：智能体、工具、会话、插件组合、设置。
+ *     我们绝不在这里重新实现任何 harness 行为。
  *
- * That is what makes "at least official dsh capability" reachable: the packaged
- * runtime IS the official dsh install, launched unmodified, with the same
- * profile composition a `dsh --profile web` invocation would build.
+ * 正因如此，"至少达到官方 dsh 能力"才是可达的：打包进去的运行时**就是**官方 dsh 安装，
+ * 原样启动，组合出的 profile 与一次 `dsh --profile web` 调用所构建的完全一致。
  *
  * @module dsh-px/main
  */
 import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage } from 'electron'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, cpSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, cpSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -24,7 +23,7 @@ const APP_ROOT = resolve(HERE, '..')                          // <app>
 const PROFILE_NAME = process.env.DSH_PX_PROFILE ?? 'web'
 const HOST = '127.0.0.1'
 const DEFAULT_PORT = Number(process.env.DSH_PX_PORT ?? 3080)
-/** How long to wait for the harness HTTP surface to answer before giving up. */
+/** 等待 harness 的 HTTP 面给出应答的上限；超时即判定启动失败。 */
 const READY_TIMEOUT_MS = Number(process.env.DSH_PX_READY_TIMEOUT_MS ?? 180_000)
 
 /** @type {import('node:child_process').ChildProcess | null} */
@@ -36,10 +35,9 @@ let tray = null
 let quitting = false
 
 /**
- * Resolve the staged runtime. Supports two layouts so the same code runs in
- * development and inside an installed app:
- *   packaged:  <resources>/runtime/{node,dsh,dsh-home}
- *   dev:       <repo>/runtime/{node,dsh,dsh-home}
+ * 解析已装配的运行时。支持两种布局，使同一份代码在开发态和安装后都能跑：
+ *   打包后：  <resources>/runtime/{node,dsh,dsh-home}
+ *   开发态：  <仓库>/runtime/{node,dsh,dsh-home}
  * @returns {{root:string,node:string,dshEntry:string,seedHome:string}|null}
  */
 function resolveRuntime () {
@@ -61,11 +59,10 @@ function resolveRuntime () {
 }
 
 /**
- * Pick the harness home. Precedence:
- *   1. DSH_PX_HOME   — explicit override (also how you point the shell at an
- *                      existing ~/.dsh during plugin development).
- *   2. <userData>/dsh-home — the app's own home, seeded from the bundled tree
- *                      on first run and thereafter owned by the user.
+ * 选定 harness home。优先级：
+ *   1. DSH_PX_HOME —— 显式覆盖（也是在开发插件时，把外壳指向你现有 ~/.dsh 的方式）。
+ *   2. <userData>/dsh-home —— 应用自己的 home：首次运行从随附的树播种，
+ *      此后归用户所有。
  * @returns {string}
  */
 function resolveHarnessHome (runtime) {
@@ -86,8 +83,8 @@ function resolveHarnessHome (runtime) {
 }
 
 /**
- * Find a free TCP port, preferring `preferred` so an already-running harness on
- * the default port is reused rather than duplicated.
+ * 找一个空闲 TCP 端口，优先使用 `preferred`，
+ * 这样如果默认端口上已经有一个 harness 在跑，就会被复用而不是重复起一个。
  * @param {number} preferred
  * @returns {Promise<number>}
  */
@@ -104,9 +101,9 @@ function findPort (preferred) {
 }
 
 /**
- * Poll the harness HTTP surface until it answers. Any HTTP status (including
- * 401 from the browser-trust fence) proves the server is listening; a connection
- * refusal is what we are waiting out.
+ * 轮询 harness 的 HTTP 面直到有应答。任何 HTTP 状态码
+ * （包括来自浏览器信任围栏的 401）都证明服务器已在监听；
+ * 我们真正在等的是"连接被拒绝"这件事结束。
  * @param {string} url
  * @param {number} timeoutMs
  */
@@ -129,13 +126,12 @@ async function waitForReady (url, timeoutMs) {
 }
 
 /**
- * The harness fences its browser surface with a per-process launch token: the
- * plain `http://127.0.0.1:<port>/` answers 401, and only the URL `dsh web`
- * announces (`authenticatedUrl()` = clean URL + process token) exchanges that
- * token for the signed browser-session cookie.
+ * harness 用一个**进程级启动令牌**围栏它的浏览器面：
+ * 干净的 `http://127.0.0.1:<端口>/` 会返回 401，只有 `dsh web` 宣告的那个 URL
+ * （`authenticatedUrl()` = 干净 URL 加上进程令牌）才能把令牌换成签名的浏览器会话 cookie。
  *
- * So the shell must not guess the URL — it reads the one the harness prints.
- * The clean URL stays the readiness probe; the announced URL is what we load.
+ * 所以外壳**不能猜** URL —— 它要读取 harness 打印出来的那一个。
+ * 干净 URL 仍作为就绪探针；真正加载的是宣告出来的 URL。
  * @param {string} text
  * @returns {string | null}
  */
@@ -145,7 +141,7 @@ function extractAuthenticatedUrl (text) {
 }
 
 /**
- * Spawn the bundled harness and resolve once it announces its authenticated URL.
+ * 拉起随附的 harness，并在它宣告出自己的鉴权 URL 后兑现 Promise。
  * @param {{runtime:any, home:string, port:number}} opts
  * @returns {{child: import('node:child_process').ChildProcess, authUrl: Promise<string|null>}}
  */
@@ -155,7 +151,7 @@ function startHarness ({ runtime, home, port }) {
     ...process.env,
     DSH_HOME: home,
     DSH_PERMISSION_MODE: process.env.DSH_PERMISSION_MODE ?? 'workspace-write',
-    // Electron ships its own Node; the harness must run on the bundled runtime.
+    // Electron 自带自己的 Node；harness 必须跑在随附的那个运行时上。
     NODE_OPTIONS: '',
     ELECTRON_RUN_AS_NODE: '1'
   }
@@ -185,12 +181,12 @@ function startHarness ({ runtime, home, port }) {
   child.on('exit', (code, signal) => {
     process.stdout.write(`[dsh] harness exited code=${code} signal=${signal}\n`)
     harness = null
-    // Unblock a pending URL wait so the caller reports "exited early" rather
-    // than hanging until the readiness timeout.
+    // 解除仍在等待 URL 的那一方，好让调用方报告"提前退出"，
+    // 而不是一直挂到就绪超时。
     if (settle) { const done = settle; settle = null; done(null) }
     if (!quitting) {
       dialog.showErrorBox('dsh-px',
-        `The harness process exited unexpectedly (code ${code}).\n\nLast output:\n${announced.slice(-1500)}`)
+        `harness 进程意外退出（code ${code}）。\n\n最后的输出：\n${announced.slice(-1500)}`)
     }
   })
 
@@ -208,7 +204,7 @@ function createWindow (url) {
     title: 'dsh-px',
     autoHideMenuBar: true,
     webPreferences: {
-      // The harness frontend is a trusted local origin; keep Node out of it.
+      // harness 前端是一个可信的本地源；别把 Node 暴露进去。
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -219,7 +215,7 @@ function createWindow (url) {
   win.once('ready-to-show', () => win?.show())
   win.on('closed', () => { win = null })
 
-  // External links open in the real browser, never inside the shell.
+  // 外部链接交给真正的浏览器打开，绝不在外壳里打开。
   win.webContents.setWindowOpenHandler(({ url: target }) => {
     if (target.startsWith('http://127.0.0.1') || target.startsWith('http://localhost')) {
       return { action: 'allow' }
@@ -237,15 +233,15 @@ function createTray (url) {
     tray = new Tray(nativeImage.createEmpty())
     tray.setToolTip('dsh-px')
     tray.setContextMenu(Menu.buildFromTemplate([
-      { label: 'Open dsh-px', click: () => { if (win) { win.show(); win.focus() } else { createWindow(url) } } },
+      { label: '打开 dsh-px', click: () => { if (win) { win.show(); win.focus() } else { createWindow(url) } } },
       { type: 'separator' },
-      { label: 'Open in browser', click: () => void shell.openExternal(url) },
+      { label: '在浏览器中打开', click: () => void shell.openExternal(url) },
       { type: 'separator' },
-      { label: 'Quit', click: () => { quitting = true; app.quit() } }
+      { label: '退出', click: () => { quitting = true; app.quit() } }
     ]))
     tray.on('double-click', () => { win?.show(); win?.focus() })
   } catch {
-    // Tray is best-effort; headless/CI environments have no notification area.
+    // 托盘是尽力而为的；无头/CI 环境没有通知区域。
   }
 }
 
@@ -253,8 +249,8 @@ async function main () {
   const runtime = resolveRuntime()
   if (!runtime) {
     dialog.showErrorBox(
-      'dsh-px — runtime missing',
-      'The bundled runtime was not found.\n\nRun `npm run stage` to assemble it, then start again.'
+      'dsh-px —— 缺少运行时',
+      '没有找到随附的运行时。\n\n请先执行 `npm run stage` 装配它，然后重新启动。'
     )
     app.exit(1)
     return
@@ -273,8 +269,8 @@ async function main () {
   try {
     const status = await waitForReady(cleanUrl, READY_TIMEOUT_MS)
     process.stdout.write(`[dsh-px] harness listening (HTTP ${status}) at ${cleanUrl}\n`)
-    // Prefer the URL the harness announced: it carries the per-process launch
-    // token, and loading the clean URL would just 401 at the browser fence.
+    // 优先使用 harness 宣告的 URL：它带着进程启动令牌；
+    // 加载干净 URL 只会在浏览器围栏上撞到 401。
     const authUrl = await Promise.race([
       started.authUrl,
       new Promise((res) => setTimeout(() => res(null), 20_000))
@@ -286,7 +282,7 @@ async function main () {
       process.stdout.write('[dsh-px] WARNING: no announced URL captured; loading the clean URL (expect a 401 fence)\n')
     }
   } catch (err) {
-    dialog.showErrorBox('dsh-px — harness failed to start', String(err?.message ?? err))
+    dialog.showErrorBox('dsh-px —— harness 启动失败', String(err?.message ?? err))
     quitting = true
     app.quit()
     return
@@ -297,8 +293,8 @@ async function main () {
 }
 
 app.on('window-all-closed', () => {
-  // A desktop client that keeps running with no window is a support burden;
-  // quit with the window on every platform.
+  // 一个没有窗口却还在运行的桌面客户端是维护负担；
+  // 因此在所有平台上都随窗口一起退出。
   quitting = true
   app.quit()
 })
@@ -313,6 +309,6 @@ app.on('will-quit', () => {
 })
 
 app.whenReady().then(main).catch((err) => {
-  dialog.showErrorBox('dsh-px — startup error', String(err?.stack ?? err))
+  dialog.showErrorBox('dsh-px —— 启动异常', String(err?.stack ?? err))
   app.exit(1)
 })

@@ -1,11 +1,11 @@
 /**
- * Minimal shell-side health check. Run this before blaming the UI.
+ * 外壳侧的最小健康检查。在怀疑界面之前，先跑这个。
  *
- * Boots the STAGED runtime (not your global dsh) against a scratch port, waits
- * for the HTTP surface, reports the status code, and shuts it down. Any HTTP
- * answer — including 401 from the browser-trust fence — proves the harness is up.
+ * 它会用**已装配**的运行时（不是你全局的 dsh）在临时端口上启动，
+ * 等 HTTP 面应答，报告状态码，然后关掉它。
+ * 任何 HTTP 应答 —— 包括来自浏览器信任围栏的 401 —— 都证明 harness 已经起来了。
  *
- * Usage:
+ * 用法：
  *   node app/bootstrap.mjs
  *   DSH_PX_PORT=3080 node app/bootstrap.mjs
  */
@@ -28,7 +28,7 @@ const home = process.env.DSH_PX_HOME ?? join(RUNTIME, 'dsh-home')
 
 for (const [label, p] of [['node', nodeExe], ['dsh', dshEntry], ['home', join(home, 'profiles', PROFILE, 'package.json')]]) {
   if (!existsSync(p)) {
-    process.stderr.write(`[bootstrap] missing ${label}: ${p}\nRun: npm run stage -- --from-existing\n`)
+    process.stderr.write(`[bootstrap] 缺少 ${label}：${p}\n请先执行：npm run stage -- --from-existing\n`)
     process.exit(1)
   }
 }
@@ -46,7 +46,7 @@ let ready = false
 while (Date.now() < deadline && child.exitCode === null) {
   try {
     const res = await fetch(url, { redirect: 'manual' })
-    process.stdout.write(`[bootstrap] READY ${url} -> HTTP ${res.status}\n`)
+    process.stdout.write(`[bootstrap] 就绪 ${url} -> HTTP ${res.status}\n`)
     ready = true
     break
   } catch {
@@ -54,6 +54,6 @@ while (Date.now() < deadline && child.exitCode === null) {
   }
 }
 
-if (!ready) process.stderr.write('[bootstrap] harness did not become ready\n')
+if (!ready) process.stderr.write('[bootstrap] harness 未能在限时内就绪\n')
 if (child.exitCode === null) child.kill()
 process.exit(ready ? 0 : 1)

@@ -1,12 +1,11 @@
 name: verify
 
-# The beta gate. This workflow is the reason "at least official dsh capability"
-# is a checkable claim rather than a slogan: it stages a runtime from scratch and
-# then diffs the composed plugin tree against the official install's tree.
+# beta 门禁。这个工作流正是"至少达到官方 dsh 能力"从一个口号变成一条可检查主张的原因：
+# 它从零装配一份运行时，然后把组合出的插件树与官方安装的树逐行 diff。
 #
-# NOTE: the parity check runs against the dsh version pinned in
-# scripts/stage-runtime.mjs. Bump DSH_PX_DSH_VERSION deliberately; a bump that
-# drops rows will fail this workflow, which is the point.
+# 注意：平价检查针对的是 scripts/stage-runtime.mjs 里锁定的那个 dsh 版本。
+# 请有意地去改 DSH_PX_DSH_VERSION；如果某次升级导致行数减少，这个工作流就会失败 ——
+# 这正是它存在的意义。
 
 on:
   push:
@@ -28,19 +27,19 @@ jobs:
         with:
           node-version: '24'
 
-      - name: Install pnpm
+      - name: 安装 pnpm
         run: npm install -g pnpm@10
 
-      - name: Install dev dependencies
+      - name: 安装开发依赖
         run: npm install
 
-      - name: Stage runtime (node + dsh + profile from npm)
+      - name: 装配运行时（Node + dsh + 从 npm 构建 profile）
         run: npm run stage -- --with-plugins
 
-      - name: Verify capability parity
+      - name: 验证能力平价
         run: npm run verify -- --boot --json
 
-      - name: Upload staged manifest
+      - name: 上传装配清单
         if: always()
         uses: actions/upload-artifact@v4
         with:

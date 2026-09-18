@@ -1,27 +1,22 @@
 /**
- * Verify that the staged dsh-px runtime reaches at least official-dsh capability.
+ * 验证装配出的 dsh-px 运行时至少达到了官方 dsh 的能力。
  *
- * The acceptance question for beta is: "does the packaged app offer what a plain
- * `dsh --profile web` install offers?" We answer it mechanically instead of by
- * opinion:
+ * beta 的验收问题是："打包后的应用是否提供了普通 `dsh --profile web` 安装所提供的东西？"
+ * 我们机械地回答它，而不是凭感觉：
  *
- *   1. STRUCTURE  the staged runtime exists and its profile declares the same
- *                 bundle layers the official shipped profile declares.
- *   2. PARITY     compose the staged profile's tree and the official profile's
- *                 tree with `--dump-config`, then compare the set of composed
- *                 plugin rows (id + name). Anything official has that staged
- *                 lacks is a capability gap.
- *   3. SPAWN      (--boot) start the staged harness on a scratch port and prove
- *                 its HTTP surface answers.
+ *   1. 结构     装配出的运行时存在，且它的 profile 声明了官方随附 profile 所声明的同一批组合包层。
+ *   2. 能力平价 用 `--dump-config` 分别组合出装配版 profile 与官方 profile 的树，
+ *               然后比较组合出的插件行集合（id + name）。
+ *               官方有而装配版缺的任何东西都是能力缺口。
+ *   3. 启动     （--boot）在临时端口上启动装配好的 harness，并证明它的 HTTP 面有应答。
  *
- * Usage:
- *   node scripts/verify-capabilities.mjs            # structure + parity
- *   node scripts/verify-capabilities.mjs --boot     # also boot and probe
- *   node scripts/verify-capabilities.mjs --json     # machine-readable result
+ * 用法：
+ *   node scripts/verify-capabilities.mjs            # 结构 + 能力平价
+ *   node scripts/verify-capabilities.mjs --boot     # 额外启动并探测
+ *   node scripts/verify-capabilities.mjs --json     # 机器可读结果
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, readFileSync, mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -35,10 +30,10 @@ const AS_JSON = process.argv.includes('--json')
 const results = []
 const record = (name, ok, detail) => {
   results.push({ name, ok, detail })
-  if (!AS_JSON) process.stdout.write(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` — ${detail}` : ''}\n`)
+  if (!AS_JSON) process.stdout.write(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` —— ${detail}` : ''}\n`)
 }
 
-/** Parse `--dump-config` YAML-ish output into composed rows. */
+/** 解析 `--dump-config` 那种类 YAML 输出，取出组合出的行。 */
 function parseRows (yaml) {
   const rows = []
   let current = null
@@ -68,7 +63,7 @@ function dump (nodeExe, dshEntry, home) {
   return parseRows(out)
 }
 
-/** Locate the official dsh this machine runs, for the parity baseline. */
+/** 定位这台机器在用的官方 dsh，用作能力平价的基线。 */
 function officialDsh () {
   const root = execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['root', '-g'], {
     encoding: 'utf8',
@@ -92,14 +87,14 @@ async function bootProbe (nodeExe, dshEntry, home) {
   const deadline = Date.now() + 150_000
   try {
     while (Date.now() < deadline) {
-      if (child.exitCode !== null) throw new Error(`exited early (${child.exitCode})\n${log.slice(-2000)}`)
+      if (child.exitCode !== null) throw new Error(`提前退出（${child.exitCode}）\n${log.slice(-2000)}`)
       try {
         const res = await fetch(url, { redirect: 'manual' })
         return { ok: true, status: res.status, url, log }
-      } catch { /* not listening yet */ }
+      } catch { /* 还没开始监听 */ }
       await new Promise((r) => setTimeout(r, 400))
     }
-    throw new Error(`not ready within 150s\n${log.slice(-2000)}`)
+    throw new Error(`150 秒内未就绪\n${log.slice(-2000)}`)
   } finally {
     if (child.exitCode === null) child.kill()
   }
@@ -113,68 +108,69 @@ async function main () {
   const home = join(RUNTIME, 'dsh-home')
   const profileDir = join(home, 'profiles', PROFILE)
 
-  // ---- 1. structure -------------------------------------------------------
-  record('staged node runtime exists', existsSync(nodeExe), nodeExe.replace(REPO, '.'))
-  record('staged dsh install exists', existsSync(dshEntry), dshEntry.replace(REPO, '.'))
-  record('seed profile exists', existsSync(join(profileDir, 'package.json')), profileDir.replace(REPO, '.'))
+  // ---- 1. 结构 ------------------------------------------------------------
+  record('装配的 Node 运行时存在', existsSync(nodeExe), nodeExe.replace(REPO, '.'))
+  record('装配的 dsh 安装存在', existsSync(dshEntry), dshEntry.replace(REPO, '.'))
+  record('种子 profile 存在', existsSync(join(profileDir, 'package.json')), profileDir.replace(REPO, '.'))
 
   if (!existsSync(nodeExe) || !existsSync(dshEntry)) return finish()
 
   const runtimeManifest = join(RUNTIME, 'runtime-manifest.json')
   if (existsSync(runtimeManifest)) {
     const m = JSON.parse(readFileSync(runtimeManifest, 'utf8'))
-    record('runtime manifest present', true, `dsh ${m.dsh?.version} / node ${m.node?.version}`)
+    record('运行时 manifest 存在', true, `dsh ${m.dsh?.version} / node ${m.node?.version}`)
   }
 
   if (!existsSync(join(profileDir, 'package.json'))) return finish()
   const profileManifest = JSON.parse(readFileSync(join(profileDir, 'package.json'), 'utf8'))
   const bundles = profileManifest?.dsh?.profile?.bundles ?? []
   for (const required of ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']) {
-    record(`profile declares ${required}`, bundles.includes(required), `bundles=${bundles.join(', ')}`)
+    record(`profile 声明了 ${required}`, bundles.includes(required), `bundles=${bundles.join(', ')}`)
   }
 
-  // ---- 2. parity against the official install -----------------------------
+  // ---- 2. 与官方安装做能力平价 --------------------------------------------
   const official = officialDsh()
   if (!official) {
-    record('official dsh baseline available', false, 'no global dsh install found; parity not measured')
+    record('官方 dsh 基线可用', false, '找不到全局 dsh 安装；未度量能力平价')
   } else {
     const officialHome = process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh')
     let stagedRows, officialRows
     try {
       stagedRows = dump(nodeExe, dshEntry, home)
     } catch (err) {
-      record('staged --dump-config succeeds', false, String(err?.message ?? err).slice(0, 400))
+      record('装配版 --dump-config 成功', false, String(err?.message ?? err).slice(0, 400))
     }
     try {
       officialRows = dump(nodeExe, join(official, 'lib', 'bin.js'), officialHome)
     } catch (err) {
-      record('official --dump-config succeeds', false, String(err?.message ?? err).slice(0, 400))
+      record('官方版 --dump-config 成功', false, String(err?.message ?? err).slice(0, 400))
     }
     if (stagedRows && officialRows) {
       const key = (r) => `${r.id}|${r.name}`
+      const officialKeys = new Set(officialRows.map(key))
       const stagedSet = new Set(stagedRows.map(key))
       const missing = officialRows.filter((r) => !stagedSet.has(key(r)))
-      const extra = stagedRows.filter((r) => !new Set(officialRows.map(key)).has(key(r)))
-      record('staged composes a plugin tree', stagedRows.length > 100, `${stagedRows.length} rows`)
+      const extra = stagedRows.filter((r) => !officialKeys.has(key(r)))
+      record('装配版能组合出插件树', stagedRows.length > 100, `${stagedRows.length} 行`)
       record(
-        'capability parity: nothing official is missing',
+        '能力平价：官方的东西一样都不缺',
         missing.length === 0,
-        missing.length ? `missing ${missing.length}: ${missing.slice(0, 10).map((r) => r.id).join(', ')}` : 'identical or superset'
+        missing.length ? `缺失 ${missing.length} 行：${missing.slice(0, 10).map((r) => r.id).join('、')}` : '完全一致或为其超集'
       )
       if (extra.length) {
-        record('staged superset (bundled plugins add rows)', true,
-          `+${extra.length}: ${extra.slice(0, 10).map((r) => r.id).join(', ')}`)
+        record('装配版是超集（随附插件带来了额外行）', true,
+          `+${extra.length}：${extra.slice(0, 10).map((r) => r.id).join('、')}`)
       }
     }
   }
 
-  // ---- 3. spawn ------------------------------------------------------------
+  // ---- 3. 启动 ------------------------------------------------------------
   if (BOOT) {
     try {
       const probe = await bootProbe(nodeExe, dshEntry, home)
-      record('staged harness boots and answers HTTP', true, `${probe.url} -> HTTP ${probe.status}`)
+      record('装配的 harness 能启动且 HTTP 有应答', true, `${probe.url} -> HTTP ${probe.status}`)
     } catch (err) {
-      record('staged harness boots and answers HTTP', false, String(err?.message ?? err).slice(0, 600))
+      record('装配的 harness 能启动且 HTTP 有应答', false, String(err?.message ?? err).slice(0, 600))
     }
   }
 
@@ -186,8 +182,8 @@ function finish () {
   if (AS_JSON) {
     process.stdout.write(JSON.stringify({ ok: failed.length === 0, results }, null, 2) + '\n')
   } else {
-    process.stdout.write(`\n${results.length - failed.length}/${results.length} checks passed\n`)
-    if (failed.length) process.stdout.write(`BETA NOT MET: ${failed.map((r) => r.name).join('; ')}\n`)
+    process.stdout.write(`\n${results.length - failed.length}/${results.length} 项检查通过\n`)
+    if (failed.length) process.stdout.write(`beta 未达标：${failed.map((r) => r.name).join('；')}\n`)
   }
   process.exitCode = failed.length ? 1 : 0
 }

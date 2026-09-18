@@ -1,6 +1,11 @@
-# Staged runtime: the bundled Node + dsh install + profile tree.
-# Assembled by `npm run stage`; never committed (hundreds of MB of third-party code).
+# 装配出的运行时：随附的 Node + dsh 安装 + profile 树。
+# 由 `npm run stage` 生成；绝不入库（数百 MB 的第三方代码）。
+#
+# 用通配符而不是写死 `/runtime/`：手工调试时很容易留下 `runtime.bak/`
+# 这类旁支目录，而一次 `git add -A` 就会把整个 Node 发行版（十万级文件）
+# 扫进索引 —— 这个坑真的踩过。
 /runtime/
+/runtime*/
 
 # Build output
 /dist/
