@@ -129,17 +129,33 @@ async function waitForReady (url, timeoutMs) {
 }
 
 /**
- * Spawn the bundled harness.
- * @param {{runtime:any, home:string, port:number, logs:string}} opts
+ * The harness fences its browser surface with a per-process launch token: the
+ * plain `http://127.0.0.1:<port>/` answers 401, and only the URL `dsh web`
+ * announces (`authenticatedUrl()` = clean URL + process token) exchanges that
+ * token for the signed browser-session cookie.
+ *
+ * So the shell must not guess the URL — it reads the one the harness prints.
+ * The clean URL stays the readiness probe; the announced URL is what we load.
+ * @param {string} text
+ * @returns {string | null}
  */
-function startHarness ({ runtime, home, port, logs }) {
+function extractAuthenticatedUrl (text) {
+  const match = text.match(/dsh web:\s*(http:\/\/\S+)/)
+  return match ? match[1] : null
+}
+
+/**
+ * Spawn the bundled harness and resolve once it announces its authenticated URL.
+ * @param {{runtime:any, home:string, port:number}} opts
+ * @returns {{child: import('node:child_process').ChildProcess, authUrl: Promise<string|null>}}
+ */
+function startHarness ({ runtime, home, port }) {
   const args = [runtime.dshEntry, '--profile', PROFILE_NAME, '--host', HOST, '--port', String(port), '--no-open']
   const env = {
     ...process.env,
     DSH_HOME: home,
     DSH_PERMISSION_MODE: process.env.DSH_PERMISSION_MODE ?? 'workspace-write',
-    // Electron ships its own Node; make sure the child never inherits a
-    // confusing NODE_OPTIONS and never tries to attach a debugger.
+    // Electron ships its own Node; the harness must run on the bundled runtime.
     NODE_OPTIONS: '',
     ELECTRON_RUN_AS_NODE: '1'
   }
@@ -149,20 +165,36 @@ function startHarness ({ runtime, home, port, logs }) {
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true
   })
-  const logStream = (chunk, tag) => {
+
+  let announced = ''
+  let settle
+  const authUrl = new Promise((res) => { settle = res })
+
+  const consume = (chunk) => {
     const text = chunk.toString()
-    process.stdout.write(`[dsh ${tag}] ${text}`)
+    announced += text
+    process.stdout.write(`[dsh] ${text}`)
+    if (settle) {
+      const url = extractAuthenticatedUrl(announced)
+      if (url) { const done = settle; settle = null; done(url) }
+    }
   }
-  child.stdout?.on('data', (c) => logStream(c, 'out'))
-  child.stderr?.on('data', (c) => logStream(c, 'err'))
+  child.stdout?.on('data', consume)
+  child.stderr?.on('data', consume)
+
   child.on('exit', (code, signal) => {
     process.stdout.write(`[dsh] harness exited code=${code} signal=${signal}\n`)
     harness = null
-    if (!quitting && win) {
-      dialog.showErrorBox('dsh-px', `The harness process exited unexpectedly (code ${code}).\n\nLogs: ${logs}`)
+    // Unblock a pending URL wait so the caller reports "exited early" rather
+    // than hanging until the readiness timeout.
+    if (settle) { const done = settle; settle = null; done(null) }
+    if (!quitting) {
+      dialog.showErrorBox('dsh-px',
+        `The harness process exited unexpectedly (code ${code}).\n\nLast output:\n${announced.slice(-1500)}`)
     }
   })
-  return child
+
+  return { child, authUrl }
 }
 
 function createWindow (url) {
@@ -229,17 +261,30 @@ async function main () {
   }
 
   const home = resolveHarnessHome(runtime)
-  const logs = join(home, 'dsh-px.log')
   const port = await findPort(DEFAULT_PORT)
-  const url = `http://${HOST}:${port}/`
+  const cleanUrl = `http://${HOST}:${port}/`
 
-  process.stdout.write(`[dsh-px] node=${runtime.node}\n[dsh-px] dsh=${runtime.dshEntry}\n[dsh-px] DSH_HOME=${home}\n[dsh-px] url=${url}\n`)
+  process.stdout.write(`[dsh-px] node=${runtime.node}\n[dsh-px] dsh=${runtime.dshEntry}\n[dsh-px] DSH_HOME=${home}\n[dsh-px] url=${cleanUrl}\n`)
 
-  harness = startHarness({ runtime, home, port, logs })
+  const started = startHarness({ runtime, home, port })
+  harness = started.child
 
+  let openUrl = cleanUrl
   try {
-    const status = await waitForReady(url, READY_TIMEOUT_MS)
-    process.stdout.write(`[dsh-px] harness ready (HTTP ${status}) at ${url}\n`)
+    const status = await waitForReady(cleanUrl, READY_TIMEOUT_MS)
+    process.stdout.write(`[dsh-px] harness listening (HTTP ${status}) at ${cleanUrl}\n`)
+    // Prefer the URL the harness announced: it carries the per-process launch
+    // token, and loading the clean URL would just 401 at the browser fence.
+    const authUrl = await Promise.race([
+      started.authUrl,
+      new Promise((res) => setTimeout(() => res(null), 20_000))
+    ])
+    if (authUrl) {
+      openUrl = authUrl
+      process.stdout.write('[dsh-px] using harness-announced authenticated URL\n')
+    } else {
+      process.stdout.write('[dsh-px] WARNING: no announced URL captured; loading the clean URL (expect a 401 fence)\n')
+    }
   } catch (err) {
     dialog.showErrorBox('dsh-px — harness failed to start', String(err?.message ?? err))
     quitting = true
@@ -247,8 +292,8 @@ async function main () {
     return
   }
 
-  createWindow(url)
-  createTray(url)
+  createWindow(openUrl)
+  createTray(cleanUrl)
 }
 
 app.on('window-all-closed', () => {

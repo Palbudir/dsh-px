@@ -135,7 +135,60 @@ Consequence for the desktop app: installing a plugin from the market can leave
 it visible-but-inert until the harness process is restarted. The shell must be
 able to restart the harness on request, and the UI should say so.
 
-## Constraint 6 — Electron's Node is not the harness's Node
+## Constraint 6 — the shell must load the harness-*announced* URL, not the clean one
+
+`dsh web` fences its browser surface with a **per-process launch token**. Measured
+on this machine:
+
+| Request | Result |
+|---|---|
+| `GET http://127.0.0.1:<port>/` (clean) | **401** — `dsh web authentication required; reopen the URL printed by dsh web.` |
+| `GET http://127.0.0.1:<port>/?token=<launch-token>` | **200**, redirects to the clean URL and mints a signed browser-session cookie |
+| `GET http://127.0.0.1:<port>/` with that cookie | **200** |
+
+The mechanism is `connection.authenticatedUrl(baseUrl)`: it appends the process
+launch token, and the index handler exchanges a valid root query token for a
+persistent signed cookie (secret loaded by the credential provider).
+
+Consequence for any embedder — Electron, Tauri, or a custom shell: **do not
+navigate to the URL you constructed.** Let `printUrl` (on by default) emit the
+announced URL on stdout, capture it, and load *that*:
+
+```
+dsh web: http://127.0.0.1:3099/?token=bQKvr5kOK4MxQUaD_cJm36aDNlbOnRggdwzj7QRUi34
+```
+
+`app/main.mjs` therefore treats the clean URL only as a **readiness probe** (any
+HTTP status, including 401, proves the socket is bound) and loads the announced
+URL. A shell that loads the clean URL shows a bare 401 page and looks broken.
+
+Corollary: `--no-open` must be passed so the harness does not also launch a
+system browser, but `printUrl` must stay enabled. Do not disable both.
+
+## Constraint 7 — Electron's own install can fail silently; verify it
+
+`npm install` can leave `node_modules/electron/dist/` holding a **single file**
+(observed: `locales/sr.pak` out of 75 archive entries) while the package still
+reports a successful install. `require('electron')` then throws
+*"Electron failed to install correctly"*, and re-running `install.js` no-ops
+because `@electron/get` reports a **cache hit** — the zip is fine, the
+*extraction* is what failed.
+
+Diagnose and repair without re-downloading:
+
+```sh
+# 1. The cached zip is complete; confirm it.
+ls "$LOCALAPPDATA/electron/Cache"/*/electron-v*-win32-x64.zip
+tar -xf <that-zip> -C node_modules/electron/dist      # extraction is what failed
+# 2. electron reads the binary path from this file; a manual extract must write it.
+printf 'electron.exe' > node_modules/electron/path.txt
+npx electron --version
+```
+
+`path.txt` is the step that is easy to miss: `index.js` reads it to locate the
+binary, and `install.js` is what normally writes it.
+
+## Constraint 8 — Electron's Node is not the harness's Node
 
 The harness runs in a **spawned** Node process, never inside Electron's runtime.
 This is deliberate:

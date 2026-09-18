@@ -33,6 +33,13 @@ electron main process
               └─ serves http://127.0.0.1:<port>  ──►  BrowserWindow
 ```
 
+One subtlety makes or breaks the window, and it is worth stating up front:
+**the clean URL above answers `401`.** dsh fences its browser surface with a
+per-process launch token, and only the URL `dsh web` announces — the clean URL
+plus `?token=…` — exchanges that token for a signed session cookie. So the shell
+uses the clean URL purely as a *readiness probe* and loads the URL the harness
+prints. See `docs/PACKAGING.md`, constraint 6.
+
 ## Repository layout
 
 ```
@@ -120,6 +127,24 @@ non-obvious constraints (junction trees, pnpm build approvals, `allowBuilds`).
 - The Electron build is **unsigned**.
 - Auth uses dsh's own browser-trust fence; the shell does not add a second
   login layer.
+- **Installing plugins from inside the app needs `pnpm` on PATH.** The initial
+  plugin set is pre-installed in the bundled profile, so the app works out of the
+  box; adding more from the market currently expects pnpm (the market offers a
+  one-click setup when it is missing).
+- The staged runtime is ~620 MB (Node 100 MB + dsh 213 MB + plugin tree 309 MB),
+  so an installed build is large. `electron-builder` compresses it, but there is
+  real room to trim.
+
+### Verifying Electron itself on Windows
+
+`npm install` can silently leave a broken Electron (see `docs/PACKAGING.md`,
+constraint 7). If `npx electron --version` fails, the cached zip is usually fine
+and only the extraction failed:
+
+```sh
+tar -xf "$LOCALAPPDATA/electron/Cache"/*/electron-v*-win32-x64.zip -C node_modules/electron/dist
+printf 'electron.exe' > node_modules/electron/path.txt
+```
 
 ## License
 
