@@ -13,6 +13,7 @@
     "node": ">=20"
   },
   "scripts": {
+    "postinstall": "node scripts/repair-electron.mjs",
     "stage": "node scripts/stage-runtime.mjs",
     "stage:plugins": "node scripts/stage-runtime.mjs --with-plugins",
     "verify": "node scripts/verify-capabilities.mjs",
