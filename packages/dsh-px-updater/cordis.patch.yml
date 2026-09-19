@@ -1,0 +1,10 @@
+# dsh-px-updater bundle patch
+#
+# 本文件是 `dsh.bundle.patch` 层：当这个包被安装进某个 profile 时，
+# `dsh plugin` 的 bundle 协调会把它加进 `dsh.profile.bundles`，
+# profile 启动时这条插入行就把插件挂进宿主树。
+#
+# 与其他插件一样按包名引用（而不是相对路径），这样 Node 的模块解析才能找到已安装的代码。
+- insert:
+    - id: dsh-px-updater
+      name: 'dsh-px-updater'

@@ -1,0 +1,25 @@
+{
+  "name": "dsh-px-updater",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DSH-PX 的更新检查插件：把版本检查、更新发现与状态查询做成 dsh 生态内的正式插件",
+  "_note": "刻意保持零运行时依赖与零 peerDependencies：pnpm 的 file:/link: 安装不会安装 peer 依赖，而 link: 下 Node 又按真实路径（仓库外）解析模块，于是任何 import 的宿主包都会 ERR_MODULE_NOT_FOUND。配置默认值自己合并即可，无需 schemastery。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "license": "MIT",
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  }
+}

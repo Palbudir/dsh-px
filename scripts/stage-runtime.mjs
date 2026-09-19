@@ -39,13 +39,38 @@ const DSH_VERSION = process.env.DSH_PX_DSH_VERSION ?? '0.1.5-rc.2'
 const NODE_VERSION = process.env.DSH_PX_NODE_VERSION ?? '24.16.0'
 const PROFILE = process.env.DSH_PX_PROFILE ?? 'web'
 
-/** beta 版预装的插件。包名均已对 npm 注册表核验过。 */
+/**
+ * beta 版预装的插件。
+ *
+ * 外部插件均已对 npm 注册表核验过包名。
+ * 最后一项是本仓库自带的插件（`packages/dsh-px-updater`），
+ * 用 `file:` 引用安装 —— 这样它和外部插件走完全相同的链路：
+ * 同样声明 `dsh.bundle.patch`、同样由 bundle 协调进入层栈。
+ * 换言之，我们对自己的插件不做任何特殊处理，用的是官方机制本身。
+ */
 const DEFAULT_PLUGINS = [
   'dshmarket',
   'dsh-better-sidebar',
   'dsh-mermaid-render',
-  'dsh-find-plugin'
+  'dsh-find-plugin',
+  'file:packages/dsh-px-updater'
 ]
+
+/**
+ * 上述 `file:` 项对应的包名（bundle 协调要用真实包名，而不是 file: 路径）。
+ */
+const LOCAL_PLUGIN_NAMES = ['dsh-px-updater']
+
+/**
+ * 用 `link:` 而不是 `file:` 安装本仓库自带的插件。
+ *
+ * 原因（踩过）：pnpm 的 `file:` 会做**硬拷贝**，源码改了安装副本不会更新 ——
+ * 表现为"改了代码、重启、行为完全没变"，很容易误判成逻辑问题去查错方向。
+ * `link:` 建立符号链接，源码即生效，开发迭代才正常。
+ *
+ * 发布时也不受影响：装配产物是把文件复制进 runtime 的，链接只在构建机上有意义。
+ */
+const USE_LINK_FOR_LOCAL = true
 
 const args = new Set(process.argv.slice(2))
 const log = (msg) => process.stdout.write(`[stage] ${msg}\n`)
@@ -346,7 +371,11 @@ function stageHome (nodeExe, dshDir, { withPlugins, fromExisting }) {
     const scan = (base, prefix) => {
       if (!existsSync(base)) return
       for (const entry of readdirSync(base, { withFileTypes: true })) {
-        if (!entry.isDirectory()) continue
+        // 必须同时接受**符号链接**：`link:` 协议（以及 pnpm 的 .pnpm 布局）
+        // 给出的顶层条目是 symlink，`isDirectory()` 对它返回 false。
+        // 只认 isDirectory() 会静默漏掉本地插件 —— 实测就是这样：
+        // 插件装上了、也在 node_modules 里，却始终没进 bundles。
+        if (!entry.isDirectory() && !entry.isSymbolicLink()) continue
         if (entry.name.startsWith('@')) {
           scan(join(base, entry.name), entry.name + '/')
           continue
@@ -379,10 +408,21 @@ function stageHome (nodeExe, dshDir, { withPlugins, fromExisting }) {
       // 再由 pnpm 安装，最后按 manifest 协调 bundles。
       // 这样就不依赖 `dsh plugin add` 内部的 pnpm 子进程调用，确定性更好。
       log(`正在安装插件：${DEFAULT_PLUGINS.join('、')}`)
+      // `file:` 引用在 pnpm 里是相对于 **profile 目录**解析的，所以本仓库自带的插件
+      // 必须写成绝对路径；否则会去找 <profile>/packages/... 而必然失败。
+      const deps = Object.fromEntries(DEFAULT_PLUGINS.map((p) => {
+        if (p.startsWith('file:')) {
+          const rel = p.slice('file:'.length)
+          const abs = resolve(REPO, rel)
+          // link: 建符号链接（源码即生效，开发迭代正常）；file: 是硬拷贝。
+          return [LOCAL_PLUGIN_NAMES[0], `${USE_LINK_FOR_LOCAL ? 'link' : 'file'}:${abs}`]
+        }
+        return [p, 'latest']
+      }))
       writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
         name: `dsh-profile-${PROFILE}`,
         private: true,
-        dependencies: Object.fromEntries(DEFAULT_PLUGINS.map((p) => [p, 'latest'])),
+        dependencies: deps,
         dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'], patchReload: 'live' } }
       }, null, 2) + '\n')
       writeFileSync(join(profileDir, 'pnpm-workspace.yaml'),
@@ -504,8 +544,15 @@ async function main () {
   }
 
   // 精确记录装配了什么，好让应用和 CI 都能对它做断言。
+  //
+  // `app.version` 从 package.json 读，写进这里成为**应用版本的唯一真相源**。
+  // 为什么不直接调 Electron 的 app.getVersion()：开发态下它返回的是
+  // **Electron 自己的版本**（实测得到 "38.8.6"），而不是本应用的版本，
+  // 于是更新检查会得出"有新版本吗"的错误结论。
+  const appManifest = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'))
   const manifest = {
     stagedAt: new Date().toISOString(),
+    app: { name: appManifest.name, version: appManifest.version },
     platform: process.platform,
     arch: process.arch,
     node: { version: NODE_VERSION, path: nodeExe.replace(REPO, '.') },

@@ -327,6 +327,14 @@ function startHarness ({ runtime, home, port }) {
     ...process.env,
     DSH_HOME: home,
     DSH_PERMISSION_MODE: process.env.DSH_PERMISSION_MODE ?? 'workspace-write',
+    // 告诉 dsh 侧插件真正的运行时根目录。
+    //
+    // 为什么必须由外壳注入：随附插件安装在**用户数据目录**（<userData>/dsh-home），
+    // 它按自身位置上溯只能找到**安装目录**里的 runtime，而那里不是活动的那一份。
+    // 外壳恰好知道正确路径，所以由外壳显式告知，比让插件去猜可靠。
+    // 应用版本不在这里传 —— 它写进了 runtime-manifest.json，那才是唯一真相源
+    // （Electron 的 app.getVersion() 在开发态返回的是 Electron 自身版本）。
+    DSH_PX_RUNTIME_ROOT: runtime.root,
     // Electron 自带自己的 Node；harness 必须跑在随附的那个运行时上。
     NODE_OPTIONS: '',
     ELECTRON_RUN_AS_NODE: '1'
