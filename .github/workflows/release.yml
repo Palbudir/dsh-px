@@ -47,6 +47,16 @@ jobs:
         run: choco install 7zip -y --no-progress
 
       # 先跑门禁：beta 的发布前提是能力平价成立。
+      #
+      # typecheck + test 放在最前面：它们是秒级的，而装配是分钟级的。
+      # test 会重建并校验客户端半边（lib/client.js）—— 那个产物入库，
+      # 若与源码漂移会在界面上静默缺失，必须在发版前卡住。
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 单元测试
+        run: npm run test
+
       - name: 装配运行时
         run: npm run stage -- --with-plugins
 

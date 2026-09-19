@@ -185,7 +185,34 @@ function report (normalized, source) {
     else log(`PASS  不含 ${bad}`)
   }
 
-  // 3) 规模提示
+  // 3) 交付物瘦身：`*.map` 与 `tests/` 必须已经被 prune 裁掉。
+  //
+  // 为什么要在**打包门禁**里断言，而不是只靠 prune 跑对：这两类东西删掉完全不影响
+  // 功能，所以一旦漏裁，应用照常运行、只是安装包白白大 100+ MB —— 没有任何
+  // 现象会提醒你。把断言放在这里，才能让"忘了跑 prune"在发布这一步就失败。
+  //
+  // 只对 runtime 载荷断言（`resources/runtime/`），不碰 app.asar 内部：
+  // 那里是 Electron 打包自己的事，不在本次裁剪范围内。
+  const runtimePrefix = 'resources/runtime/'
+  const runtimeEntries = [...normalized].filter((p) => p.startsWith(runtimePrefix))
+  const leftoverMaps = runtimeEntries.filter((p) => p.endsWith('.map'))
+  const leftoverTests = runtimeEntries.filter((p) => /\/tests?\//.test(p))
+  if (leftoverMaps.length > 0) {
+    log(`FAIL  交付物里仍有 ${leftoverMaps.length} 个 *.map —— 打包前是否漏跑 npm run prune？`)
+    for (const s of leftoverMaps.slice(0, 3)) log(`       例如 ${s}`)
+    failures.push(`${leftoverMaps.length} 个 *.map 未裁剪`)
+  } else {
+    log('PASS  不含 *.map（已裁剪）')
+  }
+  if (leftoverTests.length > 0) {
+    log(`FAIL  交付物里仍有 ${leftoverTests.length} 个 tests/ 条目 —— 打包前是否漏跑 npm run prune？`)
+    for (const s of leftoverTests.slice(0, 3)) log(`       例如 ${s}`)
+    failures.push(`${leftoverTests.length} 个 tests/ 条目未裁剪`)
+  } else {
+    log('PASS  不含 tests/（已裁剪）')
+  }
+
+  // 4) 规模提示
   log(`载荷规模：${source}`)
 
   if (failures.length) {
