@@ -304,6 +304,11 @@ function stageDsh () {
   mkdirSync(dest, { recursive: true })
   cpSync(src, dest, { recursive: true, dereference: true })
   copyTree(prefixModules, join(dest, 'node_modules'), { skip: new Set(), skipEntry: null })
+  // 依赖已经搬进 runtime/dsh/node_modules，_dsh-install 就只是构建中间产物了。
+  // **必须删掉**：extraResources 会把整个 runtime/ 打进安装包 ——
+  // beta.0 就是这样凭空胖了约 300 MB（多出 28747 个文件条目）。
+  rmTree(join(OUT, '_dsh-install'))
+  log('已清理 _dsh-install（构建中间产物，不进交付物）')
   log(`已装配 dsh -> ${dest}`)
   return dest
 }
@@ -475,6 +480,20 @@ async function main () {
     fromExisting: args.has('--from-existing')
   })
 
+  // 把种子树"洗干净"。
+  //
+  // 为什么必须做：`npm run verify --boot` 会真的启动一次 harness，而 dsh 启动时会在
+  // 种子树里生成它自己的运行时产物。实测一次 verify 之后：
+  //     profiles/node_modules          -> 397 MB（dsh 重建的 fallback）
+  //     profiles/web/.dsh-module-fallback -> 221 MB（profile 内 fallback）
+  // 合计约 618 MB 纯冗余 —— 它们随用户首次启动就地重建，却会被 extraResources
+  // 原样打进安装包。发布 beta.0 时就是这样：安装后 dsh-home 达 924 MB（正常 308 MB）。
+  //
+  // 判据与首启过滤一致：这些都是 dsh 自己管理的生成物，绝不进交付物。
+  if (args.has('--prune') || args.has('--with-plugins') || args.has('--from-existing')) {
+    pruneSeedHome(home)
+  }
+
   // 精确记录装配了什么，好让应用和 CI 都能对它做断言。
   const manifest = {
     stagedAt: new Date().toISOString(),
@@ -489,6 +508,53 @@ async function main () {
   writeFileSync(join(OUT, 'runtime-manifest.json'), JSON.stringify(manifest, null, 2) + '\n')
   log('已写入 runtime/runtime-manifest.json')
   log('完成。下一步：npm run verify')
+}
+
+/**
+ * 从种子树中删除 dsh / 插件生成的运行时产物。
+ *
+ * 这些目录在用户首次启动时会就地重建，因此**不该进交付物** ——
+ * 它们既拖大安装包，又可能带着构建机器上的路径痕迹。
+ *
+ * 注意：本函数必须只在"装配收尾"时调用。`npm run verify` 之后如果不再 prune，
+ * 生成的产物就会被打包进安装包（beta.0 的真实事故）。
+ * @param {string} home 种子 home 目录
+ */
+function pruneSeedHome (home) {
+  const targets = [
+    join(home, 'profiles', 'node_modules'),                                  // dsh 重建的顶层 fallback
+    join(home, 'profiles', PROFILE, '.dsh-module-fallback'),                 // profile 内 fallback
+    join(home, 'profiles', PROFILE, '.dsh-market'),                          // 市场状态
+    join(home, 'storages'),                                                  // 构建期 KV 落盘
+    join(home, 'sessions'),                                                  // 构建期会话（verify 会写）
+    join(home, '.credentials.yaml'),                                         // 绝不外带任何凭据
+    join(home, 'settings.yaml')                                              // 构建机上的设置
+  ]
+  let freed = 0
+  for (const t of targets) {
+    if (!existsSync(t)) continue
+    const before = dirSize(t)
+    rmTree(t)
+    freed += before
+    log(`已清理种子树中的 ${t.replace(home, '<home>')}（${(before / 1048576).toFixed(1)} MB）`)
+  }
+  if (freed > 0) log(`种子树共瘦身 ${(freed / 1048576).toFixed(1)} MB`)
+}
+
+/** 递归统计目录体积（字节）。 */
+function dirSize (p) {
+  let total = 0
+  const walk = (dir) => {
+    let entries
+    try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      const full = join(dir, e.name)
+      if (e.isDirectory()) walk(full)
+      else { try { total += statSync(full).size } catch { /* 忽略不可读项 */ } }
+    }
+  }
+  try { if (statSync(p).isDirectory()) walk(p) } catch { /* 不是目录就算了 */ }
+  return total
 }
 
 main().catch((err) => {

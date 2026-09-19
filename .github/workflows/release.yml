@@ -47,6 +47,12 @@ jobs:
       - name: 验证能力平价
         run: npm run verify -- --boot
 
+      # verify 会真的启动 harness，从而在种子树里生成 dsh 的运行时产物
+      # （实测让 dsh-home 从 308 MB 涨到 924 MB）。打包前必须再清一次，
+      # 否则这些纯冗余会被 extraResources 原样打进安装包 —— beta.0 就是这样胖了约 830 MB。
+      - name: 清理种子树（打包前必做）
+        run: npm run prune
+
       - name: 生成图标
         run: node scripts/build-icon.mjs
 
@@ -56,3 +62,12 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win --publish always
+
+      # 关键收尾：校验**安装包内部**的内容。
+      #
+      # beta.0 的教训 —— 当时只验证了 dist/win-unpacked（一切正常），
+      # 没验证最终交付物，结果发出一个装不出来的版本。
+      # 这一步会在载荷缺少 node.exe 或混入 _dsh-install 等构建产物时直接失败，
+      # 从而在"发布"这一步就拦住问题，而不是等用户装完才发现。
+      - name: 校验安装包内容
+        run: npm run verify:package
