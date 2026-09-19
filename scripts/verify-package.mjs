@@ -100,49 +100,41 @@ function main () {
   log(`大小：${(statSync(installer).size / 1048576).toFixed(1)} MB`)
 
   const seven = ensure7z()
-  // -slt 给出结构化输出；这里用普通 l 并解析文本。
+  // 用 `-slt`（结构化列表）而不是普通 `l`。
   //
-  // 解析要点（第一版就在这里写错了，把"全部缺失"误报出来）：
-  //   `7zr l` 的行格式是   ....A  <size>  <packed>  resources\runtime\node\node.exe
-  //   属性列可能是 `....A` / `D....` / `....A` 等变体，分隔用**多个空格**，
-  //   路径里用**反斜杠**。因此不能用"以路径开头"的朴素正则，要从行尾反向取路径。
-  const raw = execFileSync(seven, ['l', installer], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
+  // 教训：普通 `l` 的输出是**列对齐的表格**，同一份 7-Zip 在不同环境
+  // （CI runner 与本地）上给出不同列宽/空白，靠文本切分去解析非常脆 ——
+  // 实测 CI 上只解析出 10 条，而本地同样命令解析出 45990 条。
+  // `-slt` 把每个属性单独一行（`Path = ...`、`Attributes = ...`），
+  // 不依赖对齐，是 7-Zip 官方给脚本用的格式。
+  const raw = execFileSync(seven, ['l', '-slt', installer], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
 
-  // 解析要点（前两版都在这里出错，把"全部缺失"误报了出来）：
-  // `7zr l` 的数据行形如
-  //     ····················D....············0············0··resources\runtime\node
-  // 即：可空的日期/时间列 + 属性列(如 D.... / ....A) + Size + Compressed + **路径(行尾)**。
-  // 日期列为空时前面是一长串空格，列对齐并不可靠。
-  // 因此这里反过来做：从行尾按"两个及以上空格"反向切，最后一段就是路径。
   const paths = []
   for (const rawLine of raw.split('\n')) {
-    // 必须去掉 \r：7zr 在 Windows 上输出 CRLF，而 \r **不被 \s 视为空白**，
-    // 于是路径会以 "…app.asar\r" 结尾，后续比较全部落空
-    // —— 这正是"解析到 45988 条却报告全部缺失"的原因。
     const line = rawLine.replace(/\r$/, '')
-    if (!/[\\/]/.test(line)) continue            // 路径一定含分隔符
-    const parts = line.split(/\s{2,}/).filter(Boolean)
-    const candidate = parts[parts.length - 1]
-    if (!candidate) continue
-    // 路径段必然把分隔符当普通字符；再用属性列做一次形状校验，滤掉表头与统计行。
-    if (!/(^|[\\/])(resources|locales)([\\/]|$)/i.test(candidate) && !/\.(exe|dll|pak|bin|asar|json|yml|dat|html|txt)$/i.test(candidate)) continue
-    paths.push(candidate.replace(/\\/g, '/').replace(/\/+$/, ''))
+    // 结构化格式里路径就是 `Path = ...`；末尾的归档自身路径会先出现一次，
+    // 它不含分隔符，会被后面的过滤自然剔除。
+    const m = line.match(/^Path = (.+)$/)
+    if (!m) continue
+    const p = m[1].trim().replace(/\\/g, '/').replace(/\/+$/, '')
+    if (!p || !p.includes('/')) continue      // 只要归档内部路径
+    paths.push(p)
   }
   log(`解析到载荷条目：${paths.length}`)
 
   // 防线：条目数过少说明**解析失败**，而不是"文件缺失"。
   //
-  // 实测教训：CI 上没有 7-Zip 时，脚本只解析到 10 条，于是把
-  // "资源全都不存在"报了出来 —— 而安装包其实是好的（232 MB、41301 个文件）。
-  // 这种误报方向最糟：它会让人去查打包问题，而真正的问题是校验工具不可用。
-  // 因此这里显式区分两种失败。
+  // 实测教训：CI 上曾只解析到 10 条，于是把"资源全都不存在"报了出来 ——
+  // 而安装包其实是好的（232 MB、4 万多个文件）。这种误报方向最糟：
+  // 它会让人去查打包问题，而真正的问题是校验工具或解析方式不可用。
   if (paths.length < 1000) {
-    const sevenPath = seven
+    const sample = raw.split('\n').slice(0, 12).map((l) => '    | ' + l.replace(/\r$/, '')).join('\n')
     throw new Error(
       `只解析到 ${paths.length} 个载荷条目，远少于预期（应约 4 万）—— ` +
-      `这说明 7-Zip 没能正确读取安装包，而不是文件缺失。\n` +
-      `  使用的 7-Zip：${sevenPath}\n` +
-      `  请确认它可用（DSH_PX_7Z 可显式指定），或安装完整版 7-Zip。`
+      `这说明 7-Zip 没能按预期列出安装包内容，而不是文件缺失。\n` +
+      `  使用的 7-Zip：${seven}\n` +
+      `  7-Zip 输出开头：\n${sample}\n` +
+      `  请确认它可用（DSH_PX_7Z 可显式指定）。`
     )
   }
 
