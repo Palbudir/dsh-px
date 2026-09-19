@@ -31,6 +31,8 @@ import type { NativeImage, MenuItemConstructorOptions, Event as ElectronEvent } 
 import type { AppUpdater } from 'electron-updater'
 import { materializeSeedHome } from './materialize'
 import type { SeedProgress } from './materialize'
+import { setUpdateState, watchInstallRequests } from './update-bridge'
+import type { UpdateBridgeState } from './update-bridge'
 
 /**
  * electron-updater 是 CJS 包，从 ESM 里用 createRequire 加载最稳。
@@ -366,6 +368,9 @@ function startHarness ({ runtime, home, port }: HarnessContext): HarnessStartRes
     // 应用版本不在这里传 —— 它写进了 runtime-manifest.json，那才是唯一真相源
     // （Electron 的 app.getVersion() 在开发态返回的是 Electron 自身版本）。
     DSH_PX_RUNTIME_ROOT: runtime.root,
+    // 让随附插件能定位外壳的数据目录 —— 更新状态桥（update-bridge）就在这里。
+    // 插件在 harness 里跑，拿不到 Electron 的 app.getPath()，只能由外壳告知。
+    DSH_PX_USER_DATA: app.getPath('userData'),
     // Electron 自带自己的 Node；harness 必须跑在随附的那个运行时上。
     NODE_OPTIONS: '',
     ELECTRON_RUN_AS_NODE: '1'
@@ -523,6 +528,22 @@ interface UpdateState {
 /** 最近一次检查到的更新状态，供托盘菜单显示。 */
 let updateState: UpdateState = { status: '未检查', version: null }
 
+/** 停止监听界面发来的安装请求（应用退出时调用）。 */
+let stopInstallWatch: (() => void) | null = null
+
+/**
+ * 同步更新状态。
+ *
+ * 这是**唯一的**状态写入点：托盘菜单与界面（经 update-bridge）都从这里取，
+ * 避免两处各自维护一份而慢慢不一致。曾经的状态散落在 6 个事件回调里各自赋值，
+ * 加一处新消费方就得改 6 个地方。
+ */
+function publishUpdateState (next: UpdateState, bridge: Partial<Omit<UpdateBridgeState, 'updatedAt'>>): void {
+  updateState = next
+  setUpdateState(bridge)
+  refreshTray()
+}
+
 /**
  * 配置并触发外壳自身的更新检查。
  *
@@ -531,19 +552,43 @@ let updateState: UpdateState = { status: '未检查', version: null }
  */
 function setupAutoUpdate (): void {
   if (!autoUpdater) return
+  // **开发态必须最先返回。** 下面会注册"界面请求安装"的监听，那条路径最终会
+  // 退出应用；开发态响应它毫无意义，却会让调试中的实例被自己关掉
+  // （实测：开发态 POST 一次 /install，harness 随即被 SIGTERM）。
+  // 打包态才有 app-update.yml。
+  if (!app.isPackaged) {
+    process.stdout.write('[dsh-px] 开发态，跳过自动更新（含安装请求监听）\n')
+    return
+  }
+
   // 不自动下载：让用户先看到"有新版本 + 更新内容"，再决定是否下载安装。
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
 
+  // 界面可以请求"重启并安装"（经插件端点 → 请求文件 → 这里）。
+  // 这是界面侧唯一的写操作，且它只表达"用户点了按钮"，不携带任何参数 ——
+  // 界面无法让外壳做别的事。
+  stopInstallWatch = watchInstallRequests(() => {
+    try {
+      installUpdateNow()
+    } catch (err) {
+      process.stderr.write(`[dsh-px] 安装更新失败：${errText(err)}\n`)
+    }
+  })
+
   autoUpdater.on('checking-for-update', () => {
-    updateState = { status: '正在检查更新…', version: null }
+    publishUpdateState({ status: '正在检查更新…', version: null },
+      { phase: 'checking', status: '正在检查更新…', version: null, percent: null, error: null })
   })
   autoUpdater.on('update-not-available', (info) => {
-    updateState = { status: '已是最新版本', version: info?.version ?? appVersion() }
+    const v = info?.version ?? appVersion()
+    publishUpdateState({ status: '已是最新版本', version: v },
+      { phase: 'idle', status: '已是最新版本', version: v, percent: null, error: null })
     process.stdout.write('[dsh-px] 已是最新版本\n')
   })
   autoUpdater.on('update-available', async (info) => {
-    updateState = { status: `有新版本 ${info.version}`, version: info.version }
+    publishUpdateState({ status: `有新版本 ${info.version}`, version: info.version },
+      { phase: 'downloading', status: `正在下载 ${info.version}`, version: info.version, percent: 0, error: null })
     process.stdout.write(`[dsh-px] 发现新版本 ${info.version}\n`)
 
     // **不再弹模态对话框。**
@@ -566,51 +611,62 @@ function setupAutoUpdate (): void {
     process.stdout.write('[dsh-px] 开始后台下载更新（不打断使用）\n')
 
     autoUpdater.on('download-progress', (p) => {
-      updateState = { status: `正在下载 ${Math.round(p.percent)}%`, version: info.version }
+      publishUpdateState(
+        { status: `正在下载 ${Math.round(p.percent)}%`, version: info.version },
+        {
+          phase: 'downloading',
+          status: `正在下载 ${Math.round(p.percent)}%`,
+          version: info.version,
+          percent: Math.round(p.percent),
+          error: null
+        }
+      )
       process.stdout.write(`\r[dsh-px] 下载 ${p.percent.toFixed(1)}% (${(p.transferred / 1048576).toFixed(1)}MB/${(p.total / 1048576).toFixed(1)}MB)`)
-      refreshTray()
     })
     autoUpdater.on('update-downloaded', async (done) => {
       process.stdout.write('\n')
-      updateState = { status: `已下载 ${done.version}，待重启安装`, version: done.version }
+      publishUpdateState(
+        { status: `已下载 ${done.version}，待重启安装`, version: done.version },
+        { phase: 'ready', status: '已下载，待重启安装', version: done.version, percent: 100, error: null }
+      )
       process.stdout.write(`[dsh-px] 更新已下载完成：${done.version}\n`)
-      refreshTray()
       if (silent) {
         process.stdout.write('[dsh-px] 静默模式：将在退出时安装\n')
         return
       }
       // 系统通知而非模态框：不夺焦点、不阻塞。
+      // 界面里同时会出现一条**非模态**的提示（设置页与本桥同一份状态）。
       try {
         const n = new Notification({
           title: 'DSH-PX 更新已就绪',
-          body: `新版本 ${done.version} 已下载完成。可从托盘菜单选择"重启并安装"，或在退出应用时自动安装。`
+          body: `新版本 ${done.version} 已下载完成。可在界面或托盘菜单选择"重启并安装"，也会在退出时自动安装。`
         })
         n.on('click', () => { if (win) { win.show(); win.focus() } })
         n.show()
       } catch {
-        // 某些环境不支持通知；托盘状态仍会显示，不影响使用。
+        // 某些环境不支持通知；界面与托盘状态仍会显示，不影响使用。
       }
     })
-    autoUpdater.on('error', (err: any) => {
-      updateState = { status: '更新失败', version: null }
-      process.stderr.write(`[dsh-px] 更新出错：${errText(err)}\n`)
+    autoUpdater.on('error', (err: unknown) => {
+      const detail = errText(err)
+      publishUpdateState({ status: '更新失败', version: null },
+        { phase: 'error', status: '更新失败', version: null, percent: null, error: detail })
+      process.stderr.write(`[dsh-px] 更新出错：${detail}\n`)
     })
 
     try {
       await autoUpdater.downloadUpdate()
     } catch (err) {
-      dialog.showErrorBox('下载更新失败', errText(err))
+      // 后台下载失败不该弹模态框打断用户：状态已经通过桥与托盘可见。
+      publishUpdateState({ status: '更新失败', version: info.version },
+        { phase: 'error', status: '下载更新失败', version: info.version, percent: null, error: errText(err) })
+      process.stderr.write(`[dsh-px] 下载更新失败：${errText(err)}\n`)
     }
   })
 
-  // 打包态才有 app-update.yml；开发态直接跳过，避免噪音报错。
-  if (!app.isPackaged) {
-    process.stdout.write('[dsh-px] 开发态，跳过自动更新检查\n')
-    return
-  }
   // 启动后延后 8 秒再查，避免和 harness 启动抢资源/抢网络。
   setTimeout(() => {
-    autoUpdater.checkForUpdates().catch((err: any) => {
+    autoUpdater.checkForUpdates().catch((err: unknown) => {
       process.stdout.write(`[dsh-px] 检查更新失败：${errText(err)}\n`)
     })
   }, 8000)
@@ -706,11 +762,7 @@ function buildTrayMenu (url: string): MenuItemConstructorOptions[] {
     items.push({ type: 'separator' })
     items.push({
       label: `重启并安装 ${updateState.version}`,
-      click: () => {
-        quitting = true
-        if (harness && harness.exitCode === null) harness.kill()
-        autoUpdater?.quitAndInstall()
-      }
+      click: () => { installUpdateNow() }
     })
   }
 
@@ -738,26 +790,42 @@ function refreshTray (url?: string): void {
 }
 
 /**
+ * 触发"重启并安装更新"。
+ *
+ * 独立成函数是因为有**两个**入口：托盘菜单，以及界面（经 update-bridge 的
+ * 请求文件）。两条路径必须做完全一样的事 —— 尤其别漏掉 `harness.kill()`，
+ * 否则安装程序替换文件时会撞上仍在运行的 harness 及其子进程。
+ */
+function installUpdateNow (): void {
+  quitting = true
+  if (harness && harness.exitCode === null) harness.kill()
+  autoUpdater?.quitAndInstall(false, true)
+}
+
+/**
  * 用户主动触发的更新检查。与后台检查的区别只在于反馈方式：
  * 无论结果如何都要给一个明确回执，不能"点了没反应"。
+ *
+ * 回执走 `update-bridge`：状态会出现在界面设置页里，**不再弹模态框**。
+ * 用户主动点击的动作确实需要回执，但托盘菜单的点击本身就是"用户发起"，
+ * 让状态出现在他已打开的界面里是更轻的反馈方式，也不会夺走焦点。
  */
 async function checkUpdatesManually (): Promise<void> {
-  if (!autoUpdater) {
-    dialog.showMessageBox({ type: 'info', message: '开发态不支持自动更新', detail: '打包后的应用才会启用此功能。' })
-    return
-  }
-  if (!app.isPackaged) {
-    dialog.showMessageBox({ type: 'info', message: '开发态不支持自动更新', detail: `当前版本 ${appVersion()}。请使用打包后的应用。` })
+  if (!autoUpdater || !app.isPackaged) {
+    publishUpdateState({ status: '开发态不支持自动更新', version: null },
+      { phase: 'idle', status: '开发态不支持自动更新（仅打包后可用）', version: null, percent: null, error: null })
+    process.stdout.write('[dsh-px] 开发态不支持自动更新\n')
     return
   }
   try {
-    const res = await autoUpdater.checkForUpdates()
-    if (!res?.updateInfo) {
-      dialog.showMessageBox({ type: 'info', message: '已是最新版本', detail: `当前版本 ${appVersion()}` })
-    }
-    // 有新版本时由 update-available 事件接管并弹下载确认。
+    // 结果由 update-available / update-not-available 事件写入状态；
+    // 这里只在抛错时补一条，避免"点了没反应"。
+    await autoUpdater.checkForUpdates()
   } catch (err) {
-    dialog.showErrorBox('检查更新失败', errText(err))
+    const detail = errText(err)
+    publishUpdateState({ status: '检查更新失败', version: null },
+      { phase: 'error', status: '检查更新失败', version: null, percent: null, error: detail })
+    process.stderr.write(`[dsh-px] 检查更新失败：${detail}\n`)
   }
 }
 
@@ -884,6 +952,9 @@ app.on('window-all-closed', () => {
 app.on('before-quit', () => { quitting = true })
 
 app.on('will-quit', () => {
+  // 停掉轮询/监视：否则退出过程中它还可能触发一次 quitAndInstall。
+  stopInstallWatch?.()
+  stopInstallWatch = null
   if (harness && harness.exitCode === null) {
     process.stdout.write('[dsh-px] stopping harness\n')
     harness.kill()

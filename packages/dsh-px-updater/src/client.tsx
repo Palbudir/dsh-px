@@ -67,6 +67,10 @@ const DICT: Record<string, Record<string, string>> = {
     'copy': '复制',
     'copied': '已复制',
     'unavailable': '无法读取版本信息',
+    'shellState': '外壳状态',
+    'readyPrefix': '新版本已下载完成：',
+    'installNow': '重启并安装',
+    'installing': '正在请求…',
     'note': '更新由桌面客户端执行下载与安装；这里只负责显示与检查。'
   },
   en: {
@@ -91,6 +95,10 @@ const DICT: Record<string, Record<string, string>> = {
     'copy': 'Copy',
     'copied': 'Copied',
     'unavailable': 'Could not read version information',
+    'shellState': 'Shell status',
+    'readyPrefix': 'Update downloaded: ',
+    'installNow': 'Restart and install',
+    'installing': 'Requesting…',
     'note': 'The desktop client performs the download and install; this page only displays and checks.'
   }
 }
@@ -110,6 +118,22 @@ interface CheckPayload {
   releaseUrl: string | null
   releaseNotes: string | null
   errors: string[]
+}
+
+/**
+ * `/shell-state` 端点的响应：**外壳**真实的更新进度。
+ *
+ * 为什么需要它：插件自己只能查"有没有新版"，而下载进度与"已就绪"只有外壳知道
+ * （下载/安装必须由 Electron 侧的 electron-updater 做）。界面跑在浏览器里够不到
+ * 外壳，因此状态经 `update-bridge` 文件 → 插件端点 → 这里。
+ */
+interface ShellStatePayload {
+  phase: 'idle' | 'checking' | 'downloading' | 'ready' | 'error'
+  status: string
+  version: string | null
+  percent: number | null
+  error: string | null
+  available?: boolean
 }
 
 /** 一次性取 JSON；失败抛出可读错误。 */
@@ -165,6 +189,48 @@ function PathRow ({ label, value, copyLabel, copiedLabel }: {
 }
 
 /**
+ * 非阻塞的更新就绪提示。
+ *
+ * 刻意不用模态对话框：更新是后台行为，弹窗会夺走焦点、挡住正在看的界面，
+ * 而且在它被处理掉之前用户没法继续 —— 对一个"每天开着"的客户端这是明显的倒退。
+ * 这里只是一条横幅：可以忽略，也可以点一下重启安装。
+ */
+function UpdateBanner ({ state, onInstall, installing, t }: {
+  state: ShellStatePayload
+  onInstall: () => void
+  installing: boolean
+  t: (key: string) => string
+}): unknown {
+  const tone = state.phase === 'error' ? '#c0392b' : '#2e7d32'
+  return (
+    <div style={{
+      display: 'flex', gap: 12, alignItems: 'center', margin: '0 0 16px',
+      padding: '10px 14px', borderRadius: 10,
+      border: `1px solid ${tone}`, background: `${tone}1a`
+    }}>
+      <div style={{ flex: 1, fontSize: 13, lineHeight: 1.6 }}>
+        <div>{state.phase === 'ready'
+          ? `${t('readyPrefix')}${state.version ?? ''}`
+          : state.status}</div>
+        {state.phase === 'downloading' && state.percent !== null
+          ? <div style={{ opacity: 0.75, fontSize: 12 }}>{state.percent}%</div>
+          : null}
+        {state.phase === 'error' && state.error !== null
+          ? <div style={{ opacity: 0.75, fontSize: 12 }}>{state.error}</div>
+          : null}
+      </div>
+      {state.phase === 'ready'
+        ? <button type="button" onClick={onInstall} disabled={installing} style={{
+          flex: 'none', cursor: installing ? 'default' : 'pointer', fontSize: 13,
+          padding: '5px 14px', borderRadius: 8, border: '1px solid currentColor',
+          background: 'transparent', color: 'inherit', opacity: installing ? 0.5 : 0.95
+        }}>{installing ? t('installing') : t('installNow')}</button>
+        : null}
+    </div>
+  )
+}
+
+/**
  * 设置页里的 DSH-PX 分区。
  * @param props - 宿主注入面（本站点用 `t` 翻译函数）。
  */
@@ -175,6 +241,8 @@ function DshPxSection ({ t }: SlotComponentProps): unknown {
   const [check, setCheck] = useState<CheckPayload | null>(null)
   const [checking, setChecking] = useState(false)
   const [checkError, setCheckError] = useState<string | null>(null)
+  const [shell, setShell] = useState<ShellStatePayload | null>(null)
+  const [installing, setInstalling] = useState(false)
 
   // 挂载时只读本地信息，**不联网** —— 打开设置页不该触发网络请求。
   useEffect(() => {
@@ -183,6 +251,30 @@ function DshPxSection ({ t }: SlotComponentProps): unknown {
       .then((v) => { if (alive) setStatus(v) })
       .catch((err: unknown) => { if (alive) setStatusError(err instanceof Error ? err.message : String(err)) })
     return () => { alive = false }
+  }, [])
+
+  // 轮询外壳状态。
+  //
+  // 为什么是轮询而不是推送：界面在外壳的**对等 HTTP 面**之外，外壳无法主动推给
+  // 它；而要为此新建一条 WebSocket/SSE 通道，代价远大于收益。3 秒一次、
+  // 且只在设置页打开时轮询（组件卸载即停），开销可忽略。
+  useEffect(() => {
+    let alive = true
+    const tick = (): void => {
+      getJson<ShellStatePayload>(`${ROUTE_PREFIX}/shell-state`)
+        .then((v) => { if (alive) setShell(v) })
+        .catch(() => { /* 外壳未提供状态：保持上一次的值 */ })
+    }
+    tick()
+    const timer = setInterval(tick, 3000)
+    return () => { alive = false; clearInterval(timer) }
+  }, [])
+
+  const doInstall = useCallback((): void => {
+    setInstalling(true)
+    fetch(`${ROUTE_PREFIX}/install`, { method: 'POST' })
+      .then(() => { /* 外壳收到请求后会退出并安装，界面不必等待 */ })
+      .catch(() => { setInstalling(false) })
   }, [])
 
   const doCheck = useCallback((): void => {
@@ -202,6 +294,11 @@ function DshPxSection ({ t }: SlotComponentProps): unknown {
 
   return (
     <div style={{ padding: '4px 2px 24px', maxWidth: 620 }}>
+      {/* 更新就绪/失败时，先给一条**非阻塞**横幅（见 UpdateBanner 的说明）。 */}
+      {shell !== null && (shell.phase === 'ready' || shell.phase === 'error')
+        ? <UpdateBanner state={shell} onInstall={doInstall} installing={installing} t={tr} />
+        : null}
+
       <Heading>{tr('section.app')}</Heading>
       {statusError !== null
         ? <div style={{ fontSize: 13, opacity: 0.8 }}>{tr('unavailable')}（{statusError}）</div>
@@ -213,6 +310,14 @@ function DshPxSection ({ t }: SlotComponentProps): unknown {
 
       <Heading>{tr('section.update')}</Heading>
       <Row label={tr('latest')} value={check?.latest.app ?? '—'} />
+      {/* 外壳侧的进度：只有它能给出"正在下载 42%"/"已就绪"。 */}
+      {shell?.available === true
+        ? <Row label={tr('shellState')} value={
+          shell.phase === 'downloading' && shell.percent !== null
+            ? `${shell.status} (${shell.percent}%)`
+            : shell.status
+        } />
+        : null}
       <div style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '6px 0' }}>
         <span style={{ flex: '0 0 132px', opacity: 0.62, fontSize: 13 }}>{tr('section.update')}</span>
         <span style={{ fontSize: 14 }}>{updateLabel}</span>

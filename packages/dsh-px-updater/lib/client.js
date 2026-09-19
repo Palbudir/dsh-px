@@ -57,6 +57,10 @@ window.__ModuleLoader__.load({
 		    "copy": "\u590D\u5236",
 		    "copied": "\u5DF2\u590D\u5236",
 		    "unavailable": "\u65E0\u6CD5\u8BFB\u53D6\u7248\u672C\u4FE1\u606F",
+		    "shellState": "\u5916\u58F3\u72B6\u6001",
+		    "readyPrefix": "\u65B0\u7248\u672C\u5DF2\u4E0B\u8F7D\u5B8C\u6210\uFF1A",
+		    "installNow": "\u91CD\u542F\u5E76\u5B89\u88C5",
+		    "installing": "\u6B63\u5728\u8BF7\u6C42\u2026",
 		    "note": "\u66F4\u65B0\u7531\u684C\u9762\u5BA2\u6237\u7AEF\u6267\u884C\u4E0B\u8F7D\u4E0E\u5B89\u88C5\uFF1B\u8FD9\u91CC\u53EA\u8D1F\u8D23\u663E\u793A\u4E0E\u68C0\u67E5\u3002"
 		  },
 		  en: {
@@ -81,6 +85,10 @@ window.__ModuleLoader__.load({
 		    "copy": "Copy",
 		    "copied": "Copied",
 		    "unavailable": "Could not read version information",
+		    "shellState": "Shell status",
+		    "readyPrefix": "Update downloaded: ",
+		    "installNow": "Restart and install",
+		    "installing": "Requesting\u2026",
 		    "note": "The desktop client performs the download and install; this page only displays and checks."
 		  }
 		};
@@ -123,6 +131,39 @@ window.__ModuleLoader__.load({
 		    }, children: copied ? copiedLabel : copyLabel })
 		  ] });
 		}
+		function UpdateBanner({ state, onInstall, installing, t }) {
+		  const tone = state.phase === "error" ? "#c0392b" : "#2e7d32";
+		  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: {
+		    display: "flex",
+		    gap: 12,
+		    alignItems: "center",
+		    margin: "0 0 16px",
+		    padding: "10px 14px",
+		    borderRadius: 10,
+		    border: `1px solid ${tone}`,
+		    background: `${tone}1a`
+		  }, children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { flex: 1, fontSize: 13, lineHeight: 1.6 }, children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: state.phase === "ready" ? `${t("readyPrefix")}${state.version ?? ""}` : state.status }),
+		      state.phase === "downloading" && state.percent !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { opacity: 0.75, fontSize: 12 }, children: [
+		        state.percent,
+		        "%"
+		      ] }) : null,
+		      state.phase === "error" && state.error !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { opacity: 0.75, fontSize: 12 }, children: state.error }) : null
+		    ] }),
+		    state.phase === "ready" ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", onClick: onInstall, disabled: installing, style: {
+		      flex: "none",
+		      cursor: installing ? "default" : "pointer",
+		      fontSize: 13,
+		      padding: "5px 14px",
+		      borderRadius: 8,
+		      border: "1px solid currentColor",
+		      background: "transparent",
+		      color: "inherit",
+		      opacity: installing ? 0.5 : 0.95
+		    }, children: installing ? t("installing") : t("installNow") }) : null
+		  ] });
+		}
 		function DshPxSection({ t }) {
 		  const tr = (key) => typeof t === "function" ? t(key) : key;
 		  const [status, setStatus] = (0, import_react.useState)(null);
@@ -130,6 +171,8 @@ window.__ModuleLoader__.load({
 		  const [check, setCheck] = (0, import_react.useState)(null);
 		  const [checking, setChecking] = (0, import_react.useState)(false);
 		  const [checkError, setCheckError] = (0, import_react.useState)(null);
+		  const [shell, setShell] = (0, import_react.useState)(null);
+		  const [installing, setInstalling] = (0, import_react.useState)(false);
 		  (0, import_react.useEffect)(() => {
 		    let alive = true;
 		    getJson(`${ROUTE_PREFIX}/status`).then((v) => {
@@ -140,6 +183,28 @@ window.__ModuleLoader__.load({
 		    return () => {
 		      alive = false;
 		    };
+		  }, []);
+		  (0, import_react.useEffect)(() => {
+		    let alive = true;
+		    const tick = () => {
+		      getJson(`${ROUTE_PREFIX}/shell-state`).then((v) => {
+		        if (alive) setShell(v);
+		      }).catch(() => {
+		      });
+		    };
+		    tick();
+		    const timer = setInterval(tick, 3e3);
+		    return () => {
+		      alive = false;
+		      clearInterval(timer);
+		    };
+		  }, []);
+		  const doInstall = (0, import_react.useCallback)(() => {
+		    setInstalling(true);
+		    fetch(`${ROUTE_PREFIX}/install`, { method: "POST" }).then(() => {
+		    }).catch(() => {
+		      setInstalling(false);
+		    });
 		  }, []);
 		  const doCheck = (0, import_react.useCallback)(() => {
 		    setChecking(true);
@@ -152,6 +217,7 @@ window.__ModuleLoader__.load({
 		    return check.updateAvailable.app || check.updateAvailable.dsh ? tr("available") : tr("upToDate");
 		  })();
 		  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { padding: "4px 2px 24px", maxWidth: 620 }, children: [
+		    shell !== null && (shell.phase === "ready" || shell.phase === "error") ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UpdateBanner, { state: shell, onInstall: doInstall, installing, t: tr }) : null,
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Heading, { children: tr("section.app") }),
 		    statusError !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { fontSize: 13, opacity: 0.8 }, children: [
 		      tr("unavailable"),
@@ -164,6 +230,7 @@ window.__ModuleLoader__.load({
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: "platform", value: status?.current.platform ?? "\u2014" }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Heading, { children: tr("section.update") }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("latest"), value: check?.latest.app ?? "\u2014" }),
+		    shell?.available === true ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("shellState"), value: shell.phase === "downloading" && shell.percent !== null ? `${shell.status} (${shell.percent}%)` : shell.status }) : null,
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 12, alignItems: "center", padding: "6px 0" }, children: [
 		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { flex: "0 0 132px", opacity: 0.62, fontSize: 13 }, children: tr("section.update") }),
 		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { fontSize: 14 }, children: updateLabel }),
