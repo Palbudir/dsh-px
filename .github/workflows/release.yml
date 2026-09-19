@@ -72,6 +72,29 @@ jobs:
       - name: 生成图标
         run: node scripts/build-icon.mjs
 
+      # **必须构建，不能直接打包。**
+      #
+      # 这是 beta-re.0.1 发布时踩到的真实事故：本 workflow 曾经直接调
+      # `npx electron-builder`，而 electron-builder 只打包、不构建。
+      # 从前能碰巧成功，是因为入口是**入库**的 `app/main.mjs`；
+      # 主进程迁到 TypeScript 后入口变成 `out/main/index.js` —— 那是构建产物，
+      # 在 .gitignore 里。于是打包时 app.asar 里根本没有入口文件，报：
+      #   Application entry file "out\main\index.js" ... was not found in this archive
+      #
+      # 这个坑特别隐蔽，有三层原因：
+      #   1. 前面"装配 + 验证能力平价"全绿 —— 它们只验 harness，不碰 Electron 主进程；
+      #   2. 报错措辞是 "corrupted"，容易往"文件损坏"方向查，而真实原因只是没构建；
+      #   3. 本地 `npm run dist` 能成功（它的脚本里含 build），只有 CI 走的是
+      #      "直接调 electron-builder"这条路。
+      #
+      # `npm run build` = 客户端半边 + 主进程，两者都是交付物所必需的。
+      - name: 构建（客户端半边 + 主进程）
+        run: npm run build
+
+      # 打包前再显式断言一次，并用直白的话说清修法（见脚本头部说明）。
+      - name: 断言入口产物存在
+        run: node scripts/check-entry-artifacts.mjs
+
       # --publish always：让 electron-builder 生成并上传 latest.yml 与 blockmap。
       # GITHUB_TOKEN 由 actions 环境自动提供，electron-builder 会认。
       - name: 构建并发布
