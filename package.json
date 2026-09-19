@@ -1,6 +1,6 @@
 {
   "name": "dsh-px",
-  "version": "0.1.0-beta.6",
+  "version": "0.1.0-beta.7",
   "private": true,
   "description": "dsh-px: a self-contained Electron desktop client that packages DeepSeek Harness (dsh) into one app.",
   "license": "MIT",

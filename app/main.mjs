@@ -13,7 +13,7 @@
  */
 import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage } from 'electron'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, cpSync, writeFileSync, readdirSync, realpathSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, cpSync, writeFileSync, readdirSync, realpathSync, readFileSync, createWriteStream } from 'node:fs'
 import { createServer } from 'node:net'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve, sep } from 'node:path'
@@ -36,6 +36,69 @@ try {
   // 开发态（未打包）下通常拿不到 app-update.yml，属正常，不应致命。
   process.stdout.write(`[dsh-px] electron-updater 不可用（开发态正常）：${err?.message ?? err}\n`)
 }
+
+// ── 日志落盘 ────────────────────────────────────────────────────────────────
+//
+// 为什么需要：本文件里有 20 多处 `process.stdout.write`，而**双击启动时用户看不到
+// 任何输出**（GUI 没有控制台）。于是出问题时用户手上没有任何证据，只能描述现象 ——
+// 既让用户难以自查，也让远程排查几乎无从下手。
+//
+// 做法：在最早时机劫持 stdout/stderr 的写入，把每一行同时追加到
+// `<userData>/dsh-px.log`。好处是**不必改动任何既有调用点**；
+// 连 harness 子进程的输出（我们也转发到 stdout）会一并进日志。
+//
+// `userData` 要等 app ready 才稳定，所以先缓冲，ready 后再落盘。
+const LOG_BUFFER = []
+let LOG_STREAM = null
+let LOG_PATH = null
+
+/** 追加文本到日志缓冲或文件。 */
+function appendLog (text) {
+  const line = text.endsWith('\n') ? text : text + '\n'
+  if (LOG_STREAM) {
+    try { LOG_STREAM.write(line) } catch { /* 日志写入失败不该影响应用 */ }
+  } else if (LOG_BUFFER.length < 5000) {
+    LOG_BUFFER.push(line)   // 缓冲上限，避免 ready 之前无限增长
+  }
+}
+
+/** 劫持标准输出/错误，使所有既有输出自动进日志。 */
+function teeStdio () {
+  for (const [stream, tag] of [[process.stdout, 'out'], [process.stderr, 'err']]) {
+    const original = stream.write.bind(stream)
+    stream.write = (chunk, encoding, cb) => {
+      try {
+        const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')
+        appendLog(tag === 'err'
+          ? text.split('\n').map((l) => (l ? `[stderr] ${l}` : l)).join('\n')
+          : text)
+      } catch { /* 忽略 */ }
+      return original(chunk, encoding, cb)
+    }
+  }
+}
+
+/** app ready 后打开日志文件，并把缓冲刷进去。 */
+function openLogFile () {
+  try {
+    LOG_PATH = join(app.getPath('userData'), 'dsh-px.log')
+    mkdirSync(dirname(LOG_PATH), { recursive: true })
+    LOG_STREAM = createWriteStream(LOG_PATH, { flags: 'a' })
+    LOG_STREAM.write(`\n${'='.repeat(70)}\n`)
+    LOG_STREAM.write(`[dsh-px] 启动 ${new Date().toISOString()}  版本 ${app.getVersion()}  平台 ${process.platform}\n`)
+    for (const line of LOG_BUFFER) LOG_STREAM.write(line)
+    LOG_BUFFER.length = 0
+  } catch {
+    LOG_STREAM = null   // 日志失败绝不阻断启动
+  }
+}
+
+/** 日志文件路径（错误弹窗里告知用户）。 */
+function logPath () {
+  return LOG_PATH ?? '(尚未初始化)'
+}
+
+teeStdio()
 
 const HERE = dirname(fileURLToPath(import.meta.url))          // <app>/app
 const APP_ROOT = resolve(HERE, '..')                          // <app>
@@ -511,10 +574,59 @@ function setupAutoUpdate () {
   }, 8000)
 }
 
+/**
+ * 为托盘取一个真实图标。
+ *
+ * 原来用的是 `nativeImage.createEmpty()` —— 那是**空图像**，于是托盘区域
+ * 只显示一个空白占位（用户实测截图确认"右下角没有图标"）。
+ *
+ * 取图顺序：
+ *   1. 从**自身可执行文件**提取图标。electron-builder 已把鲸鱼图标写进
+ *      `DSH-PX.exe`，所以这条在打包态总能拿到，且不额外占体积、不会与 exe 不一致。
+ *   2. 退回 `build/icon.png`（开发态可用）。
+ *   3. 再不行就在内存里画一个简单的蓝色方块，保证托盘至少可见可点。
+ * @returns {Promise<import('electron').NativeImage>}
+ */
+async function trayImage () {
+  try {
+    const exeIcon = await app.getFileIcon(process.execPath, { size: 'small' })
+    if (exeIcon && !exeIcon.isEmpty()) return exeIcon
+  } catch { /* 某些平台/开发态不支持，继续往下 */ }
+
+  for (const p of [
+    join(APP_ROOT, 'build', 'icon-256.png'),
+    join(APP_ROOT, 'build', 'icon.png'),
+    join(process.resourcesPath ?? '', 'icon.png')
+  ]) {
+    try {
+      if (p && existsSync(p)) {
+        const img = nativeImage.createFromPath(p)
+        if (!img.isEmpty()) return img
+      }
+    } catch { /* 继续尝试下一个 */ }
+  }
+
+  // 最后兜底：画一个 16×16 的蓝色方块，至少让托盘项可见可点。
+  const size = 16
+  const buf = Buffer.alloc(size * size * 4)
+  for (let i = 0; i < size * size; i += 1) {
+    buf[i * 4 + 0] = 0x2e   // B
+    buf[i * 4 + 1] = 0x6b   // G
+    buf[i * 4 + 2] = 0xe6   // R
+    buf[i * 4 + 3] = 0xff   // A
+  }
+  return nativeImage.createFromBuffer(buf, { width: size, height: size })
+}
+
 function createTray (url) {
   try {
+    // 先用兜底图标同步构造，避免 await 期间托盘项缺失；随后替换为真实图标。
     tray = new Tray(nativeImage.createEmpty())
     tray.setToolTip(`DSH-PX ${app.getVersion()}`)
+    void trayImage().then((img) => {
+      try { tray?.setImage(img) } catch { /* 托盘可能已销毁 */ }
+    })
+
     tray.setContextMenu(Menu.buildFromTemplate([
       { label: `DSH-PX ${app.getVersion()}`, enabled: false },
       { label: updateState.status, enabled: false },
@@ -523,6 +635,9 @@ function createTray (url) {
       { label: '打开 DSH-PX', click: () => { if (win) { win.show(); win.focus() } else { createWindow(url) } } },
       { type: 'separator' },
       { label: '重启 harness', click: () => void restartHarness() },
+      { type: 'separator' },
+      { label: '打开日志文件', click: () => void shell.openPath(logPath()) },
+      { label: '打开数据目录', click: () => void shell.openPath(app.getPath('userData')) },
       { type: 'separator' },
       { label: '在浏览器中打开', click: () => void shell.openExternal(currentCleanUrl ?? url) },
       { type: 'separator' },
@@ -700,8 +815,17 @@ if (!app.requestSingleInstanceLock()) {
     }
   })
 
-  app.whenReady().then(main).catch((err) => {
-    dialog.showErrorBox('dsh-px —— 启动异常', String(err?.stack ?? err))
-    app.exit(1)
-  })
+  app.whenReady()
+    .then(() => {
+      // 最先打开日志文件：越早越好，这样连 main() 里的准备工作也被记录。
+      openLogFile()
+      return main()
+    })
+    .catch((err) => {
+      dialog.showErrorBox(
+        'DSH-PX —— 启动异常',
+        `${String(err?.stack ?? err)}\n\n日志文件：${logPath()}`
+      )
+      app.exit(1)
+    })
 }

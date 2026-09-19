@@ -33,7 +33,8 @@ const cfg = publish[0]
 /** 按 electron-updater 的期望格式渲染。它接受扁平的 key: value。 */
 const lines = Object.entries(cfg)
   .filter(([, v]) => v !== undefined && v !== null && typeof v !== 'object')
-  .map(([k, v]) => `${k}: ${v}`)
+  // 值里也必须剥掉 \r：否则会写出 "github\r" 这类带控制字符的值。
+  .map(([k, v]) => `${k}: ${String(v).replace(/[\r\n]+/g, '')}`)
 
 // updater 缓存目录名：electron-updater 默认按 productName 生成，显式写出更稳。
 lines.push(`updaterCacheDirName: ${(pkg.name ?? 'app').replace(/[^a-z0-9-_]/gi, '-')}-updater`)

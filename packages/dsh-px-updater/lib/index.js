@@ -276,12 +276,28 @@ export function apply (ctx, rawConfig) {
         name: 'dsh_px_version',
         description:
           '查询当前 DSH-PX 桌面客户端的版本信息，并检查是否有新版本可用（同时检查外壳与随附的 dsh 核心）。',
+        // parameters 必须是**标准 JSON Schema**（ToolSchema.parameters 的类型是
+        // Record<string, unknown>，由 assertObjectJsonSchema 校验）。
+        //
+        // 这里曾写错：用了 `{ checkRemote: { type: 'boolean', required: false } }`
+        // 这种"属性表"简写 —— 那是 defineTool 的**输入**格式，不是 ToolSchema。
+        // JSON Schema 里 `required` 是**根级字符串数组**，不是属性上的布尔值；
+        // 传错会让宿主报
+        //   Invalid schema for function 'dsh_px_version': schema must be a JSON Schema
+        //   of 'type: "object"', got 'type: "null"'
+        // 并导致**整轮对话失败**（不只是本工具不可用），代价很大，故把原因写明。
+        //
+        // 本插件刻意不 import defineTool：见文件顶部说明 —— 自研插件保持零运行时
+        // 依赖，避免 pnpm file:/link: 不装 peer 依赖导致的 ERR_MODULE_NOT_FOUND。
         parameters: {
-          checkRemote: {
-            type: 'boolean',
-            required: false,
-            description: '是否联网查询最新版本。传 false 时只返回本地版本信息。'
-          }
+          type: 'object',
+          properties: {
+            checkRemote: {
+              type: 'boolean',
+              description: '是否联网查询最新版本。传 false 时只返回本地版本信息。'
+            }
+          },
+          additionalProperties: false
         },
         output: {
           schema: { type: 'string' },
