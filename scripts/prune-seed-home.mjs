@@ -22,7 +22,8 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const HOME = join(REPO, 'runtime', 'dsh-home')
+const RUNTIME = join(REPO, 'runtime')
+const HOME = join(RUNTIME, 'dsh-home')
 const PROFILE = process.env.DSH_PX_PROFILE ?? 'web'
 const log = (m) => process.stdout.write(`[prune] ${m}\n`)
 
@@ -82,12 +83,79 @@ for (const [label, path] of TARGETS) {
 
 const remaining = dirSize(HOME)
 log(freed > 0 ? `共瘦身 ${(freed / 1048576).toFixed(1)} MB` : '没有需要清理的内容')
-log(`种子 home 现在 ${(remaining / 1048576).toFixed(1)} MB`)
+
+// ── 交付物瘦身：*.map 与 tests/ ────────────────────────────────────────────
+//
+// 这一步与上面的"清生成物"目的不同：那些是**不该存在**的，这两个是
+// **合法但运行期用不到**的 —— 只裁掉它们，别的都不动。
+//
+//   *.map          源映射。只在 DevTools 里用；缺了它 JS 照常执行
+//                  （末尾的 sourceMappingURL 注释指向不存在的文件，浏览器静默忽略）。
+//                  实测随附运行时里有 6073 个，约 100 MB。
+//   tests/ test/   包自带的测试。运行期不会有人跑它们。
+//                  实测 1408 个，约 9 MB。
+//
+// **不断言删掉的数量**：dsh 版本升级后这两个数字会变，写死会让流程变得脆弱。
+// 只报告实际删掉了多少。
+let mapFreed = 0
+let mapCount = 0
+const testsDirs = []
+
+/**
+ * 递归裁剪：删除 *.map，并整体删除名为 tests/test 的目录。
+ * @param {string} dir 起始目录
+ * @param {number} depth 当前深度（上限保护，见调用处说明）
+ */
+const trim = (dir, depth) => {
+  if (depth > 24) return
+  let entries
+  try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
+  for (const e of entries) {
+    const full = join(dir, e.name)
+    // 符号链接/Junction 一律不跟随：随附运行时里 dsh 托管的 fallback 是链接，
+    // 跟随会把只读安装区里的东西删掉（那是另一份数据）。
+    if (e.isSymbolicLink()) continue
+    // `node/` 是随附的 Node 本体，没有 map 也没有 tests，跳过省时间。
+    if (depth === 0 && e.isDirectory() && e.name === 'node') continue
+    if (e.isDirectory()) {
+      if (e.name === 'tests' || e.name === 'test') {
+        const sz = dirSize(full)
+        rmTree(full)
+        mapFreed += sz
+        testsDirs.push(full)
+        continue
+      }
+      trim(full, depth + 1)
+      continue
+    }
+    if (e.name.endsWith('.map')) {
+      try {
+        const sz = statSync(full).size
+        rmSync(full, { force: true, maxRetries: 2 })
+        mapFreed += sz
+        mapCount += 1
+      } catch { /* 删不掉就留着，不影响功能 */ }
+    }
+  }
+}
+
+log('裁剪 *.map 与 tests/ …')
+// 扫描范围刻意是整个 runtime（含 dsh 安装本体，不含 node）：
+// 实测 map 分布为 dsh-home 1418 个（66.6 MB）+ dsh 本体 4649 个（35.7 MB），
+// 只扫 dsh-home 会漏掉三分之一的收益。node 自身不带 map，跳过即可。
+//
+// 上限保护：万一将来把 runtime 指到了仓库外的共享目录，也不会一路删下去。
+trim(RUNTIME, 0)
+log(`已删除 ${mapCount} 个 *.map、${testsDirs.length} 个测试目录（共 ${(mapFreed / 1048576).toFixed(1)} MB）`)
+freed += mapFreed
+
+const afterTrim = dirSize(HOME)
+log(`种子 home 现在 ${(afterTrim / 1048576).toFixed(1)} MB`)
 
 // 交付物健康区间：干净的种子树应在 200–400 MB。明显超出说明又混进了生成物。
-if (remaining > 500 * 1048576) {
+if (afterTrim > 500 * 1048576) {
   process.stderr.write(
-    `[prune] 警告：种子 home 仍有 ${(remaining / 1048576).toFixed(0)} MB，` +
+    `[prune] 警告：种子 home 仍有 ${(afterTrim / 1048576).toFixed(0)} MB，` +
     '超出预期（干净时应约 300 MB）。可能有新的 dsh 生成物没被识别，请检查。\n'
   )
 }
