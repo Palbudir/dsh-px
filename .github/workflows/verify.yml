@@ -47,6 +47,20 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install 7zip -y --no-progress
 
+      # 先跑 TypeScript 与单元测试，再花几分钟装配运行时。
+      #
+      # 顺序是刻意的：typecheck/test 是秒级的，装配是分钟级的。把它们放在前面，
+      # 类型错误或单测失败会立刻反馈，而不是等装配跑完才报出来。
+      #
+      # `npm run test` 同时会重建客户端半边（lib/client.js）并校验其形态 ——
+      # 那个产物是入库的，若与源码漂移，症状是"设置页少了这一项"或前端静默报错，
+      # 很难定位，所以必须在门禁里卡住。
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 单元测试
+        run: npm run test
+
       - name: 装配运行时（Node + dsh + 从 npm 构建 profile）
         run: npm run stage -- --with-plugins
 

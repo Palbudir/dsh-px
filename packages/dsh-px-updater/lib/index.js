@@ -20,7 +20,7 @@
  *
  * @module dsh-px-updater
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -98,6 +98,57 @@ function readAppInfo () {
     }
   }
   return empty
+}
+
+/**
+ * 外壳数据目录（`<userData>`）。
+ *
+ * 只能由外壳告知：插件在 harness 进程里跑，拿不到 Electron 的 `app.getPath()`。
+ * 拿不到就返回 null —— 更新状态缺失不该让插件加载失败，更不该抛错。
+ * @returns {string|null}
+ */
+function shellUserData () {
+  const fromEnv = process.env.DSH_PX_USER_DATA
+  return typeof fromEnv === 'string' && fromEnv.length > 0 ? fromEnv : null
+}
+
+/**
+ * 读外壳写下的更新状态。
+ *
+ * 文件由外壳**原子写**（先写 .tmp 再 rename），所以这里正常不会读到半截 JSON。
+ * 但读到任何异常都返回 null：状态文件是"锦上添花"，不该影响插件可用性。
+ * @returns {object|null}
+ */
+function readShellState () {
+  const dir = shellUserData()
+  if (dir === null) return null
+  try {
+    const raw = readFileSync(join(dir, 'update-bridge', 'state.json'), 'utf8')
+    const parsed = JSON.parse(raw)
+    return typeof parsed === 'object' && parsed !== null ? { ...parsed, available: true } : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 写一个"请重启并安装"的请求文件，由外壳监听并执行。
+ *
+ * 这里刻意**不**等待外壳的回应：外壳一旦执行就会退出应用，回应不可能到达。
+ * 返回 true 只表示"请求已送达"。
+ * @returns {boolean}
+ */
+function requestInstall () {
+  const dir = shellUserData()
+  if (dir === null) return false
+  try {
+    const bridgeDir = join(dir, 'update-bridge')
+    mkdirSync(bridgeDir, { recursive: true })
+    writeFileSync(join(bridgeDir, 'install.req'), `${new Date().toISOString()}\n`)
+    return true
+  } catch {
+    return false
+  }
 }
 
 /** 带超时的 fetch，避免更新检查把宿主拖住。 */
@@ -258,13 +309,59 @@ export function apply (ctx, rawConfig) {
       }
     })
 
-    say(`已注册 HTTP 端点 ${config.routePrefix}/status 与 ${config.routePrefix}/check`)
+    // ── 外壳状态：更新的真实进度只有外壳知道 ─────────────────────────────────
+    //
+    // 插件能查"有没有新版"，但**下载进度与"已就绪"只有外壳知道**（下载与安装
+    // 必须由 electron-updater 在 Electron 侧做）。外壳把状态写进
+    // `<userData>/update-bridge/state.json`，这里读出来转给界面。
+    // 界面跑在浏览器里，够不到 Electron，这条路是唯一的通道。
+    const disposeShellState = webServer.register({
+      kind: 'exact',
+      path: `${config.routePrefix}/shell-state`,
+      handler: (_req, res) => {
+        const bridge = readShellState()
+        // 外壳没写（开发态未打包、或应用刚启动）时给一个明确的空状态，
+        // 而不是 404：界面只需渲染一次，不必处理两种失败形态。
+        sendJson(res, 200, bridge ?? {
+          phase: 'idle',
+          status: '外壳未提供更新状态（开发态正常）',
+          version: null,
+          percent: null,
+          error: null,
+          available: false
+        })
+      }
+    })
+
+    // ── 界面请求"重启并安装" ────────────────────────────────────────────────
+    //
+    // 界面不能直接替换运行中的 exe，也不该拿到 Electron API。它只表达
+    // "用户点了按钮"：这里写一个请求文件，外壳在监听并执行真正的安装。
+    // 刻意只接受 POST，且不接受任何参数 —— 减少界面的权限面。
+    const disposeInstall = webServer.register({
+      kind: 'exact',
+      path: `${config.routePrefix}/install`,
+      handler: (req, res) => {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, error: '只接受 POST' })
+          return
+        }
+        const ok = requestInstall()
+        sendJson(res, ok ? 202 : 503, ok
+          ? { ok: true, message: '已请求外壳重启并安装' }
+          : { ok: false, error: '找不到外壳数据目录，无法请求安装' })
+      }
+    })
+
+    say(`已注册 HTTP 端点 ${config.routePrefix}/{status,check,shell-state,install}`)
 
     // 路由注册属于 effect，插件卸载时自动清理 —— 这是 dsh 的约定，
     // 不需要手写 removeRoute。
     hostCtx.effect?.(() => () => {
       disposeStatus()
       disposeCheck()
+      disposeShellState()
+      disposeInstall()
     }, 'dsh-px-updater: http routes')
   })
 

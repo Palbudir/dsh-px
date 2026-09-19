@@ -7,6 +7,7 @@
 /runtime*/
 
 # 构建产物
+/build-test/
 /dist/
 /out/
 
@@ -35,3 +36,7 @@ Thumbs.db
 # 临时文件
 commit-msg.tmp
 .git-commit-msg.txt
+# 提交信息草稿（用 git commit -F 时生成；曾误提交进仓库一次）
+.commit-msg*.txt
+# 构建/检查命令的落盘输出（排查用，不入库）
+*.out.txt

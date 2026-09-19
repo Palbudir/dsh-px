@@ -1,11 +1,11 @@
 {
   "name": "dsh-px",
-  "version": "0.1.0-beta.8",
+  "version": "0.1.0-beta.re.0.1",
   "private": true,
   "description": "dsh-px: a self-contained Electron desktop client that packages DeepSeek Harness (dsh) into one app.",
   "license": "MIT",
   "author": "Palbudir",
-  "main": "app/main.mjs",
+  "main": "out/main/index.js",
   "type": "module",
   "repository": {
     "type": "git",
@@ -16,20 +16,30 @@
   },
   "scripts": {
     "postinstall": "node scripts/repair-electron.mjs",
+    "build": "npm run build:client && npm run build:main",
+    "build:main": "electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json",
+    "build:client": "node packages/dsh-px-updater/scripts/build-client.mjs",
+    "test": "npm run build:client && esbuild test/**/*.test.ts --bundle --platform=node --format=esm --packages=external --outdir=build-test --log-level=warning && node --test build-test/*.test.js",
+    "dev": "npm run build && electron out/main/index.js",
     "stage": "node scripts/stage-runtime.mjs",
     "stage:plugins": "node scripts/stage-runtime.mjs --with-plugins",
     "verify": "node scripts/verify-capabilities.mjs",
     "verify:package": "node scripts/verify-package.mjs",
     "prune": "node scripts/prune-seed-home.mjs",
     "icon": "node scripts/build-icon.mjs",
-    "start": "electron app/main.mjs",
-    "pack": "electron-builder --dir && node scripts/write-app-update-yml.mjs",
-    "dist": "npm run prune && electron-builder --publish never && node scripts/verify-package.mjs",
-    "clean": "node -e \"require('node:fs').rmSync('runtime',{recursive:true,force:true});require('node:fs').rmSync('dist',{recursive:true,force:true})\""
+    "start": "npm run build && electron out/main/index.js",
+    "pack": "npm run build && electron-builder --dir && node scripts/write-app-update-yml.mjs",
+    "dist": "npm run build && npm run prune && electron-builder --publish never && node scripts/verify-package.mjs",
+    "clean": "node -e \"require('node:fs').rmSync('runtime',{recursive:true,force:true});require('node:fs').rmSync('dist',{recursive:true,force:true});require('node:fs').rmSync('out',{recursive:true,force:true})\""
   },
   "devDependencies": {
+    "@types/node": "^26.6.2",
     "electron": "^38.0.0",
-    "electron-builder": "^26.0.0"
+    "electron-builder": "^26.0.0",
+    "electron-vite": "^5.0.0",
+    "esbuild": "^0.25.12",
+    "typescript": "^7.0.2"
   },
   "build": {
     "appId": "com.palbudir.dshpx",
@@ -39,7 +49,7 @@
       "buildResources": "build"
     },
     "files": [
-      "app/**/*",
+      "out/**/*",
       "package.json"
     ],
     "extraResources": [

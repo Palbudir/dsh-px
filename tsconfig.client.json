@@ -1,0 +1,16 @@
+{
+  "//": "客户端半边（浏览器代码）的类型检查配置。",
+  "//jsx": "自动 JSX 运行时：与 esbuild 的 jsx:'automatic' 一致，产出 require('react/jsx-runtime')。",
+  "//isolated": "与根 tsconfig 一致的严格度，额外打开 JSX。",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "jsx": "react-jsx",
+    "jsxImportSource": "react",
+    "noEmit": true
+  },
+  "include": [
+    "packages/dsh-px-updater/src/host-modules.d.ts",
+    "packages/dsh-px-updater/src/**/*.ts",
+    "packages/dsh-px-updater/src/**/*.tsx"
+  ]
+}
