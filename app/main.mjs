@@ -11,7 +11,7 @@
  *
  * @module dsh-px/main
  */
-import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage } from 'electron'
+import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage, Notification } from 'electron'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, cpSync, writeFileSync, readdirSync, realpathSync, readFileSync, createWriteStream } from 'node:fs'
 import { createServer } from 'node:net'
@@ -448,7 +448,11 @@ function createWindow (url) {
     minHeight: 600,
     show: false,
     backgroundColor: '#111318',
-    title: 'dsh-px',
+    // 标题栏固定显示应用名，而不是跟随页面。
+    // Electron 默认行为是让页面里的 document.title 覆盖窗口标题，而 dsh 的
+    // Web UI 会把标题设成**当前会话名**（用户实测看到的就是会话名）。
+    // 光在这里设 title 不够 —— 必须在下面拦截 page-title-updated。
+    title: `DSH-PX ${app.getVersion()}`,
     autoHideMenuBar: true,
     webPreferences: {
       // harness 前端是一个可信的本地源；别把 Node 暴露进去。
@@ -457,6 +461,13 @@ function createWindow (url) {
       sandbox: true,
       spellcheck: false
     }
+  })
+
+  // 阻止页面改写窗口标题（dsh 的 UI 会把它设成会话名）。
+  // 这是桌面客户端该有的行为：窗口标题标识**应用**，不是标识当前文档。
+  win.on('page-title-updated', (event) => {
+    event.preventDefault()
+    win?.setTitle(`DSH-PX ${app.getVersion()}`)
   })
 
   win.once('ready-to-show', () => win?.show())
@@ -502,51 +513,49 @@ function setupAutoUpdate () {
     updateState = { status: `有新版本 ${info.version}`, version: info.version }
     process.stdout.write(`[dsh-px] 发现新版本 ${info.version}\n`)
 
-    // DSH_PX_AUTO_UPDATE=1：跳过弹窗直接下载。
-    // 用途有二：一是自动化测试（否则下载要等人点确认，无法脚本验证），
-    // 二是企业/无人值守部署需要静默更新。
-    const auto = process.env.DSH_PX_AUTO_UPDATE === '1'
-    if (!auto) {
-      const { response } = await dialog.showMessageBox({
-        type: 'info',
-        title: 'DSH-PX 有新版本',
-        message: `发现新版本 ${info.version}（当前 ${app.getVersion()}）`,
-        detail: '是否现在下载？下载采用差分方式，只获取变化的文件块。\n下载完成后可选择重启安装，或退出时自动安装。',
-        buttons: ['下载并安装', '稍后'],
-        defaultId: 0,
-        cancelId: 1
-      })
-      if (response === 1) return
-    } else {
-      process.stdout.write('[dsh-px] DSH_PX_AUTO_UPDATE=1，跳过确认直接下载\n')
-    }
+    // **不再弹模态对话框。**
+    //
+    // 用户反馈："更新怎么是弹窗？" —— 这是对的批评。Curosr / Codex / VS Code
+    // 这类成熟产品都不会用模态弹窗打断工作：更新是后台行为，只需一个不打扰的
+    // 提示 + 用户主动确认。模态框会夺走焦点、挡住正在看的界面，且必须处理掉
+    // 才能继续用 —— 对一个"每天开着"的客户端来说这是明显的体验倒退。
+    //
+    // 现在的行为：
+    //   - 后台静默下载（不打断任何操作）
+    //   - 托盘图标 + 菜单显示进度与状态
+    //   - 下载完成后发一条系统通知，并在托盘菜单提供"重启并安装"
+    //   - 退出应用时自动安装（autoInstallOnAppQuit）
+    //   - 仅在用户**主动点击**"手动检查更新"且已是最新时，才给一个反馈弹窗
+    //     （那是用户发起的动作，需要回执；后台检查不需要）
+    //
+    // DSH_PX_AUTO_UPDATE=1 保留：语义是"连系统通知也不发"，供自动化/无人值守。
+    const silent = process.env.DSH_PX_AUTO_UPDATE === '1'
+    process.stdout.write('[dsh-px] 开始后台下载更新（不打断使用）\n')
 
     autoUpdater.on('download-progress', (p) => {
       updateState = { status: `正在下载 ${Math.round(p.percent)}%`, version: info.version }
       process.stdout.write(`\r[dsh-px] 下载 ${p.percent.toFixed(1)}% (${(p.transferred / 1048576).toFixed(1)}MB/${(p.total / 1048576).toFixed(1)}MB)`)
+      refreshTray()
     })
     autoUpdater.on('update-downloaded', async (done) => {
       process.stdout.write('\n')
-      updateState = { status: `已下载 ${done.version}，待安装`, version: done.version }
+      updateState = { status: `已下载 ${done.version}，待重启安装`, version: done.version }
       process.stdout.write(`[dsh-px] 更新已下载完成：${done.version}\n`)
-      // 自动模式同样不弹窗；此时交给 autoInstallOnAppQuit，在退出时安装。
-      if (auto) {
-        process.stdout.write('[dsh-px] 自动模式：将在退出时安装\n')
+      refreshTray()
+      if (silent) {
+        process.stdout.write('[dsh-px] 静默模式：将在退出时安装\n')
         return
       }
-      const r = await dialog.showMessageBox({
-        type: 'info',
-        title: '更新已就绪',
-        message: `新版本 ${done.version} 已下载完成`,
-        detail: '重启后生效。也可以选择在退出应用时自动安装。',
-        buttons: ['立即重启安装', '退出时安装'],
-        defaultId: 0,
-        cancelId: 1
-      })
-      if (r.response === 0) {
-        quitting = true
-        if (harness && harness.exitCode === null) harness.kill()
-        autoUpdater.quitAndInstall()
+      // 系统通知而非模态框：不夺焦点、不阻塞。
+      try {
+        const n = new Notification({
+          title: 'DSH-PX 更新已就绪',
+          body: `新版本 ${done.version} 已下载完成。可从托盘菜单选择"重启并安装"，或在退出应用时自动安装。`
+        })
+        n.on('click', () => { if (win) { win.show(); win.focus() } })
+        n.show()
+      } catch {
+        // 某些环境不支持通知；托盘状态仍会显示，不影响使用。
       }
     })
     autoUpdater.on('error', (err) => {
@@ -575,38 +584,51 @@ function setupAutoUpdate () {
 }
 
 /**
- * 为托盘取一个真实图标。
+ * 取托盘图标。
  *
- * 原来用的是 `nativeImage.createEmpty()` —— 那是**空图像**，于是托盘区域
- * 只显示一个空白占位（用户实测截图确认"右下角没有图标"）。
+ * 历史教训（用户实测"托盘还是没有鲸鱼娘图标"）：最初用
+ * `app.getFileIcon(process.execPath)` 从可执行文件提取 —— 开发态下 execPath 是
+ * electron.exe，于是拿到 **Electron 默认图标**；即使打包态能拿到鲸鱼图标，
+ * 这种"依赖从 exe 提取"的做法也是脆的。
  *
- * 取图顺序：
- *   1. 从**自身可执行文件**提取图标。electron-builder 已把鲸鱼图标写进
- *      `DSH-PX.exe`，所以这条在打包态总能拿到，且不额外占体积、不会与 exe 不一致。
- *   2. 退回 `build/icon.png`（开发态可用）。
- *   3. 再不行就在内存里画一个简单的蓝色方块，保证托盘至少可见可点。
+ * 正确做法是**自带专用托盘图标资源**（桌面应用通行做法）：
+ * 构建时产出 tray-16/32.png，经 extraResources 放进 resources/，运行期直接读。
+ * 顺序：打包态资源 → 开发态 build/ → exe 图标兜底 → 内存绘制兜底。
  * @returns {Promise<import('electron').NativeImage>}
  */
 async function trayImage () {
-  try {
-    const exeIcon = await app.getFileIcon(process.execPath, { size: 'small' })
-    if (exeIcon && !exeIcon.isEmpty()) return exeIcon
-  } catch { /* 某些平台/开发态不支持，继续往下 */ }
+  const candidates = [
+    // 打包态：extraResources 落在 resources/ 下
+    process.resourcesPath ? join(process.resourcesPath, 'tray-32.png') : null,
+    process.resourcesPath ? join(process.resourcesPath, 'tray-16.png') : null,
+    // 开发态：仓库 build/ 目录
+    join(APP_ROOT, 'build', 'tray-32.png'),
+    join(APP_ROOT, 'build', 'tray-16.png')
+  ].filter(Boolean)
 
-  for (const p of [
-    join(APP_ROOT, 'build', 'icon-256.png'),
-    join(APP_ROOT, 'build', 'icon.png'),
-    join(process.resourcesPath ?? '', 'icon.png')
-  ]) {
+  for (const p of candidates) {
     try {
-      if (p && existsSync(p)) {
+      if (existsSync(p)) {
         const img = nativeImage.createFromPath(p)
-        if (!img.isEmpty()) return img
+        if (!img.isEmpty()) {
+          process.stdout.write(`[dsh-px] 托盘图标：${p}\n`)
+          return img
+        }
       }
-    } catch { /* 继续尝试下一个 */ }
+    } catch { /* 试下一个 */ }
   }
 
-  // 最后兜底：画一个 16×16 的蓝色方块，至少让托盘项可见可点。
+  // 兜底 1：从可执行文件提取（打包态通常就是应用自己的图标）
+  try {
+    const exeIcon = await app.getFileIcon(process.execPath, { size: 'small' })
+    if (exeIcon && !exeIcon.isEmpty()) {
+      process.stdout.write('[dsh-px] 托盘图标：从可执行文件提取（兜底）\n')
+      return exeIcon
+    }
+  } catch { /* 继续 */ }
+
+  // 兜底 2：在内存里画一个 16×16 蓝色方块，保证托盘项至少可见可点。
+  process.stdout.write('[dsh-px] 托盘图标：使用内存绘制兜底\n')
   const size = 16
   const buf = Buffer.alloc(size * size * 4)
   for (let i = 0; i < size * size; i += 1) {
@@ -620,33 +642,68 @@ async function trayImage () {
 
 function createTray (url) {
   try {
-    // 先用兜底图标同步构造，避免 await 期间托盘项缺失；随后替换为真实图标。
+    // 先用空图标同步构造，避免 await 期间托盘项缺失；随后替换为真实图标。
     tray = new Tray(nativeImage.createEmpty())
     tray.setToolTip(`DSH-PX ${app.getVersion()}`)
     void trayImage().then((img) => {
       try { tray?.setImage(img) } catch { /* 托盘可能已销毁 */ }
     })
-
-    tray.setContextMenu(Menu.buildFromTemplate([
-      { label: `DSH-PX ${app.getVersion()}`, enabled: false },
-      { label: updateState.status, enabled: false },
-      { label: '手动检查更新', click: () => void checkUpdatesManually() },
-      { type: 'separator' },
-      { label: '打开 DSH-PX', click: () => { if (win) { win.show(); win.focus() } else { createWindow(url) } } },
-      { type: 'separator' },
-      { label: '重启 harness', click: () => void restartHarness() },
-      { type: 'separator' },
-      { label: '打开日志文件', click: () => void shell.openPath(logPath()) },
-      { label: '打开数据目录', click: () => void shell.openPath(app.getPath('userData')) },
-      { type: 'separator' },
-      { label: '在浏览器中打开', click: () => void shell.openExternal(currentCleanUrl ?? url) },
-      { type: 'separator' },
-      { label: '退出', click: () => { quitting = true; app.quit() } }
-    ]))
+    tray.setContextMenu(Menu.buildFromTemplate(buildTrayMenu(url)))
     tray.on('double-click', () => { win?.show(); win?.focus() })
   } catch {
     // 托盘是尽力而为的；无头/CI 环境没有通知区域。
   }
+}
+
+/**
+ * 构造托盘菜单。
+ *
+ * 独立成函数是为了能**重建**菜单：更新状态会变化（正在下载 42% → 已就绪），
+ * 而 Electron 的托盘菜单是快照，改状态必须重新 setContextMenu。
+ * @param {string} url 兜底打开地址（无窗口时用）
+ * @returns {import('electron').MenuItemConstructorOptions[]}
+ */
+function buildTrayMenu (url) {
+  const readyToInstall = updateState.version && updateState.status.includes('待重启安装')
+  const items = [
+    { label: `DSH-PX ${app.getVersion()}`, enabled: false },
+    { label: updateState.status, enabled: false }
+  ]
+
+  // 下载完成后，把"重启并安装"提到最显眼的位置 —— 这是用户此刻唯一要做的事。
+  if (readyToInstall) {
+    items.push({ type: 'separator' })
+    items.push({
+      label: `重启并安装 ${updateState.version}`,
+      click: () => {
+        quitting = true
+        if (harness && harness.exitCode === null) harness.kill()
+        autoUpdater?.quitAndInstall()
+      }
+    })
+  }
+
+  items.push(
+    { label: '手动检查更新', click: () => void checkUpdatesManually() },
+    { type: 'separator' },
+    { label: '打开 DSH-PX', click: () => { if (win) { win.show(); win.focus() } else { createWindow(url) } } },
+    { label: '重启 harness', click: () => void restartHarness() },
+    { type: 'separator' },
+    { label: '打开日志文件', click: () => void shell.openPath(logPath()) },
+    { label: '打开数据目录', click: () => void shell.openPath(app.getPath('userData')) },
+    { type: 'separator' },
+    { label: '在浏览器中打开', click: () => void shell.openExternal(currentCleanUrl ?? url) },
+    { type: 'separator' },
+    { label: '退出', click: () => { quitting = true; app.quit() } }
+  )
+  return items
+}
+
+/** 重建托盘菜单以反映最新状态（下载进度、更新就绪等）。 */
+function refreshTray (url) {
+  try {
+    tray?.setContextMenu(Menu.buildFromTemplate(buildTrayMenu(url ?? currentCleanUrl ?? '')))
+  } catch { /* 托盘可能尚未创建或已销毁 */ }
 }
 
 /**

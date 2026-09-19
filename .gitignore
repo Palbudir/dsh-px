@@ -1,39 +1,37 @@
 # 装配出的运行时：随附的 Node + dsh 安装 + profile 树。
-# 由 `npm run stage` 生成；绝不入库（数百 MB 的第三方代码）。
+# 由 npm run stage 生成；绝不入库（数百 MB 的第三方代码）。
 #
-# 用通配符而不是写死 `/runtime/`：手工调试时很容易留下 `runtime.bak/`
-# 这类旁支目录，而一次 `git add -A` 就会把整个 Node 发行版（十万级文件）
-# 扫进索引 —— 这个坑真的踩过。
+# 用通配符而不是写死 /runtime/：手工调试时很容易留下 runtime.bak/ 这类旁支目录，
+# 而一次 git add -A 就会把整个 Node 发行版（十万级文件）扫进索引 —— 这个坑真的踩过。
 /runtime/
 /runtime*/
 
-# Build output
+# 构建产物
 /dist/
 /out/
 
-# Dependencies
+# 依赖
 /node_modules/
 
-# Local env / secrets
+# 本地环境与密钥
 .env
 .env.*
 *.local
 
-# OS / editor noise
+# 系统与编辑器噪音
 .DS_Store
 Thumbs.db
 *.log
 
-# npm ��װ�� dsh��CI/�ɾ������Ĺ������룩
-/runtime/_dsh-install/
-
-
-# ͼ���زģ�������������Դ������ʱ���أ�����⣩
+# 图标「素材」不入库；成品托盘图标**必须入库** ——
+# 它是运行期要读的资源（经 extraResources 打进应用），不能依赖构建机重新生成。
 /build/icon-source.png
 /build/icon.png
 /build/icon-256.png
 
-
-# �������ߣ�����ʱ�������أ�����⣩
+# 构建工具（运行时按需下载）
 /build/tools/
 
+# 临时文件
+commit-msg.tmp
+.git-commit-msg.txt

@@ -93,13 +93,29 @@ async function main () {
   const ico = await sharp(buf).resize(256, 256, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toBuffer()
   writeFileSync(join(BUILD, 'icon-256.png'), ico)
 
+  // 专用托盘图标。
+  //
+  // 为什么必须单独产出、而不能运行时从 exe 提取：
+  // 早期实现用 `app.getFileIcon(process.execPath)` —— 开发态下 execPath 是
+  // electron.exe，取到的是 **Electron 默认图标**；即便打包态能拿到鲸鱼图标，
+  // "依赖从可执行文件提取"本身也是脆的（换打包器/平台即失效）。
+  // 桌面应用的通行做法是**自带托盘图标资源**，这里产出 16/32 两档供系统按 DPI 选用。
+  for (const size of [16, 32]) {
+    const tray = await sharp(buf)
+      .resize(size, size, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+      .png()
+      .toBuffer()
+    writeFileSync(join(BUILD, `tray-${size}.png`), tray)
+    log(`已生成 build/tray-${size}.png`)
+  }
+
   // 记录本次素材摘要，便于追溯。
   const meta = {
     generatedAt: new Date().toISOString(),
     sourceUrl: SOURCE.url,
     sha256: digest,
     license: SOURCE.license,
-    outputs: ['build/icon.png', 'build/icon-256.png']
+    outputs: ['build/icon.png', 'build/icon-256.png', 'build/tray-16.png', 'build/tray-32.png']
   }
   writeFileSync(join(BUILD, 'icon-meta.json'), JSON.stringify(meta, null, 2) + '\n')
   log('已写入 build/icon-meta.json')
