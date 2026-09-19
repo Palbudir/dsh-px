@@ -307,6 +307,15 @@ function stageDsh () {
   // 依赖已经搬进 runtime/dsh/node_modules，_dsh-install 就只是构建中间产物了。
   // **必须删掉**：extraResources 会把整个 runtime/ 打进安装包 ——
   // beta.0 就是这样凭空胖了约 300 MB（多出 28747 个文件条目）。
+  //
+  // 但删除前先把它的 manifest 单独留一份：能力平价检查需要"官方安装"作基线，
+  // 而 CI 上没有全局 dsh，基线只能来自这里。留一份 package.json 只要几 KB，
+  // 比留着整个 212 MB 的安装目录划算得多。
+  // 注意：**绝不能**把这份记录放进 runtime/dsh/ —— 那会污染交付物。
+  const baselineDir = join(REPO, 'build', 'baseline')
+  mkdirSync(baselineDir, { recursive: true })
+  writeFileSync(join(baselineDir, 'dsh-package.json'), readFileSync(join(src, 'package.json')))
+  log(`已留存官方 dsh manifest 作为能力平价基线（build/baseline/dsh-package.json）`)
   rmTree(join(OUT, '_dsh-install'))
   log('已清理 _dsh-install（构建中间产物，不进交付物）')
   log(`已装配 dsh -> ${dest}`)

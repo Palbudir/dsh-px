@@ -16,7 +16,7 @@
  *   node scripts/verify-capabilities.mjs --json     # 机器可读结果
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -66,18 +66,29 @@ function dump (nodeExe, dshEntry, home) {
 /**
  * 定位用作能力平价基线的"官方 dsh"。
  *
- * 两条来源，按顺序：
+ * 三条来源，按顺序：
  *   1. `runtime/_dsh-install` —— stage 脚本从 npm 安装的**锁定版本**。
- *      这是 CI / 干净机器上唯一的来源（它们没有全局 dsh），
- *      而且它比全局安装更权威：版本由 DSH_PX_DSH_VERSION 固定。
+ *      但它现在会被清理掉（避免 212 MB 被误打包），所以只在未清理时可用。
  *   2. 全局安装 —— 开发机上顺手可用。
+ *   3. `build/baseline/dsh-package.json` —— stage 在清理前留存的官方 manifest。
+ *      这是 CI 上**唯一**可用的基线来源：CI 没有全局 dsh，
+ *      而 _dsh-install 已被删除。只留一个 JSON 文件即可支撑平价对比。
  *
- * 早期只查全局安装，于是 CI 上基线永远缺失、平价检查被跳过；
- * 后来那条路径又直接失败。这两处都必须修掉，否则"能力平价"在 CI 里等于没验。
+ * 早期只查全局安装，CI 上基线永远缺失、平价检查被静默跳过；
+ * 后来 _dsh-install 被清理又让基线消失。这两处都是真实踩过的坑。
+ * @returns {{kind:'install', dir:string} | {kind:'manifest', file:string} | null}
  */
-function officialDsh () {
+function officialBaseline () {
+  // 强制走 manifest 分支：CI 上就是这条路径（无全局 dsh、_dsh-install 已清理），
+  // 而开发机上因为装了全局 dsh 走不到它 —— 若不显式测，这条唯一在 CI 生效的
+  // 分支就从未被验证过。
+  if (process.argv.includes('--baseline=manifest')) {
+    const forced = join(REPO, 'build', 'baseline', 'dsh-package.json')
+    return existsSync(forced) ? { kind: 'manifest', file: forced } : null
+  }
+
   const fromNpmInstall = join(RUNTIME, '_dsh-install', 'node_modules', '@deepseek-ai', 'dsh')
-  if (existsSync(join(fromNpmInstall, 'lib', 'bin.js'))) return fromNpmInstall
+  if (existsSync(join(fromNpmInstall, 'lib', 'bin.js'))) return { kind: 'install', dir: fromNpmInstall }
 
   try {
     const root = execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['root', '-g'], {
@@ -85,8 +96,12 @@ function officialDsh () {
       shell: process.platform === 'win32'
     }).trim()
     const dir = join(root, '@deepseek-ai', 'dsh')
-    if (existsSync(join(dir, 'lib', 'bin.js'))) return dir
+    if (existsSync(join(dir, 'lib', 'bin.js'))) return { kind: 'install', dir }
   } catch { /* 没有全局 npm/dsh 也正常 */ }
+
+  const manifest = join(REPO, 'build', 'baseline', 'dsh-package.json')
+  if (existsSync(manifest)) return { kind: 'manifest', file: manifest }
+
   return null
 }
 
@@ -146,37 +161,77 @@ async function main () {
   }
 
   // ---- 2. 与官方安装做能力平价 --------------------------------------------
-  const official = officialDsh()
-  if (!official) {
-    record('官方 dsh 基线可用', false, '找不到全局 dsh 安装；未度量能力平价')
+  const baseline = officialBaseline()
+  if (!baseline) {
+    record('官方 dsh 基线可用', false, '既没有全局 dsh，也没有 build/baseline/dsh-package.json；未度量能力平价')
   } else {
-    const officialHome = process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh')
-    let stagedRows, officialRows
+    let stagedRows
     try {
       stagedRows = dump(nodeExe, dshEntry, home)
     } catch (err) {
       record('装配版 --dump-config 成功', false, String(err?.message ?? err).slice(0, 400))
     }
-    try {
-      officialRows = dump(nodeExe, join(official, 'lib', 'bin.js'), officialHome)
-    } catch (err) {
-      record('官方版 --dump-config 成功', false, String(err?.message ?? err).slice(0, 400))
-    }
-    if (stagedRows && officialRows) {
-      const key = (r) => `${r.id}|${r.name}`
-      const officialKeys = new Set(officialRows.map(key))
-      const stagedSet = new Set(stagedRows.map(key))
-      const missing = officialRows.filter((r) => !stagedSet.has(key(r)))
-      const extra = stagedRows.filter((r) => !officialKeys.has(key(r)))
+
+    if (stagedRows) {
       record('装配版能组合出插件树', stagedRows.length > 100, `${stagedRows.length} 行`)
-      record(
-        '能力平价：官方的东西一样都不缺',
-        missing.length === 0,
-        missing.length ? `缺失 ${missing.length} 行：${missing.slice(0, 10).map((r) => r.id).join('、')}` : '完全一致或为其超集'
-      )
-      if (extra.length) {
-        record('装配版是超集（随附插件带来了额外行）', true,
-          `+${extra.length}：${extra.slice(0, 10).map((r) => r.id).join('、')}`)
+
+      let missing = null
+      let extra = []
+      let baselineLabel = ''
+
+      if (baseline.kind === 'install') {
+        // 完整基线：直接组合官方安装的树，逐行对比 —— 这是最有说服力的形式。
+        baselineLabel = '官方安装（组合树逐行对比）'
+        const officialHome = process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh')
+        try {
+          const officialRows = dump(nodeExe, join(baseline.dir, 'lib', 'bin.js'), officialHome)
+          const key = (r) => `${r.id}|${r.name}`
+          const stagedSet = new Set(stagedRows.map(key))
+          const officialKeys = new Set(officialRows.map(key))
+          missing = officialRows.filter((r) => !stagedSet.has(key(r)))
+          extra = stagedRows.filter((r) => !officialKeys.has(key(r)))
+        } catch (err) {
+          record('官方版 --dump-config 成功', false, String(err?.message ?? err).slice(0, 400))
+        }
+      } else {
+        // manifest 基线：只有官方 dsh 的依赖清单。无法逐行组合对比，
+        // 因此改为断言"官方 dsh 的每个直接依赖都确实被打进了装配树"——
+        // 这是 CI（无全局 dsh、_dsh-install 已清理）唯一可做的事，
+        // 也正是"自包含"这一步真正会失败的地方。
+        baselineLabel = '官方 manifest（依赖完整性对比）'
+        const manifest = JSON.parse(readFileSync(baseline.file, 'utf8'))
+        const deps = Object.keys(manifest.dependencies ?? {})
+        const installed = new Set()
+        const scanScope = (base, prefix) => {
+          if (!existsSync(base)) return
+          for (const entry of readdirSync(base, { withFileTypes: true })) {
+            if (!entry.isDirectory()) continue
+            if (entry.name.startsWith('@')) { scanScope(join(base, entry.name), entry.name + '/'); continue }
+            installed.add(prefix + entry.name)
+          }
+        }
+        // 扫描装配树的依赖。注意基准目录必须是 `runtime/dsh/node_modules`：
+        // dshEntry 是**文件**（lib/bin.js），用 `join(dshEntry, '..', 'node_modules')`
+        // 会解析成 lib/node_modules 而漏掉全部依赖（第一次写就是这样，
+        // 结果误报'缺失 72 项'）。用 dirname 明确上溯两级才是对的。
+        const stagedDshDir = dirname(dirname(dshEntry))          // runtime/dsh
+        const stagedModules = join(stagedDshDir, 'node_modules')
+        scanScope(join(stagedModules, '@deepseek-ai'), '@deepseek-ai/')
+        scanScope(stagedModules, '')
+        missing = deps.filter((d) => !installed.has(d)).map((d) => ({ id: d, name: d }))
+        extra = []
+      }
+
+      if (missing) {
+        record(
+          `能力平价：官方的东西一样都不缺（基线：${baselineLabel}）`,
+          missing.length === 0,
+          missing.length ? `缺失 ${missing.length} 项：${missing.slice(0, 10).map((r) => r.id ?? r.name).join('、')}` : '完全一致或为其超集'
+        )
+        if (extra.length) {
+          record('装配版是超集（随附插件带来了额外行）', true,
+            `+${extra.length}：${extra.slice(0, 10).map((r) => r.id).join('、')}`)
+        }
       }
     }
   }
