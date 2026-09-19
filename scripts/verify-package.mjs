@@ -20,7 +20,7 @@
  *   node scripts/verify-package.mjs <安装包路径>
  */
 import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -44,20 +44,43 @@ const FORBIDDEN = [
   'resources/runtime/_dsh-install'
 ]
 
-/** 获取 7zr（只需一次，约 600 KB）。 */
+/** 获取可用的 7-Zip。优先用系统/CI 已安装的，最后才尝试下载。 */
 function ensure7z () {
+  // 1) 显式配置
+  if (process.env.DSH_PX_7Z) {
+    if (existsSync(process.env.DSH_PX_7Z)) return process.env.DSH_PX_7Z
+    throw new Error(`DSH_PX_7Z 指向的文件不存在：${process.env.DSH_PX_7Z}`)
+  }
+  // 2) 仓库内自带的（本地开发时下载一次即可）
   const vendored = join(TOOLS, '7zr.exe')
   if (existsSync(vendored)) return vendored
+  // 3) 系统安装
   for (const p of ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe']) {
     if (existsSync(p)) return p
   }
+  // 4) PATH 上的 7z（CI 里用 choco 安装后就在 PATH 上，这是最省事的一条）
+  const probe = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['7z'], { encoding: 'utf8' })
+  if (probe.status === 0 && probe.stdout.trim()) return probe.stdout.trim().split(/\r?\n/)[0].trim()
+
   if (process.platform !== 'win32') return '7z'
+
+  // 5) 最后才下载。**注意**：CI 上这一步曾静默失败，导致"解析到 10 条载荷"
+  //    从而误报全部缺失。因此这里不再静默 —— 失败就抛出可读原因，
+  //    并在 CI 里由工作流预装 7-Zip 来避免走到这一步。
   mkdirSync(TOOLS, { recursive: true })
-  log('本地没有 7-Zip，正在下载 7zr.exe（约 600 KB）')
-  execFileSync('powershell', ['-NoProfile', '-Command',
-    `Invoke-WebRequest 'https://www.7-zip.org/a/7zr.exe' -OutFile '${vendored}' -UseBasicParsing`],
-  { stdio: 'inherit' })
-  if (!existsSync(vendored)) throw new Error('7zr.exe 下载失败')
+  log('本地没有 7-Zip，尝试下载 7zr.exe（约 600 KB）')
+  try {
+    execFileSync('powershell', ['-NoProfile', '-Command',
+      `Invoke-WebRequest 'https://www.7-zip.org/a/7zr.exe' -OutFile '${vendored}' -UseBasicParsing`],
+    { stdio: 'inherit' })
+  } catch (err) {
+    throw new Error(
+      `无法获得 7-Zip，因此不能校验安装包内容。\n` +
+      `  自动下载失败：${err?.message ?? err}\n` +
+      `  解决：安装 7-Zip（CI 上可 choco install 7zip -y），或设置 DSH_PX_7Z 指向 7z 可执行文件。`
+    )
+  }
+  if (!existsSync(vendored)) throw new Error('7zr.exe 下载后仍不存在')
   return vendored
 }
 
@@ -106,6 +129,22 @@ function main () {
     paths.push(candidate.replace(/\\/g, '/').replace(/\/+$/, ''))
   }
   log(`解析到载荷条目：${paths.length}`)
+
+  // 防线：条目数过少说明**解析失败**，而不是"文件缺失"。
+  //
+  // 实测教训：CI 上没有 7-Zip 时，脚本只解析到 10 条，于是把
+  // "资源全都不存在"报了出来 —— 而安装包其实是好的（232 MB、41301 个文件）。
+  // 这种误报方向最糟：它会让人去查打包问题，而真正的问题是校验工具不可用。
+  // 因此这里显式区分两种失败。
+  if (paths.length < 1000) {
+    const sevenPath = seven
+    throw new Error(
+      `只解析到 ${paths.length} 个载荷条目，远少于预期（应约 4 万）—— ` +
+      `这说明 7-Zip 没能正确读取安装包，而不是文件缺失。\n` +
+      `  使用的 7-Zip：${sevenPath}\n` +
+      `  请确认它可用（DSH_PX_7Z 可显式指定），或安装完整版 7-Zip。`
+    )
+  }
 
   const entries = raw.split('\n')
   const normalized = new Set(paths.map((p) => p.toLowerCase()))

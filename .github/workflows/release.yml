@@ -40,6 +40,12 @@ jobs:
       - name: 安装开发依赖
         run: npm install
 
+      # 校验安装包内容需要 7-Zip。托管 runner 上不预装，而运行时自动下载
+      # 曾静默失败（导致校验把"工具不可用"误报成"文件缺失"）。
+      # 显式安装最省事也最确定。
+      - name: 安装 7-Zip（校验安装包用）
+        run: choco install 7zip -y --no-progress
+
       # 先跑门禁：beta 的发布前提是能力平价成立。
       - name: 装配运行时
         run: npm run stage -- --with-plugins

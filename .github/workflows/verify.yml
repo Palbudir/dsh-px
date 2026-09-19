@@ -41,6 +41,12 @@ jobs:
       - name: 安装开发依赖
         run: npm install
 
+      # 与 release 保持一致：校验脚本在需要时会用到 7-Zip。
+      # verify 本身不校验安装包，但保持一致可避免日后在此新增校验时踩同一个坑。
+      - name: 安装 7-Zip（Windows）
+        if: runner.os == 'Windows'
+        run: choco install 7zip -y --no-progress
+
       - name: 装配运行时（Node + dsh + 从 npm 构建 profile）
         run: npm run stage -- --with-plugins
 
