@@ -21,8 +21,9 @@
  */
 import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { listZipEntries } from './unzip-list.mjs'
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const DIST = join(REPO, 'dist')
@@ -99,47 +100,75 @@ function main () {
   log(`安装包：${installer}`)
   log(`大小：${(statSync(installer).size / 1048576).toFixed(1)} MB`)
 
-  const seven = ensure7z()
-  // 用 `-slt`（结构化列表）而不是普通 `l`。
+  // 优先用纯 JS 读 **ZIP**，而不是用 7-Zip 读 NSIS 安装包。
   //
-  // 教训：普通 `l` 的输出是**列对齐的表格**，同一份 7-Zip 在不同环境
-  // （CI runner 与本地）上给出不同列宽/空白，靠文本切分去解析非常脆 ——
-  // 实测 CI 上只解析出 10 条，而本地同样命令解析出 45990 条。
-  // `-slt` 把每个属性单独一行（`Path = ...`、`Attributes = ...`），
-  // 不依赖对齐，是 7-Zip 官方给脚本用的格式。
-  const raw = execFileSync(seven, ['l', '-slt', installer], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
+  // 原因（踩了三轮的坑）：同一份安装包，7-Zip 在本地能列出 14 万条，
+  // 在 CI 上只列出 2 行 —— 环境相关、排查成本高、方向不确定。
+  // 而 electron-builder 每次都会同时产出 `*-win.zip`，它与安装包
+  // 来自**同一个 win-unpacked 目录**，因此校验它同样能证明
+  // "交付物里有没有必备文件、有没有混入构建产物"。
+  // ZIP 的中央目录是自描述的，用 Node 内置 zlib 直接读即可：
+  // 零依赖、97 毫秒、跨平台、结果确定。
+  // 在同目录里找与安装包版本匹配的 ZIP。
+  //
+  // 命名不一定可推导（实测 electron-builder 产出的是
+  // `DSH-PX-0.1.0-beta.5-win.zip`，与 `DSH-PX Setup 0.1.0-beta.5.exe` 并不同名规则），
+  // 所以按"版本号 + -win.zip"去匹配，而不是对安装包名做字符串替换。
+  const dir = dirname(installer)
+  // 只取 `主.次.补` 作为匹配键，不试图解析完整的预发布后缀。
+  //
+  // 之前用 "数字.数字.数字 + 可选后缀" 的正则，后缀字符类里含 `.`，
+  // 结果把 `.exe` 也吞了进去（匹配到 "0.1.0-beta.5.exe"），ZIP 自然匹配不上。
+  // 用最短且稳定的 `\d+\.\d+\.\d+` 就够了：ZIP 名里必然包含这段。
+  const versionMatch = basename(installer).match(/(\d+\.\d+\.\d+)/)
+  const version = versionMatch ? versionMatch[1] : null
+  const zips = existsSync(dir)
+    ? readdirSync(dir).filter((f) => /\.zip$/i.test(f) && (!version || f.includes(version)))
+    : []
+  const foundZip = zips.length ? join(dir, zips[0]) : null
+  if (foundZip) log(`同源 ZIP：${basename(foundZip)}`)
+  if (foundZip) {
+    log(`校验目标：${foundZip}（与安装包同源，纯 JS 解析）`)
+    const names = listZipEntries(foundZip)
+    log(`解析到载荷条目：${names.length}`)
+    if (names.length < 1000) {
+      throw new Error(`ZIP 只解析到 ${names.length} 个条目，远少于预期（约 4 万），文件可能损坏`)
+    }
+    const normalized = new Set(names.map((p) => p.toLowerCase().replace(/\/+$/, '')))
+    return report(normalized, `${names.length} 条（来自 ZIP）`)
+  }
 
+  // 退路：没有 ZIP 时仍尝试用 7-Zip 读安装包。
+  log('未找到同源 ZIP，改用 7-Zip 读取安装包')
+  const seven = ensure7z()
+  const raw = execFileSync(seven, ['l', '-slt', installer], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
   const paths = []
   for (const rawLine of raw.split('\n')) {
     const line = rawLine.replace(/\r$/, '')
-    // 结构化格式里路径就是 `Path = ...`；末尾的归档自身路径会先出现一次，
-    // 它不含分隔符，会被后面的过滤自然剔除。
     const m = line.match(/^Path = (.+)$/)
     if (!m) continue
     const p = m[1].trim().replace(/\\/g, '/').replace(/\/+$/, '')
-    if (!p || !p.includes('/')) continue      // 只要归档内部路径
+    if (!p || !p.includes('/')) continue
     paths.push(p)
   }
   log(`解析到载荷条目：${paths.length}`)
-
-  // 防线：条目数过少说明**解析失败**，而不是"文件缺失"。
-  //
-  // 实测教训：CI 上曾只解析到 10 条，于是把"资源全都不存在"报了出来 ——
-  // 而安装包其实是好的（232 MB、4 万多个文件）。这种误报方向最糟：
-  // 它会让人去查打包问题，而真正的问题是校验工具或解析方式不可用。
   if (paths.length < 1000) {
     const sample = raw.split('\n').slice(0, 12).map((l) => '    | ' + l.replace(/\r$/, '')).join('\n')
     throw new Error(
-      `只解析到 ${paths.length} 个载荷条目，远少于预期（应约 4 万）—— ` +
+      `只解析到 ${paths.length} 个载荷条目，远少于预期（约 4 万）—— ` +
       `这说明 7-Zip 没能按预期列出安装包内容，而不是文件缺失。\n` +
-      `  使用的 7-Zip：${seven}\n` +
-      `  7-Zip 输出开头：\n${sample}\n` +
-      `  请确认它可用（DSH_PX_7Z 可显式指定）。`
+      `  使用的 7-Zip：${seven}\n  输出开头：\n${sample}`
     )
   }
+  return report(new Set(paths.map((p) => p.toLowerCase())), `${paths.length} 条（来自 7-Zip）`)
+}
 
-  const entries = raw.split('\n')
-  const normalized = new Set(paths.map((p) => p.toLowerCase()))
+/**
+ * 按必备/禁止清单做断言并输出结果。
+ * @param {Set<string>} normalized 已小写归一化的条目路径集合
+ * @param {string} source 来源描述，仅用于日志
+ */
+function report (normalized, source) {
   const failures = []
 
   // 1) 必备文件
@@ -157,17 +186,13 @@ function main () {
   }
 
   // 3) 规模提示
-  const statsLine = entries.find((l) => /\d+ files, \d+ folders/.test(l))
-  if (statsLine) log(`载荷规模：${statsLine.trim()}`)
-
-  const warnLine = entries.find((l) => /^Warnings?:/i.test(l.trim()))
-  if (warnLine) log(`7-Zip 提示：${warnLine.trim()}（通常无害，但值得看一眼）`)
+  log(`载荷规模：${source}`)
 
   if (failures.length) {
     process.stderr.write(`\n[pkg] 校验失败：\n  - ${failures.join('\n  - ')}\n`)
     process.exitCode = 1
   } else {
-    process.stdout.write('\n[pkg] 安装包内容校验通过\n')
+    process.stdout.write('\n[pkg] 交付物内容校验通过\n')
   }
 }
 
