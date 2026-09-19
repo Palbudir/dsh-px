@@ -20,15 +20,17 @@ function errText(err: unknown): string {
   try { return JSON.stringify(err) } catch { return String(err) }
 }
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, cpSync, writeFileSync, readdirSync, realpathSync, readFileSync, createWriteStream } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync, readFileSync, createWriteStream } from 'node:fs'
 import { createServer } from 'node:net'
 import { createRequire } from 'node:module'
-import { dirname, join, resolve, sep } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ChildProcess } from 'node:child_process'
-import type { Dirent, WriteStream } from 'node:fs'
+import type { WriteStream } from 'node:fs'
 import type { NativeImage, MenuItemConstructorOptions, Event as ElectronEvent } from 'electron'
 import type { AppUpdater } from 'electron-updater'
+import { materializeSeedHome } from './materialize'
+import type { SeedProgress } from './materialize'
 
 /**
  * electron-updater 是 CJS 包，从 ESM 里用 createRequire 加载最稳。
@@ -225,131 +227,35 @@ function resolveRuntime (): RuntimeDescriptor | null {
   return null
 }
 
-/** 判定某个目录项是否为 dsh 自己管理的 fallback（这类项绝不能复制）。 */
-interface DshFallbackFilter {
-  skipEntry: (entry: Dirent, fullPath: string) => boolean
-  skipName: Set<string>
-}
-
-/** 递归复制时可选的逐项跳过依据。 */
-interface ProfileTreeSkip {
-  skip: Set<string>
-  skipEntry: ((entry: Dirent, fullPath: string) => boolean) | null
-}
-
 /**
- * 建立"哪些目录项是 dsh 自己管理的 fallback"的判定函数，这类项**绝不能复制**。
- *
- * 实测背景：开发机上 `profiles/node_modules` 有 **164 个 Junction 全部指向
- * `runtime/dsh/node_modules`**（dsh 自己的包树），另有 23 个实体目录才是真三方依赖。
- * dsh 启动时会断言这些 fallback 必须是链接或它自己管理的 proxy，
- * 一旦被解引用成真目录就拒绝启动：
- *
- *   dsh: <home>/profiles/node_modules/commander exists and is not a symlink or
- *        dsh-managed module proxy
- *
- * **两套判据缺一不可**，因为同一条路径会经历两次解引用：
- *
- *   1. 按链接目标判断（`targetName` / `isSymbolicLink`）—— 覆盖**开发态**。
- *      开发时这些项确实还是 Junction，按目标判断最准确。
- *   2. 按"名字是否出现在 dsh 自己的直接依赖清单里"判断 —— 覆盖**打包态**。
- *      electron-builder 打包 `extraResources` 时会**再次解引用** Junction，
- *      于是应用看到的 `commander` 已经是真目录，判据 1 完全失效（实测踩到）。
- *      dsh 的直接依赖清单随附在 `runtime/dsh/package.json` 里，确定且可读。
- *
- * 注意不能笼统排除 `node_modules`：pnpm 的 `.pnpm` 内部链接指向 profile 自己的
- * store，那是真依赖，必须复制。也正因如此，真实的插件依赖（如 `react`）
- * 不在 dsh 的直接依赖清单里，会被正确保留。
- * @param dshDir 随附的 dsh 安装目录
- */
-function makeDshFallbackFilter (dshDir: string | null): DshFallbackFilter {
-  // 判据 2 的数据源：dsh 自己的直接依赖名。
-  const dshOwnDeps = new Set<string>()
-  if (dshDir) {
-    try {
-      const manifest = JSON.parse(readFileSync(join(dshDir, 'package.json'), 'utf8'))
-      for (const name of Object.keys(manifest.dependencies ?? {})) {
-        // 依赖名可能是 '@scope/pkg'；顶层条目按 scope 目录出现，所以两种形式都收。
-        dshOwnDeps.add(name)
-        if (name.startsWith('@')) dshOwnDeps.add(name.split('/')[0])
-      }
-    } catch (err) {
-      process.stderr.write(`[dsh-px] 警告：无法读取 dsh 依赖清单，打包态判据将退化：${errText(err)}\n`)
-    }
-  }
-
-  const prefix = dshDir ? (join(dshDir, 'node_modules') + sep).toLowerCase() : null
-
-  const skipEntry = (entry: Dirent, fullPath: string): boolean => {
-    // dsh / 插件自己的状态目录一律不复制。它们都是生成物，首次启动会自行重建，
-    // 而复制它们会把 Junction 解引用成真目录，从而让 dsh 拒绝启动：
-    //   .dsh-module-fallback —— profile 内的 module fallback 树，其 Junction 指向
-    //     profile 自己的 node_modules；
-    //   .dsh-market —— 插件市场状态。
-    if (entry.name.startsWith('.dsh-')) return true
-
-    if (entry.isSymbolicLink() && prefix) {
-      let target
-      try { target = realpathSync(fullPath) } catch { return true } // 悬空链接
-      if ((target + sep).toLowerCase().startsWith(prefix)) return true
-    }
-    return false
-  }
-
-  return { skipEntry, skipName: dshOwnDeps }
-}
-
-/**
- * 递归复制 `src` 到 `dest`，跳过 `skip` 里的名字，以及 `skipEntry` 判定为
- * dsh 管理 fallback 的链接。
- *
- * 这是本次开发中**同一个错误犯的第二次**（第一次在装配脚本里，见
- * docs/PACKAGING.md 约束 2），所以在这里也写清楚为什么必须这样做。
- */
-function copyProfileTree (src: string, dest: string, { skip, skipEntry = null }: ProfileTreeSkip): void {
-  mkdirSync(dest, { recursive: true })
-  for (const entry of readdirSync(src, { withFileTypes: true })) {
-    if (skip.has(entry.name)) continue
-    const from = join(src, entry.name)
-    if (skipEntry && skipEntry(entry, from)) continue
-    const to = join(dest, entry.name)
-    if (entry.isDirectory()) {
-      copyProfileTree(from, to, { skip, skipEntry })
-    } else {
-      // recursive:true 是必须的：Dirent 报的是链接本身，
-      // 而实际源可能是目录（实测 '@agentclientprotocol/sdk/' 就是这种情况），
-      // 少了它 cpSync 会以 "Recursive option not enabled" 直接失败。
-      cpSync(from, to, { recursive: true, dereference: true, force: true })
-    }
-  }
-}
-
-/** dsh 自己管理的 fallback 命名空间；见 makeDshFallbackFilter 的说明。 */
-const SKIP_IN_PROFILE_TREE = new Set(['@deepseek-ai'])
-
-/**
- * 选定 harness home。优先级：
+ * 选定并准备 harness home。优先级：
  *   1. DSH_PX_HOME —— 显式覆盖（也是在开发插件时，把外壳指向你现有 ~/.dsh 的方式）。
- *   2. <userData>/dsh-home —— 应用自己的 home：首次运行从随附的树播种，
+ *   2. <userData>/dsh-home —— 应用自己的 home：首次运行从随附的树物化，
  *      此后归用户所有。
  *
- * 首启播种的实测数据：随附种子树约 30 万文件，同步复制耗时**约 3 分钟**。
- * 因此这里：先写认领标记、逐项检查可续传、并且把失败如实报出来 ——
- * 而不是让应用带着一个空壳 profile 启动、再表现出一堆莫名其妙的症状。
+ * 物化用**硬链接**（见 materialize.ts）：同卷首启实测 3.5 秒，跨卷自动回退到
+ * 逐文件复制并给出进度。旧实现是同步整树复制，实测 4–5 分钟且界面冻结。
+ *
+ * 完成判据用 `.dsh-px-materialized` 标记**并**实际核对 profile 清单存在：
+ * 只认标记会在"标记写了但物化被中断"时错误地跳过准备，让应用带着空壳 profile 启动。
  */
-function resolveHarnessHome (runtime: RuntimeDescriptor): string {
+async function resolveHarnessHome (
+  runtime: RuntimeDescriptor,
+  onProgress: (p: SeedProgress) => void
+): Promise<string> {
   if (process.env.DSH_PX_HOME) return resolve(process.env.DSH_PX_HOME)
 
   const home = join(app.getPath('userData'), 'dsh-home')
-  const marker = join(home, '.dsh-px-seed-claimed')
+  const doneMarker = join(home, '.dsh-px-materialized')
   const profileManifest = join(home, 'profiles', PROFILE_NAME, 'package.json')
 
-  // 已经播种完整：直接用。
-  if (existsSync(profileManifest)) return home
+  // 已经物化完整：直接用（二次启动零开销）。
+  if (existsSync(doneMarker) && existsSync(profileManifest)) return home
 
-  // 认领这次播种。先落盘，这样即便中途被打断也能看出这是哪一次尝试。
+  // 认领这次物化。先落盘，这样即便中途被打断也能看出这是哪一次尝试。
   mkdirSync(home, { recursive: true })
-  writeFileSync(marker, `claimed at ${new Date().toISOString()}\nseedSource=${runtime.seedHome ?? '(none)'}\n`)
+  writeFileSync(join(home, '.dsh-px-seed-claimed'),
+    `claimed at ${new Date().toISOString()}\nseedSource=${runtime.seedHome ?? '(none)'}\n`)
 
   if (!runtime.seedHome) {
     mkdirSync(join(home, 'profiles'), { recursive: true })
@@ -357,52 +263,31 @@ function resolveHarnessHome (runtime: RuntimeDescriptor): string {
     return home
   }
 
-  // 逐个子项复制并记录：中断后可精确续传，也便于在日志里定位卡在哪一项。
-  const items = ['profiles', 'settings.yaml', '.credentials.yaml']
-  for (const item of items) {
-    const from = join(runtime.seedHome, item)
-    if (!existsSync(from)) continue
-    const to = join(home, item)
-    process.stdout.write(`[dsh-px] 首次运行：正在准备 ${item}（首次约需数分钟，请稍候）…\n`)
-    try {
-      if (item === 'profiles') {
-        // profiles/ 下有两棵 node_modules，处理方式完全不同：
-        //
-        //   profiles/node_modules          —— **整体跳过**。实测开发机上它有 164 个
-        //     Junction（全部指向 dsh 包树）+ 23 个实体目录，而那 23 个全是 dsh 自己的
-        //     依赖作用域（@aws-sdk、@octokit、@opentelemetry、@anthropic-ai、
-        //     @deepseek-ai …）。也就是说它整棵就是 dsh 托管的 fallback 树，
-        //     不含任何插件依赖；dsh 首启会自行重建。
-        //     （曾试图按名字过滤：不可行 —— dsh 的传递依赖闭包很大，
-        //       `argparse` 这类不在其直接依赖清单里，逐个枚举必然漏。）
-        //
-        //   profiles/<name>/node_modules   —— **有选择地复制**。这里才混着真插件依赖
-        //     （mermaid、@codemirror、node-pty、react…）与 dsh 管理的链接。
-        const { skipEntry, skipName } = makeDshFallbackFilter(join(runtime.root, 'dsh'))
-        const isTopLevelModules = (entry: Dirent, fullPath: string): boolean =>
-          entry.name === 'node_modules' && dirname(fullPath) === from
-        copyProfileTree(from, to, {
-          skip: new Set([...SKIP_IN_PROFILE_TREE, ...skipName]),
-          skipEntry: (entry, fullPath) => isTopLevelModules(entry, fullPath) || skipEntry(entry, fullPath)
-        })
-      } else {
-        cpSync(from, to, { recursive: true, dereference: true, force: false, errorOnExist: false })
-      }
-    } catch (err) {
-      // 不吞掉：把真实原因告诉用户，否则应用会以一个空壳 profile 启动。
-      const detail = err instanceof Error ? errText(err) : String(err)
-      process.stderr.write(`[dsh-px] 准备 ${item} 失败：${detail}\n`)
-      dialog.showErrorBox(
-        'dsh-px —— 首次运行准备失败',
-        `无法把随附的运行时复制到：\n${home}\n\n失败项：${item}\n原因：${detail}\n\n` +
-        '可尝试：删除该目录后重新启动；或检查磁盘空间与杀毒软件拦截。'
-      )
-      throw err
-    }
+  process.stdout.write('[dsh-px] 首次运行：正在从随附运行时准备本地数据目录…\n')
+  try {
+    const r = await materializeSeedHome({
+      seedHome: runtime.seedHome,
+      home,
+      profileName: PROFILE_NAME,
+      dshDir: join(runtime.root, 'dsh'),
+      onProgress
+    })
+    process.stdout.write(
+      `[dsh-px] 首次运行准备完成：硬链接 ${r.linked}、复制 ${r.copied}、跳过 ${r.skipped}、` +
+      `共 ${r.total} 项，耗时 ${(r.ms / 1000).toFixed(1)} 秒\n`
+    )
+  } catch (err) {
+    // 不吞掉：把真实原因告诉用户，否则应用会以一个空壳 profile 启动。
+    const detail = errText(err)
+    process.stderr.write(`[dsh-px] 首次运行准备失败：${detail}\n`)
+    dialog.showErrorBox(
+      'dsh-px —— 首次运行准备失败',
+      `无法把随附的运行时准备到：\n${home}\n\n原因：${detail}\n\n` +
+      '可尝试：删除该目录后重新启动；或检查磁盘空间与杀毒软件拦截。'
+    )
+    throw err
   }
 
-  writeFileSync(join(home, '.dsh-px-seeded'), `seeded from ${runtime.seedHome} at ${new Date().toISOString()}\n`)
-  process.stdout.write('[dsh-px] 首次运行准备完成\n')
   return home
 }
 
@@ -523,7 +408,59 @@ function startHarness ({ runtime, home, port }: HarnessContext): HarnessStartRes
   return { child, authUrl }
 }
 
-function createWindow (url: string): BrowserWindow {
+/**
+ * 构建启动期进度页。
+ *
+ * 为什么要有它：首启在**跨卷**场景下要逐文件复制数万个文件（分钟级），
+ * 旧实现是同步复制、界面完全冻结，用户只能看到一个白窗口。同一卷时靠硬链接
+ * 只要几秒，但**不能因此就不给反馈**——没人能区分"在干活"和"卡死了"。
+ *
+ * 这里刻意不用模态框：用户在更新交互上已明确要求"不要打断式弹窗"，
+ * 启动进度同理，画在应用自己的窗口里即可。
+ */
+function splashHtml (): string {
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>DSH-PX</title>
+<style>
+  :root { color-scheme: dark }
+  body { margin:0; height:100vh; display:flex; flex-direction:column; align-items:center;
+         justify-content:center; background:#111318; color:#e6e8ee;
+         font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif; user-select:none }
+  .brand { font-size:22px; letter-spacing:.14em; font-weight:600 }
+  .bar { width:280px; height:5px; border-radius:3px; background:#233; margin:22px 0 12px; overflow:hidden }
+  .bar > i { display:block; height:100%; width:36%; border-radius:3px;
+             background:linear-gradient(90deg,#4f8cff,#7c5cff);
+             animation:slide 1.15s ease-in-out infinite }
+  @keyframes slide { 0%{transform:translateX(-110%)} 100%{transform:translateX(320%)} }
+  .phase { font-size:13px; color:#aeb6c8 }
+  .detail { font-size:11px; color:#6d7688; margin-top:6px; min-height:14px }
+</style></head><body>
+  <div class="brand">DSH-PX</div>
+  <div class="bar"><i></i></div>
+  <div class="phase" id="phase">正在启动…</div>
+  <div class="detail" id="detail"></div>
+</body></html>`
+}
+
+/** 向进度页推送状态（页面可能已经切走，失败一律忽略）。 */
+function reportSeedProgress (p: SeedProgress): void {
+  if (!win || win.isDestroyed()) return
+  const now = Date.now()
+  // 节流：跨卷复制时进度会很密集，没必要每次都跨进程发。
+  if (p.done < p.total && now - lastSeedPushAt < 120) return
+  lastSeedPushAt = now
+  const percent = p.total > 0 ? Math.min(99, Math.round((p.done / p.total) * 100)) : 0
+  const detail = p.total > 0 ? `${p.done} / ${p.total} 项（${percent}%）` : ''
+  void win.webContents.executeJavaScript(
+    `(() => { const a=document.getElementById('phase'); if(a) a.textContent=${JSON.stringify(p.phase)};` +
+    ` const b=document.getElementById('detail'); if(b) b.textContent=${JSON.stringify(detail)}; })()`
+  ).catch(() => { /* 页面已切到 harness，正常 */ })
+}
+
+/** 进度推送节流时间戳。 */
+let lastSeedPushAt = 0
+
+/** 创建窗口并先显示启动进度页。 */
+function createShellWindow (): BrowserWindow {
   win = new BrowserWindow({
     width: 1440,
     height: 940,
@@ -565,8 +502,16 @@ function createWindow (url: string): BrowserWindow {
     return { action: 'deny' }
   })
 
-  void win.loadURL(url)
+  void win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(splashHtml()))
   return win
+}
+
+/** 把窗口切到 harness 的真实地址。 */
+async function loadHarnessUrl (url: string): Promise<void> {
+  if (!win || win.isDestroyed()) return
+  await win.loadURL(url)
+  win.show()
+  win.focus()
 }
 
 /** 最近一次检查到的更新状态。 */
@@ -772,7 +717,7 @@ function buildTrayMenu (url: string): MenuItemConstructorOptions[] {
   items.push(
     { label: '手动检查更新', click: () => void checkUpdatesManually() },
     { type: 'separator' },
-    { label: '打开 DSH-PX', click: () => { if (win) { win.show(); win.focus() } else { createWindow(url) } } },
+    { label: '打开 DSH-PX', click: () => { if (win) { win.show(); win.focus() } else { void createShellWindow(); void loadHarnessUrl(url) } } },
     { label: '重启 harness', click: () => void restartHarness() },
     { type: 'separator' },
     { label: '打开日志文件', click: () => void shell.openPath(logPath()) },
@@ -863,9 +808,7 @@ async function restartHarness (): Promise<boolean> {
       return false
     }
     if (win) {
-      await win.loadURL(authUrl)
-      win.show()
-      win.focus()
+      await loadHarnessUrl(authUrl)
     }
     createTray(cleanUrl)
     return true
@@ -886,7 +829,12 @@ async function main (): Promise<void> {
     return
   }
 
-  const home = resolveHarnessHome(runtime)
+  // 先建窗口并显示进度页：后面的物化在跨卷时是分钟级，必须先有地方显示进度。
+  createShellWindow()
+
+  // 首启物化（同卷硬链接，秒级；跨卷回退复制，分钟级但有进度）。
+  const home = await resolveHarnessHome(runtime, reportSeedProgress)
+
   const port = await findPort(DEFAULT_PORT)
   const cleanUrl = `http://${HOST}:${port}/`
   ctxState = { runtime, home, port }
@@ -894,6 +842,7 @@ async function main (): Promise<void> {
 
   process.stdout.write(`[dsh-px] node=${runtime.node}\n[dsh-px] dsh=${runtime.dshEntry}\n[dsh-px] DSH_HOME=${home}\n[dsh-px] url=${cleanUrl}\n`)
 
+  reportSeedProgress({ done: 0, total: 0, copied: 0, phase: '正在启动本地服务…' })
   const started = startHarness({ runtime, home, port })
   harness = started.child
 
@@ -920,7 +869,7 @@ async function main (): Promise<void> {
     return
   }
 
-  createWindow(openUrl)
+  await loadHarnessUrl(openUrl)
   createTray(cleanUrl)
   setupAutoUpdate()
 }

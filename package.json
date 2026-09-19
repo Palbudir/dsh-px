@@ -18,6 +18,7 @@
     "postinstall": "node scripts/repair-electron.mjs",
     "build": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "esbuild test/**/*.test.ts --bundle --platform=node --format=esm --packages=external --outdir=build-test --log-level=warning && node --test build-test/*.test.js",
     "dev": "electron-vite build && electron out/main/index.js",
     "stage": "node scripts/stage-runtime.mjs",
     "stage:plugins": "node scripts/stage-runtime.mjs --with-plugins",
@@ -35,6 +36,7 @@
     "electron": "^38.0.0",
     "electron-builder": "^26.0.0",
     "electron-vite": "^5.0.0",
+    "esbuild": "^0.25.12",
     "typescript": "^7.0.2"
   },
   "build": {
