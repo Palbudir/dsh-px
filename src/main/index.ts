@@ -12,12 +12,23 @@
  * @module dsh-px/main
  */
 import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage, Notification } from 'electron'
+
+/** 从 unknown 的 catch 变量里安全取出可读消息（strict 下 catch 变量是 unknown）。 */
+function errText(err: unknown): string {
+  if (err instanceof Error) return err.message
+  if (typeof err === 'string') return err
+  try { return JSON.stringify(err) } catch { return String(err) }
+}
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, cpSync, writeFileSync, readdirSync, realpathSync, readFileSync, createWriteStream } from 'node:fs'
 import { createServer } from 'node:net'
 import { createRequire } from 'node:module'
 import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { ChildProcess } from 'node:child_process'
+import type { Dirent, WriteStream } from 'node:fs'
+import type { NativeImage, MenuItemConstructorOptions, Event as ElectronEvent } from 'electron'
+import type { AppUpdater } from 'electron-updater'
 
 /**
  * electron-updater 是 CJS 包，从 ESM 里用 createRequire 加载最稳。
@@ -29,12 +40,12 @@ import { fileURLToPath } from 'node:url'
  * 两者通道不同、节奏不同，混在一起就会互相踩。
  */
 const require = createRequire(import.meta.url)
-let autoUpdater = null
+let autoUpdater: AppUpdater | null = null
 try {
   ({ autoUpdater } = require('electron-updater'))
 } catch (err) {
   // 开发态（未打包）下通常拿不到 app-update.yml，属正常，不应致命。
-  process.stdout.write(`[dsh-px] electron-updater 不可用（开发态正常）：${err?.message ?? err}\n`)
+  process.stdout.write(`[dsh-px] electron-updater 不可用（开发态正常）：${errText(err)}\n`)
 }
 
 // ── 日志落盘 ────────────────────────────────────────────────────────────────
@@ -48,12 +59,12 @@ try {
 // 连 harness 子进程的输出（我们也转发到 stdout）会一并进日志。
 //
 // `userData` 要等 app ready 才稳定，所以先缓冲，ready 后再落盘。
-const LOG_BUFFER = []
-let LOG_STREAM = null
-let LOG_PATH = null
+const LOG_BUFFER: string[] = []
+let LOG_STREAM: WriteStream | null = null
+let LOG_PATH: string | null = null
 
 /** 追加文本到日志缓冲或文件。 */
-function appendLog (text) {
+function appendLog (text: string): void {
   const line = text.endsWith('\n') ? text : text + '\n'
   if (LOG_STREAM) {
     try { LOG_STREAM.write(line) } catch { /* 日志写入失败不该影响应用 */ }
@@ -63,29 +74,49 @@ function appendLog (text) {
 }
 
 /** 劫持标准输出/错误，使所有既有输出自动进日志。 */
-function teeStdio () {
-  for (const [stream, tag] of [[process.stdout, 'out'], [process.stderr, 'err']]) {
+function teeStdio (): void {
+  // 写入回调的窄化别名：只需保留"可选的错误回调"这一位置，不复制 node 的整组重载。
+  type WriteCallback = (err?: Error | null) => void
+  for (const [stream, tag] of [[process.stdout, 'out'], [process.stderr, 'err']] as const) {
     const original = stream.write.bind(stream)
-    stream.write = (chunk, encoding, cb) => {
+    stream.write = ((chunk: string | Uint8Array, encoding?: BufferEncoding | WriteCallback, cb?: WriteCallback): boolean => {
       try {
         const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8')
         appendLog(tag === 'err'
           ? text.split('\n').map((l) => (l ? `[stderr] ${l}` : l)).join('\n')
           : text)
       } catch { /* 忽略 */ }
-      return original(chunk, encoding, cb)
-    }
+      // 只需窄化 `original` 的编码参数位置，行为与原 .mjs 完全一致。
+      return (original as (chunk: string | Uint8Array, encoding?: BufferEncoding, cb?: WriteCallback) => boolean)(chunk, encoding as BufferEncoding, cb)
+    }) as typeof stream.write
+  }
+}
+
+/**
+ * 应用自身版本号。
+ *
+ * 注意**不能只看 `app.getVersion()`**：开发态（未打包）时它返回的是 **Electron 的版本**
+ * （实测日志里出现 "版本 38.8.6"，而应用是 0.1.0-beta.8），会把排查带偏。
+ * 因此开发态回退到仓库 package.json 的 version；打包态才是权威的应用版本。
+ */
+function appVersion (): string {
+  if (app.isPackaged) return app.getVersion()
+  try {
+    return (JSON.parse(readFileSync(join(APP_ROOT, 'package.json'), 'utf8')) as { version?: string }).version ?? app.getVersion()
+  } catch {
+    return app.getVersion()
   }
 }
 
 /** app ready 后打开日志文件，并把缓冲刷进去。 */
-function openLogFile () {
+function openLogFile (): void {
   try {
     LOG_PATH = join(app.getPath('userData'), 'dsh-px.log')
     mkdirSync(dirname(LOG_PATH), { recursive: true })
     LOG_STREAM = createWriteStream(LOG_PATH, { flags: 'a' })
     LOG_STREAM.write(`\n${'='.repeat(70)}\n`)
-    LOG_STREAM.write(`[dsh-px] 启动 ${new Date().toISOString()}  版本 ${app.getVersion()}  平台 ${process.platform}\n`)
+    LOG_STREAM.write(`[dsh-px] 启动 ${new Date().toISOString()}  版本 ${appVersion()}  平台 ${process.platform}\n`)
+    LOG_STREAM.write(`[dsh-px] electron=${process.versions.electron ?? '(非 Electron)'} node=${process.versions.node} packaged=${app.isPackaged}\n`)
     for (const line of LOG_BUFFER) LOG_STREAM.write(line)
     LOG_BUFFER.length = 0
   } catch {
@@ -94,48 +125,91 @@ function openLogFile () {
 }
 
 /** 日志文件路径（错误弹窗里告知用户）。 */
-function logPath () {
+function logPath (): string {
   return LOG_PATH ?? '(尚未初始化)'
 }
 
 teeStdio()
 
-const HERE = dirname(fileURLToPath(import.meta.url))          // <app>/app
-const APP_ROOT = resolve(HERE, '..')                          // <app>
+const HERE = dirname(fileURLToPath(import.meta.url))
+
+/**
+ * 仓库/应用根目录。
+ *
+ * 由 `HERE` 向上找最近的、带 `package.json` 的祖先，而不是写死退几层：
+ * 这段代码的来源路径会随构建方式变化 —— 迁移前是 `<app>/app/main.mjs`（退一层），
+ * 现在是 `<app>/out/main/index.js`（**要退两层**）。曾因写死 `resolve(HERE, '..')`
+ * 而把根算成 `<app>/out`，导致 `resolveRuntime()` 找不到随附运行时、
+ * 应用起来只弹一个模态错误框（进程还在，但既无日志也无端口），极难排查。
+ * 按「带 package.json 的祖先」判断对上述两种布局以及将来换 outDir 都成立。
+ */
+function findAppRoot (from: string): string {
+  let dir = from
+  for (let i = 0; i < 6; i++) {
+    if (existsSync(join(dir, 'package.json'))) return dir
+    const parent = resolve(dir, '..')
+    if (parent === dir) break
+    dir = parent
+  }
+  return resolve(from, '..')   // 兜底：维持旧行为，不外抛
+}
+
+const APP_ROOT = findAppRoot(HERE)
 const PROFILE_NAME = process.env.DSH_PX_PROFILE ?? 'web'
 const HOST = '127.0.0.1'
 const DEFAULT_PORT = Number(process.env.DSH_PX_PORT ?? 3080)
 /** 等待 harness 的 HTTP 面给出应答的上限；超时即判定启动失败。 */
 const READY_TIMEOUT_MS = Number(process.env.DSH_PX_READY_TIMEOUT_MS ?? 180_000)
 
-/** @type {import('node:child_process').ChildProcess | null} */
-let harness = null
-/** @type {BrowserWindow | null} */
-let win = null
-/** @type {Tray | null} */
-let tray = null
+let harness: ChildProcess | null = null
+let win: BrowserWindow | null = null
+let tray: Tray | null = null
 let quitting = false
+
+/** 已装配的运行时描述（`resolveRuntime` 的返回值）。 */
+interface RuntimeDescriptor {
+  /** 运行时根目录（`…/runtime`）。 */
+  root: string
+  /** 随附的 node 可执行文件路径。 */
+  node: string
+  /** 随附的 dsh CLI 入口（`…/dsh/lib/bin.js`）。 */
+  dshEntry: string
+  /** 随附的种子 home；随附运行时里没有该目录时为 null。 */
+  seedHome: string | null
+}
+
+/** 拉起 harness 所需的全部状态（profile home 与端口）。 */
+interface HarnessContext {
+  runtime: RuntimeDescriptor
+  home: string
+  port: number
+}
 
 /**
  * 拉起 harness 所需的全部状态。重启 harness 时要重新求值，
  * 所以单独存起来而不是散落在 main 里。
- * @type {{runtime:any, home:string, port:number}|null}
  */
-let ctxState = null
+let ctxState: HarnessContext | null = null
 /** 当前窗口应加载的干净 URL（重启后端口可能变，所以要跟着更新）。 */
-let currentCleanUrl = null
+let currentCleanUrl: string | null = null
 
 /**
- * 解析已装配的运行时。支持两种布局，使同一份代码在开发态和安装后都能跑：
+ * 解析已装配的运行时。支持三种布局，使同一份代码在开发态和安装后都能跑：
+ *   显式覆盖：$DSH_PX_RUNTIME_ROOT —— 与启动 harness 时传给它的同名变量保持一致
  *   打包后：  <resources>/runtime/{node,dsh,dsh-home}
  *   开发态：  <仓库>/runtime/{node,dsh,dsh-home}
- * @returns {{root:string,node:string,dshEntry:string,seedHome:string}|null}
+ *
+ * 找不到时把**试过哪些路径**写进日志：这个函数返回 null 只会导致一个模态错误框，
+ * 而模态框在无人值守/自动化场景下看起来就是"进程卡住"，没有候选路径几乎无法排查。
  */
-function resolveRuntime () {
-  const roots = []
+function resolveRuntime (): RuntimeDescriptor | null {
+  const roots: string[] = []
+  const override = process.env.DSH_PX_RUNTIME_ROOT
+  if (override) roots.push(resolve(override))
   if (process.resourcesPath) roots.push(join(process.resourcesPath, 'runtime'))
   roots.push(join(APP_ROOT, 'runtime'))
 
+  const tried: string[] = []
   for (const root of roots) {
     const node = process.platform === 'win32'
       ? join(root, 'node', 'node.exe')
@@ -145,8 +219,22 @@ function resolveRuntime () {
     if (existsSync(node) && existsSync(dshEntry)) {
       return { root, node, dshEntry, seedHome: existsSync(seedHome) ? seedHome : null }
     }
+    tried.push(`${root}（node=${existsSync(node) ? '有' : '无'} dsh=${existsSync(dshEntry) ? '有' : '无'}）`)
   }
+  process.stdout.write(`[dsh-px] 未找到随附运行时，已尝试：\n${tried.map((t) => `  - ${t}`).join('\n')}\n`)
   return null
+}
+
+/** 判定某个目录项是否为 dsh 自己管理的 fallback（这类项绝不能复制）。 */
+interface DshFallbackFilter {
+  skipEntry: (entry: Dirent, fullPath: string) => boolean
+  skipName: Set<string>
+}
+
+/** 递归复制时可选的逐项跳过依据。 */
+interface ProfileTreeSkip {
+  skip: Set<string>
+  skipEntry: ((entry: Dirent, fullPath: string) => boolean) | null
 }
 
 /**
@@ -172,12 +260,11 @@ function resolveRuntime () {
  * 注意不能笼统排除 `node_modules`：pnpm 的 `.pnpm` 内部链接指向 profile 自己的
  * store，那是真依赖，必须复制。也正因如此，真实的插件依赖（如 `react`）
  * 不在 dsh 的直接依赖清单里，会被正确保留。
- * @param {string|null} dshDir 随附的 dsh 安装目录
- * @returns {{ skipEntry: (entry: import('node:fs').Dirent, fullPath: string) => boolean, skipName: Set<string> }}
+ * @param dshDir 随附的 dsh 安装目录
  */
-function makeDshFallbackFilter (dshDir) {
+function makeDshFallbackFilter (dshDir: string | null): DshFallbackFilter {
   // 判据 2 的数据源：dsh 自己的直接依赖名。
-  const dshOwnDeps = new Set()
+  const dshOwnDeps = new Set<string>()
   if (dshDir) {
     try {
       const manifest = JSON.parse(readFileSync(join(dshDir, 'package.json'), 'utf8'))
@@ -187,13 +274,13 @@ function makeDshFallbackFilter (dshDir) {
         if (name.startsWith('@')) dshOwnDeps.add(name.split('/')[0])
       }
     } catch (err) {
-      process.stderr.write(`[dsh-px] 警告：无法读取 dsh 依赖清单，打包态判据将退化：${err?.message ?? err}\n`)
+      process.stderr.write(`[dsh-px] 警告：无法读取 dsh 依赖清单，打包态判据将退化：${errText(err)}\n`)
     }
   }
 
   const prefix = dshDir ? (join(dshDir, 'node_modules') + sep).toLowerCase() : null
 
-  const skipEntry = (entry, fullPath) => {
+  const skipEntry = (entry: Dirent, fullPath: string): boolean => {
     // dsh / 插件自己的状态目录一律不复制。它们都是生成物，首次启动会自行重建，
     // 而复制它们会把 Junction 解引用成真目录，从而让 dsh 拒绝启动：
     //   .dsh-module-fallback —— profile 内的 module fallback 树，其 Junction 指向
@@ -219,7 +306,7 @@ function makeDshFallbackFilter (dshDir) {
  * 这是本次开发中**同一个错误犯的第二次**（第一次在装配脚本里，见
  * docs/PACKAGING.md 约束 2），所以在这里也写清楚为什么必须这样做。
  */
-function copyProfileTree (src, dest, { skip, skipEntry = null }) {
+function copyProfileTree (src: string, dest: string, { skip, skipEntry = null }: ProfileTreeSkip): void {
   mkdirSync(dest, { recursive: true })
   for (const entry of readdirSync(src, { withFileTypes: true })) {
     if (skip.has(entry.name)) continue
@@ -249,10 +336,8 @@ const SKIP_IN_PROFILE_TREE = new Set(['@deepseek-ai'])
  * 首启播种的实测数据：随附种子树约 30 万文件，同步复制耗时**约 3 分钟**。
  * 因此这里：先写认领标记、逐项检查可续传、并且把失败如实报出来 ——
  * 而不是让应用带着一个空壳 profile 启动、再表现出一堆莫名其妙的症状。
- * @param {any} runtime
- * @returns {string}
  */
-function resolveHarnessHome (runtime) {
+function resolveHarnessHome (runtime: RuntimeDescriptor): string {
   if (process.env.DSH_PX_HOME) return resolve(process.env.DSH_PX_HOME)
 
   const home = join(app.getPath('userData'), 'dsh-home')
@@ -294,7 +379,7 @@ function resolveHarnessHome (runtime) {
         //   profiles/<name>/node_modules   —— **有选择地复制**。这里才混着真插件依赖
         //     （mermaid、@codemirror、node-pty、react…）与 dsh 管理的链接。
         const { skipEntry, skipName } = makeDshFallbackFilter(join(runtime.root, 'dsh'))
-        const isTopLevelModules = (entry, fullPath) =>
+        const isTopLevelModules = (entry: Dirent, fullPath: string): boolean =>
           entry.name === 'node_modules' && dirname(fullPath) === from
         copyProfileTree(from, to, {
           skip: new Set([...SKIP_IN_PROFILE_TREE, ...skipName]),
@@ -305,7 +390,7 @@ function resolveHarnessHome (runtime) {
       }
     } catch (err) {
       // 不吞掉：把真实原因告诉用户，否则应用会以一个空壳 profile 启动。
-      const detail = err instanceof Error ? err.message : String(err)
+      const detail = err instanceof Error ? errText(err) : String(err)
       process.stderr.write(`[dsh-px] 准备 ${item} 失败：${detail}\n`)
       dialog.showErrorBox(
         'dsh-px —— 首次运行准备失败',
@@ -324,12 +409,10 @@ function resolveHarnessHome (runtime) {
 /**
  * 找一个空闲 TCP 端口，优先使用 `preferred`，
  * 这样如果默认端口上已经有一个 harness 在跑，就会被复用而不是重复起一个。
- * @param {number} preferred
- * @returns {Promise<number>}
  */
-function findPort (preferred) {
+function findPort (preferred: number): Promise<number> {
   return new Promise((res) => {
-    const probe = (port) => {
+    const probe = (port: number): void => {
       const srv = createServer()
       srv.once('error', () => probe(port + 1))
       srv.once('listening', () => srv.close(() => res(port)))
@@ -343,10 +426,8 @@ function findPort (preferred) {
  * 轮询 harness 的 HTTP 面直到有应答。任何 HTTP 状态码
  * （包括来自浏览器信任围栏的 401）都证明服务器已在监听；
  * 我们真正在等的是"连接被拒绝"这件事结束。
- * @param {string} url
- * @param {number} timeoutMs
  */
-async function waitForReady (url, timeoutMs) {
+async function waitForReady (url: string, timeoutMs: number): Promise<number> {
   const deadline = Date.now() + timeoutMs
   let lastErr = 'no attempt made'
   while (Date.now() < deadline) {
@@ -357,7 +438,7 @@ async function waitForReady (url, timeoutMs) {
       const res = await fetch(url, { redirect: 'manual' })
       return res.status
     } catch (err) {
-      lastErr = err instanceof Error ? err.message : String(err)
+      lastErr = err instanceof Error ? errText(err) : String(err)
     }
     await new Promise((r) => setTimeout(r, 350))
   }
@@ -371,20 +452,22 @@ async function waitForReady (url, timeoutMs) {
  *
  * 所以外壳**不能猜** URL —— 它要读取 harness 打印出来的那一个。
  * 干净 URL 仍作为就绪探针；真正加载的是宣告出来的 URL。
- * @param {string} text
- * @returns {string | null}
  */
-function extractAuthenticatedUrl (text) {
+function extractAuthenticatedUrl (text: string): string | null {
   const match = text.match(/dsh web:\s*(http:\/\/\S+)/)
   return match ? match[1] : null
 }
 
+/** 拉起 harness 的结果：子进程句柄 + 宣告鉴权 URL 的 Promise。 */
+interface HarnessStartResult {
+  child: ChildProcess
+  authUrl: Promise<string | null>
+}
+
 /**
  * 拉起随附的 harness，并在它宣告出自己的鉴权 URL 后兑现 Promise。
- * @param {{runtime:any, home:string, port:number}} opts
- * @returns {{child: import('node:child_process').ChildProcess, authUrl: Promise<string|null>}}
  */
-function startHarness ({ runtime, home, port }) {
+function startHarness ({ runtime, home, port }: HarnessContext): HarnessStartResult {
   const args = [runtime.dshEntry, '--profile', PROFILE_NAME, '--host', HOST, '--port', String(port), '--no-open']
   const env = {
     ...process.env,
@@ -410,10 +493,10 @@ function startHarness ({ runtime, home, port }) {
   })
 
   let announced = ''
-  let settle
-  const authUrl = new Promise((res) => { settle = res })
+  let settle: ((value: string | null) => void) | null = null
+  const authUrl = new Promise<string | null>((res) => { settle = res })
 
-  const consume = (chunk) => {
+  const consume = (chunk: Buffer): void => {
     const text = chunk.toString()
     announced += text
     process.stdout.write(`[dsh] ${text}`)
@@ -440,7 +523,7 @@ function startHarness ({ runtime, home, port }) {
   return { child, authUrl }
 }
 
-function createWindow (url) {
+function createWindow (url: string): BrowserWindow {
   win = new BrowserWindow({
     width: 1440,
     height: 940,
@@ -452,7 +535,7 @@ function createWindow (url) {
     // Electron 默认行为是让页面里的 document.title 覆盖窗口标题，而 dsh 的
     // Web UI 会把标题设成**当前会话名**（用户实测看到的就是会话名）。
     // 光在这里设 title 不够 —— 必须在下面拦截 page-title-updated。
-    title: `DSH-PX ${app.getVersion()}`,
+    title: `DSH-PX ${appVersion()}`,
     autoHideMenuBar: true,
     webPreferences: {
       // harness 前端是一个可信的本地源；别把 Node 暴露进去。
@@ -465,9 +548,9 @@ function createWindow (url) {
 
   // 阻止页面改写窗口标题（dsh 的 UI 会把它设成会话名）。
   // 这是桌面客户端该有的行为：窗口标题标识**应用**，不是标识当前文档。
-  win.on('page-title-updated', (event) => {
+  win.on('page-title-updated', (event: ElectronEvent) => {
     event.preventDefault()
-    win?.setTitle(`DSH-PX ${app.getVersion()}`)
+    win?.setTitle(`DSH-PX ${appVersion()}`)
   })
 
   win.once('ready-to-show', () => win?.show())
@@ -486,17 +569,22 @@ function createWindow (url) {
   return win
 }
 
+/** 最近一次检查到的更新状态。 */
+interface UpdateState {
+  status: string
+  version: string | null
+}
+
 /** 最近一次检查到的更新状态，供托盘菜单显示。 */
-let updateState = { status: '未检查', version: null }
+let updateState: UpdateState = { status: '未检查', version: null }
 
 /**
  * 配置并触发外壳自身的更新检查。
  *
  * 这里刻意把"检查"与"安装"分开：检查是静默的、后台的；安装必须由用户确认，
  * 因为它会重启应用。这也是主流桌面应用的做法。
- * @returns {void}
  */
-function setupAutoUpdate () {
+function setupAutoUpdate (): void {
   if (!autoUpdater) return
   // 不自动下载：让用户先看到"有新版本 + 更新内容"，再决定是否下载安装。
   autoUpdater.autoDownload = false
@@ -506,7 +594,7 @@ function setupAutoUpdate () {
     updateState = { status: '正在检查更新…', version: null }
   })
   autoUpdater.on('update-not-available', (info) => {
-    updateState = { status: '已是最新版本', version: info?.version ?? app.getVersion() }
+    updateState = { status: '已是最新版本', version: info?.version ?? appVersion() }
     process.stdout.write('[dsh-px] 已是最新版本\n')
   })
   autoUpdater.on('update-available', async (info) => {
@@ -558,15 +646,15 @@ function setupAutoUpdate () {
         // 某些环境不支持通知；托盘状态仍会显示，不影响使用。
       }
     })
-    autoUpdater.on('error', (err) => {
+    autoUpdater.on('error', (err: any) => {
       updateState = { status: '更新失败', version: null }
-      process.stderr.write(`[dsh-px] 更新出错：${err?.message ?? err}\n`)
+      process.stderr.write(`[dsh-px] 更新出错：${errText(err)}\n`)
     })
 
     try {
       await autoUpdater.downloadUpdate()
     } catch (err) {
-      dialog.showErrorBox('下载更新失败', String(err?.message ?? err))
+      dialog.showErrorBox('下载更新失败', errText(err))
     }
   })
 
@@ -577,8 +665,8 @@ function setupAutoUpdate () {
   }
   // 启动后延后 8 秒再查，避免和 harness 启动抢资源/抢网络。
   setTimeout(() => {
-    autoUpdater.checkForUpdates().catch((err) => {
-      process.stdout.write(`[dsh-px] 检查更新失败：${err?.message ?? err}\n`)
+    autoUpdater.checkForUpdates().catch((err: any) => {
+      process.stdout.write(`[dsh-px] 检查更新失败：${errText(err)}\n`)
     })
   }, 8000)
 }
@@ -594,9 +682,8 @@ function setupAutoUpdate () {
  * 正确做法是**自带专用托盘图标资源**（桌面应用通行做法）：
  * 构建时产出 tray-16/32.png，经 extraResources 放进 resources/，运行期直接读。
  * 顺序：打包态资源 → 开发态 build/ → exe 图标兜底 → 内存绘制兜底。
- * @returns {Promise<import('electron').NativeImage>}
  */
-async function trayImage () {
+async function trayImage (): Promise<NativeImage> {
   const candidates = [
     // 打包态：extraResources 落在 resources/ 下
     process.resourcesPath ? join(process.resourcesPath, 'tray-32.png') : null,
@@ -604,7 +691,7 @@ async function trayImage () {
     // 开发态：仓库 build/ 目录
     join(APP_ROOT, 'build', 'tray-32.png'),
     join(APP_ROOT, 'build', 'tray-16.png')
-  ].filter(Boolean)
+  ].filter((p): p is string => Boolean(p))
 
   for (const p of candidates) {
     try {
@@ -640,11 +727,11 @@ async function trayImage () {
   return nativeImage.createFromBuffer(buf, { width: size, height: size })
 }
 
-function createTray (url) {
+function createTray (url: string): void {
   try {
     // 先用空图标同步构造，避免 await 期间托盘项缺失；随后替换为真实图标。
     tray = new Tray(nativeImage.createEmpty())
-    tray.setToolTip(`DSH-PX ${app.getVersion()}`)
+    tray.setToolTip(`DSH-PX ${appVersion()}`)
     void trayImage().then((img) => {
       try { tray?.setImage(img) } catch { /* 托盘可能已销毁 */ }
     })
@@ -660,13 +747,12 @@ function createTray (url) {
  *
  * 独立成函数是为了能**重建**菜单：更新状态会变化（正在下载 42% → 已就绪），
  * 而 Electron 的托盘菜单是快照，改状态必须重新 setContextMenu。
- * @param {string} url 兜底打开地址（无窗口时用）
- * @returns {import('electron').MenuItemConstructorOptions[]}
+ * @param url 兜底打开地址（无窗口时用）
  */
-function buildTrayMenu (url) {
+function buildTrayMenu (url: string): MenuItemConstructorOptions[] {
   const readyToInstall = updateState.version && updateState.status.includes('待重启安装')
-  const items = [
-    { label: `DSH-PX ${app.getVersion()}`, enabled: false },
+  const items: MenuItemConstructorOptions[] = [
+    { label: `DSH-PX ${appVersion()}`, enabled: false },
     { label: updateState.status, enabled: false }
   ]
 
@@ -700,7 +786,7 @@ function buildTrayMenu (url) {
 }
 
 /** 重建托盘菜单以反映最新状态（下载进度、更新就绪等）。 */
-function refreshTray (url) {
+function refreshTray (url?: string): void {
   try {
     tray?.setContextMenu(Menu.buildFromTemplate(buildTrayMenu(url ?? currentCleanUrl ?? '')))
   } catch { /* 托盘可能尚未创建或已销毁 */ }
@@ -709,25 +795,24 @@ function refreshTray (url) {
 /**
  * 用户主动触发的更新检查。与后台检查的区别只在于反馈方式：
  * 无论结果如何都要给一个明确回执，不能"点了没反应"。
- * @returns {Promise<void>}
  */
-async function checkUpdatesManually () {
+async function checkUpdatesManually (): Promise<void> {
   if (!autoUpdater) {
     dialog.showMessageBox({ type: 'info', message: '开发态不支持自动更新', detail: '打包后的应用才会启用此功能。' })
     return
   }
   if (!app.isPackaged) {
-    dialog.showMessageBox({ type: 'info', message: '开发态不支持自动更新', detail: `当前版本 ${app.getVersion()}。请使用打包后的应用。` })
+    dialog.showMessageBox({ type: 'info', message: '开发态不支持自动更新', detail: `当前版本 ${appVersion()}。请使用打包后的应用。` })
     return
   }
   try {
     const res = await autoUpdater.checkForUpdates()
     if (!res?.updateInfo) {
-      dialog.showMessageBox({ type: 'info', message: '已是最新版本', detail: `当前版本 ${app.getVersion()}` })
+      dialog.showMessageBox({ type: 'info', message: '已是最新版本', detail: `当前版本 ${appVersion()}` })
     }
     // 有新版本时由 update-available 事件接管并弹下载确认。
   } catch (err) {
-    dialog.showErrorBox('检查更新失败', String(err?.message ?? err))
+    dialog.showErrorBox('检查更新失败', errText(err))
   }
 }
 
@@ -740,9 +825,9 @@ async function checkUpdatesManually () {
  *
  * 这里刻意不复用旧端口：旧进程释放端口有延迟，
  * 重新探测端口比跟 TIME_WAIT 抢更可靠。
- * @returns {Promise<boolean>} 是否重启成功
+ * @returns 是否重启成功
  */
-async function restartHarness () {
+async function restartHarness (): Promise<boolean> {
   if (!ctxState) return false
   const { runtime, home } = ctxState
 
@@ -752,7 +837,7 @@ async function restartHarness () {
     dying.removeAllListeners('exit')
     dying.kill()
     // 给旧进程一点时间释放句柄，避免新旧实例互相干扰。
-    await new Promise((res) => {
+    await new Promise<void>((res) => {
       const t = setTimeout(res, 4000)
       dying.once('exit', () => { clearTimeout(t); res() })
     })
@@ -771,7 +856,7 @@ async function restartHarness () {
     process.stdout.write(`[dsh-px] 新 harness 已监听（HTTP ${status}）于 ${cleanUrl}\n`)
     const authUrl = await Promise.race([
       started.authUrl,
-      new Promise((res) => setTimeout(() => res(null), 20_000))
+      new Promise<null>((res) => setTimeout(() => res(null), 20_000))
     ])
     if (!authUrl) {
       process.stdout.write('[dsh-px] 警告：未捕获到宣告的 URL；加载干净 URL（预期会撞 401 围栏）\n')
@@ -785,12 +870,12 @@ async function restartHarness () {
     createTray(cleanUrl)
     return true
   } catch (err) {
-    dialog.showErrorBox('dsh-px —— 重启 harness 失败', String(err?.message ?? err))
+    dialog.showErrorBox('dsh-px —— 重启 harness 失败', errText(err))
     return false
   }
 }
 
-async function main () {
+async function main (): Promise<void> {
   const runtime = resolveRuntime()
   if (!runtime) {
     dialog.showErrorBox(
@@ -820,7 +905,7 @@ async function main () {
     // 加载干净 URL 只会在浏览器围栏上撞到 401。
     const authUrl = await Promise.race([
       started.authUrl,
-      new Promise((res) => setTimeout(() => res(null), 20_000))
+      new Promise<null>((res) => setTimeout(() => res(null), 20_000))
     ])
     if (authUrl) {
       openUrl = authUrl
@@ -829,7 +914,7 @@ async function main () {
       process.stdout.write('[dsh-px] WARNING: no announced URL captured; loading the clean URL (expect a 401 fence)\n')
     }
   } catch (err) {
-    dialog.showErrorBox('dsh-px —— harness 启动失败', String(err?.message ?? err))
+    dialog.showErrorBox('dsh-px —— harness 启动失败', errText(err))
     quitting = true
     app.quit()
     return
