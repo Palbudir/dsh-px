@@ -529,19 +529,14 @@ async function main () {
     fromExisting: args.has('--from-existing')
   })
 
-  // 把种子树"洗干净"。
+  // 装完立刻洗干净，**默认就做**（不再依赖调用方记得加 --prune）。
   //
-  // 为什么必须做：`npm run verify --boot` 会真的启动一次 harness，而 dsh 启动时会在
-  // 种子树里生成它自己的运行时产物。实测一次 verify 之后：
-  //     profiles/node_modules          -> 397 MB（dsh 重建的 fallback）
-  //     profiles/web/.dsh-module-fallback -> 221 MB（profile 内 fallback）
-  // 合计约 618 MB 纯冗余 —— 它们随用户首次启动就地重建，却会被 extraResources
-  // 原样打进安装包。发布 beta.0 时就是这样：安装后 dsh-home 达 924 MB（正常 308 MB）。
-  //
-  // 判据与首启过滤一致：这些都是 dsh 自己管理的生成物，绝不进交付物。
-  if (args.has('--prune') || args.has('--with-plugins') || args.has('--from-existing')) {
-    pruneSeedHome(home)
-  }
+  // 为什么改成默认：这个坑反复出现了三次 —— 种子树被 dsh 生成物污染后
+  // （profiles/node_modules、profiles/web/.dsh-module-fallback），
+  // 会被 extraResources 原样打进安装包，beta.0 的安装后目录因此达到 924 MB。
+  // 只要"清理"是可选的，就总会有入口忘记调用（如 npm run pack）。
+  // 因此把清理内建为装配的收尾步骤，另外保留 npm run prune 供 verify 之后补跑。
+  pruneSeedHome(home)
 
   // 精确记录装配了什么，好让应用和 CI 都能对它做断言。
   //

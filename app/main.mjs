@@ -438,16 +438,25 @@ function setupAutoUpdate () {
   autoUpdater.on('update-available', async (info) => {
     updateState = { status: `有新版本 ${info.version}`, version: info.version }
     process.stdout.write(`[dsh-px] 发现新版本 ${info.version}\n`)
-    const { response } = await dialog.showMessageBox({
-      type: 'info',
-      title: 'DSH-PX 有新版本',
-      message: `发现新版本 ${info.version}（当前 ${app.getVersion()}）`,
-      detail: '是否现在下载？下载采用差分方式，只获取变化的文件块。\n下载完成后可选择重启安装，或退出时自动安装。',
-      buttons: ['下载并安装', '稍后'],
-      defaultId: 0,
-      cancelId: 1
-    })
-    if (response === 1) return
+
+    // DSH_PX_AUTO_UPDATE=1：跳过弹窗直接下载。
+    // 用途有二：一是自动化测试（否则下载要等人点确认，无法脚本验证），
+    // 二是企业/无人值守部署需要静默更新。
+    const auto = process.env.DSH_PX_AUTO_UPDATE === '1'
+    if (!auto) {
+      const { response } = await dialog.showMessageBox({
+        type: 'info',
+        title: 'DSH-PX 有新版本',
+        message: `发现新版本 ${info.version}（当前 ${app.getVersion()}）`,
+        detail: '是否现在下载？下载采用差分方式，只获取变化的文件块。\n下载完成后可选择重启安装，或退出时自动安装。',
+        buttons: ['下载并安装', '稍后'],
+        defaultId: 0,
+        cancelId: 1
+      })
+      if (response === 1) return
+    } else {
+      process.stdout.write('[dsh-px] DSH_PX_AUTO_UPDATE=1，跳过确认直接下载\n')
+    }
 
     autoUpdater.on('download-progress', (p) => {
       updateState = { status: `正在下载 ${Math.round(p.percent)}%`, version: info.version }
@@ -456,6 +465,12 @@ function setupAutoUpdate () {
     autoUpdater.on('update-downloaded', async (done) => {
       process.stdout.write('\n')
       updateState = { status: `已下载 ${done.version}，待安装`, version: done.version }
+      process.stdout.write(`[dsh-px] 更新已下载完成：${done.version}\n`)
+      // 自动模式同样不弹窗；此时交给 autoInstallOnAppQuit，在退出时安装。
+      if (auto) {
+        process.stdout.write('[dsh-px] 自动模式：将在退出时安装\n')
+        return
+      }
       const r = await dialog.showMessageBox({
         type: 'info',
         title: '更新已就绪',

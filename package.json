@@ -23,7 +23,7 @@
     "prune": "node scripts/prune-seed-home.mjs",
     "icon": "node scripts/build-icon.mjs",
     "start": "electron app/main.mjs",
-    "pack": "electron-builder --dir",
+    "pack": "electron-builder --dir && node scripts/write-app-update-yml.mjs",
     "dist": "npm run prune && electron-builder --publish never && node scripts/verify-package.mjs",
     "clean": "node -e \"require('node:fs').rmSync('runtime',{recursive:true,force:true});require('node:fs').rmSync('dist',{recursive:true,force:true})\""
   },
@@ -53,7 +53,8 @@
       "target": [
         "nsis",
         "zip"
-      ]
+      ],
+      "requestedExecutionLevel": "asInvoker"
     },
     "nsis": {
       "oneClick": false,
