@@ -117,6 +117,17 @@ test('物化：可重复执行（幂等），第二次全跳过', async () => {
 })
 
 test('物化：硬链接数达上限时回退复制，且不中断', async (t) => {
+  // 这个用例的**前提是 Windows/NTFS 特有的**：NTFS 单文件硬链接上限是 1024，
+  // 而 Linux 的 ext4 上限约 65000 —— 在 Linux 上无论建多少条都触发不了上限，
+  // 于是"回退"根本不会发生，断言必然失败（CI 上就是这么暴露的）。
+  //
+  // 我们真正要守的是"上限触发后回退复制且不中断"这条逻辑；它只在 NTFS 上能被
+  // 真实触发。在其他平台跳过，并说明原因，而不是留一个会误报失败的用例。
+  if (process.platform !== 'win32') {
+    t.skip('硬链接上限回退只在 NTFS（上限 1024）上可真实触发；本平台跳过')
+    return
+  }
+
   const root = mkdtempSync(join(tmpdir(), 'dshpx-mat3-'))
   try {
     // 真实触发条件：NTFS 单文件硬链接上限是 1024。种子树的文件来自 pnpm
@@ -130,18 +141,19 @@ test('物化：硬链接数达上限时回退复制，且不中断', async (t) =
     const filler = join(root, 'filler')
     mkdirSync(filler, { recursive: true })
     let made = 0
+    let hitLimit = false
     try {
       for (let i = 0; i < 1100; i++) {
         linkSync(target, join(filler, `h${i}`))
         made++
       }
-    } catch (err) {
+    } catch {
       // 到上限了 —— 正是我们要的状态。
-      if ((err as { code?: string }).code === undefined && made === 0) throw err
+      hitLimit = true
     }
-    if (made < 2) {
-      // 该文件系统不支持硬链接（如 FAT32）：本用例无意义，跳过而不是误报失败。
-      t.skip('当前文件系统不支持硬链接，跳过上限回退用例')
+    // 在 NTFS 上 1100 次必然触顶；没触顶说明前提变了，宁可跳过也不要误报。
+    if (!hitLimit) {
+      t.skip(`未能触发硬链接上限（已建 ${made} 条），跳过`)
       return
     }
 
