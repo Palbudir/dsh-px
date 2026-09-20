@@ -82,11 +82,13 @@
       "requestedExecutionLevel": "asInvoker"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
+      "oneClick": true,
+      "allowToChangeInstallationDirectory": false,
+      "deleteAppDataOnUninstall": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "DSH-PX"
+      "shortcutName": "DSH-PX",
+      "uninstallDisplayName": "DSH-PX"
     },
     "mac": {
       "icon": "build/icon.png",

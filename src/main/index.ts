@@ -459,29 +459,62 @@ function startHarness ({ runtime, home, port }: HarnessContext): HarnessStartRes
 }
 
 /**
+ * 在**若干已知布局**里定位一个随应用分发的资源。
+ *
+ * 为什么要收敛成一个函数：此前进度页、preload、托盘图标各自手写一份候选列表，
+ * 于是同一个布局知识散在三处 —— 改一处漏两处正是本项目反复出问题的方式
+ * （真实事故：`APP_ROOT` 算错导致找不到运行时；`out/renderer` 落到错误目录）。
+ *
+ * 覆盖的两种布局：
+ *   开发态 / win-unpacked：`<仓库或 app 根>/<相对路径>`
+ *   打包后（app.asar 内）  ：`<app.getAppPath()>/<相对路径>`
+ *
+ * 另外也试 `process.resourcesPath`：`extraResources` 放进去的资源
+ * （如 `tray-32.png`）在那里，而不是在 asar 里。
+ *
+ * @param rel 相对路径，用 POSIX 写法（如 `out/renderer/index.html`）
+ * @returns 第一个存在的绝对路径；都不存在返回 null
+ */
+function findShippedResource (...rel: string[]): string | null {
+  const p = findShippedResourceQuiet(...rel)
+  if (p === null) {
+    const bases = [APP_ROOT, app.getAppPath(), process.resourcesPath ?? null]
+      .filter((b): b is string => typeof b === 'string' && b.length > 0)
+    const tried = bases.flatMap((b) => rel.map((r) => join(b, r)))
+    process.stderr.write(
+      `[dsh-px] 未找到随附资源 ${rel.join(' / ')}。已试：\n${tried.map((t) => `  - ${t}`).join('\n')}\n`
+    )
+  }
+  return p
+}
+
+/** 同 `findShippedResource`，但找不到时不打日志（用于"缺了也无所谓"的资源）。 */
+function findShippedResourceQuiet (...rel: string[]): string | null {
+  const bases = [
+    APP_ROOT,                                   // 开发态 / 解包目录
+    app.getAppPath(),                           // 打包后（asar 内）
+    process.resourcesPath ?? null               // extraResources 落点
+  ].filter((b): b is string => typeof b === 'string' && b.length > 0)
+
+  for (const base of bases) {
+    for (const r of rel) {
+      const p = join(base, r)
+      if (existsSync(p)) return p
+    }
+  }
+  return null
+}
+
+/**
  * 首启/重启进度页的路径。
  *
  * 由 electron-vite 的 renderer 目标构建（源在 `src/renderer/index.html`）。
  * 之所以做成真入口而不是主进程里的 HTML 模板字符串，见 `src/renderer/splash.ts`
  * 头部说明：一是页面可维护，二是 electron-vite 的
  * "renderer and preload config is missing" 警告无法在配置里关掉。
- *
- * 两种布局都要覆盖：
- *   开发态：`<repo>/out/renderer/index.html`
- *   打包后：`<app.asar>/out/renderer/index.html`
  */
 function splashPagePath (): string | null {
-  const candidates = [
-    join(APP_ROOT, 'out', 'renderer', 'index.html'),
-    join(app.getAppPath(), 'out', 'renderer', 'index.html')
-  ]
-  for (const p of candidates) {
-    if (existsSync(p)) return p
-  }
-  process.stderr.write(
-    `[dsh-px] 未找到进度页（已试：${candidates.join('、')}）。是否漏跑了 npm run build？\n`
-  )
-  return null
+  return findShippedResource(join('out', 'renderer', 'index.html'))
 }
 
 /** 向进度页推送状态（页面可能已经切走，失败一律忽略）。 */
@@ -503,19 +536,16 @@ function reportSeedProgress (p: SeedProgress): void {
 let lastSeedPushAt = 0
 
 /**
- * 进度页 preload 的路径（两个布局都试，找不到返回 null）。
+ * 进度页 preload 的路径。
  *
  * 找不到不算错：进度页没有 preload 也能正常显示，只是少了渲染进程侧的
- * 标题看守。因此这里**不抛错**，只如实说明。
+ * 标题看守。因此这里**不抛错**，只如实说明 —— 所以不用 `findShippedResource`
+ * 的告警路径，自己静默返回 null。
  */
 function preloadPath (): string | null {
-  const candidates = [
-    join(APP_ROOT, 'out', 'preload', 'index.mjs'),
-    join(app.getAppPath(), 'out', 'preload', 'index.mjs')
-  ]
-  for (const p of candidates) if (existsSync(p)) return p
-  process.stderr.write('[dsh-px] 未找到进度页 preload，跳过（不影响启动）\n')
-  return null
+  const p = findShippedResourceQuiet(join('out', 'preload', 'index.mjs'))
+  if (p === null) process.stderr.write('[dsh-px] 未找到进度页 preload，跳过（不影响启动）\n')
+  return p
 }
 
 /**
@@ -789,14 +819,15 @@ function setupAutoUpdate (): void {
  * 顺序：打包态资源 → 开发态 build/ → exe 图标兜底 → 内存绘制兜底。
  */
 async function trayImage (): Promise<NativeImage> {
+  // 用统一的资源定位：`tray-32.png` 在打包后由 extraResources 落在 resources/，
+  // 开发态在仓库 build/。此前这里手写三份候选，与进度页/preload 的候选各写一份 ——
+  // 同一个布局知识散在多处，正是本项目反复出问题的方式。
   const candidates = [
-    // 打包态：extraResources 落在 resources/ 下
-    process.resourcesPath ? join(process.resourcesPath, 'tray-32.png') : null,
-    process.resourcesPath ? join(process.resourcesPath, 'tray-16.png') : null,
-    // 开发态：仓库 build/ 目录
-    join(APP_ROOT, 'build', 'tray-32.png'),
-    join(APP_ROOT, 'build', 'tray-16.png')
-  ].filter((p): p is string => Boolean(p))
+    findShippedResourceQuiet('tray-32.png'),
+    findShippedResourceQuiet('tray-16.png'),
+    findShippedResourceQuiet(join('build', 'tray-32.png')),
+    findShippedResourceQuiet(join('build', 'tray-16.png'))
+  ].filter((p): p is string => p !== null)
 
   for (const p of candidates) {
     try {
