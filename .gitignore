@@ -36,6 +36,10 @@ Thumbs.db
 /build/icon.png
 /build/icon-256.png
 
+# 视觉验证的截图（`npm run screenshot` 产出）。是**看**的结果，不是源，
+# 因此不入库；需要时重新生成即可，且不同机器渲染会有细微差异。
+/build/screenshots/
+
 # 构建工具（运行时按需下载）
 /build/tools/
 

@@ -32,6 +32,8 @@
     "verify:package": "node scripts/run.mjs verify-package",
     "prune": "node scripts/run.mjs prune-seed-home",
     "icon": "node scripts/run.mjs build-icon",
+    "//screenshot": "用 Playwright 驱动 Electron 截图，做「界面是否正常」的视觉验证（截图落在 build/screenshots/）。首次需 npm run build。",
+    "screenshot": "node scripts/run.mjs screenshot-app",
     "start": "npm run build && electron out/main/index.js",
     "pack": "npm run build && electron-builder --dir && node scripts/run.mjs write-app-update-yml",
     "dist": "npm run build && npm run prune && electron-builder --publish never && npm run verify:package",
@@ -43,6 +45,7 @@
     "electron-builder": "^26.0.0",
     "electron-vite": "^5.0.0",
     "esbuild": "^0.25.12",
+    "playwright-core": "^1.63.0",
     "typescript": "^7.0.2"
   },
   "build": {
