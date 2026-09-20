@@ -7,6 +7,12 @@
 /runtime*/
 
 # 构建产物
+#
+# `/build-scripts/` 是 `scripts/*.ts` 经 `scripts/run.mjs` 编译出的中间产物。
+# 它曾经被误提交（我加忽略规则的那条命令因引号问题没执行到），
+# 危害是 CI 可能跑到**陈旧的编译结果**：`git checkout` 出来的旧 .js 与源码不一致，
+# 而症状是"改的代码没生效"，极难归因。与 out/、dist/ 同等对待。
+/build-scripts/
 /build-test/
 /dist/
 /out/
