@@ -66,7 +66,8 @@ runtime/node/node.exe runtime/dsh/lib/bin.js --profile web --host 127.0.0.1 --po
 
 ```
 materialize(seed, home):
-  if home 已完成播种（标记文件存在）: return          # 二次启动零开销
+  if home 已完成播种 且 种子身份未变: return          # 二次启动零开销
+  if 种子身份变了: 覆盖式重新物化（refresh）
   1. 复制种子树的**清单文件**（package.json、cordis*.yml、pnpm-workspace.yaml）
   2. 对 seeds/profiles/<name>/node_modules 逐项：
        - 目录 → 递归
@@ -74,8 +75,31 @@ materialize(seed, home):
          （开发态插件是 Junction，若不跟随会失败 —— 实验里就是这么漏掉一个插件的）
        - 文件 → fs.linkSync(src, dst)
          失败（跨卷/不支持）→ 回退 fs.copyFileSync
-  3. 写完成标记
+  3. 写完成标记（含 `seedIdentity=`）
 ```
+
+### 种子身份：升级后必须重新物化（一次真实事故）
+
+"完成标记存在就直接复用"是**错的**，因为它只看"有没有做完"，从不问"种子换了没有"。
+外壳每次升级都会带来一棵**全新的种子树**，而用户的 home 会永远停在首次安装那一版。
+
+实测后果：`0.1.0-beta.re.0.2` 装好后，**设置页里没有「DSH-PX」分区**。
+物化出来的自研插件仍是 `re.0.1` 时代的 `package.json`
+（858 B，缺少 `exports["./client"]` 与 `dsh.client` 声明），
+客户端半边因此根本不会被加载。而日志里看起来一切正常，只有一行
+`跳过 12129` 在悄悄说明整棵树都没被更新 —— 这是最难查的一类失败。
+
+修法：
+
+- 标记里记录 **`seedIdentity`**，取 `runtime-manifest.json` 的 `stagedAt`
+  （不能用种子目录路径：它会从构建机的 `D:\a\...` 变成用户的安装目录）。
+- 身份变了就 **`refresh: true`** 覆盖式重新物化：逐项**先删再写**
+  （硬链接不能覆盖，且旧目标可能是上一版的文件）。
+- 旧标记里没有 `seedIdentity`，读出来是 `null`，与任何真实身份都不等 ——
+  因此**从旧版本升级过来的用户会被正确地刷新一次**，不需要手工删目录。
+
+代价：用户若额外装了插件，刷新后被替换回随附版本。可接受（重新装一次即可），
+但值得知道。
 
 ### 跨卷回退
 

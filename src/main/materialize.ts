@@ -26,7 +26,7 @@
  * @module dsh-px/materialize
  */
 import {
-  copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readlinkSync, statSync, symlinkSync, writeFileSync
+  copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync
 } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import type { Dirent } from 'node:fs'
@@ -53,6 +53,18 @@ export interface MaterializeOptions {
   onProgress?: (p: SeedProgress) => void
   /** 每个批次处理多少项后让出事件循环。 */
   batchSize?: number
+  /**
+   * 覆盖已存在的目标项（用于"随附运行时换新版"的场景）。
+   *
+   * 默认 false 保持可续传语义；true 时先删再写，因为**硬链接不能覆盖**，
+   * 而旧目标可能是上一版的文件 —— 这正是升级后插件停留在旧版本的根因。
+   */
+  refresh?: boolean
+  /**
+   * 种子身份（由调用方从 `runtime-manifest.json` 的 `stagedAt` 算出）。
+   * 写进 `.dsh-px-materialized`，供下次启动判断"随附运行时换了没有"。
+   */
+  seedIdentity?: string
 }
 
 /** 物化结果。 */
@@ -223,10 +235,15 @@ function recreateLink (item: WorkItem): void {
  * 把种子 home 物化到目标 home。
  *
  * 可续传：已存在的目标项直接跳过，所以中途失败后再启动不会从头再来。
+ *
+ * @param opts.refresh 为 true 时**覆盖已存在的目标项**，用于"随附运行时换了新版"
+ *   的场景（见 `src/main/index.ts` 里 `resolveHarnessHome` 的说明）。默认 false
+ *   保持可续传语义。
  */
 export async function materializeSeedHome (opts: MaterializeOptions): Promise<MaterializeResult> {
   const { seedHome, home, profileName, dshDir, onProgress } = opts
   const batchSize = opts.batchSize ?? 400
+  const refresh = opts.refresh === true
   const t0 = Date.now()
 
   // ---- 1. 清单文件：一律**复制**（不能硬链接，见模块头部说明）----
@@ -246,7 +263,7 @@ export async function materializeSeedHome (opts: MaterializeOptions): Promise<Ma
     const to = join(home, rel)
     try {
       mkdirSync(dirname(to), { recursive: true })
-      if (!existsSync(to)) copyFileSync(from, to)
+      if (refresh || !existsSync(to)) copyFileSync(from, to)
     } catch (err) {
       // 清单文件很小；失败就如实抛出，不要带着空壳 profile 继续。
       throw new Error(`复制清单文件 ${rel} 失败：${describe(err)}`)
@@ -285,12 +302,20 @@ export async function materializeSeedHome (opts: MaterializeOptions): Promise<Ma
             break
           case 'link':
             // 续传：目标已存在（含上次已建的同名链接）就跳过，不能重复建。
-            if (entryExists(item.to)) { skipped++; break }
+            if (entryExists(item.to)) {
+              if (!refresh) { skipped++; break }
+              rmSync(item.to, { recursive: true, force: true, maxRetries: 3 })
+            }
             mkdirSync(dirname(item.to), { recursive: true })
             recreateLink(item)
             break
           case 'hard': {
-            if (entryExists(item.to)) { skipped++; break }
+            if (entryExists(item.to)) {
+              if (!refresh) { skipped++; break }
+              // 刷新时必须先删：硬链接不能覆盖，且旧目标可能是**上一版**的文件。
+              // 删除只减少链接数，源文件在只读安装区里不受影响。
+              rmSync(item.to, { force: true, maxRetries: 3 })
+            }
             mkdirSync(dirname(item.to), { recursive: true })
             try {
               linkSync(item.from, item.to)
@@ -322,7 +347,9 @@ export async function materializeSeedHome (opts: MaterializeOptions): Promise<Ma
             break
           }
           case 'copy': {
-            if (entryExists(item.to) && !isMeaningfulLink(item.to)) { skipped++; break }
+            if (entryExists(item.to) && !isMeaningfulLink(item.to)) {
+              if (!refresh) { skipped++; break }
+            }
             mkdirSync(dirname(item.to), { recursive: true })
             copyFileSync(item.from, item.to)
             copied++
@@ -340,6 +367,10 @@ export async function materializeSeedHome (opts: MaterializeOptions): Promise<Ma
   writeFileSync(
     join(home, '.dsh-px-materialized'),
     `materialized from ${seedHome} at ${new Date().toISOString()}\n` +
+    // 种子身份：下一次启动据此判断"随附运行时换了没有"。缺了它就只能看到
+    // "曾经物化过"，于是外壳升级后用户的插件树永远停在旧版本（真实事故）。
+    `seedIdentity=${opts.seedIdentity ?? '(none)'}\n` +
+    `refreshed=${String(refresh)}\n` +
     `linked=${linked} copied=${copied} skipped=${skipped} total=${total} ms=${Date.now() - t0}\n` +
     (fallbackDetails.length
       ? `hardlinkFallback=${fallbackDetails.length}\n` + fallbackDetails.slice(0, 20).map((d) => `  ${d}\n`).join('')

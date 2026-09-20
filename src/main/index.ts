@@ -230,16 +230,40 @@ function resolveRuntime (): RuntimeDescriptor | null {
 }
 
 /**
+ * 随附运行时的身份标识：用来判断"种子换了没有"。
+ *
+ * 取值优先用装配时写下的 `stagedAt`（内容指纹），退化到种子目录路径。
+ *
+ * **不能用种子目录路径单独判断**：`stagedAt` 在每次装配时都会变，而路径在
+ * 用户机器上从 CI 的 `D:\a\...` 变成安装目录 —— 两者各有用途，所以合起来取。
+ */
+function seedIdentity (runtime: RuntimeDescriptor): string {
+  try {
+    const m = JSON.parse(readFileSync(join(runtime.root, 'runtime-manifest.json'), 'utf8')) as { stagedAt?: string }
+    if (typeof m.stagedAt === 'string' && m.stagedAt.length > 0) return m.stagedAt
+  } catch { /* manifest 读不到：退化到路径 */ }
+  return runtime.seedHome ?? '(none)'
+}
+
+/**
  * 选定并准备 harness home。优先级：
  *   1. DSH_PX_HOME —— 显式覆盖（也是在开发插件时，把外壳指向你现有 ~/.dsh 的方式）。
  *   2. <userData>/dsh-home —— 应用自己的 home：首次运行从随附的树物化，
  *      此后归用户所有。
  *
- * 物化用**硬链接**（见 materialize.ts）：同卷首启实测 3.5 秒，跨卷自动回退到
+ * 物化用**硬链接**（见 materialize.ts）：同卷首启实测 5.7 秒，跨卷自动回退到
  * 逐文件复制并给出进度。旧实现是同步整树复制，实测 4–5 分钟且界面冻结。
  *
- * 完成判据用 `.dsh-px-materialized` 标记**并**实际核对 profile 清单存在：
- * 只认标记会在"标记写了但物化被中断"时错误地跳过准备，让应用带着空壳 profile 启动。
+ * ## 完成判据必须包含"种子是否换了"（一次真实事故）
+ *
+ * 早期只检查 `.dsh-px-materialized` 与 profile 清单是否存在，于是**外壳升级后
+ * 用户的 home 永远停在首次安装那一版的插件树**。实测后果：`beta.re.0.2` 装好后
+ * 设置页里没有「DSH-PX」分区 —— 因为物化出来的自研插件还是 `re.0.1` 时代的
+ * `package.json`（那时还没有 `exports["./client"]` 与 `dsh.client` 声明），
+ * 客户端半边根本不会被加载。而日志里一切正常，只有一行
+ * `跳过 12129` 在悄悄说明整棵树都没被更新。
+ *
+ * 修法：标记里记下种子身份，身份变了就**覆盖式重新物化**（`refresh: true`）。
  */
 async function resolveHarnessHome (
   runtime: RuntimeDescriptor,
@@ -250,14 +274,26 @@ async function resolveHarnessHome (
   const home = join(app.getPath('userData'), 'dsh-home')
   const doneMarker = join(home, '.dsh-px-materialized')
   const profileManifest = join(home, 'profiles', PROFILE_NAME, 'package.json')
+  const identity = seedIdentity(runtime)
 
-  // 已经物化完整：直接用（二次启动零开销）。
-  if (existsSync(doneMarker) && existsSync(profileManifest)) return home
+  // 读上次物化时记录的种子身份。老版本标记里没有这行 —— 那是 `undefined`，
+  // 与任何真实身份都不相等，因此升级过来的用户会被正确地重新物化一次。
+  let lastIdentity: string | null = null
+  try {
+    const prev = readFileSync(doneMarker, 'utf8')
+    lastIdentity = /^seedIdentity=(.+)$/m.exec(prev)?.[1] ?? null
+  } catch { /* 标记不存在 */ }
+
+  const seeded = existsSync(doneMarker) && existsSync(profileManifest)
+  const refresh = seeded && lastIdentity !== identity
+
+  // 已经物化完整、且种子没变：直接用（二次启动零开销）。
+  if (seeded && !refresh) return home
 
   // 认领这次物化。先落盘，这样即便中途被打断也能看出这是哪一次尝试。
   mkdirSync(home, { recursive: true })
   writeFileSync(join(home, '.dsh-px-seed-claimed'),
-    `claimed at ${new Date().toISOString()}\nseedSource=${runtime.seedHome ?? '(none)'}\n`)
+    `claimed at ${new Date().toISOString()}\nseedSource=${runtime.seedHome ?? '(none)'}\nidentity=${identity}\n`)
 
   if (!runtime.seedHome) {
     mkdirSync(join(home, 'profiles'), { recursive: true })
@@ -265,18 +301,27 @@ async function resolveHarnessHome (
     return home
   }
 
-  process.stdout.write('[dsh-px] 首次运行：正在从随附运行时准备本地数据目录…\n')
+  if (refresh) {
+    process.stdout.write(
+      `[dsh-px] 随附运行时已更新（种子 ${String(lastIdentity)} → ${identity}），` +
+      '正在刷新本地数据目录…\n'
+    )
+  } else {
+    process.stdout.write('[dsh-px] 首次运行：正在从随附运行时准备本地数据目录…\n')
+  }
   try {
     const r = await materializeSeedHome({
       seedHome: runtime.seedHome,
       home,
       profileName: PROFILE_NAME,
       dshDir: join(runtime.root, 'dsh'),
-      onProgress
+      onProgress,
+      refresh,
+      seedIdentity: identity
     })
     process.stdout.write(
-      `[dsh-px] 首次运行准备完成：硬链接 ${r.linked}、复制 ${r.copied}、跳过 ${r.skipped}、` +
-      `共 ${r.total} 项，耗时 ${(r.ms / 1000).toFixed(1)} 秒\n`
+      `[dsh-px] ${refresh ? '刷新' : '首次运行'}完成：硬链接 ${r.linked}、复制 ${r.copied}、` +
+      `跳过 ${r.skipped}、共 ${r.total} 项，耗时 ${(r.ms / 1000).toFixed(1)} 秒\n`
     )
   } catch (err) {
     // 不吞掉：把真实原因告诉用户，否则应用会以一个空壳 profile 启动。

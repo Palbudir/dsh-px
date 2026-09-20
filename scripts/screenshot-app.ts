@@ -32,6 +32,15 @@ const REPO = repoRoot()
 const OUT_DIR = process.env.DSH_PX_SHOT_DIR ?? join(REPO, 'build', 'screenshots')
 const PORT = process.env.DSH_PX_PORT ?? '3099'
 
+/**
+ * userData 目录。
+ *
+ * 默认用一次性临时目录（干净的首次运行）；设 `DSH_PX_SHOT_USER_DATA`
+ * 可以指向一个**已存在的** home —— 用于验证"升级/刷新后的既有安装"，
+ * 那是临时目录无论如何都复现不了的场景。
+ */
+const USER_DATA = process.env.DSH_PX_SHOT_USER_DATA ?? mkdtempSync(join(tmpdir(), 'dshpx-shot-'))
+
 /** 打包产物或开发态产物，优先用打包后的（更接近交付形态）。 */
 function appEntry (): { executable: string, args: string[] } {
   const packaged = join(REPO, 'dist', 'win-unpacked', 'DSH-PX.exe')
@@ -55,16 +64,15 @@ async function waitFor<T> (what: string, fn: () => Promise<T | null>, timeoutMs 
 }
 
 const { executable, args } = appEntry()
-const userData = mkdtempSync(join(tmpdir(), 'dshpx-shot-'))
 mkdirSync(OUT_DIR, { recursive: true })
 
 console.log(`应用：${executable} ${args.join(' ')}`)
-console.log(`userData：${userData}`)
+console.log(`userData：${USER_DATA}`)
 console.log(`输出：${OUT_DIR}`)
 
 const app = await electron.launch({
   executablePath: executable,
-  args: [...args, `--user-data-dir=${userData}`],
+  args: [...args, `--user-data-dir=${USER_DATA}`],
   env: { ...process.env, DSH_PX_PORT: PORT, DSH_PX_HOME: '' }
 })
 

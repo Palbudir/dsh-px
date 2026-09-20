@@ -116,6 +116,61 @@ test('物化：可重复执行（幂等），第二次全跳过', async () => {
   }
 })
 
+test('物化：refresh 会覆盖旧内容（升级场景），否则插件会停在旧版本', async () => {
+  // 这个用例钉住一次真实的线上事故：外壳升级带来**全新的种子树**，
+  // 但幂等快路径看到"标记存在 + profile 清单存在"就整棵跳过，
+  // 于是用户的插件树永远停在首次安装那一版。
+  //
+  // 实测后果：beta.re.0.2 装好后设置页里没有「DSH-PX」分区 —— 因为物化出来的
+  // 自研插件还是 re.0.1 时代的 package.json（缺少 exports["./client"] 与
+  // dsh.client 声明），客户端半边根本不会被加载。日志里只有 `跳过 12129` 说明问题。
+  const root = mkdtempSync(join(tmpdir(), 'dshpx-mat-upgrade-'))
+  try {
+    const dshDir = join(root, 'dsh')
+    mkdirSync(dshDir, { recursive: true })
+    const seed = makeSeed(root, dshDir)
+    const home = join(root, 'home')
+
+    // 第一次：模拟"旧版外壳"物化
+    const pkgInSeed = join(seed, 'profiles', 'web', 'node_modules', 'a-real-plugin', 'index.js')
+    writeFileSync(pkgInSeed, 'OLD CONTENT\n')
+    const first = await materializeSeedHome({
+      seedHome: seed, home, profileName: 'web', dshDir, seedIdentity: 'v1'
+    })
+    assert.ok(first.linked > 0, '首次应建立链接')
+
+    // 第二次：模拟"升级后的外壳"——种子里同一个文件换了内容，且身份变了。
+    //
+    // **必须先删再写，不能在原文件上覆写**：首次物化建的是硬链接，
+    // 覆写会改到同一个 inode，目标会跟着一起变，这个用例就失去意义了。
+    // 真实的升级是种子树被整体重建（新 inode），所以删掉重建才是忠实模拟。
+    rmSync(pkgInSeed, { force: true })
+    writeFileSync(pkgInSeed, 'NEW CONTENT\n')
+    const dest = join(home, 'profiles', 'web', 'node_modules', 'a-real-plugin', 'index.js')
+    assert.equal(readFileSync(dest, 'utf8'), 'OLD CONTENT\n', '刷新前目标应是旧内容')
+
+    // ① 不带 refresh：仍然跳过（这是**旧**行为，用于说明问题确实存在）
+    await materializeSeedHome({ seedHome: seed, home, profileName: 'web', dshDir, seedIdentity: 'v2' })
+    assert.equal(readFileSync(dest, 'utf8'), 'OLD CONTENT\n',
+      '不带 refresh 时确实会保留旧内容 —— 这正是那次事故的机制')
+
+    // ② 带 refresh：必须覆盖为新内容
+    const refreshed = await materializeSeedHome({
+      seedHome: seed, home, profileName: 'web', dshDir, seedIdentity: 'v2', refresh: true
+    })
+    assert.equal(refreshed.skipped, 0, 'refresh 下不应再跳过已存在的项')
+    assert.equal(readFileSync(dest, 'utf8'), 'NEW CONTENT\n',
+      'refresh 必须把旧版本的文件替换掉')
+
+    // ③ 刷新标记里应记下种子身份，供下次启动比对
+    const marker = readFileSync(join(home, '.dsh-px-materialized'), 'utf8')
+    assert.match(marker, /seedIdentity=v2/, '标记必须记录种子身份')
+    assert.match(marker, /refreshed=true/, '标记应说明这次是刷新')
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test('物化：硬链接数达上限时回退复制，且不中断', async (t) => {
   // 这个用例的**前提是 Windows/NTFS 特有的**：NTFS 单文件硬链接上限是 1024，
   // 而 Linux 的 ext4 上限约 65000 —— 在 Linux 上无论建多少条都触发不了上限，
