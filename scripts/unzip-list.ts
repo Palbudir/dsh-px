@@ -16,7 +16,6 @@
  */
 import { readFileSync, existsSync } from 'node:fs'
 import { inflateRawSync } from 'node:zlib'
-import { pathToFileURL } from 'node:url'
 
 /**
  * 列出 ZIP 内所有条目路径。
@@ -67,16 +66,21 @@ export function listZipEntries (zipPath) {
   return names
 }
 
-// 允许直接运行，便于人工检查。
+// 允许直接运行，便于人工检查（`node scripts/run.mjs unzip-list <zip>`）。
 //
-// 判据是"**除本模块外没有任何参数**"而不是匹配文件名：脚本已改为 .ts 源码
-// 经 `scripts/run.mjs` 编译后运行，运行期的 argv[1] 是
-// `build-scripts/unzip-list.js`，写死 `.mjs`/`.ts` 都会失效。
-// 以"被当作入口直接调用"为准，才对两种调用方式都成立。
-if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+// 判据必须有**两层**，缺一不可：
+//
+//   1. 本模块不是被别人 import 的。`unzip-list` 同时被 `verify-package` 导入，
+//      而 `run.mjs` 也是用 `import` 把脚本拉起来的 —— 因此
+//      `import.meta.url === argv[1]` 这种判据**恒为假**，那段代码会静默失效。
+//      改为按文件名比对：直接运行时 `import.meta.url` 就是本文件。
+//
+//   2. 真的给了参数。只有第 1 条时，`node scripts/run.mjs unzip-list`（忘记给
+//      zip 路径）会走进来时才发现没参数，报错时机偏远；显式判参数更直白。
+if (import.meta.url.endsWith('/unzip-list.js') && (process.argv[2] ?? '').length > 0) {
   const target = process.argv[2]
-  if (!target || !existsSync(target)) {
-    console.error('用法：node scripts/run.mjs unzip-list <zip 路径>')
+  if (!existsSync(target)) {
+    console.error(`找不到文件：${target}`)
     process.exit(1)
   }
   const names = listZipEntries(target)

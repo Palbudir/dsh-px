@@ -43,10 +43,10 @@ function listZipEntries(zipPath) {
   }
   return names;
 }
-if (process.argv[1] && process.argv[1].endsWith("unzip-list.mjs")) {
+if (import.meta.url.endsWith("/unzip-list.js") && (process.argv[2] ?? "").length > 0) {
   const target = process.argv[2];
-  if (!target || !existsSync(target)) {
-    console.error("\u7528\u6CD5\uFF1Anode scripts/unzip-list.mjs <zip \u8DEF\u5F84>");
+  if (!existsSync(target)) {
+    console.error(`\u627E\u4E0D\u5230\u6587\u4EF6\uFF1A${target}`);
     process.exit(1);
   }
   const names = listZipEntries(target);
