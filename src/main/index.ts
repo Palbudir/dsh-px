@@ -510,9 +510,17 @@ async function createShellWindow (): Promise<BrowserWindow> {
 
   // 阻止页面改写窗口标题（dsh 的 UI 会把它设成会话名）。
   // 这是桌面客户端该有的行为：窗口标题标识**应用**，不是标识当前文档。
+  //
+  // 但只对 **harness 的页面**这样做。进度页是我们自己的本地页面，
+  // 它的 `<title>` 就该是应用名；无条件覆盖会让进度页的标题也变成
+  // `DSH-PX <版本>`，看着像"外壳盖住了页面自己的标题"。
+  // 判据用 URL：进度页是 file://，harness 是 http://127.0.0.1:<port>/。
   win.on('page-title-updated', (event: ElectronEvent) => {
-    event.preventDefault()
-    win?.setTitle(`DSH-PX ${appVersion()}`)
+    const url = win?.webContents.getURL() ?? ''
+    if (url.startsWith('http://127.0.0.1') || url.startsWith('http://localhost')) {
+      event.preventDefault()
+      win?.setTitle(`DSH-PX ${appVersion()}`)
+    }
   })
 
   win.once('ready-to-show', () => win?.show())
