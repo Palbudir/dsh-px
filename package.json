@@ -1,6 +1,6 @@
 {
   "name": "dsh-px",
-  "version": "0.1.0-beta.re.0.3",
+  "version": "0.1.0-beta.re.0.4",
   "private": true,
   "description": "dsh-px: a self-contained Electron desktop client that packages DeepSeek Harness (dsh) into one app.",
   "license": "MIT",
@@ -85,6 +85,7 @@
       "oneClick": true,
       "allowToChangeInstallationDirectory": false,
       "deleteAppDataOnUninstall": false,
+      "include": "build/installer.nsh",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "DSH-PX",
