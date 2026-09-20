@@ -84,6 +84,26 @@
     <div class="bar"><i></i></div>
     <div class="phase" id="phase">正在启动…</div>
     <div class="detail" id="detail"></div>
+
+    <!--
+      入口先在这里挂上，模块脚本再覆盖它。
+
+      为什么不能只靠下面的 module 脚本：`type="module"` 是**异步执行**的，
+      主进程 `loadFile()` 返回时它可能还没跑。主进程会在加载后立即核对入口是否
+      存在（缺失就告警"进度无法显示"），如果入口只由模块脚本提供，这个核对会
+      误报 —— 实测正是如此。
+
+      内联脚本在解析到此处时**同步执行**，因此 `loadFile()` 返回时入口必然存在。
+      这里刻意不写 `defer`/`async`。
+    -->
+    <script>
+      window.__dshPxProgress = function (phase, detail) {
+        var a = document.getElementById('phase')
+        var b = document.getElementById('detail')
+        if (a) a.textContent = phase
+        if (b) b.textContent = detail
+      }
+    </script>
     <script type="module" src="./splash.ts"></script>
   </body>
 </html>

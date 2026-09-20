@@ -458,6 +458,22 @@ function reportSeedProgress (p: SeedProgress): void {
 let lastSeedPushAt = 0
 
 /**
+ * 进度页 preload 的路径（两个布局都试，找不到返回 null）。
+ *
+ * 找不到不算错：进度页没有 preload 也能正常显示，只是少了渲染进程侧的
+ * 标题看守。因此这里**不抛错**，只如实说明。
+ */
+function preloadPath (): string | null {
+  const candidates = [
+    join(APP_ROOT, 'out', 'preload', 'index.mjs'),
+    join(app.getAppPath(), 'out', 'preload', 'index.mjs')
+  ]
+  for (const p of candidates) if (existsSync(p)) return p
+  process.stderr.write('[dsh-px] 未找到进度页 preload，跳过（不影响启动）\n')
+  return null
+}
+
+/**
  * 创建窗口并先显示启动进度页。
  *
  * 返回 Promise 是因为进度页用 `loadFile` 从磁盘加载（异步）。调用方
@@ -484,7 +500,11 @@ async function createShellWindow (): Promise<BrowserWindow> {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      spellcheck: false
+      spellcheck: false,
+      // 进度页的 preload：只做窗口标题看守 + 暴露两个只读字符串。
+      // 见 src/preload/index.ts。缺了它进度页仍能显示，只是少一层标题保护，
+      // 所以这里不因为文件不存在就失败。
+      preload: preloadPath() ?? undefined
     }
   })
 
@@ -511,7 +531,25 @@ async function createShellWindow (): Promise<BrowserWindow> {
   // 而不是 data: URL —— 这样页面是构建产物，可维护、可检查。
   const page = splashPagePath()
   if (page !== null) {
+    // 页面加载失败（打包漏了资源、CSP 挡了脚本等）默认是**静默**的：
+    // 窗口会停在一片空白或卡在初始文案上，而日志里什么都没有。
+    // 这里显式接住 did-fail-load，并在加载后核对进度页的入口函数确实挂上了 ——
+    // 这条可观测性直接对应"首启几秒到几分钟内屏幕上有没有反馈"，
+    // 是本项目最难远程排查的一类问题。
+    win.webContents.once('did-fail-load', (_e, code, desc, url) => {
+      process.stderr.write(`[dsh-px] 进度页加载失败（${String(code)} ${desc}）：${url}\n`)
+    })
     await win.loadFile(page)
+    try {
+      const ready = await win.webContents.executeJavaScript(
+        "typeof window.__dshPxProgress === 'function'"
+      ) as boolean
+      process.stdout.write(ready
+        ? '[dsh-px] 进度页已就绪（含进度推送入口）\n'
+        : '[dsh-px] 警告：进度页已加载但缺少 __dshPxProgress 入口，进度将无法显示\n')
+    } catch (err) {
+      process.stderr.write(`[dsh-px] 核对进度页入口失败：${errText(err)}\n`)
+    }
   } else {
     // 兜底：进度页缺失（例如漏跑构建）也要让窗口有内容，而不是一片空白，
     // 否则用户看到的是"应用卡死"。此时进度无法显示，但至少能看出在启动。
