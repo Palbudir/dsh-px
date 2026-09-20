@@ -28,9 +28,10 @@ import { dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
+import { repoRoot } from './paths'
+import type { Dirent } from 'node:fs'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-const REPO = resolve(HERE, '..')
+const REPO = repoRoot()
 const OUT = join(REPO, 'runtime')
 
 /** 锁定的 dsh 版本。要改动请有意为之，改完重跑 `npm run verify`。 */
@@ -105,7 +106,14 @@ function shim (name) {
  *     而且它也是冗余的：随附的 `runtime/dsh` 已经带了全部 239 个嵌套的
  *     `@deepseek-ai` 包，而组合包名称的解析优先走 dsh 安装目录。
  */
-function copyTree (src, dest, { skip = SKIP_IN_PROFILE_TREE, skipEntry = null } = {}) {
+function copyTree (
+  src: string,
+  dest: string,
+  { skip = SKIP_IN_PROFILE_TREE, skipEntry = null }: {
+    skip?: Set<string>
+    skipEntry?: ((entry: Dirent, fullPath: string) => boolean) | null
+  } = {}
+): void {
   mkdirSync(dest, { recursive: true })
   for (const entry of readdirSync(src, { withFileTypes: true })) {
     if (skip.has(entry.name)) continue
@@ -273,7 +281,8 @@ async function downloadNode () {
   log(`正在下载 ${url}`)
   const res = await fetch(url)
   if (!res.ok) throw new Error(`下载失败：HTTP ${res.status}`)
-  await pipeline(Readable.fromWeb(res.body), createWriteStream(archive))
+  if (res.body === null) throw new Error('归档响应没有 body')
+  await pipeline(Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]), createWriteStream(archive))
 
   log(`正在解压 ${base}`)
   if (ext === 'zip') {
@@ -367,7 +376,7 @@ function stageHome (nodeExe, dshDir, { withPlugins, fromExisting }) {
    * @returns {string[]} 需要加入 bundles 的包名（按名称排序，保证可复现）
    */
   const installedBundles = (dir) => {
-    const names = []
+    const names: unknown[] = []
     const scan = (base, prefix) => {
       if (!existsSync(base)) return
       for (const entry of readdirSync(base, { withFileTypes: true })) {
@@ -482,7 +491,7 @@ function stageHome (nodeExe, dshDir, { withPlugins, fromExisting }) {
       //     @deepseek-ai …）。整棵就是 dsh 托管的 fallback 树，不含插件依赖，
       //     dsh 首启会自行重建。（曾试图按名字过滤：不可行，dsh 的传递依赖闭包很大，
       //     `argparse` 这类不在其直接依赖清单里，逐个枚举必然漏。）
-      const isDshFallback = makeDshFallbackFilter(dshDir)
+      const isDshFallback = makeDshFallbackFilter(dshDir ?? null)
       const srcWebModules = join(srcHome, 'profiles', PROFILE, 'node_modules')
       if (existsSync(srcWebModules)) {
         copyTree(srcWebModules, join(profileDir, 'node_modules'), { skipEntry: isDshFallback })

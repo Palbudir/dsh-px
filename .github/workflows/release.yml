@@ -70,7 +70,7 @@ jobs:
         run: npm run prune
 
       - name: 生成图标
-        run: node scripts/build-icon.mjs
+        run: npm run icon
 
       # **必须构建，不能直接打包。**
       #
@@ -93,7 +93,7 @@ jobs:
 
       # 打包前再显式断言一次，并用直白的话说清修法（见脚本头部说明）。
       - name: 断言入口产物存在
-        run: node scripts/check-entry-artifacts.mjs
+        run: node scripts/run.mjs check-entry-artifacts
 
       # --publish always：让 electron-builder 生成并上传 latest.yml 与 blockmap。
       # GITHUB_TOKEN 由 actions 环境自动提供，electron-builder 会认。

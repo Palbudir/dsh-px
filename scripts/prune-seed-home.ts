@@ -1,5 +1,5 @@
 /**
- * 清理种子 home 里 dsh / 插件生成的运行时产物。
+ * 清理种子 home 里 dsh / 插件生成的运行时产物，并裁掉运行期用不到的交付物内容。
  *
  * 为什么需要独立脚本（而不是只在 stage-runtime 里做一次）：
  *   `npm run verify --boot` 会**真的启动一次 harness**，而 dsh 启动时会在种子树里
@@ -14,28 +14,33 @@
  * 发布 beta.0 时正是漏了这一步：安装后 dsh-home 达 924 MB（正常 308 MB）。
  *
  * 用法：
- *   node scripts/prune-seed-home.mjs
+ *   node scripts/run.mjs prune-seed-home        # 经 run.mjs 运行（推荐）
+ *
+ * @module dsh-px/scripts/prune-seed-home
  */
 import { existsSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
+import { repoRoot } from './paths'
 
-const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const REPO = repoRoot()
 const RUNTIME = join(REPO, 'runtime')
 const HOME = join(RUNTIME, 'dsh-home')
 const PROFILE = process.env.DSH_PX_PROFILE ?? 'web'
-const log = (m) => process.stdout.write(`[prune] ${m}\n`)
+const log = (m: string): void => { process.stdout.write(`[prune] ${m}\n`) }
 
 if (!existsSync(HOME)) {
   log(`没有种子 home（${HOME}），无需清理`)
   process.exit(0)
 }
 
-/** 递归统计体积。 */
-function dirSize (p) {
+/**
+ * 递归统计体积（字节）。
+ * @param p 起始路径
+ */
+function dirSize (p: string): number {
   let total = 0
-  const walk = (dir) => {
+  const walk = (dir: string): void => {
     let entries
     try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
     for (const e of entries) {
@@ -49,7 +54,7 @@ function dirSize (p) {
 }
 
 /** 读只读文件会让 rmSync 失败；先清属性再删。 */
-function rmTree (target) {
+function rmTree (target: string): void {
   try {
     rmSync(target, { recursive: true, force: true, maxRetries: 3 })
   } catch {
@@ -62,7 +67,7 @@ function rmTree (target) {
   }
 }
 
-const TARGETS = [
+const TARGETS: Array<[string, string]> = [
   ['profiles/node_modules', join(HOME, 'profiles', 'node_modules')],
   ['profiles/<name>/.dsh-module-fallback', join(HOME, 'profiles', PROFILE, '.dsh-module-fallback')],
   ['profiles/<name>/.dsh-market', join(HOME, 'profiles', PROFILE, '.dsh-market')],
@@ -91,22 +96,22 @@ log(freed > 0 ? `共瘦身 ${(freed / 1048576).toFixed(1)} MB` : '没有需要�
 //
 //   *.map          源映射。只在 DevTools 里用；缺了它 JS 照常执行
 //                  （末尾的 sourceMappingURL 注释指向不存在的文件，浏览器静默忽略）。
-//                  实测随附运行时里有 6073 个，约 100 MB。
+//                  实测随附运行时里有 6067 个，约 100 MB。
 //   tests/ test/   包自带的测试。运行期不会有人跑它们。
-//                  实测 1408 个，约 9 MB。
+//                  实测 61 个目录，约 9 MB。
 //
 // **不断言删掉的数量**：dsh 版本升级后这两个数字会变，写死会让流程变得脆弱。
 // 只报告实际删掉了多少。
 let mapFreed = 0
 let mapCount = 0
-const testsDirs = []
+const testsDirs: string[] = []
 
 /**
  * 递归裁剪：删除 *.map，并整体删除名为 tests/test 的目录。
- * @param {string} dir 起始目录
- * @param {number} depth 当前深度（上限保护，见调用处说明）
+ * @param dir 起始目录
+ * @param depth 当前深度（上限保护，见调用处说明）
  */
-const trim = (dir, depth) => {
+const trim = (dir: string, depth: number): void => {
   if (depth > 24) return
   let entries
   try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
@@ -142,11 +147,11 @@ const trim = (dir, depth) => {
 log('裁剪 *.map 与 tests/ …')
 // 扫描范围刻意是整个 runtime（含 dsh 安装本体，不含 node）：
 // 实测 map 分布为 dsh-home 1418 个（66.6 MB）+ dsh 本体 4649 个（35.7 MB），
-// 只扫 dsh-home 会漏掉三分之一的收益。node 自身不带 map，跳过即可。
+// 只扫 dsh-home 会漏掉三分之一的收益。
 //
-// 上限保护：万一将来把 runtime 指到了仓库外的共享目录，也不会一路删下去。
+// 深度上限是保护：万一将来把 runtime 指到了仓库外的共享目录，也不会一路删下去。
 trim(RUNTIME, 0)
-log(`已删除 ${mapCount} 个 *.map、${testsDirs.length} 个测试目录（共 ${(mapFreed / 1048576).toFixed(1)} MB）`)
+log(`已删除 ${String(mapCount)} 个 *.map、${String(testsDirs.length)} 个测试目录（共 ${(mapFreed / 1048576).toFixed(1)} MB）`)
 freed += mapFreed
 
 const afterTrim = dirSize(HOME)

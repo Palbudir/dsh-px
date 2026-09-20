@@ -20,8 +20,9 @@ import { fileURLToPath } from 'node:url'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import { createRequire } from 'node:module'
+import { repoRoot } from './paths'
 
-const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const REPO = repoRoot()
 const BUILD = join(REPO, 'build')
 const CACHE = join(BUILD, 'icon-source.png')
 
@@ -62,7 +63,8 @@ async function fetchSource (localPath) {
   const res = await fetch(SOURCE.url)
   if (!res.ok) throw new Error(`素材下载失败：HTTP ${res.status}`)
   mkdirSync(BUILD, { recursive: true })
-  await pipeline(Readable.fromWeb(res.body), createWriteStream(CACHE))
+  if (res.body === null) throw new Error('素材响应没有 body')
+  await pipeline(Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]), createWriteStream(CACHE))
   return readFileSync(CACHE)
 }
 

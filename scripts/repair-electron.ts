@@ -19,8 +19,9 @@ import { spawnSync } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir } from 'node:os'
+import { repoRoot } from './paths'
 
-const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const REPO = repoRoot()
 const ELECTRON_DIR = join(REPO, 'node_modules', 'electron')
 const DIST = join(ELECTRON_DIR, 'dist')
 const log = (m) => process.stdout.write(`[electron-repair] ${m}\n`)
@@ -56,7 +57,7 @@ function findCachedArchive () {
       : process.platform === 'darwin'
         ? join(homedir(), 'Library', 'Caches', 'electron')
         : join(homedir(), '.cache', 'electron')
-  ].filter(Boolean)
+  ].filter((p): p is string => Boolean(p))
 
   const wanted = `electron-v${version}-`
   for (const root of roots) {
@@ -64,7 +65,7 @@ function findCachedArchive () {
     // 缓存布局：<root>/<sha>/electron-v<版本>-<平台>-<架构>.zip
     for (const entry of readdirSync(root)) {
       const dir = join(root, entry)
-      let files = []
+      let files: string[] = []
       try { files = readdirSync(dir) } catch { continue }
       for (const file of files) {
         if (file.startsWith(wanted) && /\.(zip|tar\.gz)$/.test(file)) return join(dir, file)

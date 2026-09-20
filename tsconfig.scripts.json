@@ -1,0 +1,13 @@
+{
+  "//": "构建脚本（scripts/*.ts）的类型检查配置。",
+  "//运行": "由 scripts/run.mjs 用 esbuild 编译到 build-scripts/ 后运行；不用 Node 的 .ts 原生支持（实验特性，CI 上不该依赖）。",
+  "//strict": "与主项目同级的严格度。这些脚本是构建工具、不进交付物，因此允许隐式 any —— 它们大量调用 spawnSync/JSON 等无类型返回值的接口，为每个位置补类型注解的收益低于风险。",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noImplicitAny": false,
+    "noEmit": true
+  },
+  "include": [
+    "scripts/**/*.ts"
+  ]
+}

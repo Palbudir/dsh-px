@@ -23,9 +23,16 @@ import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { listZipEntries } from './unzip-list.mjs'
+import { listZipEntries } from './unzip-list'
+import { repoRoot } from './paths'
 
-const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+/** 从 unknown 的 catch 变量里取出可读消息（strict 下 catch 变量是 unknown）。 */
+function errText (err: unknown): string {
+  return err instanceof Error ? (err.stack ?? err.message) : String(err)
+}
+
+
+const REPO = repoRoot()
 const DIST = join(REPO, 'dist')
 const TOOLS = join(REPO, 'build', 'tools')
 const log = (m) => process.stdout.write(`[pkg] ${m}\n`)
@@ -77,7 +84,7 @@ function ensure7z () {
   } catch (err) {
     throw new Error(
       `无法获得 7-Zip，因此不能校验安装包内容。\n` +
-      `  自动下载失败：${err?.message ?? err}\n` +
+      `  自动下载失败：${errText(err)}\n` +
       `  解决：安装 7-Zip（CI 上可 choco install 7zip -y），或设置 DSH_PX_7Z 指向 7z 可执行文件。`
     )
   }
@@ -134,7 +141,7 @@ function main () {
     if (names.length < 1000) {
       throw new Error(`ZIP 只解析到 ${names.length} 个条目，远少于预期（约 4 万），文件可能损坏`)
     }
-    const normalized = new Set(names.map((p) => p.toLowerCase().replace(/\/+$/, '')))
+    const normalized = new Set(names.map((p: string) => p.toLowerCase().replace(/\/+$/, '')))
     return report(normalized, `${names.length} 条（来自 ZIP）`)
   }
 
@@ -142,7 +149,7 @@ function main () {
   log('未找到同源 ZIP，改用 7-Zip 读取安装包')
   const seven = ensure7z()
   const raw = execFileSync(seven, ['l', '-slt', installer], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
-  const paths = []
+  const paths: string[] = []
   for (const rawLine of raw.split('\n')) {
     const line = rawLine.replace(/\r$/, '')
     const m = line.match(/^Path = (.+)$/)
@@ -168,8 +175,8 @@ function main () {
  * @param {Set<string>} normalized 已小写归一化的条目路径集合
  * @param {string} source 来源描述，仅用于日志
  */
-function report (normalized, source) {
-  const failures = []
+function report (normalized: Set<string>, source: string): void {
+  const failures: unknown[] = []
 
   // 1) 必备文件
   for (const req of REQUIRED) {
@@ -226,6 +233,6 @@ function report (normalized, source) {
 try {
   main()
 } catch (err) {
-  process.stderr.write(`[pkg] 出错：${err?.stack ?? err}\n`)
+  process.stderr.write(`[pkg] 出错：${errText(err)}\n`)
   process.exit(1)
 }

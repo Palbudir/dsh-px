@@ -18,8 +18,9 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { repoRoot } from './paths'
 
-const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const REPO = repoRoot()
 const log = (m) => process.stdout.write(`[app-update] ${m}\n`)
 
 const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8'))

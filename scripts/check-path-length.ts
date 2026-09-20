@@ -15,8 +15,9 @@
 import { readdirSync, statSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { repoRoot } from './paths'
 
-const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const REPO = repoRoot()
 const RUNTIME = join(REPO, 'runtime')
 /** Windows 传统 MAX_PATH 上限。 */
 const MAX_PATH = 260

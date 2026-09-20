@@ -19,24 +19,31 @@ import { execFileSync, spawn } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { repoRoot } from './paths'
+import type { Dirent } from 'node:fs'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-const REPO = resolve(HERE, '..')
+/** 从 unknown 的 catch 变量里取出可读消息（strict 下 catch 变量是 unknown）。 */
+function errText (err: unknown): string {
+  return err instanceof Error ? (err.stack ?? err.message) : String(err)
+}
+
+
+const REPO = repoRoot()
 const RUNTIME = join(REPO, 'runtime')
 const PROFILE = process.env.DSH_PX_PROFILE ?? 'web'
 const BOOT = process.argv.includes('--boot')
 const AS_JSON = process.argv.includes('--json')
 
-const results = []
-const record = (name, ok, detail) => {
+const results: Array<{ name: string, ok: boolean, detail: string | undefined }> = []
+const record = (name: string, ok: boolean, detail?: string): void => {
   results.push({ name, ok, detail })
   if (!AS_JSON) process.stdout.write(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` —— ${detail}` : ''}\n`)
 }
 
 /** 解析 `--dump-config` 那种类 YAML 输出，取出组合出的行。 */
 function parseRows (yaml) {
-  const rows = []
-  let current = null
+  const rows: Array<{ id: string, name: string | null }> = []
+  let current: { id: string, name: string | null } | null = null
   for (const raw of yaml.split('\n')) {
     const line = raw.replace(/\r$/, '')
     if (/^\s*#\s*==/.test(line)) continue
@@ -169,14 +176,14 @@ async function main () {
     try {
       stagedRows = dump(nodeExe, dshEntry, home)
     } catch (err) {
-      record('装配版 --dump-config 成功', false, String(err?.message ?? err).slice(0, 400))
+      record('装配版 --dump-config 成功', false, errText(err).slice(0, 400))
     }
 
     if (stagedRows) {
       record('装配版能组合出插件树', stagedRows.length > 100, `${stagedRows.length} 行`)
 
-      let missing = null
-      let extra = []
+      let missing: Array<{ id: string, name: string | null }> = []
+      let extra: Array<{ id: string, name: string | null }> = []
       let baselineLabel = ''
 
       if (baseline.kind === 'install') {
@@ -184,14 +191,14 @@ async function main () {
         baselineLabel = '官方安装（组合树逐行对比）'
         const officialHome = process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh')
         try {
-          const officialRows = dump(nodeExe, join(baseline.dir, 'lib', 'bin.js'), officialHome)
-          const key = (r) => `${r.id}|${r.name}`
+          const officialRows = dump(nodeExe, join(baseline.dir ?? '', 'lib', 'bin.js'), officialHome)
+          const key = (r: { id: string, name: string | null }): string => `${r.id}|${r.name}`
           const stagedSet = new Set(stagedRows.map(key))
           const officialKeys = new Set(officialRows.map(key))
           missing = officialRows.filter((r) => !stagedSet.has(key(r)))
           extra = stagedRows.filter((r) => !officialKeys.has(key(r)))
         } catch (err) {
-          record('官方版 --dump-config 成功', false, String(err?.message ?? err).slice(0, 400))
+          record('官方版 --dump-config 成功', false, errText(err).slice(0, 400))
         }
       } else {
         // manifest 基线：只有官方 dsh 的依赖清单。无法逐行组合对比，
@@ -199,7 +206,7 @@ async function main () {
         // 这是 CI（无全局 dsh、_dsh-install 已清理）唯一可做的事，
         // 也正是"自包含"这一步真正会失败的地方。
         baselineLabel = '官方 manifest（依赖完整性对比）'
-        const manifest = JSON.parse(readFileSync(baseline.file, 'utf8'))
+        const manifest = JSON.parse(readFileSync(baseline.file ?? '', 'utf8')) as { dependencies?: Record<string, string> }
         const deps = Object.keys(manifest.dependencies ?? {})
         const installed = new Set()
         const scanScope = (base, prefix) => {
@@ -242,7 +249,7 @@ async function main () {
       const probe = await bootProbe(nodeExe, dshEntry, home)
       record('装配的 harness 能启动且 HTTP 有应答', true, `${probe.url} -> HTTP ${probe.status}`)
     } catch (err) {
-      record('装配的 harness 能启动且 HTTP 有应答', false, String(err?.message ?? err).slice(0, 600))
+      record('装配的 harness 能启动且 HTTP 有应答', false, errText(err).slice(0, 600))
     }
   }
 

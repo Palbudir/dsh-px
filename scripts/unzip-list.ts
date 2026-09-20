@@ -16,6 +16,7 @@
  */
 import { readFileSync, existsSync } from 'node:fs'
 import { inflateRawSync } from 'node:zlib'
+import { pathToFileURL } from 'node:url'
 
 /**
  * 列出 ZIP 内所有条目路径。
@@ -50,7 +51,7 @@ export function listZipEntries (zipPath) {
   }
   if (cdOffset + cdSize > buf.length) throw new Error('ZIP 中央目录越界，文件可能损坏')
 
-  const names = []
+  const names: string[] = []
   let p = cdOffset
   for (let i = 0; i < entryCount; i += 1) {
     if (p + 46 > buf.length || buf.readUInt32LE(p) !== CD_SIG) {
@@ -66,11 +67,16 @@ export function listZipEntries (zipPath) {
   return names
 }
 
-// 允许直接运行，便于人工检查
-if (process.argv[1] && process.argv[1].endsWith('unzip-list.mjs')) {
+// 允许直接运行，便于人工检查。
+//
+// 判据是"**除本模块外没有任何参数**"而不是匹配文件名：脚本已改为 .ts 源码
+// 经 `scripts/run.mjs` 编译后运行，运行期的 argv[1] 是
+// `build-scripts/unzip-list.js`，写死 `.mjs`/`.ts` 都会失效。
+// 以"被当作入口直接调用"为准，才对两种调用方式都成立。
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const target = process.argv[2]
   if (!target || !existsSync(target)) {
-    console.error('用法：node scripts/unzip-list.mjs <zip 路径>')
+    console.error('用法：node scripts/run.mjs unzip-list <zip 路径>')
     process.exit(1)
   }
   const names = listZipEntries(target)
