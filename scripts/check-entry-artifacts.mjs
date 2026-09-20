@@ -39,6 +39,9 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  */
 const REQUIRED = [
   ['out/main/index.js', 'Electron 主进程（package.json 的 main 指向它）'],
+  ['out/renderer/index.html', '首启/重启进度页（主进程用 loadFile 加载它）'],
+  ['out/preload/index.mjs', '进度页 preload'],
+  [join('packages', 'dsh-px-updater', 'lib', 'index.js'), '自研插件的宿主半边'],
   [join('packages', 'dsh-px-updater', 'lib', 'client.js'), '自研插件的客户端半边（设置页分区）']
 ]
 

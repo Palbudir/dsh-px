@@ -103,4 +103,56 @@ declare module '@deepseek-ai/cordis' {
     effect?: (fn: () => (() => void) | void, label?: string) => void
     logger?: { info?: (...args: unknown[]) => void, warn?: (...args: unknown[]) => void }
   }
+
+  // ── 宿主半边（src/index.ts）用到的成员 ─────────────────────────────────────
+
+  /** HTTP 响应（只用得到这几个成员）。 */
+  export interface HostResponse {
+    writeHead (status: number, headers: Record<string, string>): void
+    end (body?: string): void
+  }
+
+  /** HTTP 请求（只用得到 method）。 */
+  export interface HostRequest {
+    method?: string
+  }
+
+  /** 一个已注册路由的清理函数。 */
+  export type RouteDisposer = () => void
+
+  /** webServer 服务。 */
+  export interface WebServer {
+    register (route: {
+      kind: 'exact' | 'prefix'
+      path: string
+      handler: (req: HostRequest, res: HostResponse) => void | Promise<void>
+    }): RouteDisposer
+  }
+
+  /** 工具注册表服务。 */
+  export interface ToolRegistry {
+    register (tool: {
+      name: string
+      description: string
+      parameters: Record<string, unknown>
+      output: { schema: Record<string, unknown>, render: (args: unknown, value: string) => unknown[] }
+      execute: (args: { checkRemote?: boolean } | undefined) => Promise<string>
+    }): unknown
+  }
+
+  /**
+   * 宿主侧插件上下文。只为本站点用到的成员声明类型。
+   *
+   * 注意 `inject` 的回调会拿到**带服务的窄化上下文** —— 这正是本插件的关键用法：
+   * apply 期间 webServer 可能尚未提供，`ctx.get()` 会静默拿到 undefined，
+   * 而 `ctx.inject([...])` 会等到服务就绪后再回调。
+   */
+  export interface HostPluginContext {
+    logger?: { info?: (...args: unknown[]) => void, debug?: (...args: unknown[]) => void }
+    inject (services: readonly string[], callback: (ctx: HostPluginContext & {
+      webServer?: WebServer
+      tools?: ToolRegistry
+    }) => void): unknown
+    effect?: (fn: () => (() => void) | void, label?: string) => void
+  }
 }
