@@ -9,8 +9,8 @@
 不需要终端，不需要用户在本地 `npm install`，不需要单独安装 Node、pnpm 或 dsh。
 下载、双击，完整的 harness 就在那里。
 
-> **状态：beta 开发中。** beta 的验收标准是刻意写得具体的：
-> **打包后的应用必须达到至少等同于官方 `dsh` 的能力。**
+> **当前版本 `0.1.0-beta.re.0.2`**（[Releases](https://github.com/Palbudir/dsh-px/releases)）。
+> beta 的验收标准是刻意写得具体的：**打包后的应用必须至少达到官方 `dsh` 的能力。**
 > 这条标准是被**度量**出来的，不是被声明的 —— 见 [验收](#验收)。
 
 ---
@@ -28,8 +28,9 @@
 
 ```
 Electron 主进程
+  ├─ 首启：把随附 runtime/dsh-home 硬链接物化到 <userData>/dsh-home（秒级，见下）
   └─ spawn  runtime/node/node.exe runtime/dsh/lib/bin.js --profile web --no-open
-              │  DSH_HOME = <userData>/dsh-home   （首次运行从 runtime/dsh-home 播种）
+              │  DSH_HOME = <userData>/dsh-home
               └─ 服务 http://127.0.0.1:<端口>  ──►  BrowserWindow
 ```
 
@@ -39,22 +40,39 @@ Electron 主进程
 所以外壳**只把干净 URL 当作就绪探针**，真正加载的是 harness 打印出来的那个 URL。
 详见 `docs/PACKAGING.md` 的约束 6。
 
+## 首启为什么是秒级
+
+早期实现用同步整树复制把随附运行时铺进用户数据目录：**4–5 分钟，界面冻结**。
+现在改为**硬链接物化** —— 同卷内不复制数据，实测 **5.7 秒**铺完约 1.3 万个文件，
+且几乎不额外占盘。
+
+- 跨卷时 `linkSync` 抛 `EXDEV`，自动回退逐文件复制，并显示**进度页**
+  （不是模态框：可以忽略，不夺焦点）。
+- 硬链接失败（含 NTFS 单文件 1024 条链接上限）**一律回退复制**，绝不因此中断首启。
+- 可续传：中途失败后再启动不会从头再来。
+
+细节与实验数据见 [`docs/design-first-run.md`](docs/design-first-run.md)。
+
 ## 仓库结构
 
 ```
-app/
-  main.mjs                Electron 主进程：解析运行时、拉起 dsh、窗口、托盘
-  bootstrap.mjs           无 Electron 的冒烟测试 —— 直接启动已装配的运行时
-scripts/
-  stage-runtime.mjs       装配 ./runtime（Node + dsh + 种子 profile）
-  verify-capabilities.mjs beta 验收工具（结构 + 能力平价 + 启动）
-  repair-electron.mjs     修复被 npm 装坏的 Electron（postinstall 自动调用）
+src/
+  main/index.ts           Electron 主进程：解析运行时、物化 home、拉起 dsh、窗口、托盘、更新
+  main/materialize.ts     首启硬链接物化（跨卷回退、续传、进度）
+  main/update-bridge.ts   外壳 ↔ 界面之间的更新状态桥（文件，原子写）
+  renderer/               首启进度页（真 renderer 入口，非 data: URL）
+  preload/index.ts        进度页 preload（窗口标题看守）
+packages/dsh-px-updater/  自研 dsh 插件（宿主半边 + 客户端半边，均为预构建产物）
+scripts/                  构建与验证脚本（TypeScript 源码，经 scripts/run.mjs 编译执行）
 docs/
-  PACKAGING.md            运行时如何装配，以及为什么必须这样做
+  PACKAGING.md            运行时如何装配，以及 10 条踩出来的约束
+  design-first-run.md     首启物化的设计与实测数据
+  RELEASING.md            发版流程，以及**版本号那个坑**
   ROADMAP.md              beta 到底指什么，以及之后做什么
 ```
 
-`runtime/` 是**生成物，永不入库** —— 它是数百 MB 的第三方代码。`.gitignore` 已经强制了这一点。
+`runtime/` 与 `out/`、`dist/`、`build-scripts/`、`build-test/` 都是**生成物，永不入库**。
+`.gitignore` 已强制这一点。
 
 ## 快速开始（开发）
 
@@ -66,6 +84,10 @@ npm install
 #   --with-plugins   用 npm 全新安装默认插件集（可复现）
 npm run stage -- --from-existing
 
+# 类型检查 + 单元测试
+npm run typecheck        # 主进程 + 插件两半 + 构建脚本，三套配置
+npm run test             # 含首启物化、插件两个半边的产物形态校验
+
 # 证明装配出的运行时是真的、且能力达标
 npm run verify -- --boot
 
@@ -75,24 +97,28 @@ npm start
 
 ## 验收
 
-`npm run verify` 就是 beta 的门禁。它做三项互相独立的检查：
+门禁分三层，全部可机械复现：
 
-| 检查 | 它证明了什么 |
+| 命令 | 它证明了什么 |
 |---|---|
-| **结构** | 装配出的运行时存在、其 profile 声明了随附的组合包层、且有 manifest 记录了究竟装配了什么。 |
-| **能力平价** | 把装配版的组合插件树与**官方**安装的插件树分别 dump 出来**逐行对比**。官方有而装配版缺的任何一行都是能力缺口，直接判定失败。 |
-| **启动**（`--boot`） | 装配出的 harness 真的能启动，且它的 HTTP 面有应答。 |
+| `npm run typecheck` | 三套 tsconfig 全绿（主进程/渲染、插件两半、构建脚本）。 |
+| `npm run test` | 首启物化的行为（硬链接、跨卷/上限回退、幂等、链接规则）+ 插件两个半边产物的形态与导出面。 |
+| `npm run verify -- --boot` | **结构**、**能力平价**、**真实启动**。 |
 
-其中平价检查是关键：它把"至少达到官方能力"从一句主张变成了一个 diff。
+其中**能力平价**是关键：它把装配版的组合插件树与**官方**安装的插件树分别 dump 出来
+**逐行对比**。官方有而装配版缺的任何一行都是能力缺口，直接判定失败。
 随附插件合理地让装配版成为**超集**；门禁只对**缺失**的行报错。
 
 ```sh
 npm run verify -- --boot --json     # 机器可读，供 CI 用
 ```
 
+还有一层**视觉**验证：`npm run screenshot` 用 Playwright 驱动 Electron 截图
+（进度页、harness 界面、设置页分区），把"看起来对不对"也变成可检查项。
+
 ## 随附插件
 
-beta 版预装了以下插件到 web profile（包名均已核验）：
+预装到 web profile（包名均已核验）：
 
 | 包 | 作用 |
 |---|---|
@@ -100,47 +126,69 @@ beta 版预装了以下插件到 web profile（包名均已核验）：
 | `dsh-better-sidebar` | VSCode 式右侧栏（文件、编辑器、终端、Git、浏览器）；同时是其他 UI 插件注册页签的扩展点 |
 | `dsh-mermaid-render` | 把 mermaid 代码块渲染成图表卡 |
 | `dsh-find-plugin` | 让智能体从精选清单里发现插件 |
+| `dsh-px-updater` | **本项目自研**：版本/更新状态查询，并在 dsh 设置页注册一个「DSH-PX」分区 |
 
 插件组合**不是硬编码的**，它就是 profile 的 `dsh.profile.bundles` 列表 —— 官方机制本身。
-应用是**继承**它，而不是重新实现它。
+应用是**继承**它，而不是重新实现它。自研插件同样走官方范式：声明 `dsh.bundle.patch`
+参与组合，并声明 `dsh.client` 提供客户端半边。
+
+## 更新
+
+两层东西独立更新：
+
+| 层 | 通道 | 机制 |
+|---|---|---|
+| 桌面外壳 | GitHub Releases | `electron-updater`，差分下载（区块级） |
+| 随附 dsh 核心 | 跟随外壳 | 装进外壳的 `runtime/`，所以升外壳即升它 |
+
+行为刻意**非模态**：后台静默下载，托盘显示进度，界面设置页出现一条可忽略的提示横幅，
+退出应用时自动安装。只有用户**主动**检查更新时才给回执。
+
+差分下载**实测有效**：`beta.re.0.1 → beta.re.0.2` 时全量 217 MB，
+实际只下载 **15.5 MB（7%）**。省多少取决于改动的分布，不是固定值 ——
+`beta.7 → beta.8` 那次是 2.5 MB（省 98.9%）。
 
 ## 打包
 
 ```sh
 npm run stage -- --with-plugins   # 从 npm 装配可复现的运行时
+npm run prune                     # 裁掉 *.map 与 tests/（约省 111 MB）
 npm run dist                      # electron-builder -> dist/
 ```
 
 `electron-builder` 会把 `runtime/` 复制进应用的 `resources/`，因此装出来的应用是真正自包含的。
-那些不那么显然的约束（Junction 树、pnpm 构建审批、`allowBuilds`）见 `docs/PACKAGING.md`。
+那些不那么显然的约束（Junction 树、pnpm 构建审批、`allowBuilds`、为什么必须裁剪）见
+[`docs/PACKAGING.md`](docs/PACKAGING.md)。
 
 ## 已知限制（beta）
 
-- **首次启动需要等待约 4–5 分钟。** 应用会把随附的运行时（约 690 MB、30 万文件）
-  复制进自己的数据目录。这是一次性的，之后每次启动都是秒级。
-  这同时也是目前 beta 最大的体验短板，`docs/ROADMAP.md` 写了改进方向。
-- **Windows 是首要目标**；macOS / Linux 的打包目标已配置但未实测。
-- **尚无自动更新。** `docs/ROADMAP.md` 写了设计意图，以及为什么它要复用现成且经过验证的
-  更新插件，而不是自己造一个。
-- Electron 构建**未签名**，Windows SmartScreen 会提示。
+- **Windows 是首要目标**；macOS / Linux 的打包目标已配置但**未实测**。
+- **Electron 构建未签名**，Windows SmartScreen 会提示。
+- **跨卷首启未经真实验证**：本项目的开发机只有一个卷，无法构造 `EXDEV`。
+  判据级测试已覆盖，回退分支也已被"真实触发 NTFS 链接上限"的用例跑通（同一段代码），
+  但真实跨卷下的耗时与进度显示仍待验证。
 - 鉴权沿用 dsh 自己的浏览器信任围栏（进程启动令牌 → 签名 cookie）；
-  外壳不再叠加第二层登录。**注意干净 URL 会返回 401**，外壳加载的是 harness
+  外壳不叠加第二层登录。**注意干净 URL 会返回 401**，外壳加载的是 harness
   自己宣告的那个 URL，详见 `docs/PACKAGING.md` 约束 6。
 - **在应用内安装插件需要 PATH 上有 `pnpm`。** 初始插件集已预装在随附 profile 里，
-  所以应用开箱可用；但要从市场添加更多插件目前需要 pnpm（市场在检测到缺失时会提供一键安装引导）。
-- 安装包约 373 MB（NSIS），安装后约 946 MB —— 自包含 Node 与全套插件的代价。
+  所以应用开箱可用；但要从市场添加更多插件目前需要 pnpm
+  （市场在检测到缺失时会提供一键安装引导）。
+- 安装包约 **212 MB**（NSIS），自包含 Node + 官方 dsh + 全套插件。
+- 卸载时**不会**提示"数据目录仍占用空间"。硬链接与安装目录共享数据，
+  两边都删才真正释放 —— 这一提示尚未实现。
+- `dsh` 核心固定为装配时锁定的版本（当前 `0.1.5-rc.2`，即 npm 上的 `latest`）。
+  换核心版本要重新装配外壳，不能单独升级。
 
 ### 在 Windows 上验证 Electron 本身
 
 `npm install` 有可能静默留下一个坏掉的 Electron（见 `docs/PACKAGING.md` 约束 7）。
-如果 `npx electron --version` 失败，通常缓存里的 zip 是好的，只是解压失败了：
+`scripts/repair-electron.ts` 挂在 `postinstall` 上自动处理；
+若仍失败，通常是缓存里的 zip 是好的、只是解压失败：
 
 ```sh
 tar -xf "$LOCALAPPDATA/electron/Cache"/*/electron-v*-win32-x64.zip -C node_modules/electron/dist
 printf 'electron.exe' > node_modules/electron/path.txt
 ```
-
-`setup.ps1` / `setup.sh` 会把这一步连同前置检查一起做完，也可以直接跑它。
 
 ## 许可证
 
