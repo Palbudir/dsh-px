@@ -414,36 +414,29 @@ function startHarness ({ runtime, home, port }: HarnessContext): HarnessStartRes
 }
 
 /**
- * 构建启动期进度页。
+ * 首启/重启进度页的路径。
  *
- * 为什么要有它：首启在**跨卷**场景下要逐文件复制数万个文件（分钟级），
- * 旧实现是同步复制、界面完全冻结，用户只能看到一个白窗口。同一卷时靠硬链接
- * 只要几秒，但**不能因此就不给反馈**——没人能区分"在干活"和"卡死了"。
+ * 由 electron-vite 的 renderer 目标构建（源在 `src/renderer/index.html`）。
+ * 之所以做成真入口而不是主进程里的 HTML 模板字符串，见 `src/renderer/splash.ts`
+ * 头部说明：一是页面可维护，二是 electron-vite 的
+ * "renderer and preload config is missing" 警告无法在配置里关掉。
  *
- * 这里刻意不用模态框：用户在更新交互上已明确要求"不要打断式弹窗"，
- * 启动进度同理，画在应用自己的窗口里即可。
+ * 两种布局都要覆盖：
+ *   开发态：`<repo>/out/renderer/index.html`
+ *   打包后：`<app.asar>/out/renderer/index.html`
  */
-function splashHtml (): string {
-  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>DSH-PX</title>
-<style>
-  :root { color-scheme: dark }
-  body { margin:0; height:100vh; display:flex; flex-direction:column; align-items:center;
-         justify-content:center; background:#111318; color:#e6e8ee;
-         font-family:"Segoe UI","Microsoft YaHei",system-ui,sans-serif; user-select:none }
-  .brand { font-size:22px; letter-spacing:.14em; font-weight:600 }
-  .bar { width:280px; height:5px; border-radius:3px; background:#233; margin:22px 0 12px; overflow:hidden }
-  .bar > i { display:block; height:100%; width:36%; border-radius:3px;
-             background:linear-gradient(90deg,#4f8cff,#7c5cff);
-             animation:slide 1.15s ease-in-out infinite }
-  @keyframes slide { 0%{transform:translateX(-110%)} 100%{transform:translateX(320%)} }
-  .phase { font-size:13px; color:#aeb6c8 }
-  .detail { font-size:11px; color:#6d7688; margin-top:6px; min-height:14px }
-</style></head><body>
-  <div class="brand">DSH-PX</div>
-  <div class="bar"><i></i></div>
-  <div class="phase" id="phase">正在启动…</div>
-  <div class="detail" id="detail"></div>
-</body></html>`
+function splashPagePath (): string | null {
+  const candidates = [
+    join(APP_ROOT, 'out', 'renderer', 'index.html'),
+    join(app.getAppPath(), 'out', 'renderer', 'index.html')
+  ]
+  for (const p of candidates) {
+    if (existsSync(p)) return p
+  }
+  process.stderr.write(
+    `[dsh-px] 未找到进度页（已试：${candidates.join('、')}）。是否漏跑了 npm run build？\n`
+  )
+  return null
 }
 
 /** 向进度页推送状态（页面可能已经切走，失败一律忽略）。 */
@@ -455,17 +448,24 @@ function reportSeedProgress (p: SeedProgress): void {
   lastSeedPushAt = now
   const percent = p.total > 0 ? Math.min(99, Math.round((p.done / p.total) * 100)) : 0
   const detail = p.total > 0 ? `${p.done} / ${p.total} 项（${percent}%）` : ''
+  // 调页面里那个唯一的入口（见 src/renderer/splash.ts）。
   void win.webContents.executeJavaScript(
-    `(() => { const a=document.getElementById('phase'); if(a) a.textContent=${JSON.stringify(p.phase)};` +
-    ` const b=document.getElementById('detail'); if(b) b.textContent=${JSON.stringify(detail)}; })()`
+    `window.__dshPxProgress?.(${JSON.stringify(p.phase)}, ${JSON.stringify(detail)})`
   ).catch(() => { /* 页面已切到 harness，正常 */ })
 }
 
 /** 进度推送节流时间戳。 */
 let lastSeedPushAt = 0
 
-/** 创建窗口并先显示启动进度页。 */
-function createShellWindow (): BrowserWindow {
+/**
+ * 创建窗口并先显示启动进度页。
+ *
+ * 返回 Promise 是因为进度页用 `loadFile` 从磁盘加载（异步）。调用方
+ * **应当 await**，否则后面的进度推送可能赶在页面就绪之前发出 ——
+ * 那些推送会被 `executeJavaScript` 静默丢弃，用户看到的就是一个
+ * 永远停在"正在启动…"的窗口。
+ */
+async function createShellWindow (): Promise<BrowserWindow> {
   win = new BrowserWindow({
     width: 1440,
     height: 940,
@@ -507,7 +507,20 @@ function createShellWindow (): BrowserWindow {
     return { action: 'deny' }
   })
 
-  void win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(splashHtml()))
+  // 加载进度页。用 loadFile 从磁盘读（打包后在 app.asar 里），
+  // 而不是 data: URL —— 这样页面是构建产物，可维护、可检查。
+  const page = splashPagePath()
+  if (page !== null) {
+    await win.loadFile(page)
+  } else {
+    // 兜底：进度页缺失（例如漏跑构建）也要让窗口有内容，而不是一片空白，
+    // 否则用户看到的是"应用卡死"。此时进度无法显示，但至少能看出在启动。
+    await win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(
+      '<body style="background:#111318;color:#e6e8ee;font-family:sans-serif;' +
+      'display:flex;align-items:center;justify-content:center;height:100vh;margin:0">' +
+      '正在启动 DSH-PX…</body>'
+    ))
+  }
   return win
 }
 
@@ -898,7 +911,7 @@ async function main (): Promise<void> {
   }
 
   // 先建窗口并显示进度页：后面的物化在跨卷时是分钟级，必须先有地方显示进度。
-  createShellWindow()
+  await createShellWindow()
 
   // 首启物化（同卷硬链接，秒级；跨卷回退复制，分钟级但有进度）。
   const home = await resolveHarnessHome(runtime, reportSeedProgress)

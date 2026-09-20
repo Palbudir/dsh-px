@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <!--
+      内容安全策略：这个页面只在首启/重启期间显示，不加载任何外部资源，
+      也不接受任何用户输入。收紧到"仅自身"能把将来误加远程资源变成一次
+      明确的失败，而不是一个静悄悄的安全缺口。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
+    />
+    <title>DSH-PX</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: #111318;
+        color: #e6e8ee;
+        font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+        user-select: none;
+        -webkit-app-region: drag;
+      }
+      .brand {
+        font-size: 22px;
+        letter-spacing: 0.14em;
+        font-weight: 600;
+      }
+      .bar {
+        width: 280px;
+        height: 5px;
+        border-radius: 3px;
+        background: #223344;
+        margin: 22px 0 12px;
+        overflow: hidden;
+      }
+      .bar > i {
+        display: block;
+        height: 100%;
+        width: 36%;
+        border-radius: 3px;
+        background: linear-gradient(90deg, #4f8cff, #7c5cff);
+        animation: slide 1.15s ease-in-out infinite;
+      }
+      @keyframes slide {
+        0% {
+          transform: translateX(-110%);
+        }
+        100% {
+          transform: translateX(320%);
+        }
+      }
+      .phase {
+        font-size: 13px;
+        color: #aeb6c8;
+      }
+      .detail {
+        font-size: 11px;
+        color: #6d7688;
+        margin-top: 6px;
+        min-height: 14px;
+      }
+      /* 无障碍：尊重"减少动态效果"偏好，进度条改为静态脉冲而非滑动。 */
+      @media (prefers-reduced-motion: reduce) {
+        .bar > i {
+          animation: none;
+          width: 100%;
+          opacity: 0.75;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="brand">DSH-PX</div>
+    <div class="bar"><i></i></div>
+    <div class="phase" id="phase">正在启动…</div>
+    <div class="detail" id="detail"></div>
+    <script type="module" src="./splash.ts"></script>
+  </body>
+</html>
