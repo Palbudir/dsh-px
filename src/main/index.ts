@@ -899,11 +899,27 @@ function refreshTray (url?: string): void {
  * 独立成函数是因为有**两个**入口：托盘菜单，以及界面（经 update-bridge 的
  * 请求文件）。两条路径必须做完全一样的事 —— 尤其别漏掉 `harness.kill()`，
  * 否则安装程序替换文件时会撞上仍在运行的 harness 及其子进程。
+ *
+ * ## 参数不能凭感觉传（一次真实事故）
+ *
+ * 这里曾经是 `quitAndInstall(false, true)` —— 于是**每次更新都弹出 NSIS 安装向导**
+ * （"正在安装 / 上一步 / 下一步 / 取消"），用户得手动点完才算更新完。
+ * 对一个自动更新来说这是明显的体验退步。
+ *
+ * 第一个参数 `isSilent` 才决定静默与否：`false` 时 electron-updater 构造的
+ * 安装器参数**不含 `/S`**，NSIS 于是走交互向导。第二个参数只决定装完是否重启。
+ *
+ * 证据来自 electron-updater 源码：
+ *   `NsisUpdater.js` `doInstall()` 里 `if (options.isSilent) args.push("/S")`
+ *   `BaseUpdater.js` "退出时自动安装" 走的是 `install(true, false)`
+ * 而我们自己触发的路径传了 `false`，所以只有"退出时安装"是静默的。
+ *
+ * 现在传 `(true, true)`：静默替换（无向导）+ 装完自动重启，与成熟桌面应用一致。
  */
 function installUpdateNow (): void {
   quitting = true
   if (harness && harness.exitCode === null) harness.kill()
-  autoUpdater?.quitAndInstall(false, true)
+  autoUpdater?.quitAndInstall(true, true)
 }
 
 /**
