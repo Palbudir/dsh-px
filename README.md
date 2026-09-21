@@ -1,15 +1,23 @@
 # dsh-px
 
+
+> 当前开发目标：在这台 Windows 电脑上持续可用的 Agent 工作台。跨平台、分发和签名暂不作为验收门槛。
+
+日常使用入口仍为已安装的 **DSH-PX**。新功能通过正式版本发布与应用内更新交付。
+在 **设置 → 本机工作台** 中输入项目文件夹完整路径，添加工作区，再选择标准模式开始任务。
+这里同时提供运行检查、插件清单、任务提示词和服务重启。
+开发验证记录见 [本机使用与验收记录](docs/LOCAL-WORKBENCH.md)，发版步骤见 [RELEASING.md](docs/RELEASING.md)。
+
 > **非官方项目。** 本项目与深度求索（DeepSeek）公司**无任何从属、合作或授权关系**，
 > 是一个基于 DeepSeek Harness 构建的第三方客户端。项目名使用官方品牌规范建议的缩写
 > "DSH"。详见 [NOTICE.md](./NOTICE.md)。
 
 一个**把 DeepSeek Harness（`dsh`）完整打包进单个应用的 Electron 桌面客户端**。
 
-不需要终端，不需要用户在本地 `npm install`，不需要单独安装 Node、pnpm 或 dsh。
-下载、双击，完整的 harness 就在那里。
+随附 Node 与 dsh，日常通过已安装应用进入。当前版本针对本机现有环境验收；
+首次升级自管插件使用本机 pnpm 与缓存，工作台会显示依赖检查结果。
 
-> **当前版本 `0.1.0-beta.re.0.2`**（[Releases](https://github.com/Palbudir/dsh-px/releases)）。
+> **当前版本 `0.1.0-beta.re.0.6`**（[Releases](https://github.com/Palbudir/dsh-px/releases)）。
 > beta 的验收标准是刻意写得具体的：**打包后的应用必须至少达到官方 `dsh` 的能力。**
 > 这条标准是被**度量**出来的，不是被声明的 —— 见 [验收](#验收)。
 
@@ -59,6 +67,7 @@ Electron 主进程
 src/
   main/index.ts           Electron 主进程：解析运行时、物化 home、拉起 dsh、窗口、托盘、更新
   main/materialize.ts     首启硬链接物化（跨卷回退、续传、进度）
+  main/update-controller.ts 更新检查、下载、安装状态机（并发保护与失败恢复）
   main/update-bridge.ts   外壳 ↔ 界面之间的更新状态桥（文件，原子写）
   renderer/               首启进度页（真 renderer 入口，非 data: URL）
   preload/index.ts        进度页 preload（窗口标题看守）
@@ -133,6 +142,9 @@ npm run verify -- --boot --json     # 机器可读，供 CI 用
 参与组合，并声明 `dsh.client` 提供客户端半边。
 
 ## 更新
+
+工作区正在完善更新可靠性，接力记录、验证范围和后续事项见
+[开发交接](docs/DEVELOPMENT-HANDOFF.md)。此轮代码尚未发布新版本。
 
 两层东西独立更新：
 

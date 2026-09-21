@@ -30,6 +30,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { HostPluginContext, HostRequest, HostResponse } from '@deepseek-ai/cordis'
+import { isNewer, isValidVersion } from './version'
 
 /** Cordis 插件名（用于 loader 诊断）。 */
 export const name = 'dsh-px-updater'
@@ -190,7 +191,7 @@ function readShellState (): ShellState | null {
  *
  * @param action 动作名，必须是外壳认识的白名单值
  */
-function requestShellAction (action: 'install' | 'open-data' | 'open-log'): boolean {
+function requestShellAction (action: 'install' | 'check' | 'open-data' | 'open-log'): boolean {
   const dir = shellUserData()
   if (dir === null) return false
   try {
@@ -217,32 +218,6 @@ async function fetchJson (url: string, timeoutMs: number): Promise<Record<string
   } finally {
     clearTimeout(timer)
   }
-}
-
-/**
- * 把 `v1.2.3` / `1.2.3` 归一化后做朴素比较；不追求完整 semver 语义。
- *
- * 注意：这里只取 `major.minor.patch`，**忽略 prerelease 段**。对本插件的用途
- * （提示"有没有新版"）足够，因为外壳侧的 electron-updater 才是决定能否升级的
- * 那一环，而它按完整 semver 判断。prerelease 比较的具体陷阱见
- * `docs/RELEASING.md`。
- */
-function parseVersion (v: unknown): [number, number, number] | null {
-  if (typeof v !== 'string' || v.length === 0) return null
-  const m = v.trim().replace(/^v/, '').match(/^(\d+)\.(\d+)\.(\d+)/)
-  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null
-}
-
-/** `candidate` 是否比 `current` 新。任一侧无法解析时返回 false（宁可不提示）。 */
-function isNewer (candidate: unknown, current: unknown): boolean {
-  const a = parseVersion(candidate)
-  const b = parseVersion(current)
-  if (a === null || b === null) return false
-  for (let i = 0; i < 3; i += 1) {
-    if (a[i] > b[i]) return true
-    if (a[i] < b[i]) return false
-  }
-  return false
 }
 
 /** `checkUpdates()` 的结构化结果；失败信息放进 `errors`，不抛错。 */
@@ -282,6 +257,7 @@ async function checkUpdates (config: UpdaterConfig): Promise<UpdateCheckResult> 
   // 外壳：GitHub Releases
   try {
     const rel = await fetchJson(`https://api.github.com/repos/${config.repository}/releases/latest`, config.timeoutMs)
+    if (!isValidVersion(rel.tag_name)) throw new Error('发布页未返回有效版本号')
     result.latest.app = typeof rel.tag_name === 'string' ? rel.tag_name : null
     result.releaseUrl = typeof rel.html_url === 'string' ? rel.html_url : null
     result.releaseNotes = typeof rel.body === 'string' ? rel.body : null
@@ -295,6 +271,7 @@ async function checkUpdates (config: UpdaterConfig): Promise<UpdateCheckResult> 
     const pkg = await fetchJson('https://registry.npmjs.org/@deepseek-ai%2Fdsh', config.timeoutMs)
     const distTags = pkg['dist-tags'] as Record<string, string> | undefined
     const latest = distTags?.latest ?? null
+    if (!isValidVersion(latest)) throw new Error('npm 未返回有效版本号')
     result.latest.dsh = latest
     result.updateAvailable.dsh = isNewer(latest, info.dshVersion)
   } catch (err) {
@@ -380,6 +357,22 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
       }
     })
 
+    // 版本查询与实际桌面更新是两件事；POST 明确请求外壳检查并重试下载。
+    const disposeShellCheck = webServer.register({
+      kind: 'exact',
+      path: `${config.routePrefix}/check-shell`,
+      handler: (req: HostRequest, res: HostResponse) => {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, error: '只接受 POST' })
+          return
+        }
+        const ok = requestShellAction('check')
+        sendJson(res, ok ? 202 : 503, ok
+          ? { ok: true, message: '已请求桌面客户端检查更新' }
+          : { ok: false, error: '桌面客户端未连接，只能查询版本信息' })
+      }
+    })
+
     // ── 外壳状态：更新的真实进度只有外壳知道 ─────────────────────────────────
     //
     // 插件能查"有没有新版"，但**下载进度与"已就绪"只有外壳知道**（下载与安装
@@ -417,6 +410,11 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
           sendJson(res, 405, { ok: false, error: '只接受 POST' })
           return
         }
+        const state = readShellState()
+        if (state?.phase !== 'ready') {
+          sendJson(res, 409, { ok: false, error: '更新尚未下载完成，或安装已在进行中' })
+          return
+        }
         const ok = requestShellAction('install')
         sendJson(res, ok ? 202 : 503, ok
           ? { ok: true, message: '已请求外壳重启并安装' }
@@ -441,7 +439,8 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
         //
         // 显式收窄成字面量联合：正则的捕获组类型是宽松的 `string`，
         // 直接传给只接受白名单枚举的 requestShellAction 过不了严格检查。
-        const raw = /[?&]what=(open-data|open-log)\b/.exec(req.url ?? '')?.[1]
+        const params = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams
+        const raw = params.getAll('what').length === 1 ? params.get('what') : null
         if (raw !== 'open-data' && raw !== 'open-log') {
           sendJson(res, 400, { ok: false, error: 'what 必须是 open-data 或 open-log' })
           return
@@ -453,13 +452,14 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
       }
     })
 
-    say(`已注册 HTTP 端点 ${config.routePrefix}/{status,check,shell-state,install,open}`)
+    say(`已注册 HTTP 端点 ${config.routePrefix}/{status,check,check-shell,shell-state,install,open}`)
 
     // 路由注册属于 effect，插件卸载时自动清理 —— 这是 dsh 的约定，
     // 不需要手写 removeRoute。
     hostCtx.effect?.(() => () => {
       disposeStatus()
       disposeCheck()
+      disposeShellCheck()
       disposeShellState()
       disposeInstall()
       disposeOpen()

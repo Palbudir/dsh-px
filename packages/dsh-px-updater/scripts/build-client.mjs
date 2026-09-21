@@ -36,11 +36,11 @@
  */
 import { build } from 'esbuild'
 import { readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const PKG = join(HERE, '..')
+const PKG = process.argv[2] ? resolve(process.argv[2]) : join(HERE, '..')
 const ENTRY = join(PKG, 'src', 'client.tsx')
 const OUT = join(PKG, 'lib', 'client.js')
 

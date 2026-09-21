@@ -30,6 +30,40 @@ window.__ModuleLoader__.load({
 		});
 		module.exports = __toCommonJS(client_exports);
 		var import_react = require("react");
+
+		// packages/dsh-px-updater/src/client-data.ts
+		async function requestJson(path, init = {}, allowCheckFailure = false) {
+		  const controller = new AbortController();
+		  const timer = setTimeout(() => controller.abort(), 2e4);
+		  try {
+		    const response = await fetch(path, {
+		      ...init,
+		      signal: controller.signal,
+		      headers: { accept: "application/json", "x-dsh-px-request": "1", ...init.headers }
+		    });
+		    const body = await response.json();
+		    if (!response.ok && !(allowCheckFailure && response.status === 502 && Array.isArray(body?.errors))) {
+		      throw new Error(typeof body?.error === "string" ? body.error : `HTTP ${response.status}`);
+		    }
+		    return body;
+		  } catch (error) {
+		    if (controller.signal.aborted) throw new Error("\u8BF7\u6C42\u8D85\u65F6\uFF0C\u8BF7\u91CD\u8BD5");
+		    if (error instanceof TypeError && /fetch|network/i.test(error.message)) throw new Error("\u65E0\u6CD5\u8FDE\u63A5\u670D\u52A1\uFF0C\u8BF7\u68C0\u67E5\u7F51\u7EDC\u540E\u91CD\u8BD5");
+		    throw error;
+		  } finally {
+		    clearTimeout(timer);
+		  }
+		}
+		function checkLabel(check, failed) {
+		  if (failed) return "checkFailed";
+		  if (!check) return "notChecked";
+		  if (check.errors.length && !check.latest.app && !check.latest.dsh) return "checkFailed";
+		  if (check.updateAvailable.app || check.updateAvailable.dsh) return "available";
+		  if (check.errors.length || !check.latest.app || !check.latest.dsh || check.current.app === "\u672A\u77E5" || check.current.dsh === "\u672A\u77E5") return "checkIncomplete";
+		  return "upToDate";
+		}
+
+		// packages/dsh-px-updater/src/client.tsx
 		var import_jsx_runtime = require("react/jsx-runtime");
 		var NS = "dsh-px-updater";
 		var ROUTE_PREFIX = "/dsh-px-updater";
@@ -43,6 +77,13 @@ window.__ModuleLoader__.load({
 		    "section.update": "\u66F4\u65B0",
 		    "check": "\u68C0\u67E5\u66F4\u65B0",
 		    "checking": "\u6B63\u5728\u68C0\u67E5\u2026",
+		    "checkFailed": "\u68C0\u67E5\u5931\u8D25\uFF0C\u53EF\u91CD\u8BD5",
+		    "checkIncomplete": "\u90E8\u5206\u4FE1\u606F\u672A\u80FD\u786E\u8BA4",
+		    "lastChecked": "\u4E0A\u6B21\u68C0\u67E5",
+		    "latestCore": "\u6700\u65B0 dsh \u6838\u5FC3",
+		    "platform": "\u5E73\u53F0",
+		    "requested": "\u5DF2\u53D1\u9001\u8BF7\u6C42",
+		    "shellDisconnected": "\u6682\u65F6\u65E0\u6CD5\u8FDE\u63A5\u684C\u9762\u5BA2\u6237\u7AEF",
 		    "notChecked": "\u5C1A\u672A\u68C0\u67E5",
 		    "upToDate": "\u5DF2\u662F\u6700\u65B0\u7248\u672C",
 		    "available": "\u6709\u65B0\u7248\u672C\u53EF\u7528",
@@ -65,7 +106,7 @@ window.__ModuleLoader__.load({
 		    "readyPrefix": "\u65B0\u7248\u672C\u5DF2\u4E0B\u8F7D\u5B8C\u6210\uFF1A",
 		    "installNow": "\u91CD\u542F\u5E76\u5B89\u88C5",
 		    "installing": "\u6B63\u5728\u8BF7\u6C42\u2026",
-		    "note": "\u66F4\u65B0\u7531\u684C\u9762\u5BA2\u6237\u7AEF\u6267\u884C\u4E0B\u8F7D\u4E0E\u5B89\u88C5\uFF1B\u8FD9\u91CC\u53EA\u8D1F\u8D23\u663E\u793A\u4E0E\u68C0\u67E5\u3002"
+		    "note": "\u66F4\u65B0\u5728\u540E\u53F0\u4E0B\u8F7D\uFF0C\u4E0D\u5F71\u54CD\u5F53\u524D\u5DE5\u4F5C\u3002\u4E0B\u8F7D\u5B8C\u6210\u540E\u53EF\u91CD\u542F\u5B89\u88C5\uFF0C\u6216\u5728\u9000\u51FA\u65F6\u81EA\u52A8\u5B89\u88C5\u3002"
 		  },
 		  en: {
 		    "nav": "DSH-PX",
@@ -75,6 +116,13 @@ window.__ModuleLoader__.load({
 		    "section.update": "Updates",
 		    "check": "Check for updates",
 		    "checking": "Checking\u2026",
+		    "checkFailed": "Check failed; retry",
+		    "checkIncomplete": "Some versions could not be verified",
+		    "lastChecked": "Last checked",
+		    "latestCore": "Latest dsh core",
+		    "platform": "Platform",
+		    "requested": "Request sent",
+		    "shellDisconnected": "Desktop client is unreachable",
 		    "notChecked": "Not checked yet",
 		    "upToDate": "Up to date",
 		    "available": "A new version is available",
@@ -97,13 +145,11 @@ window.__ModuleLoader__.load({
 		    "readyPrefix": "Update downloaded: ",
 		    "installNow": "Restart and install",
 		    "installing": "Requesting\u2026",
-		    "note": "The desktop client performs the download and install; this page only displays and checks."
+		    "note": "Updates download in the background. Restart to install when ready, or install automatically when you quit."
 		  }
 		};
 		async function getJson(path) {
-		  const res = await fetch(path, { headers: { accept: "application/json" } });
-		  if (!res.ok) throw new Error(`HTTP ${String(res.status)}`);
-		  return await res.json();
+		  return requestJson(path);
 		}
 		function Row({ label, value }) {
 		  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 12, padding: "7px 0", alignItems: "baseline" }, children: [
@@ -143,6 +189,7 @@ window.__ModuleLoader__.load({
 		  const tone = state.phase === "error" ? "#c0392b" : "#2e7d32";
 		  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: {
 		    display: "flex",
+		    flexWrap: "wrap",
 		    gap: 12,
 		    alignItems: "center",
 		    margin: "0 0 16px",
@@ -151,7 +198,7 @@ window.__ModuleLoader__.load({
 		    border: `1px solid ${tone}`,
 		    background: `${tone}1a`
 		  }, children: [
-		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { flex: 1, fontSize: 13, lineHeight: 1.6 }, children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { role: "status", style: { flex: "1 1 220px", minWidth: 0, overflowWrap: "anywhere", fontSize: 13, lineHeight: 1.6 }, children: [
 		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: state.phase === "ready" ? `${t("readyPrefix")}${state.version ?? ""}` : state.status }),
 		      state.phase === "downloading" && state.percent !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { opacity: 0.75, fontSize: 12 }, children: [
 		        state.percent,
@@ -179,8 +226,11 @@ window.__ModuleLoader__.load({
 		  const [check, setCheck] = (0, import_react.useState)(null);
 		  const [checking, setChecking] = (0, import_react.useState)(false);
 		  const [checkError, setCheckError] = (0, import_react.useState)(null);
+		  const [checkedAt, setCheckedAt] = (0, import_react.useState)(null);
 		  const [shell, setShell] = (0, import_react.useState)(null);
 		  const [installing, setInstalling] = (0, import_react.useState)(false);
+		  const [installError, setInstallError] = (0, import_react.useState)(null);
+		  const [shellError, setShellError] = (0, import_react.useState)(false);
 		  (0, import_react.useEffect)(() => {
 		    let alive = true;
 		    getJson(`${ROUTE_PREFIX}/status`).then((v) => {
@@ -194,38 +244,54 @@ window.__ModuleLoader__.load({
 		  }, []);
 		  (0, import_react.useEffect)(() => {
 		    let alive = true;
+		    let timer;
 		    const tick = () => {
 		      getJson(`${ROUTE_PREFIX}/shell-state`).then((v) => {
-		        if (alive) setShell(v);
+		        if (alive) {
+		          setShell(v);
+		          setShellError(false);
+		        }
 		      }).catch(() => {
+		        if (alive) setShellError(true);
+		      }).finally(() => {
+		        if (alive) timer = setTimeout(tick, 3e3);
 		      });
 		    };
 		    tick();
-		    const timer = setInterval(tick, 3e3);
 		    return () => {
 		      alive = false;
-		      clearInterval(timer);
+		      clearTimeout(timer);
 		    };
 		  }, []);
 		  const doInstall = (0, import_react.useCallback)(() => {
 		    setInstalling(true);
-		    fetch(`${ROUTE_PREFIX}/install`, { method: "POST" }).then(() => {
-		    }).catch(() => {
-		      setInstalling(false);
-		    });
+		    setInstallError(null);
+		    requestJson(`${ROUTE_PREFIX}/install`, { method: "POST" }).then(() => getJson(`${ROUTE_PREFIX}/shell-state`)).then(setShell).catch((err) => setInstallError(err instanceof Error ? err.message : String(err))).finally(() => setInstalling(false));
 		  }, []);
 		  const doCheck = (0, import_react.useCallback)(() => {
 		    setChecking(true);
+		    setCheck(null);
 		    setCheckError(null);
-		    getJson(`${ROUTE_PREFIX}/check`).then(setCheck).catch((err) => setCheckError(err instanceof Error ? err.message : String(err))).finally(() => setChecking(false));
-		  }, []);
+		    const versions = requestJson(`${ROUTE_PREFIX}/check`, {}, true).then(setCheck);
+		    const desktop = shell?.available === true ? requestJson(`${ROUTE_PREFIX}/check-shell`, { method: "POST" }) : Promise.resolve();
+		    Promise.allSettled([versions, desktop]).then((results) => {
+		      const errors = results.filter((r) => r.status === "rejected");
+		      if (errors.length) setCheckError([...new Set(errors.map((r) => r.reason instanceof Error ? r.reason.message : String(r.reason)))].join("\uFF1B"));
+		    }).finally(() => {
+		      setChecking(false);
+		      setCheckedAt((/* @__PURE__ */ new Date()).toISOString());
+		    });
+		  }, [shell?.available]);
 		  const updateLabel = (() => {
 		    if (checking) return tr("checking");
-		    if (!check) return tr("notChecked");
-		    return check.updateAvailable.app || check.updateAvailable.dsh ? tr("available") : tr("upToDate");
+		    if (!shellError && shell?.available && ["ready", "downloading", "installing"].includes(shell.phase)) return tr("available");
+		    return tr(checkLabel(check, checkError !== null));
 		  })();
+		  const lastChecked = [checkedAt, shell?.lastCheckedAt].filter((value) => typeof value === "string" && Number.isFinite(Date.parse(value))).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
 		  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { padding: "4px 2px 24px", maxWidth: 620 }, children: [
-		    shell !== null && (shell.phase === "ready" || shell.phase === "error") ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UpdateBanner, { state: shell, onInstall: doInstall, installing, t: tr }) : null,
+		    shell !== null && ["ready", "error", "downloading", "installing"].includes(shell.phase) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UpdateBanner, { state: shell, onInstall: doInstall, installing: installing || shellError, t: tr }) : null,
+		    installError !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { role: "alert", style: { overflowWrap: "anywhere" }, children: installError }) : null,
+		    shellError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { role: "status", children: tr("shellDisconnected") }) : null,
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Heading, { children: tr("section.app") }),
 		    statusError !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { fontSize: 13, opacity: 0.8 }, children: [
 		      tr("unavailable"),
@@ -235,14 +301,16 @@ window.__ModuleLoader__.load({
 		    ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("current"), value: status?.current.app ?? tr("loading") }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Heading, { children: tr("section.dsh") }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("current"), value: status?.current.dsh ?? tr("loading") }),
-		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: "platform", value: status?.current.platform ?? "\u2014" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("platform"), value: status?.current.platform ?? "\u2014" }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Heading, { children: tr("section.update") }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("latest"), value: check?.latest.app ?? "\u2014" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("latestCore"), value: check?.latest.dsh ?? "\u2014" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("lastChecked"), value: lastChecked ? new Date(lastChecked).toLocaleString() : tr("notChecked") }),
 		    shell?.available === true ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("shellState"), value: shell.phase === "downloading" && shell.percent !== null ? `${shell.status} (${shell.percent}%)` : shell.status }) : null,
-		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 12, alignItems: "center", padding: "6px 0" }, children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", padding: "6px 0" }, children: [
 		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { flex: "0 0 132px", opacity: 0.62, fontSize: 13 }, children: tr("section.update") }),
 		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("span", { style: { fontSize: 14 }, children: updateLabel }),
-		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", onClick: doCheck, disabled: checking, style: {
+		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", onClick: doCheck, disabled: checking || shell?.phase === "installing", style: {
 		        cursor: checking ? "default" : "pointer",
 		        fontSize: 13,
 		        padding: "4px 12px",
@@ -254,8 +322,8 @@ window.__ModuleLoader__.load({
 		      }, children: checking ? tr("checking") : tr("check") })
 		    ] }),
 		    check?.releaseUrl !== null && check?.releaseUrl !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("openRelease"), value: check.releaseUrl }) : null,
-		    checkError !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { fontSize: 12.5, opacity: 0.8 }, children: checkError }) : null,
-		    check !== null && check.errors.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { fontSize: 12.5, opacity: 0.8 }, children: check.errors.join("\uFF1B") }) : null,
+		    checkError !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { role: "alert", style: { fontSize: 12.5, opacity: 0.8, overflowWrap: "anywhere" }, children: checkError }) : null,
+		    check !== null && check.errors.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { role: "status", style: { fontSize: 12.5, opacity: 0.8, overflowWrap: "anywhere" }, children: check.errors.join("\uFF1B") }) : null,
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Heading, { children: tr("paths") }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { fontSize: 12, opacity: 0.6, marginBottom: 2 }, children: tr("copyHint") }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 8, margin: "8px 0 4px" }, children: [
@@ -276,7 +344,7 @@ window.__ModuleLoader__.load({
 		      setState("failed");
 		    });
 		  }, [what]);
-		  const text = state === "sent" ? t("opened") : state === "failed" ? t("openFailed") : label;
+		  const text = state === "sent" ? t("requested") : state === "failed" ? t("openFailed") : label;
 		  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", onClick: open, style: {
 		    cursor: "pointer",
 		    fontSize: 13,

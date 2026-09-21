@@ -11,7 +11,7 @@
  *
  * @module dsh-px/main
  */
-import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage, Notification } from 'electron'
+import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage, Notification, ipcMain } from 'electron'
 
 /** 从 unknown 的 catch 变量里安全取出可读消息（strict 下 catch 变量是 unknown）。 */
 function errText(err: unknown): string {
@@ -19,20 +19,24 @@ function errText(err: unknown): string {
   if (typeof err === 'string') return err
   try { return JSON.stringify(err) } catch { return String(err) }
 }
-import { spawn } from 'node:child_process'
+import { spawn, execFile } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, createWriteStream } from 'node:fs'
 import { createServer } from 'node:net'
 import { createRequire } from 'node:module'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { dirname, join, resolve, delimiter } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { ChildProcess } from 'node:child_process'
 import type { WriteStream } from 'node:fs'
 import type { NativeImage, MenuItemConstructorOptions, Event as ElectronEvent } from 'electron'
 import type { AppUpdater } from 'electron-updater'
-import { materializeSeedHome } from './materialize'
+import { materializeSeedHome, repairPnpmMetadata } from './materialize'
 import type { SeedProgress } from './materialize'
-import { setUpdateState, watchShellActions } from './update-bridge'
-import type { ShellAction, UpdateBridgeState } from './update-bridge'
+import { setUpdateState, watchShellActions, resetUpdateBridge, getUpdateState } from './update-bridge'
+import { UpdateController } from './update-controller'
+import { createServiceState } from './service-state'
+import { HarnessOutput } from './harness-output'
+import { ensureManagedPlugins } from './managed-plugins'
+import type { UpdateBridgeState } from './update-bridge'
 
 /**
  * electron-updater 是 CJS 包，从 ESM 里用 createRequire 加载最稳。
@@ -166,6 +170,12 @@ const DEFAULT_PORT = Number(process.env.DSH_PX_PORT ?? 3080)
 const READY_TIMEOUT_MS = Number(process.env.DSH_PX_READY_TIMEOUT_MS ?? 180_000)
 
 let harness: ChildProcess | null = null
+let serviceState: ReturnType<typeof createServiceState> | null = null
+let restartPending: Promise<boolean> | null = null
+let currentAuthenticatedUrl: string | null = null
+let shutdownPending = false
+let shutdownComplete = false
+const expectedStops = new WeakSet<ChildProcess>()
 let win: BrowserWindow | null = null
 let tray: Tray | null = null
 let quitting = false
@@ -263,7 +273,7 @@ function seedIdentity (runtime: RuntimeDescriptor): string {
  * 客户端半边根本不会被加载。而日志里一切正常，只有一行
  * `跳过 12129` 在悄悄说明整棵树都没被更新。
  *
- * 修法：标记里记下种子身份，身份变了就**覆盖式重新物化**（`refresh: true`）。
+ * 修法：标记里记下种子身份，身份变了就**只刷新自管插件**（`refresh: true`）。
  */
 async function resolveHarnessHome (
   runtime: RuntimeDescriptor,
@@ -288,7 +298,11 @@ async function resolveHarnessHome (
   const refresh = seeded && lastIdentity !== identity
 
   // 已经物化完整、且种子没变：直接用（二次启动零开销）。
-  if (seeded && !refresh) return home
+  if (seeded && !refresh) {
+    if (runtime.seedHome) repairPnpmMetadata({ seedHome: runtime.seedHome, home, profileName: PROFILE_NAME })
+    await migrateManagedPlugins(runtime, home, identity, onProgress)
+    return home
+  }
 
   // 认领这次物化。先落盘，这样即便中途被打断也能看出这是哪一次尝试。
   mkdirSync(home, { recursive: true })
@@ -330,12 +344,45 @@ async function resolveHarnessHome (
     dialog.showErrorBox(
       'dsh-px —— 首次运行准备失败',
       `无法把随附的运行时准备到：\n${home}\n\n原因：${detail}\n\n` +
-      '可尝试：删除该目录后重新启动；或检查磁盘空间与杀毒软件拦截。'
+      '请保留数据目录，检查磁盘空间与目录权限后重试。不要删除配置或会话。'
     )
     throw err
   }
 
+  await migrateManagedPlugins(runtime, home, identity, onProgress)
   return home
+}
+
+async function migrateManagedPlugins (runtime: RuntimeDescriptor, home: string, identity: string,
+  onProgress: (p: SeedProgress) => void): Promise<void> {
+  // 开发态可以保持源码链接；安装版必须从安装资源加载插件，不能依赖源码仓库。
+  if (!app.isPackaged || !runtime.seedHome) return
+  await ensureManagedPlugins({ home, seedHome: runtime.seedHome, profileName: PROFILE_NAME, identity,
+    install: specs => new Promise<void>((resolveInstall, reject) => {
+      onProgress({ done: 0, total: 0, copied: 0, phase: '正在接入新版自管插件，保留现有配置…' })
+      // dsh 的 Windows pnpm 转发使用 shell；这些路径全来自本地安装目录，显式引用空格。
+      const safeSpecs = process.platform === 'win32' ? specs.map(spec => `"${spec}"`) : specs
+      const child = spawn(runtime.node, [runtime.dshEntry, 'plugin', '--profile', PROFILE_NAME,
+        'add', ...safeSpecs, '--offline', '--ignore-scripts'], {
+        env: { ...process.env, DSH_HOME: home, PATH: [dirname(runtime.node), process.env.PATH ?? ''].join(delimiter), NODE_OPTIONS: '' },
+        windowsHide: true, stdio: ['ignore', 'pipe', 'pipe']
+      })
+      let tail = ''
+      const consume = (chunk: Buffer): void => { tail = (tail + chunk.toString()).slice(-6000) }
+      child.stdout?.on('data', consume); child.stderr?.on('data', consume)
+      const timer = setTimeout(() => {
+        if (process.platform === 'win32' && child.pid) execFile('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {})
+        else child.kill()
+        reject(new Error('本机插件安装超时，请检查 pnpm 与日志后重试。'))
+      }, 120_000)
+      child.once('error', error => { clearTimeout(timer); reject(error) })
+      child.once('exit', code => {
+        clearTimeout(timer)
+        if (code === 0) { process.stdout.write('[dsh-px] 自管插件安装与组合包协调完成\n'); resolveInstall() }
+        else reject(new Error(`dsh plugin 退出码 ${code}：${tail}`))
+      })
+    })
+  })
 }
 
 /**
@@ -359,15 +406,15 @@ function findPort (preferred: number): Promise<number> {
  * （包括来自浏览器信任围栏的 401）都证明服务器已在监听；
  * 我们真正在等的是"连接被拒绝"这件事结束。
  */
-async function waitForReady (url: string, timeoutMs: number): Promise<number> {
+async function waitForReady (url: string, timeoutMs: number, child: ChildProcess): Promise<number> {
   const deadline = Date.now() + timeoutMs
   let lastErr = 'no attempt made'
   while (Date.now() < deadline) {
-    if (harness && harness.exitCode !== null) {
-      throw new Error(`harness exited early with code ${harness.exitCode}`)
+    if (harness !== child || child.exitCode !== null || child.signalCode !== null) {
+      throw new Error('Agent 服务在初始化时退出，请查看日志。')
     }
     try {
-      const res = await fetch(url, { redirect: 'manual' })
+      const res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(2000) })
       return res.status
     } catch (err) {
       lastErr = err instanceof Error ? errText(err) : String(err)
@@ -385,11 +432,6 @@ async function waitForReady (url: string, timeoutMs: number): Promise<number> {
  * 所以外壳**不能猜** URL —— 它要读取 harness 打印出来的那一个。
  * 干净 URL 仍作为就绪探针；真正加载的是宣告出来的 URL。
  */
-function extractAuthenticatedUrl (text: string): string | null {
-  const match = text.match(/dsh web:\s*(http:\/\/\S+)/)
-  return match ? match[1] : null
-}
-
 /** 拉起 harness 的结果：子进程句柄 + 宣告鉴权 URL 的 Promise。 */
 interface HarnessStartResult {
   child: ChildProcess
@@ -404,6 +446,8 @@ function startHarness ({ runtime, home, port }: HarnessContext): HarnessStartRes
   const env = {
     ...process.env,
     DSH_HOME: home,
+    DSH_PX_PROFILE: PROFILE_NAME,
+    PATH: [dirname(runtime.node), process.env.PATH ?? ''].join(delimiter),
     DSH_PERMISSION_MODE: process.env.DSH_PERMISSION_MODE ?? 'workspace-write',
     // 告诉 dsh 侧插件真正的运行时根目录。
     //
@@ -427,32 +471,30 @@ function startHarness ({ runtime, home, port }: HarnessContext): HarnessStartRes
     windowsHide: true
   })
 
-  let announced = ''
   let settle: ((value: string | null) => void) | null = null
   const authUrl = new Promise<string | null>((res) => { settle = res })
-
+  const output = new HarnessOutput(text => process.stdout.write(`[dsh] ${text}`))
   const consume = (chunk: Buffer): void => {
-    const text = chunk.toString()
-    announced += text
-    process.stdout.write(`[dsh] ${text}`)
-    if (settle) {
-      const url = extractAuthenticatedUrl(announced)
-      if (url) { const done = settle; settle = null; done(url) }
-    }
+    const url = output.push(chunk.toString())
+    if (url && settle) { const done = settle; settle = null; done(url) }
   }
   child.stdout?.on('data', consume)
   child.stderr?.on('data', consume)
-
+  const failed = (message: string): void => {
+    output.flush()
+    if (harness === child) harness = null
+    if (settle) { const done = settle; settle = null; done(null) }
+    if (!quitting && !expectedStops.has(child)) {
+      serviceState?.set('error', message)
+      void showRecovery(`${message}\n\n${output.diagnostic}`).catch(err => {
+        process.stderr.write(`[dsh-px] 恢复页加载失败：${errText(err)}\n`)
+      })
+    }
+  }
+  child.on('error', err => failed(`服务启动失败：${errText(err)}`))
   child.on('exit', (code, signal) => {
     process.stdout.write(`[dsh] harness exited code=${code} signal=${signal}\n`)
-    harness = null
-    // 解除仍在等待 URL 的那一方，好让调用方报告"提前退出"，
-    // 而不是一直挂到就绪超时。
-    if (settle) { const done = settle; settle = null; done(null) }
-    if (!quitting) {
-      dialog.showErrorBox('dsh-px',
-        `harness 进程意外退出（code ${code}）。\n\n最后的输出：\n${announced.slice(-1500)}`)
-    }
+    failed(`Agent 服务已停止（code ${code ?? signal}）`)
   })
 
   return { child, authUrl }
@@ -543,7 +585,7 @@ let lastSeedPushAt = 0
  * 的告警路径，自己静默返回 null。
  */
 function preloadPath (): string | null {
-  const p = findShippedResourceQuiet(join('out', 'preload', 'index.mjs'))
+  const p = findShippedResourceQuiet(join('out', 'preload', 'index.cjs'))
   if (p === null) process.stderr.write('[dsh-px] 未找到进度页 preload，跳过（不影响启动）\n')
   return p
 }
@@ -664,6 +706,8 @@ let updateState: UpdateState = { status: '未检查', version: null }
 
 /** 停止监听界面发来的安装请求（应用退出时调用）。 */
 let stopInstallWatch: (() => void) | null = null
+let updateController: UpdateController | null = null
+let startupUpdateTimer: ReturnType<typeof setTimeout> | undefined
 
 /**
  * 同步更新状态。
@@ -685,135 +729,59 @@ function publishUpdateState (next: UpdateState, bridge: Partial<Omit<UpdateBridg
  * 因为它会重启应用。这也是主流桌面应用的做法。
  */
 function setupAutoUpdate (): void {
-  // 界面发来的**外壳动作**监听先装上，且**不受"是否打包"影响**：
-  // 「打开数据目录 / 打开日志目录」在开发态同样有用，而"安装更新"在开发态
-  // 无意义（没有 app-update.yml），所以在动作处理器里逐个判断。
+  resetUpdateBridge()
+  if (autoUpdater && app.isPackaged) {
+    updateController = new UpdateController(autoUpdater, {
+      lastCheckedAt: getUpdateState().lastCheckedAt,
+      publish: (state) => {
+        publishUpdateState({ status: state.status, version: state.version }, state)
+        if (state.error) process.stderr.write(`[dsh-px] ${state.status}：${state.error}\n`)
+      },
+      ready: (version) => {
+        if (process.env.DSH_PX_AUTO_UPDATE === '1') return
+        notifyUpdate('DSH-PX 更新已就绪', `新版本 ${version} 已下载。可在设置或托盘中重启并安装，也会在退出时自动安装。`)
+      },
+      installing: (version) => notifyUpdate('DSH-PX 正在更新',
+        `将在约 9 秒后退出并安装 ${version}。安装通常需要 1–4 分钟，完成后自动重启。`)
+    })
+    // 保留延后检查，避免启动阶段争抢资源；手动检查与此计时器共用并发保护。
+    startupUpdateTimer = setTimeout(() => { void updateController?.check() }, 8000)
+  } else {
+    publishUpdateState({ status: '自动更新不可用', version: null }, {
+      phase: 'idle', status: app.isPackaged ? '更新器不可用，请打开日志排查' : '开发态不支持自动更新（仅打包后可用）',
+      version: null, percent: null, error: null
+    })
+  }
+
   stopInstallWatch = watchShellActions((action) => {
     process.stdout.write(`[dsh-px] 处理界面请求：${action}\n`)
     switch (action) {
+      case 'restart':
+        // 先让 HTTP 202 响应返回浏览器，再关闭服务。
+        setTimeout(() => { void restartHarness() }, 500)
+        break
+      case 'check':
+        void checkUpdatesManually()
+        break
       case 'install':
-        if (!app.isPackaged || autoUpdater === null) {
-          process.stdout.write('[dsh-px] 开发态，忽略安装请求\n')
-          break
-        }
         installUpdateNow()
         break
       case 'open-data':
         void shell.openPath(app.getPath('userData'))
         break
       case 'open-log':
-        // 日志是文件而不是目录：用 showItemInFolder 在资源管理器里选中它，
-        // 比 openPath 打开文件本身更符合"我要看日志"的意图。
         shell.showItemInFolder(logPath())
         break
     }
   })
+}
 
-  if (!autoUpdater) return
-  // 打包态才有 app-update.yml；开发态到此为止（安装请求已在上面被忽略）。
-  if (!app.isPackaged) {
-    process.stdout.write('[dsh-px] 开发态，跳过自动更新检查\n')
-    return
-  }
-
-  // 不自动下载：让用户先看到"有新版本 + 更新内容"，再决定是否下载安装。
-  autoUpdater.autoDownload = false
-  autoUpdater.autoInstallOnAppQuit = true
-
-  autoUpdater.on('checking-for-update', () => {
-    publishUpdateState({ status: '正在检查更新…', version: null },
-      { phase: 'checking', status: '正在检查更新…', version: null, percent: null, error: null })
-  })
-  autoUpdater.on('update-not-available', (info) => {
-    const v = info?.version ?? appVersion()
-    publishUpdateState({ status: '已是最新版本', version: v },
-      { phase: 'idle', status: '已是最新版本', version: v, percent: null, error: null })
-    process.stdout.write('[dsh-px] 已是最新版本\n')
-  })
-  autoUpdater.on('update-available', async (info) => {
-    publishUpdateState({ status: `有新版本 ${info.version}`, version: info.version },
-      { phase: 'downloading', status: `正在下载 ${info.version}`, version: info.version, percent: 0, error: null })
-    process.stdout.write(`[dsh-px] 发现新版本 ${info.version}\n`)
-
-    // **不再弹模态对话框。**
-    //
-    // 用户反馈："更新怎么是弹窗？" —— 这是对的批评。Curosr / Codex / VS Code
-    // 这类成熟产品都不会用模态弹窗打断工作：更新是后台行为，只需一个不打扰的
-    // 提示 + 用户主动确认。模态框会夺走焦点、挡住正在看的界面，且必须处理掉
-    // 才能继续用 —— 对一个"每天开着"的客户端来说这是明显的体验倒退。
-    //
-    // 现在的行为：
-    //   - 后台静默下载（不打断任何操作）
-    //   - 托盘图标 + 菜单显示进度与状态
-    //   - 下载完成后发一条系统通知，并在托盘菜单提供"重启并安装"
-    //   - 退出应用时自动安装（autoInstallOnAppQuit）
-    //   - 仅在用户**主动点击**"手动检查更新"且已是最新时，才给一个反馈弹窗
-    //     （那是用户发起的动作，需要回执；后台检查不需要）
-    //
-    // DSH_PX_AUTO_UPDATE=1 保留：语义是"连系统通知也不发"，供自动化/无人值守。
-    const silent = process.env.DSH_PX_AUTO_UPDATE === '1'
-    process.stdout.write('[dsh-px] 开始后台下载更新（不打断使用）\n')
-
-    autoUpdater.on('download-progress', (p) => {
-      publishUpdateState(
-        { status: `正在下载 ${Math.round(p.percent)}%`, version: info.version },
-        {
-          phase: 'downloading',
-          status: `正在下载 ${Math.round(p.percent)}%`,
-          version: info.version,
-          percent: Math.round(p.percent),
-          error: null
-        }
-      )
-      process.stdout.write(`\r[dsh-px] 下载 ${p.percent.toFixed(1)}% (${(p.transferred / 1048576).toFixed(1)}MB/${(p.total / 1048576).toFixed(1)}MB)`)
-    })
-    autoUpdater.on('update-downloaded', async (done) => {
-      process.stdout.write('\n')
-      publishUpdateState(
-        { status: `已下载 ${done.version}，待重启安装`, version: done.version },
-        { phase: 'ready', status: '已下载，待重启安装', version: done.version, percent: 100, error: null }
-      )
-      process.stdout.write(`[dsh-px] 更新已下载完成：${done.version}\n`)
-      if (silent) {
-        process.stdout.write('[dsh-px] 静默模式：将在退出时安装\n')
-        return
-      }
-      // 系统通知而非模态框：不夺焦点、不阻塞。
-      // 界面里同时会出现一条**非模态**的提示（设置页与本桥同一份状态）。
-      try {
-        const n = new Notification({
-          title: 'DSH-PX 更新已就绪',
-          body: `新版本 ${done.version} 已下载完成。可在界面或托盘菜单选择"重启并安装"，也会在退出时自动安装。`
-        })
-        n.on('click', () => { if (win) { win.show(); win.focus() } })
-        n.show()
-      } catch {
-        // 某些环境不支持通知；界面与托盘状态仍会显示，不影响使用。
-      }
-    })
-    autoUpdater.on('error', (err: unknown) => {
-      const detail = errText(err)
-      publishUpdateState({ status: '更新失败', version: null },
-        { phase: 'error', status: '更新失败', version: null, percent: null, error: detail })
-      process.stderr.write(`[dsh-px] 更新出错：${detail}\n`)
-    })
-
-    try {
-      await autoUpdater.downloadUpdate()
-    } catch (err) {
-      // 后台下载失败不该弹模态框打断用户：状态已经通过桥与托盘可见。
-      publishUpdateState({ status: '更新失败', version: info.version },
-        { phase: 'error', status: '下载更新失败', version: info.version, percent: null, error: errText(err) })
-      process.stderr.write(`[dsh-px] 下载更新失败：${errText(err)}\n`)
-    }
-  })
-
-  // 启动后延后 8 秒再查，避免和 harness 启动抢资源/抢网络。
-  setTimeout(() => {
-    autoUpdater.checkForUpdates().catch((err: unknown) => {
-      process.stdout.write(`[dsh-px] 检查更新失败：${errText(err)}\n`)
-    })
-  }, 8000)
+function notifyUpdate (title: string, body: string): void {
+  try {
+    const notification = new Notification({ title, body })
+    notification.on('click', () => { win?.show(); win?.focus() })
+    notification.show()
+  } catch { /* 通知不可用时仍有设置页与托盘反馈 */ }
 }
 
 /**
@@ -874,6 +842,7 @@ async function trayImage (): Promise<NativeImage> {
 }
 
 function createTray (url: string): void {
+  if (tray && !tray.isDestroyed()) { tray.setContextMenu(Menu.buildFromTemplate(buildTrayMenu(url))); return }
   try {
     // 先用空图标同步构造，避免 await 期间托盘项缺失；随后替换为真实图标。
     tray = new Tray(nativeImage.createEmpty())
@@ -896,7 +865,7 @@ function createTray (url: string): void {
  * @param url 兜底打开地址（无窗口时用）
  */
 function buildTrayMenu (url: string): MenuItemConstructorOptions[] {
-  const readyToInstall = updateState.version && updateState.status.includes('待重启安装')
+  const readyToInstall = getUpdateState().phase === 'ready'
   const items: MenuItemConstructorOptions[] = [
     { label: `DSH-PX ${appVersion()}`, enabled: false },
     { label: updateState.status, enabled: false }
@@ -912,7 +881,7 @@ function buildTrayMenu (url: string): MenuItemConstructorOptions[] {
   }
 
   items.push(
-    { label: '手动检查更新', click: () => void checkUpdatesManually() },
+    { label: '手动检查更新', enabled: !['checking', 'downloading', 'ready', 'installing'].includes(getUpdateState().phase), click: () => void checkUpdatesManually() },
     { type: 'separator' },
     { label: '打开 DSH-PX', click: () => { if (win) { win.show(); win.focus() } else { void createShellWindow(); void loadHarnessUrl(url) } } },
     { label: '重启 harness', click: () => void restartHarness() },
@@ -920,7 +889,7 @@ function buildTrayMenu (url: string): MenuItemConstructorOptions[] {
     { label: '打开日志文件', click: () => void shell.openPath(logPath()) },
     { label: '打开数据目录', click: () => void shell.openPath(app.getPath('userData')) },
     { type: 'separator' },
-    { label: '在浏览器中打开', click: () => void shell.openExternal(currentCleanUrl ?? url) },
+    { label: '在浏览器中打开', click: () => void shell.openExternal(currentAuthenticatedUrl ?? currentCleanUrl ?? url) },
     { type: 'separator' },
     { label: '退出', click: () => { quitting = true; app.quit() } }
   )
@@ -934,144 +903,16 @@ function refreshTray (url?: string): void {
   } catch { /* 托盘可能尚未创建或已销毁 */ }
 }
 
-/**
- * 触发"重启并安装更新"。
- *
- * 独立成函数是因为有**两个**入口：托盘菜单，以及界面（经 update-bridge 的
- * 请求文件）。两条路径必须做完全一样的事 —— 尤其别漏掉 `harness.kill()`，
- * 否则安装程序替换文件时会撞上仍在运行的 harness 及其子进程。
- *
- * ## 参数不能凭感觉传（一次真实事故）
- *
- * 这里曾经是 `quitAndInstall(false, true)` —— 于是**每次更新都弹出 NSIS 安装向导**
- * （"正在安装 / 上一步 / 下一步 / 取消"），用户得手动点完才算更新完。
- * 对一个自动更新来说这是明显的体验退步。
- *
- * 第一个参数 `isSilent` 才决定静默与否：`false` 时 electron-updater 构造的
- * 安装器参数**不含 `/S`**，NSIS 于是走交互向导。第二个参数只决定装完是否重启。
- *
- * 证据来自 electron-updater 源码：
- *   `NsisUpdater.js` `doInstall()` 里 `if (options.isSilent) args.push("/S")`
- *   `BaseUpdater.js` "退出时自动安装" 走的是 `install(true, false)`
- * 而我们自己触发的路径传了 `false`，所以只有"退出时安装"是静默的。
- *
- * 现在传 `(true, true)`：静默替换（无向导）+ 装完自动重启，与成熟桌面应用一致。
- *
- * ## 为什么还要"延迟退出"
- *
- * 静默安装**在 NSIS 侧完全没有 UI**：那个进度条窗口（`SpiderBanner::Show`）
- * 被包在模板的 `${IfNot} ${Silent}` 里，`/S` 时不显示。而我们的安装包 212 MB、
- * 实测解包安装要 **3–4 分钟** —— 于是窗口会毫无征兆地消失，用户面对数分钟
- * 什么都没有的桌面，无法区分"在更新"和"崩了"。
- *
- * 所以这里刻意**先更新界面、等几秒再退出**，让用户看到
- * "正在更新，应用会自动重启" 这句明确的话。真正的安装仍由 electron-updater
- * 静默执行（装完 `--force-run` 自动拉起新版本）。
- *
- * 不能用模态框：本项目的既定原则是更新交互不打断用户，而且模态框会挡住
- * 退出流程。用界面上的一条状态 + 一个短暂倒计时即可。
- */
-const INSTALL_EXIT_DELAY_MS = 9000
-
+/** 两个入口共用状态检查；未下载/重复点击不会关闭当前会话。 */
 function installUpdateNow (): void {
   if (quitting) return
-  quitting = true
-
-  const ver = updateState.version ?? ''
-  const seconds = Math.round(INSTALL_EXIT_DELAY_MS / 1000)
-  publishUpdateState(
-    { status: `正在更新到 ${ver}，应用将自动重启`, version: updateState.version },
-    {
-      phase: 'ready',
-      status: `正在安装 ${ver}…（约 1–4 分钟，期间没有界面）`,
-      version: updateState.version,
-      percent: 100,
-      error: null
-    }
-  )
-  process.stdout.write(
-    `[dsh-px] 开始静默安装 ${ver}；先显示 ${String(seconds)} 秒提示再退出` +
-    '（NSIS 静默安装自身没有 UI，安装耗时数分钟）\n'
-  )
-
-  // 系统通知是这里**唯一可靠**的通道：界面上的状态在设置面板里，
-  // 而用户点"重启并安装"时那个面板可能已经关掉，他就看不到提示了。
-  // 通知会在屏幕上直接出现，并且留在通知中心。
-  try {
-    const n = new Notification({
-      title: 'DSH-PX 正在更新',
-      body: `正在安装 ${ver}，应用将在约 ${String(seconds)} 秒后自动重启。` +
-        '安装过程没有界面，通常需要 1–4 分钟。'
-    })
-    n.show()
-  } catch {
-    // 某些环境不支持通知；日志里仍有完整记录。
-  }
-
-  // 先停掉 harness（否则安装器替换文件时会撞上它），但**不立刻退出应用** ——
-  // 窗口还要留着显示提示。
-  if (harness && harness.exitCode === null) harness.kill()
-
-  /**
-   * 真正触发安装。
-   *
-   * `quitAndInstall` 会返回 false 当安装包路径丢失/调用被重复等问题 ——
-   * 那种情况绝不能把用户卡在"正在更新"上，所以这里兜底直接退出。
-   * 退出后安装没发生，用户下次启动仍是旧版本，但至少不会挂住。
-   */
-  const go = (): void => {
-    let started = false
-    try {
-      started = autoUpdater?.quitAndInstall(true, true) ?? false
-    } catch (err) {
-      process.stderr.write(`[dsh-px] quitAndInstall 抛错：${errText(err)}\n`)
-    }
-    if (!started) {
-      process.stderr.write('[dsh-px] 安装未能启动；直接退出，不做无提示的挂起\n')
-      quitting = true
-      app.quit()
-    }
-  }
-
-  const timer = setInterval(() => {
-    // 界面可能已被用户关掉；此时提前退出，不必等满。
-    if (!win || win.isDestroyed()) {
-      clearInterval(timer)
-      go()
-    }
-  }, 500)
-
-  setTimeout(() => {
-    clearInterval(timer)
-    go()
-  }, INSTALL_EXIT_DELAY_MS)
+  updateController?.install()
 }
 
-/**
- * 用户主动触发的更新检查。与后台检查的区别只在于反馈方式：
- * 无论结果如何都要给一个明确回执，不能"点了没反应"。
- *
- * 回执走 `update-bridge`：状态会出现在界面设置页里，**不再弹模态框**。
- * 用户主动点击的动作确实需要回执，但托盘菜单的点击本身就是"用户发起"，
- * 让状态出现在他已打开的界面里是更轻的反馈方式，也不会夺走焦点。
- */
 async function checkUpdatesManually (): Promise<void> {
-  if (!autoUpdater || !app.isPackaged) {
-    publishUpdateState({ status: '开发态不支持自动更新', version: null },
-      { phase: 'idle', status: '开发态不支持自动更新（仅打包后可用）', version: null, percent: null, error: null })
-    process.stdout.write('[dsh-px] 开发态不支持自动更新\n')
-    return
-  }
-  try {
-    // 结果由 update-available / update-not-available 事件写入状态；
-    // 这里只在抛错时补一条，避免"点了没反应"。
-    await autoUpdater.checkForUpdates()
-  } catch (err) {
-    const detail = errText(err)
-    publishUpdateState({ status: '检查更新失败', version: null },
-      { phase: 'error', status: '检查更新失败', version: null, percent: null, error: detail })
-    process.stderr.write(`[dsh-px] 检查更新失败：${detail}\n`)
-  }
+  serviceState?.dispose()
+  clearTimeout(startupUpdateTimer)
+  if (updateController) await updateController.check()
 }
 
 /**
@@ -1085,48 +926,68 @@ async function checkUpdatesManually (): Promise<void> {
  * 重新探测端口比跟 TIME_WAIT 抢更可靠。
  * @returns 是否重启成功
  */
-async function restartHarness (): Promise<boolean> {
-  if (!ctxState) return false
-  const { runtime, home } = ctxState
+function restartHarness (): Promise<boolean> {
+  if (restartPending) return restartPending
+  restartPending = restartHarnessOnce().finally(() => { restartPending = null })
+  return restartPending
+}
 
-  process.stdout.write('[dsh-px] 正在重启 harness\n')
-  if (harness && harness.exitCode === null) {
-    const dying = harness
-    dying.removeAllListeners('exit')
-    dying.kill()
-    // 给旧进程一点时间释放句柄，避免新旧实例互相干扰。
-    await new Promise<void>((res) => {
-      const t = setTimeout(res, 4000)
-      dying.once('exit', () => { clearTimeout(t); res() })
-    })
-  }
+async function stopHarness (child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return
+  expectedStops.add(child)
+  await new Promise<void>((res, reject) => {
+    const done = (): void => { clearTimeout(timer); res() }
+    const timer = setTimeout(() => {
+      child.removeListener('exit', done)
+      expectedStops.delete(child)
+      reject(new Error('旧服务尚未退出，未启动第二个服务；请打开日志排查。'))
+    }, 8000)
+    child.once('exit', done)
+    if (process.platform === 'win32' && child.pid) {
+      // PID 来自本外壳持有的活进程；同时清理该服务的工具子进程。
+      execFile('taskkill.exe', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {})
+    } else child.kill()
+  })
+}
 
-  const port = await findPort(DEFAULT_PORT)
-  ctxState = { runtime, home, port }
-  const cleanUrl = `http://${HOST}:${port}/`
-  currentCleanUrl = cleanUrl
+async function showRecovery (message: string): Promise<void> {
+  if (!win || win.isDestroyed() || quitting) return
+  const page = splashPagePath()
+  if (!page) return
+  await win.loadFile(page)
+  await win.webContents.executeJavaScript(`window.__dshPxRecovery?.(${JSON.stringify(message)})`)
+}
 
-  const started = startHarness({ runtime, home, port })
-  harness = started.child
-
+async function restartHarnessOnce (): Promise<boolean> {
+  if (!ctxState || quitting) return false
+  const { runtime, home, port: previousPort } = ctxState
+  serviceState?.set('restarting', '正在重启服务')
   try {
-    const status = await waitForReady(cleanUrl, READY_TIMEOUT_MS)
-    process.stdout.write(`[dsh-px] 新 harness 已监听（HTTP ${status}）于 ${cleanUrl}\n`)
+    if (harness) await stopHarness(harness)
+    const port = await findPort(previousPort)
+    ctxState = { runtime, home, port }
+    const cleanUrl = `http://${HOST}:${port}/`
+    currentCleanUrl = cleanUrl
+    const page = splashPagePath()
+    if (win && page) await win.loadFile(page)
+    reportSeedProgress({ done: 0, total: 0, copied: 0, phase: '正在重新连接 Agent 服务…' })
+    const started = startHarness(ctxState)
+    harness = started.child
+    await waitForReady(cleanUrl, READY_TIMEOUT_MS, started.child)
     const authUrl = await Promise.race([
       started.authUrl,
-      new Promise<null>((res) => setTimeout(() => res(null), 20_000))
+      new Promise<null>(res => setTimeout(() => res(null), 20_000))
     ])
-    if (!authUrl) {
-      process.stdout.write('[dsh-px] 警告：未捕获到宣告的 URL；加载干净 URL（预期会撞 401 围栏）\n')
-      return false
-    }
-    if (win) {
-      await loadHarnessUrl(authUrl)
-    }
+    if (!authUrl || harness !== started.child) throw new Error('服务未完成鉴权初始化，请重试并查看日志。')
+    currentAuthenticatedUrl = authUrl
+    await loadHarnessUrl(authUrl)
+    if (process.argv.includes('--open-browser')) await shell.openExternal(authUrl)
+    serviceState?.set('running', '桌面服务运行中', started.child.pid)
     createTray(cleanUrl)
     return true
   } catch (err) {
-    dialog.showErrorBox('dsh-px —— 重启 harness 失败', errText(err))
+    serviceState?.set('error', errText(err))
+    await showRecovery(errText(err))
     return false
   }
 }
@@ -1145,6 +1006,9 @@ async function main (): Promise<void> {
   // 先建窗口并显示进度页：后面的物化在跨卷时是分钟级，必须先有地方显示进度。
   await createShellWindow()
 
+  serviceState = createServiceState(app.getPath('userData'))
+  serviceState.set('starting', '正在准备本机服务')
+
   // 首启物化（同卷硬链接，秒级；跨卷回退复制，分钟级但有进度）。
   const home = await resolveHarnessHome(runtime, reportSeedProgress)
 
@@ -1155,37 +1019,21 @@ async function main (): Promise<void> {
 
   process.stdout.write(`[dsh-px] node=${runtime.node}\n[dsh-px] dsh=${runtime.dshEntry}\n[dsh-px] DSH_HOME=${home}\n[dsh-px] url=${cleanUrl}\n`)
 
-  reportSeedProgress({ done: 0, total: 0, copied: 0, phase: '正在启动本地服务…' })
-  const started = startHarness({ runtime, home, port })
-  harness = started.child
-
-  let openUrl = cleanUrl
-  try {
-    const status = await waitForReady(cleanUrl, READY_TIMEOUT_MS)
-    process.stdout.write(`[dsh-px] harness listening (HTTP ${status}) at ${cleanUrl}\n`)
-    // 优先使用 harness 宣告的 URL：它带着进程启动令牌；
-    // 加载干净 URL 只会在浏览器围栏上撞到 401。
-    const authUrl = await Promise.race([
-      started.authUrl,
-      new Promise<null>((res) => setTimeout(() => res(null), 20_000))
-    ])
-    if (authUrl) {
-      openUrl = authUrl
-      process.stdout.write('[dsh-px] using harness-announced authenticated URL\n')
-    } else {
-      process.stdout.write('[dsh-px] WARNING: no announced URL captured; loading the clean URL (expect a 401 fence)\n')
-    }
-  } catch (err) {
-    dialog.showErrorBox('dsh-px —— harness 启动失败', errText(err))
-    quitting = true
-    app.quit()
-    return
-  }
-
-  await loadHarnessUrl(openUrl)
   createTray(cleanUrl)
   setupAutoUpdate()
+  await restartHarness()
+
 }
+
+ipcMain.handle('dsh-px:recover', async (event, action: unknown) => {
+  const page = splashPagePath()
+  if (!win || event.sender !== win.webContents || event.senderFrame !== win.webContents.mainFrame ||
+      !page || event.senderFrame.url !== pathToFileURL(page).href) throw new Error('无效的恢复页面')
+  if (action === 'retry') return restartHarness()
+  if (action === 'log') { shell.showItemInFolder(logPath()); return true }
+  if (action === 'data') { return (await shell.openPath(app.getPath('userData'))) === '' }
+  throw new Error('未知操作')
+})
 
 app.on('window-all-closed', () => {
   // 一个没有窗口却还在运行的桌面客户端是维护负担；
@@ -1194,10 +1042,25 @@ app.on('window-all-closed', () => {
   app.quit()
 })
 
-app.on('before-quit', () => { quitting = true })
+app.on('before-quit', (event) => {
+  quitting = true
+  // 等待服务及其工具子进程结束。退出期间的重复 app.quit() 也必须等待同一轮清理。
+  if (shutdownComplete) return
+  if (shutdownPending) { event.preventDefault(); return }
+  if (harness && harness.exitCode === null && harness.signalCode === null) {
+    event.preventDefault()
+    shutdownPending = true
+    void stopHarness(harness).catch(err => {
+      process.stderr.write(`[dsh-px] 停止服务失败：${errText(err)}\n`)
+    }).finally(() => { shutdownComplete = true; app.quit() })
+  }
+})
 
 app.on('will-quit', () => {
   // 停掉轮询/监视：否则退出过程中它还可能触发一次 quitAndInstall。
+  serviceState?.dispose()
+  clearTimeout(startupUpdateTimer)
+  updateController?.dispose()
   stopInstallWatch?.()
   stopInstallWatch = null
   if (harness && harness.exitCode === null) {
@@ -1229,6 +1092,8 @@ if (!app.requestSingleInstanceLock()) {
       return main()
     })
     .catch((err) => {
+      process.stderr.write(`[dsh-px] 启动异常：${errText(err)}\n`)
+      serviceState?.set('error', errText(err))
       dialog.showErrorBox(
         'DSH-PX —— 启动异常',
         `${String(err?.stack ?? err)}\n\n日志文件：${logPath()}`

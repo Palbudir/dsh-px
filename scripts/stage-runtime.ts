@@ -54,13 +54,14 @@ const DEFAULT_PLUGINS = [
   'dsh-better-sidebar',
   'dsh-mermaid-render',
   'dsh-find-plugin',
-  'file:packages/dsh-px-updater'
+  'file:packages/dsh-px-updater',
+  'file:packages/dsh-px-workbench'
 ]
 
 /**
  * 上述 `file:` 项对应的包名（bundle 协调要用真实包名，而不是 file: 路径）。
  */
-const LOCAL_PLUGIN_NAMES = ['dsh-px-updater']
+const LOCAL_PLUGIN_NAMES = ['dsh-px-updater', 'dsh-px-workbench']
 
 /**
  * 用 `link:` 而不是 `file:` 安装本仓库自带的插件。
@@ -424,7 +425,7 @@ function stageHome (nodeExe, dshDir, { withPlugins, fromExisting }) {
           const rel = p.slice('file:'.length)
           const abs = resolve(REPO, rel)
           // link: 建符号链接（源码即生效，开发迭代正常）；file: 是硬拷贝。
-          return [LOCAL_PLUGIN_NAMES[0], `${USE_LINK_FOR_LOCAL ? 'link' : 'file'}:${abs}`]
+          return [JSON.parse(readFileSync(join(abs, 'package.json'), 'utf8')).name, `${USE_LINK_FOR_LOCAL ? 'link' : 'file'}:${abs}`]
         }
         return [p, 'latest']
       }))

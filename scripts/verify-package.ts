@@ -44,7 +44,11 @@ const REQUIRED = [
   'resources/runtime/runtime-manifest.json',
   'resources/runtime/node/node.exe',
   'resources/runtime/dsh/lib/bin.js',
-  'resources/runtime/dsh-home/profiles/web/package.json'
+  'resources/runtime/dsh-home/profiles/web/package.json',
+  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-updater/lib/index.js',
+  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-updater/lib/client.js',
+  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-workbench/lib/index.js',
+  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-workbench/lib/client.js'
 ]
 
 /** 绝不该出现在交付物里的构建中间产物。 */
@@ -122,15 +126,11 @@ function main () {
   // `DSH-PX-0.1.0-beta.5-win.zip`，与 `DSH-PX Setup 0.1.0-beta.5.exe` 并不同名规则），
   // 所以按"版本号 + -win.zip"去匹配，而不是对安装包名做字符串替换。
   const dir = dirname(installer)
-  // 只取 `主.次.补` 作为匹配键，不试图解析完整的预发布后缀。
-  //
-  // 之前用 "数字.数字.数字 + 可选后缀" 的正则，后缀字符类里含 `.`，
-  // 结果把 `.exe` 也吞了进去（匹配到 "0.1.0-beta.5.exe"），ZIP 自然匹配不上。
-  // 用最短且稳定的 `\d+\.\d+\.\d+` 就够了：ZIP 名里必然包含这段。
-  const versionMatch = basename(installer).match(/(\d+\.\d+\.\d+)/)
+  // 匹配完整版本，并用 .exe 结尾定界；不能误选同目录里的旧预发布版本。
+  const versionMatch = basename(installer).match(/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\.exe$/i)
   const version = versionMatch ? versionMatch[1] : null
   const zips = existsSync(dir)
-    ? readdirSync(dir).filter((f) => /\.zip$/i.test(f) && (!version || f.includes(version)))
+    ? readdirSync(dir).filter((f) => version && f.endsWith(`-${version}-win.zip`))
     : []
   const foundZip = zips.length ? join(dir, zips[0]) : null
   if (foundZip) log(`同源 ZIP：${basename(foundZip)}`)

@@ -33,6 +33,12 @@ jobs:
         with:
           node-version: '24'
 
+      - name: 核对 tag 与版本号
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          if ($env:GITHUB_REF -ne "refs/tags/v$version") { throw '必须从与 package.json 一致的版本 tag 发布' }
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -100,6 +106,7 @@ jobs:
       - name: 构建并发布
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EP_DRAFT: 'true'
         run: npx electron-builder --win --publish always
 
       # 关键收尾：校验**安装包内部**的内容。
@@ -110,3 +117,12 @@ jobs:
       # 从而在"发布"这一步就拦住问题，而不是等用户装完才发现。
       - name: 校验安装包内容
         run: npm run verify:package
+
+      - name: 公开通过校验的 Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          gh release edit "v$version" --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { throw '公开 Release 失败' }

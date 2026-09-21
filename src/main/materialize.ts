@@ -26,7 +26,7 @@
  * @module dsh-px/materialize
  */
 import {
-  copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync
+  copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync
 } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import type { Dirent } from 'node:fs'
@@ -54,10 +54,7 @@ export interface MaterializeOptions {
   /** 每个批次处理多少项后让出事件循环。 */
   batchSize?: number
   /**
-   * 覆盖已存在的目标项（用于"随附运行时换新版"的场景）。
-   *
-   * 默认 false 保持可续传语义；true 时先删再写，因为**硬链接不能覆盖**，
-   * 而旧目标可能是上一版的文件 —— 这正是升级后插件停留在旧版本的根因。
+   * 只刷新 DSH-PX 自管插件。已有配置、凭据和第三方插件由用户管理，始终保留。
    */
   refresh?: boolean
   /**
@@ -128,7 +125,8 @@ function collect (
   items: WorkItem[],
   hardlink: boolean,
   profileSeedRoot: string,
-  dshDir: string
+  dshDir: string,
+  refresh = false
 ): void {
   let entries: Dirent[]
   try {
@@ -144,9 +142,15 @@ function collect (
 
   for (const entry of entries) {
     if (isDshManagedName(entry.name)) continue
+    // 升级时整包保留第三方依赖，不能把种子里的旧文件混进用户已更新的包。
+    const atPackages = src === join(profileSeedRoot, 'node_modules')
+    if (refresh && atPackages && entryExists(join(dest, entry.name)) &&
+        !MANAGED_PLUGINS.has(entry.name)) continue
+    // 用户主动设置的开发链接也归用户管理；绝不能沿它改写外部仓库。
+    if (isMeaningfulLink(join(dest, entry.name))) continue
     if (isProfileRoot && entry.name === 'node_modules') {
       // 进入它，但**这一棵里的文件全部硬链接**（秒级、不占盘）。
-      collect(join(src, entry.name), join(dest, entry.name), items, true, profileSeedRoot, dshDir)
+      collect(join(src, entry.name), join(dest, entry.name), items, true, profileSeedRoot, dshDir, refresh)
       continue
     }
 
@@ -170,18 +174,59 @@ function collect (
         continue
       }
       items.push({ from: real, to, kind: 'dir' })
-      collect(real, to, items, hardlink, profileSeedRoot, dshDir)
+      collect(real, to, items, hardlink, profileSeedRoot, dshDir, refresh)
       continue
     }
     if (entry.isDirectory()) {
       items.push({ from, to, kind: 'dir' })
       // 一旦进入 node_modules（hardlink=true）就整棵沿用硬链接；
       // 清单目录（hardlink=false）走复制。
-      collect(from, to, items, hardlink, profileSeedRoot, dshDir)
+      collect(from, to, items, hardlink, profileSeedRoot, dshDir, refresh)
       continue
     }
     items.push({ from, to, kind: hardlink ? 'hard' : 'copy' })
   }
+}
+
+const MANAGED_PLUGINS = new Set(['dsh-px-updater', 'dsh-px-workbench'])
+
+/** 迁移种子留下的 pnpm 绝对路径。只改确切的种子引用，保留用户自定义 store。 */
+export function repairPnpmMetadata (opts: Pick<MaterializeOptions, 'seedHome' | 'home' | 'profileName'>): boolean {
+  const rel = join('profiles', opts.profileName, 'node_modules')
+  const file = join(opts.home, rel, '.modules.yaml')
+  if (!existsSync(file) || isMeaningfulLink(file)) return false
+  const text = readFileSync(file, 'utf8')
+  let old: unknown
+  let parsed: Record<string, unknown> | null = null
+  const line = /^virtualStoreDir:\s*(.+)$/m.exec(text)
+  try { parsed = JSON.parse(text); old = parsed?.virtualStoreDir } catch {
+    const scalar = line?.[1].trim()
+    if (scalar?.startsWith('"')) { try { old = JSON.parse(scalar) } catch { return false } }
+    else old = scalar?.replace(/^'|'$/g, '').replace(/''/g, "'")
+  }
+  if (typeof old !== 'string') return false
+  const sourceStore = join(opts.seedHome, rel, '.pnpm')
+  // CI 装配时记录的是 runner 路径，不是安装后的 resources 路径。
+  let shippedStore: string | undefined
+  try {
+    const shipped = readFileSync(join(opts.seedHome, rel, '.modules.yaml'), 'utf8')
+    try { shippedStore = JSON.parse(shipped).virtualStoreDir } catch {
+      const value = /^virtualStoreDir:\s*(.+)$/m.exec(shipped)?.[1].trim()
+      shippedStore = value?.startsWith('"') ? JSON.parse(value) : value?.replace(/^'|'$/g, '').replace(/''/g, "'")
+    }
+  } catch { /* metadata absent */ }
+  const requestedStore = join(opts.home, rel, '.pnpm')
+  if (![sourceStore, shippedStore, requestedStore].some(candidate => typeof candidate === 'string' && resolve(old).toLowerCase() === resolve(candidate).toLowerCase())) return false
+  // pnpm 会展开 Windows 的 ADMINI~1 等短路径；与它使用相同的真实 home。
+  const targetStore = join(realpathSync.native(opts.home), rel, '.pnpm')
+  if (resolve(old).toLowerCase() === resolve(targetStore).toLowerCase()) return false
+  const next = parsed
+    ? JSON.stringify({ ...parsed, virtualStoreDir: targetStore }, null, 2) + '\n'
+    : text.replace(/^virtualStoreDir:.*$/m, `virtualStoreDir: ${JSON.stringify(targetStore)}`)
+  // .modules.yaml 可能也是种子的硬链接：写临时文件再替换，不能原地改写。
+  writeFileSync(file + '.dsh-px.tmp', next)
+  renameSync(file + '.dsh-px.tmp', file)
+  return true
 }
 
 /** 解析符号链接的绝对目标路径；失败返回 null。 */
@@ -236,9 +281,7 @@ function recreateLink (item: WorkItem): void {
  *
  * 可续传：已存在的目标项直接跳过，所以中途失败后再启动不会从头再来。
  *
- * @param opts.refresh 为 true 时**覆盖已存在的目标项**，用于"随附运行时换了新版"
- *   的场景（见 `src/main/index.ts` 里 `resolveHarnessHome` 的说明）。默认 false
- *   保持可续传语义。
+ * @param opts.refresh 为 true 时刷新自管插件；已有用户配置永不覆盖。
  */
 export async function materializeSeedHome (opts: MaterializeOptions): Promise<MaterializeResult> {
   const { seedHome, home, profileName, dshDir, onProgress } = opts
@@ -263,7 +306,7 @@ export async function materializeSeedHome (opts: MaterializeOptions): Promise<Ma
     const to = join(home, rel)
     try {
       mkdirSync(dirname(to), { recursive: true })
-      if (refresh || !existsSync(to)) copyFileSync(from, to)
+      if (!entryExists(to)) copyFileSync(from, to)
     } catch (err) {
       // 清单文件很小；失败就如实抛出，不要带着空壳 profile 继续。
       throw new Error(`复制清单文件 ${rel} 失败：${describe(err)}`)
@@ -276,7 +319,7 @@ export async function materializeSeedHome (opts: MaterializeOptions): Promise<Ma
   if (existsSync(profileSeed)) {
     // 关键：`profiles/node_modules`（dsh 托管的 fallback 树）根本不进入；
     // 而 `profiles/<name>/node_modules`（真插件依赖）由 collect 内部以硬链接展开。
-    collect(profileSeed, join(home, 'profiles', profileName), items, false, profileSeed, dshDir)
+    collect(profileSeed, join(home, 'profiles', profileName), items, false, profileSeed, dshDir, refresh)
   }
 
   const total = items.length
@@ -295,6 +338,8 @@ export async function materializeSeedHome (opts: MaterializeOptions): Promise<Ma
   for (let i = 0; i < items.length; i += batchSize) {
     for (const item of items.slice(i, i + batchSize)) {
       done++
+      const rel = relative(join(home, 'profiles', profileName, 'node_modules'), item.to).split(sep)
+      const replace = refresh && MANAGED_PLUGINS.has(rel[0])
       try {
         switch (item.kind) {
           case 'dir':
@@ -303,7 +348,7 @@ export async function materializeSeedHome (opts: MaterializeOptions): Promise<Ma
           case 'link':
             // 续传：目标已存在（含上次已建的同名链接）就跳过，不能重复建。
             if (entryExists(item.to)) {
-              if (!refresh) { skipped++; break }
+              if (!replace) { skipped++; break }
               rmSync(item.to, { recursive: true, force: true, maxRetries: 3 })
             }
             mkdirSync(dirname(item.to), { recursive: true })
@@ -311,7 +356,7 @@ export async function materializeSeedHome (opts: MaterializeOptions): Promise<Ma
             break
           case 'hard': {
             if (entryExists(item.to)) {
-              if (!refresh) { skipped++; break }
+              if (!replace) { skipped++; break }
               // 刷新时必须先删：硬链接不能覆盖，且旧目标可能是**上一版**的文件。
               // 删除只减少链接数，源文件在只读安装区里不受影响。
               rmSync(item.to, { force: true, maxRetries: 3 })
@@ -347,8 +392,8 @@ export async function materializeSeedHome (opts: MaterializeOptions): Promise<Ma
             break
           }
           case 'copy': {
-            if (entryExists(item.to) && !isMeaningfulLink(item.to)) {
-              if (!refresh) { skipped++; break }
+            if (entryExists(item.to)) {
+              if (!replace) { skipped++; break }
             }
             mkdirSync(dirname(item.to), { recursive: true })
             copyFileSync(item.from, item.to)
@@ -364,6 +409,7 @@ export async function materializeSeedHome (opts: MaterializeOptions): Promise<Ma
     await new Promise<void>((res) => setImmediate(res))
   }
 
+  repairPnpmMetadata(opts)
   writeFileSync(
     join(home, '.dsh-px-materialized'),
     `materialized from ${seedHome} at ${new Date().toISOString()}\n` +

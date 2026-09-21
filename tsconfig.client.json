@@ -11,6 +11,8 @@
   "include": [
     "packages/dsh-px-updater/src/host-modules.d.ts",
     "packages/dsh-px-updater/src/**/*.ts",
-    "packages/dsh-px-updater/src/**/*.tsx"
+    "packages/dsh-px-updater/src/**/*.tsx",
+    "packages/dsh-px-workbench/src/**/*.ts",
+    "packages/dsh-px-workbench/src/**/*.tsx"
   ]
 }
