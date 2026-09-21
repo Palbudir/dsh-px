@@ -32,7 +32,7 @@ import { join } from 'node:path'
 import { app } from 'electron'
 
 /** 更新所处的阶段。 */
-export type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'ready' | 'error'
+export type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'ready' | 'installing' | 'error'
 
 /** 写进 state.json 的内容（字段名即协议，插件侧按它读）。 */
 export interface UpdateBridgeState {
@@ -45,6 +45,8 @@ export interface UpdateBridgeState {
   percent: number | null
   /** 失败原因（phase === 'error' 时有意义）。 */
   error: string | null
+  /** 最近一次完成（成功或失败）的检查时间；重启后保留。 */
+  lastCheckedAt: string | null
   updatedAt: string
 }
 
@@ -63,6 +65,7 @@ let state: UpdateBridgeState = {
   version: null,
   percent: null,
   error: null,
+  lastCheckedAt: null,
   updatedAt: new Date().toISOString()
 }
 
@@ -107,7 +110,7 @@ export function getUpdateState (): UpdateBridgeState {
  * 这类事只能这样转达。刻意做成**白名单字符串**而不是"传任意路径过来打开" ——
  * 后者等于把 shell.openPath 暴露给页面，是没有必要的权限面。
  */
-export type ShellAction = 'install' | 'open-data' | 'open-log'
+export type ShellAction = 'install' | 'check' | 'restart' | 'open-data' | 'open-log'
 
 /** 请求文件路径：一个动作一个文件，内容为请求时间。 */
 function requestPath (action: ShellAction): string {
@@ -131,7 +134,7 @@ export function shellActionFileName (action: ShellAction): string {
  */
 export function watchShellActions (onAction: (action: ShellAction) => void): () => void {
   const dir = bridgeDir()
-  const actions: ShellAction[] = ['install', 'open-data', 'open-log']
+  const actions: ShellAction[] = ['install', 'check', 'restart', 'open-data', 'open-log']
   try {
     mkdirSync(dir, { recursive: true })
   } catch { /* 已在别处报错 */ }
@@ -169,9 +172,17 @@ export function watchShellActions (onAction: (action: ShellAction) => void): () 
 
 /** 清理桥文件（测试与"重置状态"用）。 */
 export function resetUpdateBridge (): void {
-  for (const a of ['install', 'open-data', 'open-log'] as ShellAction[]) {
+  // 只恢复历史时间，不能把上次进程的 ready/installing 当成当前可执行状态。
+  let lastCheckedAt: string | null = null
+  try {
+    const saved = JSON.parse(readFileSync(bridgeStatePath(), 'utf8'))
+    if (typeof saved?.lastCheckedAt === 'string' && Number.isFinite(Date.parse(saved.lastCheckedAt))) {
+      lastCheckedAt = saved.lastCheckedAt
+    }
+  } catch { /* 首启或旧状态损坏 */ }
+  for (const a of ['install', 'check', 'restart', 'open-data', 'open-log'] as ShellAction[]) {
     try { rmSync(requestPath(a), { force: true }) } catch { /* 不存在 */ }
   }
-  state = { phase: 'idle', status: '未检查', version: null, percent: null, error: null, updatedAt: new Date().toISOString() }
+  state = { phase: 'idle', status: '未检查', version: null, percent: null, error: null, lastCheckedAt, updatedAt: new Date().toISOString() }
   persist()
 }

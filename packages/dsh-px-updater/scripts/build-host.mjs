@@ -7,12 +7,9 @@
  * 用户机不需要任何构建步骤。写作形态用 TypeScript，才能在改动时得到类型检查
  * —— 客户端半边（`src/client.tsx` → `lib/client.js`）走的是同一套模式。
  *
- * ## 为什么不用 esbuild 打包依赖（`--bundle`）
- *
- * 本插件**零运行时依赖**是硬约束（原因见 `src/index.ts` 里 DEFAULTS 上方的说明：
- * pnpm 的 `link:`/`file:` 不装 peerDependencies，任何宿主 import 都会
- * ERR_MODULE_NOT_FOUND）。所以这里用 `--packages=external` 之外的策略：
- * 只做**类型擦除 + 语法降级**，不内联任何模块。产物里出现 `import` 即视为失败。
+ * ## 依赖策略
+ * semver 在构建期内联；交付物只保留 node: 内置模块引用，
+ * 因而 link:/file: 安装不需要解析第三方运行时依赖。
  *
  * ## 为什么构建期校验产物
  *
@@ -24,11 +21,12 @@
  */
 import { build } from 'esbuild'
 import { readFileSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
-const PKG = join(HERE, '..')
+const PKG = process.argv[2] ? resolve(process.argv[2]) : join(HERE, '..')
+const pkgName = JSON.parse(readFileSync(join(PKG, 'package.json'), 'utf8')).name
 const ENTRY = join(PKG, 'src', 'index.ts')
 const OUT = join(PKG, 'lib', 'index.js')
 
@@ -39,9 +37,8 @@ const result = await build({
   format: 'esm',
   platform: 'node',
   target: 'node22',
-  // 依赖一律外部化：产物里**只能**有 node: 内置模块的 import。
-  // 任何第三方（尤其 @deepseek-ai/*）出现在 import 里都会在用户机上炸。
-  packages: 'external',
+  // semver 内联到交付物；产物依然只能引用 node: 内置模块。
+  banner: { js: `/*! Bundled semver (ISC)\n${readFileSync(join(PKG, '..', '..', 'node_modules', 'semver', 'LICENSE'), 'utf8')}\n*/` },
   legalComments: 'none',
   logLevel: 'warning'
 })
@@ -66,7 +63,7 @@ try {
   exportsFace = mod
   if (typeof mod.apply !== 'function') problems.push('未导出 apply 函数')
   if (!Array.isArray(mod.inject)) problems.push('未导出 inject 数组')
-  if (mod.name !== 'dsh-px-updater') problems.push(`name 应为 dsh-px-updater，实际为 ${String(mod.name)}`)
+  if (mod.name !== pkgName) problems.push(`name 应为 ${pkgName}，实际为 ${String(mod.name)}`)
   if (typeof mod.DEFAULTS !== 'object' || mod.DEFAULTS === null) problems.push('未导出 DEFAULTS 对象')
   else if (typeof mod.DEFAULTS.routePrefix !== 'string') problems.push('DEFAULTS.routePrefix 缺失')
 } catch (err) {

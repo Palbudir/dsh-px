@@ -1,31 +1,29 @@
 # 发版流程
 
-## 版本号：一个必须知道的陷阱
+## 版本号：完整比较预发布段
 
-**`0.1.0-beta-re.0.1` 是非法的更新版本号**，尽管它是合法的 semver。
+继续使用 `0.1.0-beta.re.0.N`，但发版前必须用 SemVer 库验证顺序。
+2026-09-22 核对规范和本地 semver 实现后，修正此前文档中的两处比较错误：
 
-semver 的 prerelease 段是**按点分段、逐段比较**的：数字段按数值比，字母段按字典序比，
-且**段数少的更小**（`alpha` < `alpha.1`）。
-
-| 版本 | prerelease 段 | 与 `beta.8` 比较 |
+| 版本 | prerelease 段 | 与 `0.1.0-beta.8` 比较 |
 |---|---|---|
-| `0.1.0-beta.8` | `["beta","8"]` | — |
-| `0.1.0-beta-re.0.1` | `["beta-re","0","1"]` | **更小** —— `"beta-re" < "beta"`（字典序） |
-| `0.1.0-beta.re.0.1` | `["beta","re","0","1"]` | **更大** —— 前两段相同，段数更多 |
-| `0.1.0-beta.9` | `["beta","9"]` | 更大（`9 > 8`） |
+| `0.1.0-beta-re.0.1` | `["beta-re", "0", "1"]` | **更大**：`beta-re` 按 ASCII 排序大于 `beta` |
+| `0.1.0-beta.re.0.1` | `["beta", "re", "0", "1"]` | **更大**：非数字标识 `re` 大于数字标识 `8` |
+| `0.1.0-beta.9` | `["beta", "9"]` | 更大：数字 `9 > 8` |
 
-后果很严重且**在界面上看不出来**：`electron-updater` 拒绝把更小的版本当作更新
-（`Update for version X is not available (downgrade is disallowed)`），
-已装上一版的用户**永远收不到这个版本** —— 只能重新下载安装包。
+`beta-re.0.1` 本身不是“非法更新版本”。以前那次更新拒绝的具体原因不能由
+错误的字典序推导证明，需结合实际 feed、通道和 updater 日志重新判断。
+完整规则见 [SemVer 2.0.0](https://semver.org/#spec-item-11)。
 
-所以重构版发的是 **`0.1.0-beta.re.0.1`**（保留 `beta.re.0.1` 读法，但写成分段形式）。
+插件现在也比较完整预发布段，不再把所有 `0.1.0-beta.*` 都判为相同版本。
+`beta.re.0.10` 大于 `beta.re.0.9`；build metadata 不影响顺序。
 
 推论（发版时逐条核对）：
 
 - 改 `package.json` 的 `version` 之后，**必须**让新的版本号按上述规则严格大于线上最新版。
 - git tag 是 `v` + `package.json` 的 version，两者必须一致（`release.yml` 靠 tag 触发）。
 - 版本号的唯一真相源是 `package.json`：`runtime-manifest.json` 里的 `app.version`
-  由装配时读取它写入（见 `scripts/stage-runtime.mjs`）。
+  由装配时读取它写入（见 `scripts/stage-runtime.ts`）。
 
 ## 发布一版的步骤
 
@@ -54,7 +52,7 @@ npm run dist
 1. 把分支推上去，开 PR 合入 `master`（`master` 有分支保护，见 `docs/github/README.md`）。
 2. 在 `master` 上打 tag 并推送：`git tag v0.1.0-beta.re.0.1 && git push origin v0.1.0-beta.re.0.1`。
 3. `release.yml` 自动触发：装配 → 验证 → 裁剪 → 图标 → `electron-builder --win --publish always`
-   → 校验安装包内容。全部通过后资产出现在 GitHub Releases。
+   → 校验安装包内容 → 公开 Release。构建资产先进入草稿，通过校验才公开为 Latest。
 
 ## 发布资产必须齐三样
 
@@ -76,3 +74,10 @@ npm run dist
 
 `electron-updater` 不会自动降级。要回滚一版，必须发一个**版本号更大**的新版本
 （例如在末尾加 `.1`），不能把版本号改小 —— 那对已升级的用户是不可见的。
+
+
+## 交付完成的判据
+
+“本机可用”限定验收环境，不省略开发分支、PR、tag、Release 和更新流程。
+发版之后要启动原安装目录的应用，检查并安装新版本；核对安装后的版本、manifest、自管插件与原配置/会话。
+源码运行、临时端口上的开发实例、手工添加源码链接都只是开发验证，不能替代已安装版本更新。

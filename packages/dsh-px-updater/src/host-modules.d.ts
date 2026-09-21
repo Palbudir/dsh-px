@@ -115,6 +115,7 @@ declare module '@deepseek-ai/cordis' {
   /** HTTP 请求（本站点用到 method 与 url）。 */
   export interface HostRequest {
     method?: string
+    headers?: Record<string, string | string[] | undefined>
     /**
      * 请求 URL（含查询串）。
      *

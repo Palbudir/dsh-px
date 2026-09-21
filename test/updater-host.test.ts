@@ -83,7 +83,7 @@ test('外壳：触发安装必须是**静默**的，否则会弹出 NSIS 向导'
   // 少了它就退化成交互式安装。
   //
   // 这里直接把源码里的调用形态钉住：静默 + 装完重启必须都是 true。
-  const main = readFileSync(resolve(HERE, '..', 'src', 'main', 'index.ts'), 'utf8')
+  const main = readFileSync(resolve(HERE, '..', 'src', 'main', 'update-controller.ts'), 'utf8')
 
   // 剥掉注释再扫：那段**解释这个坑**的注释里正好写着旧的错误写法
   // `quitAndInstall(false, true)`，不剥掉就会把注释当成代码，测试自己先失败。

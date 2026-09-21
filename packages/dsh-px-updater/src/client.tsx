@@ -33,6 +33,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ClientContext } from '@deepseek-ai/cordis'
 import type { SlotComponentProps } from '@deepseek-ai/dsh-client-ui-slots'
+import { requestJson, checkLabel } from './client-data'
 
 /** 本插件的客户端模块 id；必须与 package.json 的包名一致（宿主用它索引模块）。 */
 const NS = 'dsh-px-updater'
@@ -53,6 +54,13 @@ const DICT: Record<string, Record<string, string>> = {
     'section.update': '更新',
     'check': '检查更新',
     'checking': '正在检查…',
+    'checkFailed': '检查失败，可重试',
+    'checkIncomplete': '部分信息未能确认',
+    'lastChecked': '上次检查',
+    'latestCore': '最新 dsh 核心',
+    'platform': '平台',
+    'requested': '已发送请求',
+    'shellDisconnected': '暂时无法连接桌面客户端',
     'notChecked': '尚未检查',
     'upToDate': '已是最新版本',
     'available': '有新版本可用',
@@ -75,7 +83,7 @@ const DICT: Record<string, Record<string, string>> = {
     'readyPrefix': '新版本已下载完成：',
     'installNow': '重启并安装',
     'installing': '正在请求…',
-    'note': '更新由桌面客户端执行下载与安装；这里只负责显示与检查。'
+    'note': '更新在后台下载，不影响当前工作。下载完成后可重启安装，或在退出时自动安装。'
   },
   en: {
     'nav': 'DSH-PX',
@@ -85,6 +93,13 @@ const DICT: Record<string, Record<string, string>> = {
     'section.update': 'Updates',
     'check': 'Check for updates',
     'checking': 'Checking…',
+    'checkFailed': 'Check failed; retry',
+    'checkIncomplete': 'Some versions could not be verified',
+    'lastChecked': 'Last checked',
+    'latestCore': 'Latest dsh core',
+    'platform': 'Platform',
+    'requested': 'Request sent',
+    'shellDisconnected': 'Desktop client is unreachable',
     'notChecked': 'Not checked yet',
     'upToDate': 'Up to date',
     'available': 'A new version is available',
@@ -107,7 +122,7 @@ const DICT: Record<string, Record<string, string>> = {
     'readyPrefix': 'Update downloaded: ',
     'installNow': 'Restart and install',
     'installing': 'Requesting…',
-    'note': 'The desktop client performs the download and install; this page only displays and checks.'
+    'note': 'Updates download in the background. Restart to install when ready, or install automatically when you quit.'
   }
 }
 
@@ -120,6 +135,7 @@ interface StatusPayload {
 
 /** `/check` 端点的响应。 */
 interface CheckPayload {
+  checkedAt: string
   current: { app: string, dsh: string, platform: string }
   latest: { app: string | null, dsh: string | null }
   updateAvailable: { app: boolean, dsh: boolean }
@@ -136,19 +152,18 @@ interface CheckPayload {
  * 外壳，因此状态经 `update-bridge` 文件 → 插件端点 → 这里。
  */
 interface ShellStatePayload {
-  phase: 'idle' | 'checking' | 'downloading' | 'ready' | 'error'
+  phase: 'idle' | 'checking' | 'downloading' | 'ready' | 'installing' | 'error'
   status: string
   version: string | null
   percent: number | null
   error: string | null
   available?: boolean
+  lastCheckedAt?: string | null
 }
 
 /** 一次性取 JSON；失败抛出可读错误。 */
 async function getJson<T> (path: string): Promise<T> {
-  const res = await fetch(path, { headers: { accept: 'application/json' } })
-  if (!res.ok) throw new Error(`HTTP ${String(res.status)}`)
-  return await res.json() as T
+  return requestJson<T>(path)
 }
 
 /** 一行「标签 + 值」。 */
@@ -212,11 +227,11 @@ function UpdateBanner ({ state, onInstall, installing, t }: {
   const tone = state.phase === 'error' ? '#c0392b' : '#2e7d32'
   return (
     <div style={{
-      display: 'flex', gap: 12, alignItems: 'center', margin: '0 0 16px',
+      display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', margin: '0 0 16px',
       padding: '10px 14px', borderRadius: 10,
       border: `1px solid ${tone}`, background: `${tone}1a`
     }}>
-      <div style={{ flex: 1, fontSize: 13, lineHeight: 1.6 }}>
+      <div role="status" style={{ flex: '1 1 220px', minWidth: 0, overflowWrap: 'anywhere', fontSize: 13, lineHeight: 1.6 }}>
         <div>{state.phase === 'ready'
           ? `${t('readyPrefix')}${state.version ?? ''}`
           : state.status}</div>
@@ -249,8 +264,11 @@ function DshPxSection ({ t }: SlotComponentProps): unknown {
   const [check, setCheck] = useState<CheckPayload | null>(null)
   const [checking, setChecking] = useState(false)
   const [checkError, setCheckError] = useState<string | null>(null)
+  const [checkedAt, setCheckedAt] = useState<string | null>(null)
   const [shell, setShell] = useState<ShellStatePayload | null>(null)
   const [installing, setInstalling] = useState(false)
+  const [installError, setInstallError] = useState<string | null>(null)
+  const [shellError, setShellError] = useState(false)
 
   // 挂载时只读本地信息，**不联网** —— 打开设置页不该触发网络请求。
   useEffect(() => {
@@ -268,44 +286,60 @@ function DshPxSection ({ t }: SlotComponentProps): unknown {
   // 且只在设置页打开时轮询（组件卸载即停），开销可忽略。
   useEffect(() => {
     let alive = true
+    let timer: ReturnType<typeof setTimeout>
     const tick = (): void => {
       getJson<ShellStatePayload>(`${ROUTE_PREFIX}/shell-state`)
-        .then((v) => { if (alive) setShell(v) })
-        .catch(() => { /* 外壳未提供状态：保持上一次的值 */ })
+        .then((v) => { if (alive) { setShell(v); setShellError(false) } })
+        .catch(() => { if (alive) setShellError(true) })
+        .finally(() => { if (alive) timer = setTimeout(tick, 3000) })
     }
     tick()
-    const timer = setInterval(tick, 3000)
-    return () => { alive = false; clearInterval(timer) }
+    return () => { alive = false; clearTimeout(timer) }
   }, [])
 
   const doInstall = useCallback((): void => {
     setInstalling(true)
-    fetch(`${ROUTE_PREFIX}/install`, { method: 'POST' })
-      .then(() => { /* 外壳收到请求后会退出并安装，界面不必等待 */ })
-      .catch(() => { setInstalling(false) })
+    setInstallError(null)
+    requestJson(`${ROUTE_PREFIX}/install`, { method: 'POST' })
+      .then(() => getJson<ShellStatePayload>(`${ROUTE_PREFIX}/shell-state`))
+      .then(setShell)
+      .catch((err: unknown) => setInstallError(err instanceof Error ? err.message : String(err)))
+      .finally(() => setInstalling(false))
   }, [])
 
   const doCheck = useCallback((): void => {
     setChecking(true)
+    setCheck(null)
     setCheckError(null)
-    getJson<CheckPayload>(`${ROUTE_PREFIX}/check`)
-      .then(setCheck)
-      .catch((err: unknown) => setCheckError(err instanceof Error ? err.message : String(err)))
-      .finally(() => setChecking(false))
-  }, [])
+    const versions = requestJson<CheckPayload>(`${ROUTE_PREFIX}/check`, {}, true).then(setCheck)
+    const desktop = shell?.available === true
+      ? requestJson(`${ROUTE_PREFIX}/check-shell`, { method: 'POST' })
+      : Promise.resolve()
+    Promise.allSettled([versions, desktop])
+      .then((results) => {
+        const errors = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected')
+        if (errors.length) setCheckError([...new Set(errors.map((r) => r.reason instanceof Error ? r.reason.message : String(r.reason)))].join('；'))
+      })
+      .finally(() => { setChecking(false); setCheckedAt(new Date().toISOString()) })
+  }, [shell?.available])
 
   const updateLabel = ((): string => {
     if (checking) return tr('checking')
-    if (!check) return tr('notChecked')
-    return check.updateAvailable.app || check.updateAvailable.dsh ? tr('available') : tr('upToDate')
+    if (!shellError && shell?.available && ['ready', 'downloading', 'installing'].includes(shell.phase)) return tr('available')
+    return tr(checkLabel(check, checkError !== null))
   })()
+  const lastChecked = [checkedAt, shell?.lastCheckedAt].filter((value): value is string =>
+    typeof value === 'string' && Number.isFinite(Date.parse(value)))
+    .sort((a, b) => Date.parse(b) - Date.parse(a))[0]
 
   return (
     <div style={{ padding: '4px 2px 24px', maxWidth: 620 }}>
       {/* 更新就绪/失败时，先给一条**非阻塞**横幅（见 UpdateBanner 的说明）。 */}
-      {shell !== null && (shell.phase === 'ready' || shell.phase === 'error')
-        ? <UpdateBanner state={shell} onInstall={doInstall} installing={installing} t={tr} />
+      {shell !== null && ['ready', 'error', 'downloading', 'installing'].includes(shell.phase)
+        ? <UpdateBanner state={shell} onInstall={doInstall} installing={installing || shellError} t={tr} />
         : null}
+      {installError !== null ? <div role="alert" style={{ overflowWrap: 'anywhere' }}>{installError}</div> : null}
+      {shellError ? <div role="status">{tr('shellDisconnected')}</div> : null}
 
       <Heading>{tr('section.app')}</Heading>
       {statusError !== null
@@ -314,10 +348,12 @@ function DshPxSection ({ t }: SlotComponentProps): unknown {
 
       <Heading>{tr('section.dsh')}</Heading>
       <Row label={tr('current')} value={status?.current.dsh ?? tr('loading')} />
-      <Row label="platform" value={status?.current.platform ?? '—'} />
+      <Row label={tr('platform')} value={status?.current.platform ?? '—'} />
 
       <Heading>{tr('section.update')}</Heading>
       <Row label={tr('latest')} value={check?.latest.app ?? '—'} />
+      <Row label={tr('latestCore')} value={check?.latest.dsh ?? '—'} />
+      <Row label={tr('lastChecked')} value={lastChecked ? new Date(lastChecked).toLocaleString() : tr('notChecked')} />
       {/* 外壳侧的进度：只有它能给出"正在下载 42%"/"已就绪"。 */}
       {shell?.available === true
         ? <Row label={tr('shellState')} value={
@@ -326,10 +362,10 @@ function DshPxSection ({ t }: SlotComponentProps): unknown {
             : shell.status
         } />
         : null}
-      <div style={{ display: 'flex', gap: 12, alignItems: 'center', padding: '6px 0' }}>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', padding: '6px 0' }}>
         <span style={{ flex: '0 0 132px', opacity: 0.62, fontSize: 13 }}>{tr('section.update')}</span>
         <span style={{ fontSize: 14 }}>{updateLabel}</span>
-        <button type="button" onClick={doCheck} disabled={checking} style={{
+        <button type="button" onClick={doCheck} disabled={checking || shell?.phase === 'installing'} style={{
           cursor: checking ? 'default' : 'pointer', fontSize: 13, padding: '4px 12px', borderRadius: 8,
           border: '1px solid currentColor', background: 'transparent', color: 'inherit', opacity: checking ? 0.5 : 0.85
         }}>{checking ? tr('checking') : tr('check')}</button>
@@ -337,9 +373,9 @@ function DshPxSection ({ t }: SlotComponentProps): unknown {
       {check?.releaseUrl !== null && check?.releaseUrl !== undefined
         ? <Row label={tr('openRelease')} value={check.releaseUrl} />
         : null}
-      {checkError !== null ? <div style={{ fontSize: 12.5, opacity: 0.8 }}>{checkError}</div> : null}
+      {checkError !== null ? <div role="alert" style={{ fontSize: 12.5, opacity: 0.8, overflowWrap: 'anywhere' }}>{checkError}</div> : null}
       {check !== null && check.errors.length > 0
-        ? <div style={{ fontSize: 12.5, opacity: 0.8 }}>{check.errors.join('；')}</div>
+        ? <div role="status" style={{ fontSize: 12.5, opacity: 0.8, overflowWrap: 'anywhere' }}>{check.errors.join('；')}</div>
         : null}
 
       {/* 目录信息来自宿主端点；设置页在浏览器围栏内，不能自己打开文件系统。
@@ -383,7 +419,7 @@ function OpenButton ({ what, label, t }: {
       .then((r) => { setState(r.ok ? 'sent' : 'failed') })
       .catch(() => { setState('failed') })
   }, [what])
-  const text = state === 'sent' ? t('opened') : state === 'failed' ? t('openFailed') : label
+  const text = state === 'sent' ? t('requested') : state === 'failed' ? t('openFailed') : label
   return (
     <button type="button" onClick={open} style={{
       cursor: 'pointer', fontSize: 13, padding: '4px 12px', borderRadius: 8,

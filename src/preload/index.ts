@@ -28,7 +28,7 @@
  *
  * @module dsh-px/preload
  */
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 
 /** 窗口标题（与主进程保持一致的取值）。 */
 const APP_TITLE = 'DSH-PX'
@@ -38,7 +38,7 @@ const APP_TITLE = 'DSH-PX'
 // 用 MutationObserver 而不是监听某个事件，是因为标题可能由框架在任意时刻改写，
 // 没有稳定事件可依赖；观察 <title> 节点最直接。
 window.addEventListener('DOMContentLoaded', () => {
-  const guard = (): void => { document.title = APP_TITLE }
+  const guard = (): void => { if (document.title !== APP_TITLE) document.title = APP_TITLE }
   guard()
   const titleNode = document.querySelector('title')
   if (titleNode !== null) {
@@ -51,3 +51,10 @@ contextBridge.exposeInMainWorld('dshPxShell', {
   app: APP_TITLE,
   electron: process.versions.electron
 })
+
+// 只在随附本地恢复页暴露白名单动作，主进程再次校验精确文件 URL 和主 frame。
+if (location.protocol === 'file:') {
+  contextBridge.exposeInMainWorld('dshPxRecovery', {
+    act: (action: 'retry' | 'log' | 'data') => ipcRenderer.invoke('dsh-px:recover', action)
+  })
+}

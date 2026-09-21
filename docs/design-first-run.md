@@ -67,7 +67,7 @@ runtime/node/node.exe runtime/dsh/lib/bin.js --profile web --host 127.0.0.1 --po
 ```
 materialize(seed, home):
   if home 已完成播种 且 种子身份未变: return          # 二次启动零开销
-  if 种子身份变了: 覆盖式重新物化（refresh）
+  if 种子身份变了: 仅刷新 DSH-PX 自管插件（refresh），保留用户配置和第三方插件
   1. 复制种子树的**清单文件**（package.json、cordis*.yml、pnpm-workspace.yaml）
   2. 对 seeds/profiles/<name>/node_modules 逐项：
        - 目录 → 递归
@@ -93,7 +93,7 @@ materialize(seed, home):
 
 - 标记里记录 **`seedIdentity`**，取 `runtime-manifest.json` 的 `stagedAt`
   （不能用种子目录路径：它会从构建机的 `D:\a\...` 变成用户的安装目录）。
-- 身份变了就 **`refresh: true`** 覆盖式重新物化：逐项**先删再写**
+- 身份变了就 **`refresh: true`**：仅对自管插件文件先删再写；用户配置、凭据、清单与第三方依赖始终保留。pnpm 种子虚拟仓库路径使用独立文件替换为本机路径，不改写种子硬链接
   （硬链接不能覆盖，且旧目标可能是上一版的文件）。
 - 旧标记里没有 `seedIdentity`，读出来是 `null`，与任何真实身份都不等 ——
   因此**从旧版本升级过来的用户会被正确地刷新一次**，不需要手工删目录。

@@ -57,7 +57,9 @@ export default defineConfig({
   preload: {
     // 同上：root 默认 `./src/preload`；outDir 明确用绝对路径。
     build: {
-      outDir: resolve('out/preload')
+      outDir: resolve('out/preload'),
+      // sandboxed preload 使用 Electron 的 CommonJS require shim，不能产出 ESM。
+      rollupOptions: { output: { format: 'cjs', entryFileNames: 'index.cjs' } }
     }
   }
 })

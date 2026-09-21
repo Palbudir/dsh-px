@@ -69,6 +69,8 @@
         margin-top: 6px;
         min-height: 14px;
       }
+      button { border: 1px solid #64748b; border-radius: 8px; padding: 9px 14px; background: #1e293b; color: #e6e8ee; cursor: pointer; }
+      button:disabled { opacity: .5; cursor: wait; }
       /* 无障碍：尊重"减少动态效果"偏好，进度条改为静态脉冲而非滑动。 */
       @media (prefers-reduced-motion: reduce) {
         .bar > i {
@@ -84,6 +86,16 @@
     <div class="bar"><i></i></div>
     <div class="phase" id="phase">正在启动…</div>
     <div class="detail" id="detail"></div>
+    <section id="recovery" hidden style="max-width: min(680px, 85vw); -webkit-app-region: no-drag">
+      <p>已有配置和会话仍保存在本机。可以重启服务，或打开日志检查原因。</p>
+      <pre id="failure" style="white-space: pre-wrap; overflow-wrap: anywhere; max-height: 35vh; overflow: auto; user-select: text; font-size: 12px"></pre>
+      <div style="display: flex; gap: 12px">
+        <button data-action="retry">重新启动服务</button>
+        <button data-action="log">打开日志</button>
+        <button data-action="data">打开数据目录</button>
+      </div>
+      <p id="action-result" role="status"></p>
+    </section>
 
     <!--
       入口先在这里挂上，模块脚本再覆盖它。
@@ -97,6 +109,24 @@
       这里刻意不写 `defer`/`async`。
     -->
     <script>
+      window.__dshPxRecovery = function (message) {
+        document.querySelector('.bar').hidden = true
+        document.getElementById('phase').textContent = 'Agent 服务需要恢复'
+        document.getElementById('recovery').hidden = false
+        document.getElementById('failure').textContent = message
+      }
+      document.querySelectorAll('[data-action]').forEach(function (button) {
+        button.addEventListener('click', async function () {
+          button.disabled = true
+          var result = document.getElementById('action-result')
+          result.textContent = '正在处理…'
+          try {
+            var ok = await window.dshPxRecovery.act(button.dataset.action)
+            result.textContent = ok ? '操作已完成' : '操作未完成，请查看日志后重试。'
+          } catch (error) { result.textContent = '操作失败：' + error.message }
+          finally { button.disabled = false }
+        })
+      })
       window.__dshPxProgress = function (phase, detail) {
         var a = document.getElementById('phase')
         var b = document.getElementById('detail')
