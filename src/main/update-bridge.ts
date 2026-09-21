@@ -55,9 +55,6 @@ function bridgeDir (): string {
 export function bridgeStatePath (): string {
   return join(bridgeDir(), 'state.json')
 }
-function installRequestPath (): string {
-  return join(bridgeDir(), 'install.req')
-}
 
 /** 当前状态（内存态；落盘只是给界面读的投影）。 */
 let state: UpdateBridgeState = {
@@ -104,46 +101,60 @@ export function getUpdateState (): UpdateBridgeState {
 }
 
 /**
- * 让界面能请求"重启并安装"。
+ * 界面可请求的**外壳动作**。
+ *
+ * 界面跑在 harness 的浏览器里，够不到 Electron，所以"打开数据目录/日志目录"
+ * 这类事只能这样转达。刻意做成**白名单字符串**而不是"传任意路径过来打开" ——
+ * 后者等于把 shell.openPath 暴露给页面，是没有必要的权限面。
+ */
+export type ShellAction = 'install' | 'open-data' | 'open-log'
+
+/** 请求文件路径：一个动作一个文件，内容为请求时间。 */
+function requestPath (action: ShellAction): string {
+  return join(bridgeDir(), `${action}.req`)
+}
+
+/** 插件的宿主半边写这个文件；内容即目标动作名，无需解析。 */
+export function shellActionFileName (action: ShellAction): string {
+  return `${action}.req`
+}
+
+/**
+ * 监听界面发来的**外壳动作请求**（安装更新、打开数据目录、打开日志目录）。
  *
  * 监听用 `fs.watch`，但**不信任它**：不同平台/文件系统上 watch 的行为差异很大
  * （网络盘、编辑器写入方式都可能不触发）。因此同时起一个低频轮询兜底 ——
- * 一个用户点了却毫无反应的"立即安装"按钮是最糟的失败模式。
+ * 一个用户点了却毫无反应的按钮是最糟的失败模式。
  *
- * @param onInstallRequest 收到请求时调用
+ * @param onAction 收到某个动作请求时调用
  * @returns 停止监听
  */
-export function watchInstallRequests (onInstallRequest: () => void): () => void {
+export function watchShellActions (onAction: (action: ShellAction) => void): () => void {
   const dir = bridgeDir()
-  const reqPath = installRequestPath()
+  const actions: ShellAction[] = ['install', 'open-data', 'open-log']
   try {
     mkdirSync(dir, { recursive: true })
   } catch { /* 已在别处报错 */ }
 
   let stopped = false
-  let lastHandled = 0
 
   const check = (): void => {
     if (stopped) return
-    try {
-      if (!existsSync(reqPath)) return
-      // 用 mtime 去重：同一个请求文件只处理一次。
-      const stamp = Date.now()
-      if (stamp - lastHandled < 500) return
-      readFileSync(reqPath, 'utf8')
-      rmSync(reqPath, { force: true })
-      lastHandled = stamp
-      process.stdout.write('[dsh-px] 收到界面发来的安装请求\n')
-      onInstallRequest()
-    } catch { /* 文件正在被写/已被删：下一轮再看 */ }
+    for (const action of actions) {
+      const p = requestPath(action)
+      try {
+        if (!existsSync(p)) continue
+        rmSync(p, { force: true })
+        process.stdout.write(`[dsh-px] 收到界面请求：${action}\n`)
+        onAction(action)
+      } catch { /* 文件正在被写/已被删：下一轮再看 */ }
+    }
   }
 
-  const timer = setInterval(check, 1500)
+  const timer = setInterval(check, 800)
   let watcher: ReturnType<typeof watch> | null = null
   try {
-    watcher = watch(dir, (_event, filename) => {
-      if (filename === null || String(filename).startsWith('install.req')) check()
-    })
+    watcher = watch(dir, () => check())
   } catch {
     // watch 不可用就只靠轮询，功能不受影响。
   }
@@ -158,7 +169,9 @@ export function watchInstallRequests (onInstallRequest: () => void): () => void 
 
 /** 清理桥文件（测试与"重置状态"用）。 */
 export function resetUpdateBridge (): void {
-  try { rmSync(installRequestPath(), { force: true }) } catch { /* 不存在 */ }
+  for (const a of ['install', 'open-data', 'open-log'] as ShellAction[]) {
+    try { rmSync(requestPath(a), { force: true }) } catch { /* 不存在 */ }
+  }
   state = { phase: 'idle', status: '未检查', version: null, percent: null, error: null, updatedAt: new Date().toISOString() }
   persist()
 }

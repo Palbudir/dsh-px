@@ -63,9 +63,13 @@ const DICT: Record<string, Record<string, string>> = {
     'paths': '目录',
     'dataDir': '数据目录',
     'logFile': '日志文件',
-    'copyHint': '把下面的路径复制到资源管理器即可打开。',
+    'copyHint': '路径可复制，也可以直接用下面的按钮打开。',
     'copy': '复制',
     'copied': '已复制',
+    'openDataDir': '打开数据目录',
+    'openLog': '打开日志',
+    'opened': '已打开',
+    'openFailed': '打开失败',
     'unavailable': '无法读取版本信息',
     'shellState': '外壳状态',
     'readyPrefix': '新版本已下载完成：',
@@ -91,9 +95,13 @@ const DICT: Record<string, Record<string, string>> = {
     'paths': 'Locations',
     'dataDir': 'Data directory',
     'logFile': 'Log file',
-    'copyHint': 'Copy a path below into your file manager to open it.',
+    'copyHint': 'Copy a path, or open it directly with the buttons below.',
     'copy': 'Copy',
     'copied': 'Copied',
+    'openDataDir': 'Open data folder',
+    'openLog': 'Open log',
+    'opened': 'Opened',
+    'openFailed': 'Failed',
     'unavailable': 'Could not read version information',
     'shellState': 'Shell status',
     'readyPrefix': 'Update downloaded: ',
@@ -334,16 +342,54 @@ function DshPxSection ({ t }: SlotComponentProps): unknown {
         ? <div style={{ fontSize: 12.5, opacity: 0.8 }}>{check.errors.join('；')}</div>
         : null}
 
-      {/* 目录信息来自宿主端点；设置页在浏览器围栏内，不能自己打开文件系统，
-          因此这里只提供可复制的路径。 */}
+      {/* 目录信息来自宿主端点；设置页在浏览器围栏内，不能自己打开文件系统。
+          因此：路径可复制，另有按钮经宿主端点请外壳去打开。 */}
       <Heading>{tr('paths')}</Heading>
       <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 2 }}>{tr('copyHint')}</div>
+
+      <div style={{ display: 'flex', gap: 8, margin: '8px 0 4px' }}>
+        <OpenButton what="open-data" label={tr('openDataDir')} t={tr} />
+        <OpenButton what="open-log" label={tr('openLog')} t={tr} />
+      </div>
+
       {status?.manifestPath !== null && status?.manifestPath !== undefined
         ? <PathRow label="manifest" value={status.manifestPath} copyLabel={tr('copy')} copiedLabel={tr('copied')} />
         : null}
 
       <div style={{ fontSize: 12, opacity: 0.55, marginTop: 18, lineHeight: 1.7 }}>{tr('note')}</div>
     </div>
+  )
+}
+
+/**
+ * "打开数据目录 / 日志"按钮。
+ *
+ * 为什么不能直接开：设置页跑在**浏览器围栏**里（harness 的 HTTP 服务），
+ * 拿不到文件系统。它只能请插件宿主端点转达，外壳再执行 `shell.openPath` /
+ * `showItemInFolder`。
+ *
+ * 目标用**白名单枚举**（`open-data` / `open-log`）而不是路径 ——
+ * 页面无法命令外壳打开任意位置。
+ */
+function OpenButton ({ what, label, t }: {
+  what: 'open-data' | 'open-log'
+  label: string
+  t: (key: string) => string
+}): unknown {
+  const [state, setState] = useState<'idle' | 'sent' | 'failed'>('idle')
+  const open = useCallback((): void => {
+    setState('idle')
+    fetch(`${ROUTE_PREFIX}/open?what=${what}`, { method: 'POST' })
+      .then((r) => { setState(r.ok ? 'sent' : 'failed') })
+      .catch(() => { setState('failed') })
+  }, [what])
+  const text = state === 'sent' ? t('opened') : state === 'failed' ? t('openFailed') : label
+  return (
+    <button type="button" onClick={open} style={{
+      cursor: 'pointer', fontSize: 13, padding: '4px 12px', borderRadius: 8,
+      border: '1px solid currentColor', background: 'transparent', color: 'inherit',
+      opacity: state === 'failed' ? 0.5 : 0.85
+    }}>{text}</button>
   )
 }
 

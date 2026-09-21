@@ -61,13 +61,13 @@ function readShellState() {
     return null;
   }
 }
-function requestInstall() {
+function requestShellAction(action) {
   const dir = shellUserData();
   if (dir === null) return false;
   try {
     const bridgeDir = join(dir, "update-bridge");
     mkdirSync(bridgeDir, { recursive: true });
-    writeFileSync(join(bridgeDir, "install.req"), `${(/* @__PURE__ */ new Date()).toISOString()}
+    writeFileSync(join(bridgeDir, `${action}.req`), `${(/* @__PURE__ */ new Date()).toISOString()}
 `);
     return true;
   } catch {
@@ -210,16 +210,34 @@ function apply(ctx, rawConfig) {
           sendJson(res, 405, { ok: false, error: "\u53EA\u63A5\u53D7 POST" });
           return;
         }
-        const ok = requestInstall();
+        const ok = requestShellAction("install");
         sendJson(res, ok ? 202 : 503, ok ? { ok: true, message: "\u5DF2\u8BF7\u6C42\u5916\u58F3\u91CD\u542F\u5E76\u5B89\u88C5" } : { ok: false, error: "\u627E\u4E0D\u5230\u5916\u58F3\u6570\u636E\u76EE\u5F55\uFF0C\u65E0\u6CD5\u8BF7\u6C42\u5B89\u88C5" });
       }
     });
-    say(`\u5DF2\u6CE8\u518C HTTP \u7AEF\u70B9 ${config.routePrefix}/{status,check,shell-state,install}`);
+    const disposeOpen = webServer.register({
+      kind: "exact",
+      path: `${config.routePrefix}/open`,
+      handler: (req, res) => {
+        if (req.method !== "POST") {
+          sendJson(res, 405, { ok: false, error: "\u53EA\u63A5\u53D7 POST" });
+          return;
+        }
+        const raw = /[?&]what=(open-data|open-log)\b/.exec(req.url ?? "")?.[1];
+        if (raw !== "open-data" && raw !== "open-log") {
+          sendJson(res, 400, { ok: false, error: "what \u5FC5\u987B\u662F open-data \u6216 open-log" });
+          return;
+        }
+        const ok = requestShellAction(raw);
+        sendJson(res, ok ? 202 : 503, ok ? { ok: true, message: `\u5DF2\u8BF7\u6C42\u5916\u58F3\u6253\u5F00${raw === "open-data" ? "\u6570\u636E\u76EE\u5F55" : "\u65E5\u5FD7"}` } : { ok: false, error: "\u627E\u4E0D\u5230\u5916\u58F3\u6570\u636E\u76EE\u5F55" });
+      }
+    });
+    say(`\u5DF2\u6CE8\u518C HTTP \u7AEF\u70B9 ${config.routePrefix}/{status,check,shell-state,install,open}`);
     hostCtx.effect?.(() => () => {
       disposeStatus();
       disposeCheck();
       disposeShellState();
       disposeInstall();
+      disposeOpen();
     }, "dsh-px-updater: http routes");
   });
   if (config.registerTool) {

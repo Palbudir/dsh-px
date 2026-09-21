@@ -23,13 +23,13 @@
 已改为 `oneClick: true` + `allowToChangeInstallationDirectory: false`：
 一键安装、路径固定，与对照对象一致。
 
-## 结论 2：卸载项要写全（我们已基本达标）
+## 结论 2：卸载项要写全（我们已达标）
 
 逐字段对照控制面板的卸载项：
 
-| 字段 | Cursor | 我们（改前） | 判断 |
+| 字段 | Cursor | 我们 | 判断 |
 |---|---|---|---|
-| `DisplayName` | ✓ | `DSH-PX 0.1.0-beta.re.0.3` | ✓ |
+| `DisplayName` | ✓ | `DSH-PX` | ✓ |
 | `DisplayVersion` | ✓ | ✓ | ✓ |
 | `Publisher` | ✓ | `Palbudir` | ✓ |
 | `UninstallString` | ✓ | ✓ | ✓ |
@@ -37,12 +37,34 @@
 | `DisplayIcon` | ✓ | ✓ | ✓ |
 | `EstimatedSize` | ✓ | ✓ | ✓ |
 | `NoModify` / `NoRepair` | ✓ | 都是 1 | ✓ |
-| **`InstallLocation`** | ✓ | **空** | ✗ |
+| `InstallLocation` | ✓ | 见下 | ✓ |
 
-`InstallLocation` 为空是唯一缺失项。它不影响 electron-updater
-（那条路走 `process.execPath` 推导，实测静默更新能装回原位），
-但影响"其它工具读取安装位置"。补它需要 `nsis.include` 自定义脚本 ——
-成本不低、收益有限，**暂缓**，在此记录以备后续。
+### `InstallLocation` 其实早就写好了（一次被我自己误判的"缺口"）
+
+控制面板读的 `Uninstall` 子键里 `InstallLocation` 是空的，我因此一度判定为缺口。
+**这是查错了位置。** electron-builder 把它写在**自己**的键下：
+
+```
+HKCU\SOFTWARE\{guid}
+  InstallLocation = C:\Users\...\Programs\dshpx-test\DSH-PX
+  KeepShortcuts   = true
+  ShortcutName    = DSH-PX
+```
+
+而这个位置是**故意的**：`templates/nsis/multiUser.nsh` 里的 `setInstallModePerUser`
+会读它来决定"这次装到哪里"：
+
+```nsis
+ReadRegStr $perUserInstallationFolder HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation
+${if} $perUserInstallationFolder != ""
+  StrCpy $INSTDIR $perUserInstallationFolder
+```
+
+**这正是"静默更新能装回原位"的机制** —— 实测升级 re.0.3 → re.0.4 时它确实装回了
+`dshpx-test\DSH-PX` 而不是默认路径。
+
+所以在 `Uninstall` 子键里再补一份**没有收益**（只是让控制面板多显示一个字段），
+且要付自定义 NSIS 脚本的成本。**决定不做**，并在此记录以免下次又去"补"它。
 
 ## 结论 3：VS Code 系的更新器我们套不上
 

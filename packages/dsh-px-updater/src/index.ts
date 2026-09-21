@@ -180,18 +180,23 @@ function readShellState (): ShellState | null {
 }
 
 /**
- * 写一个"请重启并安装"的请求文件，由外壳监听并执行。
+ * 向外壳投递一个**动作请求**（写一个文件，外壳轮询并执行）。
  *
- * 这里刻意**不**等待外壳的回应：外壳一旦执行就会退出应用，回应不可能到达。
- * 返回 true 只表示"请求已送达"。
+ * 界面跑在 harness 的浏览器里，够不到 Electron，因此"重启并安装"、
+ * "打开数据目录"、"打开日志目录"这类事只能这样转达。
+ *
+ * 这里刻意**不**等待外壳的回应（安装会让外壳退出，回应不可能到达），
+ * 返回 true 只表示"请求已写入"。
+ *
+ * @param action 动作名，必须是外壳认识的白名单值
  */
-function requestInstall (): boolean {
+function requestShellAction (action: 'install' | 'open-data' | 'open-log'): boolean {
   const dir = shellUserData()
   if (dir === null) return false
   try {
     const bridgeDir = join(dir, 'update-bridge')
     mkdirSync(bridgeDir, { recursive: true })
-    writeFileSync(join(bridgeDir, 'install.req'), `${new Date().toISOString()}\n`)
+    writeFileSync(join(bridgeDir, `${action}.req`), `${new Date().toISOString()}\n`)
     return true
   } catch {
     return false
@@ -412,14 +417,43 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
           sendJson(res, 405, { ok: false, error: '只接受 POST' })
           return
         }
-        const ok = requestInstall()
+        const ok = requestShellAction('install')
         sendJson(res, ok ? 202 : 503, ok
           ? { ok: true, message: '已请求外壳重启并安装' }
           : { ok: false, error: '找不到外壳数据目录，无法请求安装' })
       }
     })
 
-    say(`已注册 HTTP 端点 ${config.routePrefix}/{status,check,shell-state,install}`)
+    // ── 界面请求"打开数据目录 / 日志目录" ───────────────────────────────────
+    //
+    // 参数是**白名单枚举**，绝不接受任意路径 —— 否则等于把 shell.openPath
+    // 暴露给页面，那是不必要的权限面（页面能命令外壳打开任何东西）。
+    const disposeOpen = webServer.register({
+      kind: 'exact',
+      path: `${config.routePrefix}/open`,
+      handler: (req: HostRequest, res: HostResponse) => {
+        if (req.method !== 'POST') {
+          sendJson(res, 405, { ok: false, error: '只接受 POST' })
+          return
+        }
+        // 端点不解析 body（宿主侧给的 req 不一定带 body 读取能力），
+        // 因此把目标放在**查询串**里，简单且够用。
+        //
+        // 显式收窄成字面量联合：正则的捕获组类型是宽松的 `string`，
+        // 直接传给只接受白名单枚举的 requestShellAction 过不了严格检查。
+        const raw = /[?&]what=(open-data|open-log)\b/.exec(req.url ?? '')?.[1]
+        if (raw !== 'open-data' && raw !== 'open-log') {
+          sendJson(res, 400, { ok: false, error: 'what 必须是 open-data 或 open-log' })
+          return
+        }
+        const ok = requestShellAction(raw)
+        sendJson(res, ok ? 202 : 503, ok
+          ? { ok: true, message: `已请求外壳打开${raw === 'open-data' ? '数据目录' : '日志'}` }
+          : { ok: false, error: '找不到外壳数据目录' })
+      }
+    })
+
+    say(`已注册 HTTP 端点 ${config.routePrefix}/{status,check,shell-state,install,open}`)
 
     // 路由注册属于 effect，插件卸载时自动清理 —— 这是 dsh 的约定，
     // 不需要手写 removeRoute。
@@ -428,6 +462,7 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
       disposeCheck()
       disposeShellState()
       disposeInstall()
+      disposeOpen()
     }, 'dsh-px-updater: http routes')
   })
 

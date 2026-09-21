@@ -53,9 +53,13 @@ window.__ModuleLoader__.load({
 		    "paths": "\u76EE\u5F55",
 		    "dataDir": "\u6570\u636E\u76EE\u5F55",
 		    "logFile": "\u65E5\u5FD7\u6587\u4EF6",
-		    "copyHint": "\u628A\u4E0B\u9762\u7684\u8DEF\u5F84\u590D\u5236\u5230\u8D44\u6E90\u7BA1\u7406\u5668\u5373\u53EF\u6253\u5F00\u3002",
+		    "copyHint": "\u8DEF\u5F84\u53EF\u590D\u5236\uFF0C\u4E5F\u53EF\u4EE5\u76F4\u63A5\u7528\u4E0B\u9762\u7684\u6309\u94AE\u6253\u5F00\u3002",
 		    "copy": "\u590D\u5236",
 		    "copied": "\u5DF2\u590D\u5236",
+		    "openDataDir": "\u6253\u5F00\u6570\u636E\u76EE\u5F55",
+		    "openLog": "\u6253\u5F00\u65E5\u5FD7",
+		    "opened": "\u5DF2\u6253\u5F00",
+		    "openFailed": "\u6253\u5F00\u5931\u8D25",
 		    "unavailable": "\u65E0\u6CD5\u8BFB\u53D6\u7248\u672C\u4FE1\u606F",
 		    "shellState": "\u5916\u58F3\u72B6\u6001",
 		    "readyPrefix": "\u65B0\u7248\u672C\u5DF2\u4E0B\u8F7D\u5B8C\u6210\uFF1A",
@@ -81,9 +85,13 @@ window.__ModuleLoader__.load({
 		    "paths": "Locations",
 		    "dataDir": "Data directory",
 		    "logFile": "Log file",
-		    "copyHint": "Copy a path below into your file manager to open it.",
+		    "copyHint": "Copy a path, or open it directly with the buttons below.",
 		    "copy": "Copy",
 		    "copied": "Copied",
+		    "openDataDir": "Open data folder",
+		    "openLog": "Open log",
+		    "opened": "Opened",
+		    "openFailed": "Failed",
 		    "unavailable": "Could not read version information",
 		    "shellState": "Shell status",
 		    "readyPrefix": "Update downloaded: ",
@@ -250,9 +258,35 @@ window.__ModuleLoader__.load({
 		    check !== null && check.errors.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { fontSize: 12.5, opacity: 0.8 }, children: check.errors.join("\uFF1B") }) : null,
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Heading, { children: tr("paths") }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { fontSize: 12, opacity: 0.6, marginBottom: 2 }, children: tr("copyHint") }),
+		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 8, margin: "8px 0 4px" }, children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OpenButton, { what: "open-data", label: tr("openDataDir"), t: tr }),
+		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OpenButton, { what: "open-log", label: tr("openLog"), t: tr })
+		    ] }),
 		    status?.manifestPath !== null && status?.manifestPath !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathRow, { label: "manifest", value: status.manifestPath, copyLabel: tr("copy"), copiedLabel: tr("copied") }) : null,
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { fontSize: 12, opacity: 0.55, marginTop: 18, lineHeight: 1.7 }, children: tr("note") })
 		  ] });
+		}
+		function OpenButton({ what, label, t }) {
+		  const [state, setState] = (0, import_react.useState)("idle");
+		  const open = (0, import_react.useCallback)(() => {
+		    setState("idle");
+		    fetch(`${ROUTE_PREFIX}/open?what=${what}`, { method: "POST" }).then((r) => {
+		      setState(r.ok ? "sent" : "failed");
+		    }).catch(() => {
+		      setState("failed");
+		    });
+		  }, [what]);
+		  const text = state === "sent" ? t("opened") : state === "failed" ? t("openFailed") : label;
+		  return /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { type: "button", onClick: open, style: {
+		    cursor: "pointer",
+		    fontSize: 13,
+		    padding: "4px 12px",
+		    borderRadius: 8,
+		    border: "1px solid currentColor",
+		    background: "transparent",
+		    color: "inherit",
+		    opacity: state === "failed" ? 0.5 : 0.85
+		  }, children: text });
 		}
 		function apply(ctx) {
 		  ctx.effect?.(() => {

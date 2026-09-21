@@ -31,8 +31,8 @@ import type { NativeImage, MenuItemConstructorOptions, Event as ElectronEvent } 
 import type { AppUpdater } from 'electron-updater'
 import { materializeSeedHome } from './materialize'
 import type { SeedProgress } from './materialize'
-import { setUpdateState, watchInstallRequests } from './update-bridge'
-import type { UpdateBridgeState } from './update-bridge'
+import { setUpdateState, watchShellActions } from './update-bridge'
+import type { ShellAction, UpdateBridgeState } from './update-bridge'
 
 /**
  * electron-updater 是 CJS 包，从 ESM 里用 createRequire 加载最稳。
@@ -685,30 +685,40 @@ function publishUpdateState (next: UpdateState, bridge: Partial<Omit<UpdateBridg
  * 因为它会重启应用。这也是主流桌面应用的做法。
  */
 function setupAutoUpdate (): void {
+  // 界面发来的**外壳动作**监听先装上，且**不受"是否打包"影响**：
+  // 「打开数据目录 / 打开日志目录」在开发态同样有用，而"安装更新"在开发态
+  // 无意义（没有 app-update.yml），所以在动作处理器里逐个判断。
+  stopInstallWatch = watchShellActions((action) => {
+    process.stdout.write(`[dsh-px] 处理界面请求：${action}\n`)
+    switch (action) {
+      case 'install':
+        if (!app.isPackaged || autoUpdater === null) {
+          process.stdout.write('[dsh-px] 开发态，忽略安装请求\n')
+          break
+        }
+        installUpdateNow()
+        break
+      case 'open-data':
+        void shell.openPath(app.getPath('userData'))
+        break
+      case 'open-log':
+        // 日志是文件而不是目录：用 showItemInFolder 在资源管理器里选中它，
+        // 比 openPath 打开文件本身更符合"我要看日志"的意图。
+        shell.showItemInFolder(logPath())
+        break
+    }
+  })
+
   if (!autoUpdater) return
-  // **开发态必须最先返回。** 下面会注册"界面请求安装"的监听，那条路径最终会
-  // 退出应用；开发态响应它毫无意义，却会让调试中的实例被自己关掉
-  // （实测：开发态 POST 一次 /install，harness 随即被 SIGTERM）。
-  // 打包态才有 app-update.yml。
+  // 打包态才有 app-update.yml；开发态到此为止（安装请求已在上面被忽略）。
   if (!app.isPackaged) {
-    process.stdout.write('[dsh-px] 开发态，跳过自动更新（含安装请求监听）\n')
+    process.stdout.write('[dsh-px] 开发态，跳过自动更新检查\n')
     return
   }
 
   // 不自动下载：让用户先看到"有新版本 + 更新内容"，再决定是否下载安装。
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = true
-
-  // 界面可以请求"重启并安装"（经插件端点 → 请求文件 → 这里）。
-  // 这是界面侧唯一的写操作，且它只表达"用户点了按钮"，不携带任何参数 ——
-  // 界面无法让外壳做别的事。
-  stopInstallWatch = watchInstallRequests(() => {
-    try {
-      installUpdateNow()
-    } catch (err) {
-      process.stderr.write(`[dsh-px] 安装更新失败：${errText(err)}\n`)
-    }
-  })
 
   autoUpdater.on('checking-for-update', () => {
     publishUpdateState({ status: '正在检查更新…', version: null },
@@ -946,11 +956,95 @@ function refreshTray (url?: string): void {
  * 而我们自己触发的路径传了 `false`，所以只有"退出时安装"是静默的。
  *
  * 现在传 `(true, true)`：静默替换（无向导）+ 装完自动重启，与成熟桌面应用一致。
+ *
+ * ## 为什么还要"延迟退出"
+ *
+ * 静默安装**在 NSIS 侧完全没有 UI**：那个进度条窗口（`SpiderBanner::Show`）
+ * 被包在模板的 `${IfNot} ${Silent}` 里，`/S` 时不显示。而我们的安装包 212 MB、
+ * 实测解包安装要 **3–4 分钟** —— 于是窗口会毫无征兆地消失，用户面对数分钟
+ * 什么都没有的桌面，无法区分"在更新"和"崩了"。
+ *
+ * 所以这里刻意**先更新界面、等几秒再退出**，让用户看到
+ * "正在更新，应用会自动重启" 这句明确的话。真正的安装仍由 electron-updater
+ * 静默执行（装完 `--force-run` 自动拉起新版本）。
+ *
+ * 不能用模态框：本项目的既定原则是更新交互不打断用户，而且模态框会挡住
+ * 退出流程。用界面上的一条状态 + 一个短暂倒计时即可。
  */
+const INSTALL_EXIT_DELAY_MS = 9000
+
 function installUpdateNow (): void {
+  if (quitting) return
   quitting = true
+
+  const ver = updateState.version ?? ''
+  const seconds = Math.round(INSTALL_EXIT_DELAY_MS / 1000)
+  publishUpdateState(
+    { status: `正在更新到 ${ver}，应用将自动重启`, version: updateState.version },
+    {
+      phase: 'ready',
+      status: `正在安装 ${ver}…（约 1–4 分钟，期间没有界面）`,
+      version: updateState.version,
+      percent: 100,
+      error: null
+    }
+  )
+  process.stdout.write(
+    `[dsh-px] 开始静默安装 ${ver}；先显示 ${String(seconds)} 秒提示再退出` +
+    '（NSIS 静默安装自身没有 UI，安装耗时数分钟）\n'
+  )
+
+  // 系统通知是这里**唯一可靠**的通道：界面上的状态在设置面板里，
+  // 而用户点"重启并安装"时那个面板可能已经关掉，他就看不到提示了。
+  // 通知会在屏幕上直接出现，并且留在通知中心。
+  try {
+    const n = new Notification({
+      title: 'DSH-PX 正在更新',
+      body: `正在安装 ${ver}，应用将在约 ${String(seconds)} 秒后自动重启。` +
+        '安装过程没有界面，通常需要 1–4 分钟。'
+    })
+    n.show()
+  } catch {
+    // 某些环境不支持通知；日志里仍有完整记录。
+  }
+
+  // 先停掉 harness（否则安装器替换文件时会撞上它），但**不立刻退出应用** ——
+  // 窗口还要留着显示提示。
   if (harness && harness.exitCode === null) harness.kill()
-  autoUpdater?.quitAndInstall(true, true)
+
+  /**
+   * 真正触发安装。
+   *
+   * `quitAndInstall` 会返回 false 当安装包路径丢失/调用被重复等问题 ——
+   * 那种情况绝不能把用户卡在"正在更新"上，所以这里兜底直接退出。
+   * 退出后安装没发生，用户下次启动仍是旧版本，但至少不会挂住。
+   */
+  const go = (): void => {
+    let started = false
+    try {
+      started = autoUpdater?.quitAndInstall(true, true) ?? false
+    } catch (err) {
+      process.stderr.write(`[dsh-px] quitAndInstall 抛错：${errText(err)}\n`)
+    }
+    if (!started) {
+      process.stderr.write('[dsh-px] 安装未能启动；直接退出，不做无提示的挂起\n')
+      quitting = true
+      app.quit()
+    }
+  }
+
+  const timer = setInterval(() => {
+    // 界面可能已被用户关掉；此时提前退出，不必等满。
+    if (!win || win.isDestroyed()) {
+      clearInterval(timer)
+      go()
+    }
+  }, 500)
+
+  setTimeout(() => {
+    clearInterval(timer)
+    go()
+  }, INSTALL_EXIT_DELAY_MS)
 }
 
 /**

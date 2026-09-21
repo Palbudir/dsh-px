@@ -112,9 +112,16 @@ declare module '@deepseek-ai/cordis' {
     end (body?: string): void
   }
 
-  /** HTTP 请求（只用得到 method）。 */
+  /** HTTP 请求（本站点用到 method 与 url）。 */
   export interface HostRequest {
     method?: string
+    /**
+     * 请求 URL（含查询串）。
+     *
+     * 用它而不是读 body：宿主给的 req 不保证带 body 读取能力，
+     * 而我们的端点参数只有一个白名单枚举值，放查询串里最简单也最稳。
+     */
+    url?: string
   }
 
   /** 一个已注册路由的清理函数。 */
