@@ -134,7 +134,7 @@ window.__ModuleLoader__.load({
 		  }
 		  return /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "grid", gap: 16, minWidth: 0, overflowWrap: "anywhere", paddingBottom: 20 }, children: [
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { style: { margin: "0 0 8px" }, children: "\u672C\u673A\u5DE5\u4F5C\u53F0" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { style: { margin: "0 0 8px" }, children: "\u8FD0\u884C\u4E0E\u5E2E\u52A9" }),
 		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { style: { margin: 0, opacity: 0.7, lineHeight: 1.7 }, children: "\u4ECE\u5DE5\u4F5C\u533A\u5F00\u59CB\uFF0C\u8BA9 Agent \u8BFB\u53D6\u6587\u4EF6\u3001\u6267\u884C\u5DE5\u5177\u5E76\u4EA4\u4ED8\u53EF\u68C0\u67E5\u7684\u7ED3\u679C\u3002" })
 		    ] }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { style: card, "aria-label": "\u5F00\u59CB\u4EFB\u52A1", children: [
@@ -158,81 +158,87 @@ window.__ModuleLoader__.load({
 		      ] }, p.title)) }),
 		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { style: { fontSize: 12, opacity: 0.65, marginBottom: 0 }, children: "\u9996\u6B21\u9A8C\u8BC1\u5EFA\u8BAE\u4F7F\u7528\u7A7A\u6587\u4EF6\u5939\u3002\u6A21\u578B\u80FD\u5426\u8FDE\u63A5\u4EE5\u771F\u5B9E\u4EFB\u52A1\u7ED3\u679C\u4E3A\u51C6\u3002" })
 		    ] }),
-		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { style: card, "aria-label": "\u672C\u673A\u8FD0\u884C\u68C0\u67E5", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }, children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: "\u672C\u673A\u8FD0\u884C\u68C0\u67E5" }),
-		        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { style: button, disabled: busy, onClick: () => void refresh(), children: busy ? "\u68C0\u67E5\u4E2D\u2026" : "\u91CD\u65B0\u68C0\u67E5" })
-		      ] }),
-		      error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { role: "alert", children: [
-		        "\u68C0\u67E5\u5931\u8D25\uFF1A",
-		        error,
-		        "\u3002\u53EF\u91CD\u65B0\u68C0\u67E5\uFF0C\u6216\u5230\u684C\u9762\u7A97\u53E3\u6062\u590D\u670D\u52A1\u3002"
-		      ] }) : null,
-		      !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u672C\u673A\u72B6\u6001\u2026" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dl", { style: { display: "grid", gridTemplateColumns: "100px minmax(0,1fr)", gap: "10px 12px", fontSize: 13, lineHeight: 1.6 }, children: [
-		          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Agent \u670D\u52A1" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dd", { style: { margin: 0 }, children: [
-		            error ? "\u8FDE\u63A5\u4E2D\u65AD\uFF0C\u4EE5\u4E0B\u4E3A\u4E0A\u6B21\u68C0\u67E5\u7ED3\u679C" : "\u5DF2\u8FDE\u63A5",
-		            " \xB7 \u542F\u52A8\u4E8E ",
-		            new Date(data.startedAt).toLocaleTimeString()
-		          ] }),
-		          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "\u684C\u9762\u5916\u58F3" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { style: { margin: 0 }, children: data.service?.message ?? "\u672A\u8FDE\u63A5\uFF08\u53EF\u7EE7\u7EED\u4F7F\u7528\u6D4F\u89C8\u5668\u4E2D\u7684 Agent\uFF09" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Node" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dd", { style: { margin: 0 }, children: [
-		            data.node.version,
-		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
-		            data.node.path
-		          ] }),
-		          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "\u6570\u636E\u76EE\u5F55" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dd", { style: { margin: 0 }, children: [
-		            data.home ?? "\u672A\u77E5",
-		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
-		            data.writable ? "\u76EE\u5F55\u6743\u9650\u5141\u8BB8\u5199\u5165" : "\u76EE\u5F55\u4E0D\u53EF\u5199\uFF0C\u8BF7\u68C0\u67E5\u6743\u9650"
-		          ] }),
-		          data.tools.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "contents" }, children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t.name }),
-		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { style: { margin: 0 }, children: t.path ? `\u5DF2\u627E\u5230\uFF1A${t.path}` : "PATH \u4E2D\u672A\u627E\u5230\uFF0C\u8BF7\u5B89\u88C5\u6216\u8C03\u6574\u672C\u673A\u73AF\u5883\u540E\u91CD\u542F" })
-		          ] }, t.name)),
-		          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "\u6A21\u578B\u51ED\u636E" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { style: { margin: 0 }, children: data.credentialsFile ? "\u5B58\u5728\u51ED\u636E\u6587\u4EF6\uFF0C\u8FDE\u63A5\u80FD\u529B\u9700\u5B9E\u9645\u8FD0\u884C\u4EFB\u52A1\u9A8C\u8BC1" : "\u672A\u53D1\u73B0\u51ED\u636E\u6587\u4EF6\uFF0C\u8BF7\u5728\u6A21\u578B\u8BBE\u7F6E\u4E2D\u914D\u7F6E\uFF08\u73AF\u5883\u53D8\u91CF\u914D\u7F6E\u4E5F\u53EF\u80FD\u53EF\u7528\uFF09" })
+		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", { style: card, children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { style: { cursor: "pointer" }, children: "\u672C\u673A\u8FD0\u884C\u8BCA\u65AD\u4E0E\u670D\u52A1\u6062\u590D" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { "aria-label": "\u672C\u673A\u8FD0\u884C\u68C0\u67E5", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }, children: [
+		          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { children: "\u672C\u673A\u8FD0\u884C\u68C0\u67E5" }),
+		          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { style: button, disabled: busy, onClick: () => void refresh(), children: busy ? "\u68C0\u67E5\u4E2D\u2026" : "\u91CD\u65B0\u68C0\u67E5" })
 		        ] }),
-		        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 }, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { style: button, disabled: !data.canRestart || Boolean(error) || restarting, onClick: () => setConfirm(true), children: "\u91CD\u542F\u672C\u673A\u670D\u52A1" }) }),
-		        confirm ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { role: "alert", style: { marginTop: 12 }, children: [
-		          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "\u91CD\u542F\u4F1A\u4E2D\u65AD\u6B63\u5728\u6267\u884C\u7684\u4EFB\u52A1\u3002\u8BF7\u5148\u7B49\u5F85\u4EFB\u52A1\u7ED3\u675F\uFF1B\u5DF2\u6709\u4F1A\u8BDD\u4E0E\u914D\u7F6E\u4F1A\u4FDD\u7559\u3002" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { style: button, disabled: restarting, onClick: () => void restart(), children: "\u786E\u8BA4\u91CD\u542F" }),
-		          " ",
-		          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { style: button, onClick: () => setConfirm(false), children: "\u53D6\u6D88" })
+		        error ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { role: "alert", children: [
+		          "\u68C0\u67E5\u5931\u8D25\uFF1A",
+		          error,
+		          "\u3002\u53EF\u91CD\u65B0\u68C0\u67E5\uFF0C\u6216\u5230\u684C\u9762\u7A97\u53E3\u6062\u590D\u670D\u52A1\u3002"
 		        ] }) : null,
-		        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { style: { fontSize: 12, opacity: 0.6 }, children: [
-		          "\u68C0\u67E5\u65F6\u95F4\uFF1A",
-		          new Date(data.checkedAt).toLocaleString(),
-		          " \xB7 \u5DE5\u5177\u8DEF\u5F84\u68C0\u67E5\u4E0D\u4EE3\u8868\u547D\u4EE4\u5DF2\u6267\u884C\u6210\u529F\u3002"
+		        !data ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u672C\u673A\u72B6\u6001\u2026" }) : /* @__PURE__ */ (0, import_jsx_runtime.jsxs)(import_jsx_runtime.Fragment, { children: [
+		          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dl", { style: { display: "grid", gridTemplateColumns: "100px minmax(0,1fr)", gap: "10px 12px", fontSize: 13, lineHeight: 1.6 }, children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Agent \u670D\u52A1" }),
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dd", { style: { margin: 0 }, children: [
+		              error ? "\u8FDE\u63A5\u4E2D\u65AD\uFF0C\u4EE5\u4E0B\u4E3A\u4E0A\u6B21\u68C0\u67E5\u7ED3\u679C" : "\u5DF2\u8FDE\u63A5",
+		              " \xB7 \u542F\u52A8\u4E8E ",
+		              new Date(data.startedAt).toLocaleTimeString()
+		            ] }),
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "\u684C\u9762\u5916\u58F3" }),
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { style: { margin: 0 }, children: data.service?.message ?? "\u672A\u8FDE\u63A5\uFF08\u53EF\u7EE7\u7EED\u4F7F\u7528\u6D4F\u89C8\u5668\u4E2D\u7684 Agent\uFF09" }),
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "Node" }),
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dd", { style: { margin: 0 }, children: [
+		              data.node.version,
+		              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
+		              data.node.path
+		            ] }),
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "\u6570\u636E\u76EE\u5F55" }),
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dd", { style: { margin: 0 }, children: [
+		              data.home ?? "\u672A\u77E5",
+		              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
+		              data.writable ? "\u76EE\u5F55\u6743\u9650\u5141\u8BB8\u5199\u5165" : "\u76EE\u5F55\u4E0D\u53EF\u5199\uFF0C\u8BF7\u68C0\u67E5\u6743\u9650"
+		            ] }),
+		            data.tools.map((t) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "contents" }, children: [
+		              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: t.name }),
+		              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { style: { margin: 0 }, children: t.path ? `\u5DF2\u627E\u5230\uFF1A${t.path}` : "PATH \u4E2D\u672A\u627E\u5230\uFF0C\u8BF7\u5B89\u88C5\u6216\u8C03\u6574\u672C\u673A\u73AF\u5883\u540E\u91CD\u542F" })
+		            ] }, t.name)),
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "\u6A21\u578B\u51ED\u636E" }),
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { style: { margin: 0 }, children: data.credentialsFile ? "\u5B58\u5728\u51ED\u636E\u6587\u4EF6\uFF0C\u8FDE\u63A5\u80FD\u529B\u9700\u5B9E\u9645\u8FD0\u884C\u4EFB\u52A1\u9A8C\u8BC1" : "\u672A\u53D1\u73B0\u51ED\u636E\u6587\u4EF6\uFF0C\u8BF7\u5728\u6A21\u578B\u8BBE\u7F6E\u4E2D\u914D\u7F6E\uFF08\u73AF\u5883\u53D8\u91CF\u914D\u7F6E\u4E5F\u53EF\u80FD\u53EF\u7528\uFF09" })
+		          ] }),
+		          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 }, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { style: button, disabled: !data.canRestart || Boolean(error) || restarting, onClick: () => setConfirm(true), children: "\u91CD\u542F\u672C\u673A\u670D\u52A1" }) }),
+		          confirm ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { role: "alert", style: { marginTop: 12 }, children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "\u91CD\u542F\u4F1A\u4E2D\u65AD\u6B63\u5728\u6267\u884C\u7684\u4EFB\u52A1\u3002\u8BF7\u5148\u7B49\u5F85\u4EFB\u52A1\u7ED3\u675F\uFF1B\u5DF2\u6709\u4F1A\u8BDD\u4E0E\u914D\u7F6E\u4F1A\u4FDD\u7559\u3002" }),
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { style: button, disabled: restarting, onClick: () => void restart(), children: "\u786E\u8BA4\u91CD\u542F" }),
+		            " ",
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { style: button, onClick: () => setConfirm(false), children: "\u53D6\u6D88" })
+		          ] }) : null,
+		          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { style: { fontSize: 12, opacity: 0.6 }, children: [
+		            "\u68C0\u67E5\u65F6\u95F4\uFF1A",
+		            new Date(data.checkedAt).toLocaleString(),
+		            " \xB7 \u5DE5\u5177\u8DEF\u5F84\u68C0\u67E5\u4E0D\u4EE3\u8868\u547D\u4EE4\u5DF2\u6267\u884C\u6210\u529F\u3002"
+		          ] })
 		        ] })
 		      ] })
 		    ] }),
-		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { style: card, "aria-label": "\u63D2\u4EF6\u6E05\u5355", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { style: { marginTop: 0 }, children: "\u5F53\u524D Profile \u7684\u63D2\u4EF6" }),
-		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { style: { fontSize: 12, opacity: 0.7 }, children: "\u6CBF\u7528 DSH \u63D2\u4EF6\u5E02\u573A\u7BA1\u7406\u63D2\u4EF6\u3002\u5B89\u88C5\u6216\u66F4\u6539\u7EC4\u5408\u5305\u540E\u91CD\u542F\u670D\u52A1\u751F\u6548\uFF1B\u8FD9\u91CC\u663E\u793A\u5B89\u88C5\u4E0E\u6E05\u5355\u72B6\u6001\uFF0C\u4E0D\u4EE3\u8868\u6BCF\u4E2A\u63D2\u4EF6\u8FD0\u884C\u6B63\u5E38\u3002" }),
-		      data?.profileError ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { role: "alert", children: [
-		        "\u65E0\u6CD5\u8BFB\u53D6\u63D2\u4EF6\u6E05\u5355\uFF1A",
-		        data.profileError
-		      ] }) : null,
-		      data?.plugins.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { padding: "10px 0", borderTop: "1px solid #8883", fontSize: 13 }, children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: p.name }),
-		        /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { opacity: 0.7, marginTop: 4 }, children: [
-		          p.version ?? "\u672A\u5B89\u88C5\u6216\u5305\u4E0D\u53EF\u8BFB",
-		          " \xB7 ",
-		          p.enabled ? "\u5DF2\u52A0\u5165\u7EC4\u5408\u5305" : "\u672A\u52A0\u5165\u7EC4\u5408\u5305"
-		        ] })
-		      ] }, p.name)),
-		      data && !data.profileError && data.plugins.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "\u6B64 Profile \u6682\u65E0\u989D\u5916\u63D2\u4EF6\u3002" }) : null
+		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", { style: card, children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { style: { cursor: "pointer" }, children: "\u9AD8\u7EA7\uFF1A\u63D2\u4EF6\u8BCA\u65AD\u6E05\u5355" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { "aria-label": "\u63D2\u4EF6\u6E05\u5355", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h3", { style: { marginTop: 0 }, children: "\u5F53\u524D Profile \u7684\u63D2\u4EF6" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { style: { fontSize: 12, opacity: 0.7 }, children: "\u6CBF\u7528 DSH \u63D2\u4EF6\u5E02\u573A\u7BA1\u7406\u63D2\u4EF6\u3002\u5B89\u88C5\u6216\u66F4\u6539\u7EC4\u5408\u5305\u540E\u91CD\u542F\u670D\u52A1\u751F\u6548\uFF1B\u8FD9\u91CC\u663E\u793A\u5B89\u88C5\u4E0E\u6E05\u5355\u72B6\u6001\uFF0C\u4E0D\u4EE3\u8868\u6BCF\u4E2A\u63D2\u4EF6\u8FD0\u884C\u6B63\u5E38\u3002" }),
+		        data?.profileError ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { role: "alert", children: [
+		          "\u65E0\u6CD5\u8BFB\u53D6\u63D2\u4EF6\u6E05\u5355\uFF1A",
+		          data.profileError
+		        ] }) : null,
+		        data?.plugins.map((p) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { padding: "10px 0", borderTop: "1px solid #8883", fontSize: 13 }, children: [
+		          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: p.name }),
+		          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { opacity: 0.7, marginTop: 4 }, children: [
+		            p.version ?? "\u672A\u5B89\u88C5\u6216\u5305\u4E0D\u53EF\u8BFB",
+		            " \xB7 ",
+		            p.enabled ? "\u5DF2\u52A0\u5165\u7EC4\u5408\u5305" : "\u672A\u52A0\u5165\u7EC4\u5408\u5305"
+		          ] })
+		        ] }, p.name)),
+		        data && !data.profileError && data.plugins.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { children: "\u6B64 Profile \u6682\u65E0\u989D\u5916\u63D2\u4EF6\u3002" }) : null
+		      ] })
 		    ] }),
 		    message ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { role: "status", style: { ...card, margin: 0 }, children: message }) : null
 		  ] });
 		}
 		function apply(ctx) {
-		  ctx.slots.inject("settings.section", () => ctx.slots.register({ name: "settings.section", id: "dsh-px-workbench", order: -10, label: "\u672C\u673A\u5DE5\u4F5C\u53F0" }, Workbench));
+		  ctx.slots.inject("settings.section", () => ctx.slots.register({ name: "settings.section", id: "dsh-px-workbench", order: 110, label: "\u8FD0\u884C\u4E0E\u5E2E\u52A9" }, Workbench));
 		}
 
 		return module.exports;

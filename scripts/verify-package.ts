@@ -48,7 +48,9 @@ const REQUIRED = [
   'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-updater/lib/index.js',
   'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-updater/lib/client.js',
   'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-workbench/lib/index.js',
-  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-workbench/lib/client.js'
+  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-workbench/lib/client.js',
+  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-taskflow/lib/index.js',
+  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-taskflow/lib/client.js'
 ]
 
 /** 绝不该出现在交付物里的构建中间产物。 */

@@ -13,6 +13,8 @@
     "packages/dsh-px-updater/src/**/*.ts",
     "packages/dsh-px-updater/src/**/*.tsx",
     "packages/dsh-px-workbench/src/**/*.ts",
-    "packages/dsh-px-workbench/src/**/*.tsx"
+    "packages/dsh-px-workbench/src/**/*.tsx",
+    "packages/dsh-px-taskflow/src/**/*.ts",
+    "packages/dsh-px-taskflow/src/**/*.tsx"
   ]
 }

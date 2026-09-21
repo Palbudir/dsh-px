@@ -1,6 +1,6 @@
 {
   "name": "dsh-px",
-  "version": "0.1.0-beta.re.0.6",
+  "version": "0.1.0-beta.re.0.7",
   "private": true,
   "description": "dsh-px: a self-contained Electron desktop client that packages DeepSeek Harness (dsh) into one app.",
   "license": "MIT",
@@ -21,8 +21,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json && tsc --noEmit -p tsconfig.scripts.json",
     "//build:plugins": "自研插件的两个半边都是**预构建产物**（lib/index.js、lib/client.js），入库交付。宿主半边先构建：它决定 lib/ 是否完整。",
     "build:plugins": "npm run build:plugin-host && npm run build:plugin-client",
-    "build:plugin-host": "node packages/dsh-px-updater/scripts/build-host.mjs && node packages/dsh-px-updater/scripts/build-host.mjs packages/dsh-px-workbench",
-    "build:plugin-client": "node packages/dsh-px-updater/scripts/build-client.mjs && node packages/dsh-px-updater/scripts/build-client.mjs packages/dsh-px-workbench",
+    "build:plugin-host": "node packages/dsh-px-updater/scripts/build-host.mjs && node packages/dsh-px-updater/scripts/build-host.mjs packages/dsh-px-workbench && node packages/dsh-px-updater/scripts/build-host.mjs packages/dsh-px-taskflow",
+    "build:plugin-client": "node packages/dsh-px-updater/scripts/build-client.mjs && node packages/dsh-px-updater/scripts/build-client.mjs packages/dsh-px-workbench && node packages/dsh-px-updater/scripts/build-client.mjs packages/dsh-px-taskflow",
     "test": "npm run build:plugins && esbuild test/**/*.test.ts --bundle --platform=node --format=esm --packages=external --outdir=build-test --log-level=warning && node --test build-test/*.test.js",
     "dev": "npm run build && electron out/main/index.js",
     "//scripts": "scripts/*.ts 是源码，by scripts/run.mjs 编译到 build-scripts/ 后运行 —— 不用 Node 的 .ts 原生支持（实验特性，CI 上不该依赖）。",

@@ -1,6 +1,6 @@
 {
   "name": "dsh-px-workbench",
-  "version": "0.1.0-beta.re.0.6",
+  "version": "0.1.0-beta.re.0.7",
   "private": true,
   "type": "module",
   "description": "DSH-PX 本机工作台：运行检查、插件清单与服务恢复",

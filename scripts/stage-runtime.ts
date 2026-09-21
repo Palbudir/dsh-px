@@ -55,13 +55,15 @@ const DEFAULT_PLUGINS = [
   'dsh-mermaid-render',
   'dsh-find-plugin',
   'file:packages/dsh-px-updater',
-  'file:packages/dsh-px-workbench'
+  'file:packages/dsh-px-workbench',
+  'file:packages/dsh-px-taskflow'
 ]
 
 /**
  * 上述 `file:` 项对应的包名（bundle 协调要用真实包名，而不是 file: 路径）。
  */
-const LOCAL_PLUGIN_NAMES = ['dsh-px-updater', 'dsh-px-workbench']
+const LOCAL_PLUGIN_NAMES = ['dsh-px-updater', 'dsh-px-workbench', 'dsh-px-taskflow']
+const COMMUNITY_VERSIONS: Record<string, string> = { dshmarket: '1.48.0', 'dsh-better-sidebar': '0.19.1', 'dsh-mermaid-render': '0.1.11', 'dsh-find-plugin': '0.3.7' }
 
 /**
  * 用 `link:` 而不是 `file:` 安装本仓库自带的插件。
@@ -427,7 +429,7 @@ function stageHome (nodeExe, dshDir, { withPlugins, fromExisting }) {
           // link: 建符号链接（源码即生效，开发迭代正常）；file: 是硬拷贝。
           return [JSON.parse(readFileSync(join(abs, 'package.json'), 'utf8')).name, `${USE_LINK_FOR_LOCAL ? 'link' : 'file'}:${abs}`]
         }
-        return [p, 'latest']
+        return [p, COMMUNITY_VERSIONS[p]]
       }))
       writeFileSync(join(profileDir, 'package.json'), JSON.stringify({
         name: `dsh-profile-${PROFILE}`,
@@ -524,6 +526,17 @@ function stageHome (nodeExe, dshDir, { withPlugins, fromExisting }) {
   // 全新安装路径已在 buildFresh 内处理构建脚本（写 allowBuilds + 显式 rebuild
   // node-pty），这里不再重复。复制路径的树里已经带着构建好的二进制。
 
+  if (withPlugins) {
+    for (const [name, version] of Object.entries(COMMUNITY_VERSIONS)) {
+      const installed = JSON.parse(readFileSync(join(profileDir, 'node_modules', name, 'package.json'), 'utf8'))
+      if (installed.version !== version) throw new Error(`种子插件 ${name} 版本 ${installed.version} 不符合选型 ${version}，请更新种子后重新装配`)
+    }
+    for (const name of LOCAL_PLUGIN_NAMES) {
+      const installed = JSON.parse(readFileSync(join(profileDir, 'node_modules', name, 'package.json'), 'utf8'))
+      const expected = JSON.parse(readFileSync(join(REPO, 'packages', name, 'package.json'), 'utf8')).version
+      if (installed.version !== expected) throw new Error(`自制插件 ${name} 未更新到 ${expected}`)
+    }
+  }
   return home
 }
 
