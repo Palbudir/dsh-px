@@ -33,7 +33,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { ClientContext } from '@deepseek-ai/cordis'
 import type { SlotComponentProps } from '@deepseek-ai/dsh-client-ui-slots'
-import { requestJson, checkLabel } from './client-data'
+import { requestJson, checkLabel, desktopCheckLabel } from './client-data'
 
 /** 本插件的客户端模块 id；必须与 package.json 的包名一致（宿主用它索引模块）。 */
 const NS = 'dsh-px-updater'
@@ -47,9 +47,9 @@ export const inject = ['slots', 'locale']
 /** 站点文案。字典是扁平的 key → 模板串。 */
 const DICT: Record<string, Record<string, string>> = {
   zh: {
-    'nav': 'DSH-PX',
+    'nav': '版本与更新',
     'loading': '正在读取版本信息…',
-    'section.app': '桌面客户端',
+    'section.app': 'DSH-PX 整合包',
     'section.dsh': '随附 dsh 核心',
     'section.update': '更新',
     'check': '检查更新',
@@ -57,7 +57,7 @@ const DICT: Record<string, Record<string, string>> = {
     'checkFailed': '检查失败，可重试',
     'checkIncomplete': '部分信息未能确认',
     'lastChecked': '上次检查',
-    'latestCore': '最新 dsh 核心',
+    'latestCore': '上游 DSH（供参考）',
     'platform': '平台',
     'requested': '已发送请求',
     'shellDisconnected': '暂时无法连接桌面客户端',
@@ -83,10 +83,10 @@ const DICT: Record<string, Record<string, string>> = {
     'readyPrefix': '新版本已下载完成：',
     'installNow': '重启并安装',
     'installing': '正在请求…',
-    'note': '更新在后台下载，不影响当前工作。下载完成后可重启安装，或在退出时自动安装。'
+    'note': '整合包包含桌面端、DSH 核心和精选 Mods。更新在后台下载，下载完成后可重启安装。自行添加的插件与配置会保留。上游 DSH 版本仅供参考，随整合包验证后升级。'
   },
   en: {
-    'nav': 'DSH-PX',
+    'nav': 'Versions & updates',
     'loading': 'Reading version information…',
     'section.app': 'Desktop client',
     'section.dsh': 'Bundled dsh core',
@@ -96,7 +96,7 @@ const DICT: Record<string, Record<string, string>> = {
     'checkFailed': 'Check failed; retry',
     'checkIncomplete': 'Some versions could not be verified',
     'lastChecked': 'Last checked',
-    'latestCore': 'Latest dsh core',
+    'latestCore': 'Upstream DSH (reference)',
     'platform': 'Platform',
     'requested': 'Request sent',
     'shellDisconnected': 'Desktop client is unreachable',
@@ -325,7 +325,7 @@ function DshPxSection ({ t }: SlotComponentProps): unknown {
 
   const updateLabel = ((): string => {
     if (checking) return tr('checking')
-    if (!shellError && shell?.available && ['ready', 'downloading', 'installing'].includes(shell.phase)) return tr('available')
+    if (shell?.available) return tr(desktopCheckLabel(shell, shellError))
     return tr(checkLabel(check, checkError !== null))
   })()
   const lastChecked = [checkedAt, shell?.lastCheckedAt].filter((value): value is string =>
@@ -341,7 +341,7 @@ function DshPxSection ({ t }: SlotComponentProps): unknown {
       {installError !== null ? <div role="alert" style={{ overflowWrap: 'anywhere' }}>{installError}</div> : null}
       {shellError ? <div role="status">{tr('shellDisconnected')}</div> : null}
 
-      <Heading>{tr('section.app')}</Heading>
+      <h2 style={{ margin: '0 0 8px' }}>{tr('section.app')}</h2>
       {statusError !== null
         ? <div style={{ fontSize: 13, opacity: 0.8 }}>{tr('unavailable')}（{statusError}）</div>
         : <Row label={tr('current')} value={status?.current.app ?? tr('loading')} />}
@@ -351,7 +351,7 @@ function DshPxSection ({ t }: SlotComponentProps): unknown {
       <Row label={tr('platform')} value={status?.current.platform ?? '—'} />
 
       <Heading>{tr('section.update')}</Heading>
-      <Row label={tr('latest')} value={check?.latest.app ?? '—'} />
+      <Row label={tr('latest')} value={shell?.available && !shellError ? shell.version ?? '—' : check?.latest.app ?? '—'} />
       <Row label={tr('latestCore')} value={check?.latest.dsh ?? '—'} />
       <Row label={tr('lastChecked')} value={lastChecked ? new Date(lastChecked).toLocaleString() : tr('notChecked')} />
       {/* 外壳侧的进度：只有它能给出"正在下载 42%"/"已就绪"。 */}
@@ -380,7 +380,7 @@ function DshPxSection ({ t }: SlotComponentProps): unknown {
 
       {/* 目录信息来自宿主端点；设置页在浏览器围栏内，不能自己打开文件系统。
           因此：路径可复制，另有按钮经宿主端点请外壳去打开。 */}
-      <Heading>{tr('paths')}</Heading>
+      <details style={{ marginTop: 24, borderTop: '1px solid #8883', paddingTop: 16 }}><summary style={{ cursor: 'pointer' }}>{tr('paths')}</summary>
       <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 2 }}>{tr('copyHint')}</div>
 
       <div style={{ display: 'flex', gap: 8, margin: '8px 0 4px' }}>
@@ -392,6 +392,7 @@ function DshPxSection ({ t }: SlotComponentProps): unknown {
         ? <PathRow label="manifest" value={status.manifestPath} copyLabel={tr('copy')} copiedLabel={tr('copied')} />
         : null}
 
+      </details>
       <div style={{ fontSize: 12, opacity: 0.55, marginTop: 18, lineHeight: 1.7 }}>{tr('note')}</div>
     </div>
   )

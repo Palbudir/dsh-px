@@ -4,8 +4,8 @@
 > 当前开发目标：在这台 Windows 电脑上持续可用的 Agent 工作台。跨平台、分发和签名暂不作为验收门槛。
 
 日常使用入口仍为已安装的 **DSH-PX**。新功能通过正式版本发布与应用内更新交付。
-在 **设置 → 本机工作台** 中输入项目文件夹完整路径，添加工作区，再选择标准模式开始任务。
-这里同时提供运行检查、插件清单、任务提示词和服务重启。
+选择本机项目与模型后直接开始任务。会话右侧栏的 **任务进展** 展示交接点和实际执行记录；**设置 → 运行与帮助** 提供入门与诊断。
+目标是以 DSH 原生插件架构交付完整、可靠的 Agent 工作能力。插件是实现方式，产品标准见 [PRODUCT.md](docs/PRODUCT.md)。
 开发验证记录见 [本机使用与验收记录](docs/LOCAL-WORKBENCH.md)，发版步骤见 [RELEASING.md](docs/RELEASING.md)。
 
 > **非官方项目。** 本项目与深度求索（DeepSeek）公司**无任何从属、合作或授权关系**，
@@ -17,7 +17,7 @@
 随附 Node 与 dsh，日常通过已安装应用进入。当前版本针对本机现有环境验收；
 首次升级自管插件使用本机 pnpm 与缓存，工作台会显示依赖检查结果。
 
-> **当前版本 `0.1.0-beta.re.0.6`**（[Releases](https://github.com/Palbudir/dsh-px/releases)）。
+> **当前版本 `0.1.0-beta.re.0.7`**（[Releases](https://github.com/Palbudir/dsh-px/releases)）。
 > beta 的验收标准是刻意写得具体的：**打包后的应用必须至少达到官方 `dsh` 的能力。**
 > 这条标准是被**度量**出来的，不是被声明的 —— 见 [验收](#验收)。
 
@@ -127,6 +127,8 @@ npm run verify -- --boot --json     # 机器可读，供 CI 用
 
 ## 随附插件
 
+新增自制 `dsh-px-taskflow`：项目任务交接、执行证据与会话侧栏。它复用官方工具和会话持久化，不增加另一套执行或权限机制。
+
 预装到 web profile（包名均已核验）：
 
 | 包 | 作用 |
@@ -134,8 +136,8 @@ npm run verify -- --boot --json     # 机器可读，供 CI 用
 | `dshmarket` | 应用内插件市场：浏览、一键安装/升级、主题 |
 | `dsh-better-sidebar` | VSCode 式右侧栏（文件、编辑器、终端、Git、浏览器）；同时是其他 UI 插件注册页签的扩展点 |
 | `dsh-mermaid-render` | 把 mermaid 代码块渲染成图表卡 |
-| `dsh-find-plugin` | 让智能体从精选清单里发现插件 |
-| `dsh-px-updater` | **本项目自研**：版本/更新状态查询，并在 dsh 设置页注册一个「DSH-PX」分区 |
+| `dsh-find-plugin` | 让智能体搜索 GitHub 上的 DSH 插件 |
+| `dsh-px-updater` | **本项目自研**：版本/更新状态查询，并在 dsh 设置页注册一个「版本与更新」分区 |
 
 插件组合**不是硬编码的**，它就是 profile 的 `dsh.profile.bundles` 列表 —— 官方机制本身。
 应用是**继承**它，而不是重新实现它。自研插件同样走官方范式：声明 `dsh.bundle.patch`

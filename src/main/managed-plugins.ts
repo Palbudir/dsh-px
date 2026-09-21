@@ -1,7 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-export const MANAGED_PLUGIN_NAMES = ['dsh-px-updater', 'dsh-px-workbench'] as const
+export const MANAGED_PLUGIN_NAMES = ['dsh-px-updater', 'dsh-px-workbench', 'dsh-px-taskflow'] as const
 
 /** 一次版本迁移：由官方 CLI 安装和协调组合包，不覆盖用户的完整 profile。 */
 export async function ensureManagedPlugins (options: {

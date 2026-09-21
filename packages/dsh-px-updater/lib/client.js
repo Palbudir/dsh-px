@@ -58,9 +58,17 @@ window.__ModuleLoader__.load({
 		  if (failed) return "checkFailed";
 		  if (!check) return "notChecked";
 		  if (check.errors.length && !check.latest.app && !check.latest.dsh) return "checkFailed";
-		  if (check.updateAvailable.app || check.updateAvailable.dsh) return "available";
+		  if (check.updateAvailable.app) return "available";
 		  if (check.errors.length || !check.latest.app || !check.latest.dsh || check.current.app === "\u672A\u77E5" || check.current.dsh === "\u672A\u77E5") return "checkIncomplete";
 		  return "upToDate";
+		}
+		function desktopCheckLabel(shell, disconnected) {
+		  if (disconnected) return "shellDisconnected";
+		  if (shell.phase === "error") return "checkFailed";
+		  if (shell.phase === "checking") return "checking";
+		  if (["ready", "downloading", "installing"].includes(shell.phase)) return "available";
+		  if (shell.phase === "idle" && shell.version && shell.lastCheckedAt) return "upToDate";
+		  return "notChecked";
 		}
 
 		// packages/dsh-px-updater/src/client.tsx
@@ -70,9 +78,9 @@ window.__ModuleLoader__.load({
 		var inject = ["slots", "locale"];
 		var DICT = {
 		  zh: {
-		    "nav": "DSH-PX",
+		    "nav": "\u7248\u672C\u4E0E\u66F4\u65B0",
 		    "loading": "\u6B63\u5728\u8BFB\u53D6\u7248\u672C\u4FE1\u606F\u2026",
-		    "section.app": "\u684C\u9762\u5BA2\u6237\u7AEF",
+		    "section.app": "DSH-PX \u6574\u5408\u5305",
 		    "section.dsh": "\u968F\u9644 dsh \u6838\u5FC3",
 		    "section.update": "\u66F4\u65B0",
 		    "check": "\u68C0\u67E5\u66F4\u65B0",
@@ -80,7 +88,7 @@ window.__ModuleLoader__.load({
 		    "checkFailed": "\u68C0\u67E5\u5931\u8D25\uFF0C\u53EF\u91CD\u8BD5",
 		    "checkIncomplete": "\u90E8\u5206\u4FE1\u606F\u672A\u80FD\u786E\u8BA4",
 		    "lastChecked": "\u4E0A\u6B21\u68C0\u67E5",
-		    "latestCore": "\u6700\u65B0 dsh \u6838\u5FC3",
+		    "latestCore": "\u4E0A\u6E38 DSH\uFF08\u4F9B\u53C2\u8003\uFF09",
 		    "platform": "\u5E73\u53F0",
 		    "requested": "\u5DF2\u53D1\u9001\u8BF7\u6C42",
 		    "shellDisconnected": "\u6682\u65F6\u65E0\u6CD5\u8FDE\u63A5\u684C\u9762\u5BA2\u6237\u7AEF",
@@ -106,10 +114,10 @@ window.__ModuleLoader__.load({
 		    "readyPrefix": "\u65B0\u7248\u672C\u5DF2\u4E0B\u8F7D\u5B8C\u6210\uFF1A",
 		    "installNow": "\u91CD\u542F\u5E76\u5B89\u88C5",
 		    "installing": "\u6B63\u5728\u8BF7\u6C42\u2026",
-		    "note": "\u66F4\u65B0\u5728\u540E\u53F0\u4E0B\u8F7D\uFF0C\u4E0D\u5F71\u54CD\u5F53\u524D\u5DE5\u4F5C\u3002\u4E0B\u8F7D\u5B8C\u6210\u540E\u53EF\u91CD\u542F\u5B89\u88C5\uFF0C\u6216\u5728\u9000\u51FA\u65F6\u81EA\u52A8\u5B89\u88C5\u3002"
+		    "note": "\u6574\u5408\u5305\u5305\u542B\u684C\u9762\u7AEF\u3001DSH \u6838\u5FC3\u548C\u7CBE\u9009 Mods\u3002\u66F4\u65B0\u5728\u540E\u53F0\u4E0B\u8F7D\uFF0C\u4E0B\u8F7D\u5B8C\u6210\u540E\u53EF\u91CD\u542F\u5B89\u88C5\u3002\u81EA\u884C\u6DFB\u52A0\u7684\u63D2\u4EF6\u4E0E\u914D\u7F6E\u4F1A\u4FDD\u7559\u3002\u4E0A\u6E38 DSH \u7248\u672C\u4EC5\u4F9B\u53C2\u8003\uFF0C\u968F\u6574\u5408\u5305\u9A8C\u8BC1\u540E\u5347\u7EA7\u3002"
 		  },
 		  en: {
-		    "nav": "DSH-PX",
+		    "nav": "Versions & updates",
 		    "loading": "Reading version information\u2026",
 		    "section.app": "Desktop client",
 		    "section.dsh": "Bundled dsh core",
@@ -119,7 +127,7 @@ window.__ModuleLoader__.load({
 		    "checkFailed": "Check failed; retry",
 		    "checkIncomplete": "Some versions could not be verified",
 		    "lastChecked": "Last checked",
-		    "latestCore": "Latest dsh core",
+		    "latestCore": "Upstream DSH (reference)",
 		    "platform": "Platform",
 		    "requested": "Request sent",
 		    "shellDisconnected": "Desktop client is unreachable",
@@ -284,7 +292,7 @@ window.__ModuleLoader__.load({
 		  }, [shell?.available]);
 		  const updateLabel = (() => {
 		    if (checking) return tr("checking");
-		    if (!shellError && shell?.available && ["ready", "downloading", "installing"].includes(shell.phase)) return tr("available");
+		    if (shell?.available) return tr(desktopCheckLabel(shell, shellError));
 		    return tr(checkLabel(check, checkError !== null));
 		  })();
 		  const lastChecked = [checkedAt, shell?.lastCheckedAt].filter((value) => typeof value === "string" && Number.isFinite(Date.parse(value))).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
@@ -292,7 +300,7 @@ window.__ModuleLoader__.load({
 		    shell !== null && ["ready", "error", "downloading", "installing"].includes(shell.phase) ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(UpdateBanner, { state: shell, onInstall: doInstall, installing: installing || shellError, t: tr }) : null,
 		    installError !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { role: "alert", style: { overflowWrap: "anywhere" }, children: installError }) : null,
 		    shellError ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { role: "status", children: tr("shellDisconnected") }) : null,
-		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Heading, { children: tr("section.app") }),
+		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("h2", { style: { margin: "0 0 8px" }, children: tr("section.app") }),
 		    statusError !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { fontSize: 13, opacity: 0.8 }, children: [
 		      tr("unavailable"),
 		      "\uFF08",
@@ -303,7 +311,7 @@ window.__ModuleLoader__.load({
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("current"), value: status?.current.dsh ?? tr("loading") }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("platform"), value: status?.current.platform ?? "\u2014" }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Heading, { children: tr("section.update") }),
-		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("latest"), value: check?.latest.app ?? "\u2014" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("latest"), value: shell?.available && !shellError ? shell.version ?? "\u2014" : check?.latest.app ?? "\u2014" }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("latestCore"), value: check?.latest.dsh ?? "\u2014" }),
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("lastChecked"), value: lastChecked ? new Date(lastChecked).toLocaleString() : tr("notChecked") }),
 		    shell?.available === true ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("shellState"), value: shell.phase === "downloading" && shell.percent !== null ? `${shell.status} (${shell.percent}%)` : shell.status }) : null,
@@ -324,13 +332,15 @@ window.__ModuleLoader__.load({
 		    check?.releaseUrl !== null && check?.releaseUrl !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Row, { label: tr("openRelease"), value: check.releaseUrl }) : null,
 		    checkError !== null ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { role: "alert", style: { fontSize: 12.5, opacity: 0.8, overflowWrap: "anywhere" }, children: checkError }) : null,
 		    check !== null && check.errors.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { role: "status", style: { fontSize: 12.5, opacity: 0.8, overflowWrap: "anywhere" }, children: check.errors.join("\uFF1B") }) : null,
-		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)(Heading, { children: tr("paths") }),
-		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { fontSize: 12, opacity: 0.6, marginBottom: 2 }, children: tr("copyHint") }),
-		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 8, margin: "8px 0 4px" }, children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OpenButton, { what: "open-data", label: tr("openDataDir"), t: tr }),
-		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OpenButton, { what: "open-log", label: tr("openLog"), t: tr })
+		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("details", { style: { marginTop: 24, borderTop: "1px solid #8883", paddingTop: 16 }, children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("summary", { style: { cursor: "pointer" }, children: tr("paths") }),
+		      /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { fontSize: 12, opacity: 0.6, marginBottom: 2 }, children: tr("copyHint") }),
+		      /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { display: "flex", gap: 8, margin: "8px 0 4px" }, children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OpenButton, { what: "open-data", label: tr("openDataDir"), t: tr }),
+		        /* @__PURE__ */ (0, import_jsx_runtime.jsx)(OpenButton, { what: "open-log", label: tr("openLog"), t: tr })
+		      ] }),
+		      status?.manifestPath !== null && status?.manifestPath !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathRow, { label: "manifest", value: status.manifestPath, copyLabel: tr("copy"), copiedLabel: tr("copied") }) : null
 		    ] }),
-		    status?.manifestPath !== null && status?.manifestPath !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime.jsx)(PathRow, { label: "manifest", value: status.manifestPath, copyLabel: tr("copy"), copiedLabel: tr("copied") }) : null,
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { fontSize: 12, opacity: 0.55, marginTop: 18, lineHeight: 1.7 }, children: tr("note") })
 		  ] });
 		}

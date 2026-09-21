@@ -57,7 +57,7 @@ function Workbench (): unknown {
     finally { setRestarting(false) }
   }
   return <div style={{ display: 'grid', gap: 16, minWidth: 0, overflowWrap: 'anywhere', paddingBottom: 20 }}>
-    <div><h2 style={{ margin: '0 0 8px' }}>本机工作台</h2><p style={{ margin: 0, opacity: .7, lineHeight: 1.7 }}>从工作区开始，让 Agent 读取文件、执行工具并交付可检查的结果。</p></div>
+    <div><h2 style={{ margin: '0 0 8px' }}>运行与帮助</h2><p style={{ margin: 0, opacity: .7, lineHeight: 1.7 }}>从工作区开始，让 Agent 读取文件、执行工具并交付可检查的结果。</p></div>
     <section style={card} aria-label="开始任务">
       <h3 style={{ marginTop: 0 }}>开始一个任务</h3>
       <ol style={{ paddingLeft: 22, lineHeight: 1.9 }}>
@@ -76,7 +76,8 @@ function Workbench (): unknown {
       }}>复制：{p.title}</button>)}</div>
       <p style={{ fontSize: 12, opacity: .65, marginBottom: 0 }}>首次验证建议使用空文件夹。模型能否连接以真实任务结果为准。</p>
     </section>
-    <section style={card} aria-label="本机运行检查">
+    <details style={card}><summary style={{ cursor: 'pointer' }}>本机运行诊断与服务恢复</summary>
+    <section aria-label="本机运行检查">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}><h3>本机运行检查</h3><button style={button} disabled={busy} onClick={() => void refresh()}>{busy ? '检查中…' : '重新检查'}</button></div>
       {error ? <p role="alert">检查失败：{error}。可重新检查，或到桌面窗口恢复服务。</p> : null}
       {!data ? <p>正在读取本机状态…</p> : <>
@@ -93,16 +94,19 @@ function Workbench (): unknown {
         <p style={{ fontSize: 12, opacity: .6 }}>检查时间：{new Date(data.checkedAt).toLocaleString()} · 工具路径检查不代表命令已执行成功。</p>
       </>}
     </section>
-    <section style={card} aria-label="插件清单"><h3 style={{ marginTop: 0 }}>当前 Profile 的插件</h3>
+    </details>
+    <details style={card}><summary style={{ cursor: 'pointer' }}>高级：插件诊断清单</summary>
+    <section aria-label="插件清单"><h3 style={{ marginTop: 0 }}>当前 Profile 的插件</h3>
       <p style={{ fontSize: 12, opacity: .7 }}>沿用 DSH 插件市场管理插件。安装或更改组合包后重启服务生效；这里显示安装与清单状态，不代表每个插件运行正常。</p>
       {data?.profileError ? <p role="alert">无法读取插件清单：{data.profileError}</p> : null}
       {data?.plugins.map(p => <div key={p.name} style={{ padding: '10px 0', borderTop: '1px solid #8883', fontSize: 13 }}><strong>{p.name}</strong><div style={{ opacity: .7, marginTop: 4 }}>{p.version ?? '未安装或包不可读'} · {p.enabled ? '已加入组合包' : '未加入组合包'}</div></div>)}
       {data && !data.profileError && data.plugins.length === 0 ? <p>此 Profile 暂无额外插件。</p> : null}
     </section>
+    </details>
     {message ? <p role="status" style={{ ...card, margin: 0 }}>{message}</p> : null}
   </div>
 }
 
 export function apply (ctx: ClientContext): void {
-  ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'dsh-px-workbench', order: -10, label: '本机工作台' }, Workbench))
+  ctx.slots.inject('settings.section', () => ctx.slots.register({ name: 'settings.section', id: 'dsh-px-workbench', order: 110, label: '运行与帮助' }, Workbench))
 }

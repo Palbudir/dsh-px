@@ -45,7 +45,9 @@ const REQUIRED = [
   [join('packages', 'dsh-px-updater', 'lib', 'index.js'), '自研插件的宿主半边'],
   [join('packages', 'dsh-px-updater', 'lib', 'client.js'), '自研插件的客户端半边（设置页分区）'],
   [join('packages', 'dsh-px-workbench', 'lib', 'index.js'), '本机工作台宿主插件'],
-  [join('packages', 'dsh-px-workbench', 'lib', 'client.js'), '本机工作台客户端插件']
+  [join('packages', 'dsh-px-workbench', 'lib', 'client.js'), '本机工作台客户端插件'],
+  [join('packages', 'dsh-px-taskflow', 'lib', 'index.js'), '项目任务宿主插件'],
+  [join('packages', 'dsh-px-taskflow', 'lib', 'client.js'), '项目任务客户端插件']
 ]
 
 let failed = false
