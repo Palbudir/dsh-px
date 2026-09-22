@@ -29,6 +29,7 @@ import { fileURLToPath } from 'node:url'
 import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import { repoRoot } from './paths'
+import { copyHoistedDependencies } from './copy-hoisted-dependencies'
 import type { Dirent } from 'node:fs'
 
 const REPO = repoRoot()
@@ -340,7 +341,7 @@ function stageDsh () {
   log('正在组装自包含的 dsh 目录（提升安装 -> 嵌套布局）')
   mkdirSync(dest, { recursive: true })
   cpSync(src, dest, { recursive: true, dereference: true })
-  copyTree(prefixModules, join(dest, 'node_modules'), { skip: new Set(), skipEntry: null })
+  copyHoistedDependencies(prefixModules, join(dest, 'node_modules'))
   // 依赖已经搬进 runtime/dsh/node_modules，_dsh-install 就只是构建中间产物了。
   // **必须删掉**：extraResources 会把整个 runtime/ 打进安装包 ——
   // beta.0 就是这样凭空胖了约 300 MB（多出 28747 个文件条目）。
