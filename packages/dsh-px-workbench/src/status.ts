@@ -1,5 +1,6 @@
 import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
+import type { NetworkStatus } from '../../../src/shared/network-status'
 
 export interface ServiceState {
   phase: 'starting' | 'running' | 'restarting' | 'error' | 'stopped'
@@ -19,6 +20,7 @@ export interface LocalStatus {
   credentialsFile: boolean
   service: ServiceState | null
   canRestart: boolean
+  network: NetworkStatus | null
 }
 
 const startedAt = new Date().toISOString()
@@ -66,12 +68,19 @@ export function localStatus (): LocalStatus {
     readdirSync(profile) // 报告不可读 profile，而不是展示空清单。
   } catch (err) { profileError = err instanceof Error ? err.message : String(err) }
   const service = readServiceState()
+  let network: NetworkStatus | null = null
+  try {
+    const state = JSON.parse(readFileSync(join(process.env.DSH_PX_USER_DATA ?? '', 'network-state.json'), 'utf8'))
+    if (process.env.DSH_PX_USER_DATA && typeof state.message === 'string' && typeof state.source === 'string' && Number.isFinite(Date.parse(state.checkedAt))) {
+      network = { source: state.source, message: state.message, checkedAt: state.checkedAt, protocols: Array.isArray(state.protocols) ? state.protocols : [] }
+    }
+  } catch { /* browser-only / old shell */ }
   return {
     checkedAt: new Date().toISOString(), startedAt,
     node: { version: process.version, path: process.execPath }, home, writable,
     tools: ['git', 'pnpm'].map(name => ({ name, path: findCommand(name) })),
     plugins, profileError,
     credentialsFile: Boolean(home && existsSync(join(home, '.credentials.yaml'))),
-    service, canRestart: service?.phase === 'running'
+    service, canRestart: service?.phase === 'running', network
   }
 }

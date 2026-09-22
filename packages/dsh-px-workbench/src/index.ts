@@ -2,6 +2,7 @@ import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import type { HostPluginContext, HostResponse } from '@deepseek-ai/cordis'
 import { localStatus } from './status'
+import { checkWebAccess, type FetchPage, type NetworkCheck } from './network'
 
 export const name = 'dsh-px-workbench'
 export const inject: string[] = []
@@ -13,6 +14,18 @@ function json (res: HostResponse, status: number, body: unknown): void {
 }
 
 export function apply (ctx: HostPluginContext): void {
+  ctx.inject(['webServer', 'web'], host => {
+    const web = (host as typeof host & { web?: { fetch: FetchPage } }).web
+    if (!host.webServer || !web) return
+    let pending: Promise<NetworkCheck> | null = null
+    host.effect?.(() => host.webServer!.register({ kind: 'exact', path: `${DEFAULTS.routePrefix}/network-check`, handler: async (req, res) => {
+      if (req.method !== 'POST') return json(res, 405, { error: '请使用 POST' })
+      if (req.headers?.['x-dsh-px-request'] !== '1') return json(res, 403, { error: '请从本机工作台提交请求' })
+      if (new URL(req.url ?? '/', 'http://127.0.0.1').search) return json(res, 400, { error: '网络检查仅使用固定的公开文档地址' })
+      pending ??= checkWebAccess((request, signal) => web.fetch(request, signal)).finally(() => { pending = null })
+      json(res, 200, await pending)
+    } }), 'dsh-px-workbench: network check')
+  })
   ctx.inject(['webServer', 'workspaceController'], (ctx) => {
     if (!ctx.webServer) return
     const dispose = [

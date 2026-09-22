@@ -48,6 +48,7 @@ declare module 'react/jsx-runtime' {
  * 在这里复刻一遍既不可能也不必要 —— 宿主版本一变就会失配。
  */
 declare namespace JSX {
+  interface IntrinsicAttributes { key?: string | number }
   /** 任意标签、任意属性都接受（见上面的说明）。 */
   interface IntrinsicElements {
     [tag: string]: Record<string, unknown>

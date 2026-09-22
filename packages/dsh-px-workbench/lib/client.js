@@ -32,6 +32,15 @@ window.__ModuleLoader__.load({
 		var import_react = require("react");
 
 		// packages/dsh-px-updater/src/client-data.ts
+		var RequestError = class extends Error {
+		  constructor(message, status, code, retryable = true) {
+		    super(message);
+		    this.status = status;
+		    this.code = code;
+		    this.retryable = retryable;
+		    this.name = "RequestError";
+		  }
+		};
 		async function requestJson(path, init = {}, allowCheckFailure = false) {
 		  const controller = new AbortController();
 		  const timer = setTimeout(() => controller.abort(), 2e4);
@@ -43,7 +52,12 @@ window.__ModuleLoader__.load({
 		    });
 		    const body = await response.json();
 		    if (!response.ok && !(allowCheckFailure && response.status === 502 && Array.isArray(body?.errors))) {
-		      throw new Error(typeof body?.error === "string" ? body.error : `HTTP ${response.status}`);
+		      throw new RequestError(
+		        typeof body?.error === "string" ? body.error : `HTTP ${response.status}`,
+		        response.status,
+		        typeof body?.code === "string" ? body.code : void 0,
+		        typeof body?.retryable === "boolean" ? body.retryable : response.status >= 500
+		      );
 		    }
 		    return body;
 		  } catch (error) {
@@ -76,6 +90,20 @@ window.__ModuleLoader__.load({
 		  const [path, setPath] = (0, import_react.useState)("");
 		  const [adding, setAdding] = (0, import_react.useState)(false);
 		  const [workspaceMessage, setWorkspaceMessage] = (0, import_react.useState)("");
+		  const [networkCheck, setNetworkCheck] = (0, import_react.useState)(null);
+		  const [networkBusy, setNetworkBusy] = (0, import_react.useState)(false);
+		  const [networkError, setNetworkError] = (0, import_react.useState)("");
+		  async function checkNetwork() {
+		    setNetworkBusy(true);
+		    setNetworkError("");
+		    try {
+		      setNetworkCheck(await requestJson(`${prefix}/network-check`, { method: "POST" }));
+		    } catch (err) {
+		      setNetworkError(err instanceof Error ? err.message : String(err));
+		    } finally {
+		      setNetworkBusy(false);
+		    }
+		  }
 		  async function addWorkspace() {
 		    setAdding(true);
 		    setWorkspaceMessage("");
@@ -197,7 +225,41 @@ window.__ModuleLoader__.load({
 		              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { style: { margin: 0 }, children: t.path ? `\u5DF2\u627E\u5230\uFF1A${t.path}` : "PATH \u4E2D\u672A\u627E\u5230\uFF0C\u8BF7\u5B89\u88C5\u6216\u8C03\u6574\u672C\u673A\u73AF\u5883\u540E\u91CD\u542F" })
 		            ] }, t.name)),
 		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "\u6A21\u578B\u51ED\u636E" }),
-		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { style: { margin: 0 }, children: data.credentialsFile ? "\u5B58\u5728\u51ED\u636E\u6587\u4EF6\uFF0C\u8FDE\u63A5\u80FD\u529B\u9700\u5B9E\u9645\u8FD0\u884C\u4EFB\u52A1\u9A8C\u8BC1" : "\u672A\u53D1\u73B0\u51ED\u636E\u6587\u4EF6\uFF0C\u8BF7\u5728\u6A21\u578B\u8BBE\u7F6E\u4E2D\u914D\u7F6E\uFF08\u73AF\u5883\u53D8\u91CF\u914D\u7F6E\u4E5F\u53EF\u80FD\u53EF\u7528\uFF09" })
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dd", { style: { margin: 0 }, children: data.credentialsFile ? "\u5B58\u5728\u51ED\u636E\u6587\u4EF6\uFF0C\u8FDE\u63A5\u80FD\u529B\u9700\u5B9E\u9645\u8FD0\u884C\u4EFB\u52A1\u9A8C\u8BC1" : "\u672A\u53D1\u73B0\u51ED\u636E\u6587\u4EF6\uFF0C\u8BF7\u5728\u6A21\u578B\u8BBE\u7F6E\u4E2D\u914D\u7F6E\uFF08\u73AF\u5883\u53D8\u91CF\u914D\u7F6E\u4E5F\u53EF\u80FD\u53EF\u7528\uFF09" }),
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("dt", { children: "\u7F51\u9875\u7F51\u7EDC" }),
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("dd", { style: { margin: 0 }, children: [
+		              data.network?.message ?? "\u5C1A\u65E0\u684C\u9762\u7F51\u7EDC\u8BCA\u65AD\u3002\u53EF\u6267\u884C\u4E0B\u65B9\u7F51\u9875\u8BFB\u53D6\u68C0\u67E5\u3002",
+		              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("br", {}),
+		              /* @__PURE__ */ (0, import_jsx_runtime.jsx)("small", { children: "\u4EE3\u7406\u8BBE\u7F6E\u5728\u670D\u52A1\u542F\u52A8\u65F6\u751F\u6548\uFF1B\u7CFB\u7EDF\u4EE3\u7406\u6539\u53D8\u540E\u9700\u91CD\u542F\u670D\u52A1\u3002" })
+		            ] })
+		          ] }),
+		          /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("section", { "aria-label": "\u7F51\u9875\u8BFB\u53D6\u68C0\u67E5", style: { margin: "16px 0" }, children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { style: button, disabled: networkBusy || Boolean(error), onClick: () => void checkNetwork(), children: networkBusy ? "\u6B63\u5728\u8BFB\u53D6\u516C\u5F00\u6587\u6863\u2026" : "\u68C0\u67E5\u7F51\u9875\u8BFB\u53D6" }),
+		            /* @__PURE__ */ (0, import_jsx_runtime.jsx)("p", { style: { fontSize: 12, opacity: 0.7 }, children: "\u4F7F\u7528 Agent \u540C\u4E00\u7F51\u9875\u670D\u52A1\u8BFB\u53D6 Node.js \u4E0E TypeScript \u5B98\u65B9\u6587\u6863\uFF0C\u4E0D\u8C03\u7528\u6A21\u578B\u3002" }),
+		            networkError ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("p", { role: "alert", children: [
+		              networkError,
+		              networkCheck ? " \u4E0B\u65B9\u4E3A\u4E0A\u6B21\u68C0\u67E5\u7ED3\u679C\u3002" : ""
+		            ] }) : null,
+		            networkCheck ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { role: "status", children: [
+		              networkCheck.checks.map((check) => /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { style: { marginTop: 8 }, children: [
+		                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("strong", { children: check.ok ? "\u53EF\u8BFB\u53D6" : "\u672A\u901A\u8FC7" }),
+		                " \xB7 ",
+		                check.message,
+		                /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("code", { children: check.url }) }),
+		                check.ok ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("small", { children: [
+		                  "HTTP ",
+		                  check.status,
+		                  " \xB7 \u5DF2\u53D6\u5F97 ",
+		                  check.chars,
+		                  " \u5B57\u7B26",
+		                  check.truncated ? "\uFF08\u670D\u52A1\u5DF2\u622A\u65AD\uFF09" : ""
+		                ] }) : null
+		              ] }, check.url)),
+		              /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("small", { children: [
+		                "\u68C0\u67E5\u4E8E ",
+		                new Date(networkCheck.checkedAt).toLocaleString()
+		              ] })
+		            ] }) : null
 		          ] }),
 		          /* @__PURE__ */ (0, import_jsx_runtime.jsx)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 }, children: /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { style: button, disabled: !data.canRestart || Boolean(error) || restarting, onClick: () => setConfirm(true), children: "\u91CD\u542F\u672C\u673A\u670D\u52A1" }) }),
 		          confirm ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("div", { role: "alert", style: { marginTop: 12 }, children: [

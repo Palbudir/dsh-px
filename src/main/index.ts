@@ -23,7 +23,7 @@ import { spawn, execFile } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync, readFileSync, createWriteStream } from 'node:fs'
 import { createServer } from 'node:net'
 import { createRequire } from 'node:module'
-import { dirname, join, resolve, delimiter } from 'node:path'
+import { dirname, join, resolve, delimiter, isAbsolute } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { ChildProcess } from 'node:child_process'
 import type { WriteStream } from 'node:fs'
@@ -36,7 +36,16 @@ import { UpdateController } from './update-controller'
 import { createServiceState } from './service-state'
 import { HarnessOutput } from './harness-output'
 import { ensureManagedPlugins } from './managed-plugins'
+import { resolveHarnessProxy } from './network-proxy'
 import type { UpdateBridgeState } from './update-bridge'
+
+// Explicit local QA profile; set before logs, single-instance lock and any service state are created.
+// Normal installed launches continue to use the existing userData directory.
+if (process.env.DSH_PX_USER_DATA_DIR) {
+  if (!isAbsolute(process.env.DSH_PX_USER_DATA_DIR)) throw new Error('DSH_PX_USER_DATA_DIR 必须是绝对路径')
+  mkdirSync(process.env.DSH_PX_USER_DATA_DIR, { recursive: true })
+  app.setPath('userData', process.env.DSH_PX_USER_DATA_DIR)
+}
 
 /**
  * electron-updater 是 CJS 包，从 ESM 里用 createRequire 加载最稳。
@@ -441,10 +450,15 @@ interface HarnessStartResult {
 /**
  * 拉起随附的 harness，并在它宣告出自己的鉴权 URL 后兑现 Promise。
  */
-function startHarness ({ runtime, home, port }: HarnessContext): HarnessStartResult {
+async function startHarness ({ runtime, home, port }: HarnessContext): Promise<HarnessStartResult> {
   const args = [runtime.dshEntry, '--profile', PROFILE_NAME, '--host', HOST, '--port', String(port), '--no-open']
+  const network = await resolveHarnessProxy(home)
+  // Only the sanitized status is written. Proxy URLs (which may carry credentials in explicit settings) never enter logs.
+  writeFileSync(join(app.getPath('userData'), 'network-state.json'), JSON.stringify(network.status))
+  process.stdout.write(`[dsh-px] 网络配置来源：${network.status.source}\n`)
   const env = {
     ...process.env,
+    ...network.additions,
     DSH_HOME: home,
     DSH_PX_PROFILE: PROFILE_NAME,
     PATH: [dirname(runtime.node), process.env.PATH ?? ''].join(delimiter),
@@ -971,7 +985,7 @@ async function restartHarnessOnce (): Promise<boolean> {
     const page = splashPagePath()
     if (win && page) await win.loadFile(page)
     reportSeedProgress({ done: 0, total: 0, copied: 0, phase: '正在重新连接 Agent 服务…' })
-    const started = startHarness(ctxState)
+    const started = await startHarness(ctxState)
     harness = started.child
     await waitForReady(cleanUrl, READY_TIMEOUT_MS, started.child)
     const authUrl = await Promise.race([

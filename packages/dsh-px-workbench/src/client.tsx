@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { ClientContext } from '@deepseek-ai/cordis'
 import type { LocalStatus } from './status'
+import type { NetworkCheck } from './network'
 import { requestJson } from '../../dsh-px-updater/src/client-data'
 
 export const inject = ['slots', 'locale']
@@ -23,6 +24,15 @@ function Workbench (): unknown {
   const [path, setPath] = useState('')
   const [adding, setAdding] = useState(false)
   const [workspaceMessage, setWorkspaceMessage] = useState('')
+  const [networkCheck, setNetworkCheck] = useState<NetworkCheck | null>(null)
+  const [networkBusy, setNetworkBusy] = useState(false)
+  const [networkError, setNetworkError] = useState('')
+  async function checkNetwork (): Promise<void> {
+    setNetworkBusy(true); setNetworkError('')
+    try { setNetworkCheck(await requestJson<NetworkCheck>(`${prefix}/network-check`, { method: 'POST' })) }
+    catch (err) { setNetworkError(err instanceof Error ? err.message : String(err)) }
+    finally { setNetworkBusy(false) }
+  }
   async function addWorkspace (): Promise<void> {
     setAdding(true); setWorkspaceMessage('')
     try {
@@ -88,7 +98,14 @@ function Workbench (): unknown {
           <dt>数据目录</dt><dd style={{ margin: 0 }}>{data.home ?? '未知'}<br/>{data.writable ? '目录权限允许写入' : '目录不可写，请检查权限'}</dd>
           {data.tools.map(t => <div key={t.name} style={{ display: 'contents' }}><dt>{t.name}</dt><dd style={{ margin: 0 }}>{t.path ? `已找到：${t.path}` : 'PATH 中未找到，请安装或调整本机环境后重启'}</dd></div>)}
           <dt>模型凭据</dt><dd style={{ margin: 0 }}>{data.credentialsFile ? '存在凭据文件，连接能力需实际运行任务验证' : '未发现凭据文件，请在模型设置中配置（环境变量配置也可能可用）'}</dd>
+          <dt>网页网络</dt><dd style={{ margin: 0 }}>{data.network?.message ?? '尚无桌面网络诊断。可执行下方网页读取检查。'}<br/><small>代理设置在服务启动时生效；系统代理改变后需重启服务。</small></dd>
         </dl>
+        <section aria-label="网页读取检查" style={{ margin: '16px 0' }}>
+          <button style={button} disabled={networkBusy || Boolean(error)} onClick={() => void checkNetwork()}>{networkBusy ? '正在读取公开文档…' : '检查网页读取'}</button>
+          <p style={{ fontSize: 12, opacity: .7 }}>使用 Agent 同一网页服务读取 Node.js 与 TypeScript 官方文档，不调用模型。</p>
+          {networkError ? <p role="alert">{networkError}{networkCheck ? ' 下方为上次检查结果。' : ''}</p> : null}
+          {networkCheck ? <div role="status">{networkCheck.checks.map(check => <div key={check.url} style={{ marginTop: 8 }}><strong>{check.ok ? '可读取' : '未通过'}</strong> · {check.message}<div><code>{check.url}</code></div>{check.ok ? <small>HTTP {check.status} · 已取得 {check.chars} 字符{check.truncated ? '（服务已截断）' : ''}</small> : null}</div>)}<small>检查于 {new Date(networkCheck.checkedAt).toLocaleString()}</small></div> : null}
+        </section>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}><button style={button} disabled={!data.canRestart || Boolean(error) || restarting} onClick={() => setConfirm(true)}>重启本机服务</button></div>
         {confirm ? <div role="alert" style={{ marginTop: 12 }}><p>重启会中断正在执行的任务。请先等待任务结束；已有会话与配置会保留。</p><button style={button} disabled={restarting} onClick={() => void restart()}>确认重启</button> <button style={button} onClick={() => setConfirm(false)}>取消</button></div> : null}
         <p style={{ fontSize: 12, opacity: .6 }}>检查时间：{new Date(data.checkedAt).toLocaleString()} · 工具路径检查不代表命令已执行成功。</p>
