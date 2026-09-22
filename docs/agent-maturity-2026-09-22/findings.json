@@ -1,0 +1,405 @@
+[
+  {
+    "id": "B01",
+    "title": "默认测试命令在 Windows 沙箱中失败",
+    "kind": "运行兼容",
+    "priority": "P1",
+    "difficulty": 4,
+    "effort": "5–10 人日",
+    "confidence": "已实测",
+    "observed": "E01/E02 两轮 npm test 均出现 spawn EPERM；同测试使用 --test-isolation=none 通过，应用外默认 runner 也通过。",
+    "cause": "受限 Windows 子进程管道是官方已记录的约束；仍需确定各测试工具的覆盖面。",
+    "repro": "在安装版对 fixture 执行 npm test，对照 npm run test:single。",
+    "repair": "诊断具体限制；优先原生受控执行与明确的单命令审批，不关闭全局沙箱。",
+    "acceptance": "两种 runner 对相同断言产生一致结果，命令受限时不误报业务测试失败。",
+    "schedule": "下一功能发布的阻塞队列",
+    "features": [
+      "S01",
+      "M29"
+    ],
+    "evidence": [
+      "E01",
+      "E02",
+      "C04"
+    ]
+  },
+  {
+    "id": "B02",
+    "title": "完成交付后待办仍未完成",
+    "kind": "任务一致性",
+    "priority": "P1",
+    "difficulty": 3,
+    "effort": "3–5 人日",
+    "confidence": "已实测",
+    "observed": "E02 最终答复与 ready_for_review 均称完成；唯一 todo/write 事件仍为 1 进行中、6 待处理。",
+    "cause": "模型未更新 todo，产品缺少终态一致性核对。",
+    "repro": "完成多文件修复后比较最终答复、任务进展与 todo 卡。",
+    "repair": "读取原生 todo/交接点/验证状态，交付前自动核对并让 Agent 解释或完成剩余项。",
+    "acceptance": "完成、失败、取消三种终态在各面板一致。",
+    "schedule": "第一轮可靠性交付",
+    "features": [
+      "S02"
+    ],
+    "evidence": [
+      "E02",
+      "C01"
+    ]
+  },
+  {
+    "id": "B03",
+    "title": "只读执行也触发交接点过时提示",
+    "kind": "提示噪声",
+    "priority": "P2",
+    "difficulty": 2,
+    "effort": "1–3 人日",
+    "confidence": "已实测及纯函数复现",
+    "observed": "E02 正常交付流程后就提示记录过时；E08 checkpoint 后单次 read 使 stale=true。",
+    "cause": "当前设计将任何后续执行视为可能过时；不是数据丢失。",
+    "repro": "构造 checkpoint → read → 成功结果，调用 reviewEvents。",
+    "repair": "区分只读、修改和验证；未知工具保守标记，但不一律警告。",
+    "acceptance": "纯读取不告警，修改后要求重新核验，后续执行仍可追踪。",
+    "schedule": "第一轮低成本修正",
+    "features": [
+      "S05"
+    ],
+    "evidence": [
+      "E02",
+      "E08",
+      "C01"
+    ]
+  },
+  {
+    "id": "B04",
+    "title": "读取历史退出码被误判为本次工具失败",
+    "kind": "证据错误",
+    "priority": "P1",
+    "difficulty": 2,
+    "effort": "2–4 人日",
+    "confidence": "纯函数已复现",
+    "observed": "read 返回正常文本“历史命令输出：[exit code: 1]”，isError=false，却得到 error。",
+    "cause": "对所有工具输出应用退出码正则，缺少工具类型与状态约束。",
+    "repro": "运行 evidence-probe，检查第一项。",
+    "repair": "优先结构化状态；命令结果才解析受约束的终止标记。",
+    "acceptance": "历史日志读取成功、真实非零命令失败，两者不会混淆。",
+    "schedule": "第一轮低成本修正",
+    "features": [
+      "S03"
+    ],
+    "evidence": [
+      "E08",
+      "C01"
+    ]
+  },
+  {
+    "id": "B05",
+    "title": "兼容编辑器的 view 被统计为写文件",
+    "kind": "归因错误",
+    "priority": "P2",
+    "difficulty": 2,
+    "effort": "1–3 人日",
+    "confidence": "纯函数已复现",
+    "observed": "str_replace_editor(command=view,path=readme.md) 成功后 changedFiles 包含 readme.md。",
+    "cause": "只按工具名判断写入，没有看子命令。当前标准预设更常用 read/write/edit，影响范围需注明。",
+    "repro": "运行 evidence-probe 的 view 样例。",
+    "repair": "按子命令判定，名称改为文件工具路径并与实际 diff 对照。",
+    "acceptance": "只查看不出现写入标记，真实编辑仍记入。",
+    "schedule": "第一轮低成本修正",
+    "features": [
+      "S04"
+    ],
+    "evidence": [
+      "E08",
+      "C01"
+    ]
+  },
+  {
+    "id": "B06",
+    "title": "旧真实证据超出 80 条窗口后无法引用",
+    "kind": "功能限制",
+    "priority": "P2",
+    "difficulty": 3,
+    "effort": "2–5 人日",
+    "confidence": "纯函数已复现",
+    "observed": "81 次调用后引用 c0 被拒，尽管事件日志仍保存它。",
+    "cause": "验证逻辑只搜索展示窗口；当前明确记录了此限制，不是记录丢失。",
+    "repro": "运行 evidence-probe 的 81 次调用样例。",
+    "repair": "展示分页与证据按编号查找分离。",
+    "acceptance": "200 次调用后可引用第一条结果，伪造编号仍被拒绝。",
+    "schedule": "第一轮后半或第二轮",
+    "features": [
+      "S17"
+    ],
+    "evidence": [
+      "E08",
+      "C01"
+    ]
+  },
+  {
+    "id": "B07",
+    "title": "任务进展默认输出可能过大",
+    "kind": "性能与成本风险",
+    "priority": "P2",
+    "difficulty": 3,
+    "effort": "3–5 人日",
+    "confidence": "合成负载已测，真实卡顿未证实",
+    "observed": "80 条最大长度输入/输出的 review 序列化为 297669 字节；每次检查可能重复注入。",
+    "cause": "默认返回全文片段，而非摘要加按需展开。不能由字节数直接推出 token 或费用。",
+    "repro": "运行 evidence-probe 的长输出样例。",
+    "repair": "默认紧凑摘要、按需输出、增量事件缓存；先测真实会话性能。",
+    "acceptance": "固定信息量下默认响应受预算约束，历史全文仍可获取。",
+    "schedule": "第二轮效率优化",
+    "features": [
+      "S18",
+      "L21"
+    ],
+    "evidence": [
+      "E08",
+      "C01"
+    ]
+  },
+  {
+    "id": "B08",
+    "title": "只读审查指令下仍写工作区外临时脚本",
+    "kind": "指令遵守",
+    "priority": "P1",
+    "difficulty": 4,
+    "effort": "4–8 人日",
+    "confidence": "已实测且日志及文件核对",
+    "observed": "E03 明确禁止写文件和项目外访问，Agent 仍用 Set-Content 在 DSH 沙箱 TEMP 写入 6 个 probe 脚本。",
+    "cause": "workspace-write 允许沙箱临时目录；自然语言约束未转为相应任务权限。不是沙箱逃逸。",
+    "repro": "E03 审查提示 + 事件 seq 179/181/186/188/193/195/200/210。",
+    "repair": "提供只读审查入口并约束副作用；临时写入也纳入范围检查，不只看 git status。",
+    "acceptance": "只读审查无用户请求之外的脚本写入；确需副作用时使用明确授权流程。",
+    "schedule": "下一功能发布的阻塞队列",
+    "features": [
+      "S06",
+      "M26"
+    ],
+    "evidence": [
+      "E03",
+      "E04",
+      "C04"
+    ]
+  },
+  {
+    "id": "B09",
+    "title": "自写测试全过仍漏业务边界",
+    "kind": "模型质量与验收覆盖",
+    "priority": "P1",
+    "difficulty": 3,
+    "effort": "4–7 人日",
+    "confidence": "独立隐藏测试已复现",
+    "observed": "E02 20/20 通过，但 toString SKU 在空库存下成功返回 NaN 库存；E03 无提示审查能发现。",
+    "cause": "这是 Agent 在测试项目生成的代码缺陷，不是 DSH-PX 库存业务逻辑 bug。",
+    "repro": "checkout([{sku:'toString',price:100,qty:1}],{}) 应缺货却返回。",
+    "repair": "加入独立审查、隐藏验收和输入契约；先复现再归因。",
+    "acceptance": "预置边界缺陷被检出，未定义契约不夸称确定缺陷。",
+    "schedule": "第一轮质量门槛",
+    "features": [
+      "S07",
+      "S08",
+      "S15"
+    ],
+    "evidence": [
+      "E02",
+      "E03",
+      "E07"
+    ]
+  },
+  {
+    "id": "B10",
+    "title": "审查报告存在未经证实的行为断言",
+    "kind": "模型报告质量",
+    "priority": "P1",
+    "difficulty": 3,
+    "effort": "3–6 人日",
+    "confidence": "已独立反证",
+    "observed": "E03 声称冻结库存再次使用会抛 TypeError；独立测试正常返回新库存。E04 又错误暗示只读时不能侧证文件不存在。",
+    "cause": "模型总结超出实际验证，推断与观察未充分区分。",
+    "repro": "冻结一个有效库存后调用 checkout；检查 sentinel 不存在。",
+    "repair": "发现附可执行复现；未运行事实降为待核实，结束时核对断言与结果。",
+    "acceptance": "报告不出现无证据的确定性结果；错误发现被反证后能撤回。",
+    "schedule": "第一轮质量门槛",
+    "features": [
+      "S26"
+    ],
+    "evidence": [
+      "E03",
+      "E04",
+      "E07"
+    ]
+  },
+  {
+    "id": "B11",
+    "title": "公开网页抓取被本机 DNS/代理路径阻塞",
+    "kind": "本机集成阻塞",
+    "priority": "P1",
+    "difficulty": 3,
+    "effort": "3–6 人日",
+    "confidence": "已实测并核对解析",
+    "observed": "E10 搜索有效；nodejs.org、raw.githubusercontent.com、GitHub 等抓取报非公网 IP；本机解析 Node.js/GitHub 到 10.100.0.x。",
+    "cause": "直接抓取的公网地址校验触发；原生代码已有代理路由分支。实际代理配置/继承原因仍待下一轮定位，未认定某代理软件故障。",
+    "repro": "E10 的 web_fetch 调用；系统 Resolve-DnsName 对照。",
+    "repair": "按 DSH 原生 http-proxy 机制打通可信代理路由并增加诊断；保留私网和重定向约束。",
+    "acceptance": "公开官方文档抓取成功；故意请求私网目标仍被阻止。",
+    "schedule": "首批本机可用性修复",
+    "features": [
+      "S29"
+    ],
+    "evidence": [
+      "E10",
+      "C10"
+    ]
+  },
+  {
+    "id": "B12",
+    "title": "搜索结果来源等级标注不准确",
+    "kind": "研究可信度",
+    "priority": "P2",
+    "difficulty": 2,
+    "effort": "2–4 人日",
+    "confidence": "已实测",
+    "observed": "E10 将 nodejs.cn 的译文页面表述为官方文档；并未读取页面正文。",
+    "cause": "来源身份和抓取状态没有作为独立数据约束；Agent 虽披露未读正文，仍有措辞混淆。",
+    "repro": "检查 E10 最终回复中的链接域名和来源描述。",
+    "repair": "官网、非官方译文、摘要与已读取正文分别标记。",
+    "acceptance": "报告来源类型准确，未读正文不会成为原文依据。",
+    "schedule": "网页抓取修复同批",
+    "features": [
+      "S30"
+    ],
+    "evidence": [
+      "E10"
+    ]
+  },
+  {
+    "id": "B13",
+    "title": "主动取消在界面显示为失败",
+    "kind": "状态表达",
+    "priority": "P2",
+    "difficulty": 2,
+    "effort": "2–4 人日",
+    "confidence": "已实测",
+    "observed": "E05 约 15 秒时停止 45 秒命令；事件 reason=aborted/user，界面显示失败和 tool call aborted。",
+    "cause": "事件已区分用户取消，产品显示未使用该区分。",
+    "repro": "运行 Start-Sleep -Seconds 45，点击停止并刷新。",
+    "repair": "取消状态独立展示；需要检查副作用的取消单独提示。",
+    "acceptance": "用户取消显示已取消；真实执行故障仍显示失败。",
+    "schedule": "第一轮状态修正",
+    "features": [
+      "S11",
+      "S03"
+    ],
+    "evidence": [
+      "E05"
+    ]
+  },
+  {
+    "id": "B14",
+    "title": "任务记录读取异常全部返回 404",
+    "kind": "诊断不足",
+    "priority": "P2",
+    "difficulty": 2,
+    "effort": "2–4 人日",
+    "confidence": "源码与已有单测确认",
+    "observed": "冷会话读取抛 corrupt 后同样返回 404/稍后重试。",
+    "cause": "catch 没有区分不存在、损坏和 I/O 问题；未破坏真实用户日志做验证。",
+    "repro": "见 taskflow.test.ts 的持久读取错误 stub。",
+    "repair": "保留稳定错误码与原因，客户端给准确恢复建议。",
+    "acceptance": "损坏与不存在可区分，句柄在异常后仍正确关闭。",
+    "schedule": "第一轮诊断修正",
+    "features": [
+      "S24"
+    ],
+    "evidence": [
+      "C01"
+    ]
+  },
+  {
+    "id": "B15",
+    "title": "当前路线图与产品方向矛盾",
+    "kind": "文档漂移",
+    "priority": "P2",
+    "difficulty": 1,
+    "effort": "1–2 人日",
+    "confidence": "本轮修订",
+    "observed": "旧路线图把能力持平称为上限；README 有此轮尚未发布等过时内容。",
+    "cause": "历史包装阶段描述未随产品目标更新。",
+    "repro": "对照基线 c8056e9 的 README/ROADMAP 与 PRODUCT。",
+    "repair": "以本次审计作为当前路线图，历史内容单独归档。",
+    "acceptance": "文档一致指向基于 DSH 插件实现成熟本机 Agent。",
+    "schedule": "本轮完成文档修订",
+    "features": [
+      "S25"
+    ],
+    "evidence": [
+      "C09"
+    ]
+  },
+  {
+    "id": "B16",
+    "title": "升级耗时与用户提示不匹配",
+    "kind": "更新体验",
+    "priority": "P2",
+    "difficulty": 3,
+    "effort": "3–6 人日",
+    "confidence": "同日历史记录，非本轮重测",
+    "observed": "re.0.7 升级约 8 分钟，旧提示按 1–4 分钟描述。",
+    "cause": "缺少阶段耗时；本轮未重新安装，不能据一次记录计算普遍平均值。",
+    "repro": "参见保留的 re.0.7 验收记录。",
+    "repair": "先采样分阶段耗时，再减少重复安装与静态时长承诺。",
+    "acceptance": "三次本机采样有细分耗时，界面准确显示仍在执行的阶段。",
+    "schedule": "近期维护队列",
+    "features": [
+      "S23"
+    ],
+    "evidence": [
+      "C08"
+    ]
+  },
+  {
+    "id": "B17",
+    "title": "语言和篇幅约束执行不稳",
+    "kind": "交互质量",
+    "priority": "P3",
+    "difficulty": 2,
+    "effort": "1–3 人日",
+    "confidence": "已实测",
+    "observed": "中文任务出现英文进展/工具说明；E01 简短要求、E10 200 字要求均未稳定满足。",
+    "cause": "用户可见过程、思考折叠内容、工具描述和最终答复缺少分层规范。",
+    "repro": "查看 E01/E05/E10 页面记录。",
+    "repair": "调整可见文案与交付模板；不强制翻译代码标识。",
+    "acceptance": "主要操作说明中文，简短请求不被模板扩写成长报告。",
+    "schedule": "随相关界面迭代",
+    "features": [
+      "S19"
+    ],
+    "evidence": [
+      "E01",
+      "E05",
+      "E10"
+    ]
+  },
+  {
+    "id": "B18",
+    "title": "结构门禁被描述为能力成熟度证明",
+    "kind": "验收范围不清",
+    "priority": "P2",
+    "difficulty": 2,
+    "effort": "文档 1 人日；任务回归 4–8 人日",
+    "confidence": "源码确认；本轮修正文案",
+    "observed": "verify-capabilities 对比组合树并检查启动，不能证明每项工具或模型工作流能用。",
+    "cause": "工程结构验证与真实任务验证被混为一个能力平价结论。",
+    "repro": "阅读脚本对比字段及 boot 流程，对照 E10 抓取阻塞。",
+    "repair": "保留结构门禁，增加安装版正常/异常任务矩阵并限定宣称。",
+    "acceptance": "发布说明分别列结构、自动测试、真实任务和未测范围。",
+    "schedule": "本轮文案 + 下一轮回归",
+    "features": [
+      "S15"
+    ],
+    "evidence": [
+      "C06",
+      "E10"
+    ]
+  }
+]

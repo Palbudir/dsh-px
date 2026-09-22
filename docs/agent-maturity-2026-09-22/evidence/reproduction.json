@@ -1,0 +1,75 @@
+{
+  "baselineVersion": "re.0.7 / DSH 0.1.5-rc.2",
+  "node": "v24.16.0",
+  "before": {
+    "exitCode": 1,
+    "summary": [
+      "ℹ tests 9",
+      "ℹ pass 2",
+      "ℹ fail 7"
+    ],
+    "stdout": "✖ 按价格乘数量结算 (1.9664ms)\n✖ 优惠后按分舍入 (0.2251ms)\n✖ 成功不修改原库存 (0.979ms)\n✖ 后续缺货不污染原库存 (0.3674ms)\n✔ 重复SKU按累计量检查 (0.1958ms)\n✖ 拒绝负数数量 (0.1564ms)\n✖ 拒绝小数价格 (0.1544ms)\n✖ 拒绝未知优惠码 (0.1383ms)\n✔ 空订单 (0.1394ms)\nℹ tests 9\nℹ suites 0\nℹ pass 2\nℹ fail 7\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 77.3079\n\n✖ failing tests:\n\ntest at test\\checkout.test.js:4:1\n✖ 按价格乘数量结算 (1.9664ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  102 !== 200\n  \n      at TestContext.<anonymous> (file:///C:/Palbudir/dsh-px/build-test/audit-repro-1790085142491/before/test/checkout.test.js:4:28)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1306:25)\n      at Test.start (node:internal/test_runner/test:1177:17)\n      at startSubtestAfterBootstrap (node:internal/test_runner/harness:385:17) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 102,\n    expected: 200,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n\ntest at test\\checkout.test.js:5:1\n✖ 优惠后按分舍入 (0.2251ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly equal:\n  \n  91.8 !== 91\n  \n      at TestContext.<anonymous> (file:///C:/Palbudir/dsh-px/build-test/audit-repro-1790085142491/before/test/checkout.test.js:5:27)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1306:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:897:18)\n      at Test.postRun (node:internal/test_runner/test:1447:19)\n      at Test.run (node:internal/test_runner/test:1372:12)\n      at async startSubtestAfterBootstrap (node:internal/test_runner/harness:385:3) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: 91.8,\n    expected: 91,\n    operator: 'strictEqual',\n    diff: 'simple'\n  }\n\ntest at test\\checkout.test.js:6:1\n✖ 成功不修改原库存 (0.979ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n  + actual - expected\n  \n    {\n  +   a: 1\n  -   a: 3\n    }\n  \n      at TestContext.<anonymous> (file:///C:/Palbudir/dsh-px/build-test/audit-repro-1790085142491/before/test/checkout.test.js:6:99)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1306:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:897:18)\n      at Test.postRun (node:internal/test_runner/test:1447:19)\n      at Test.run (node:internal/test_runner/test:1372:12)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: { a: 1 },\n    expected: { a: 3 },\n    operator: 'deepStrictEqual',\n    diff: 'simple'\n  }\n\ntest at test\\checkout.test.js:7:1\n✖ 后续缺货不污染原库存 (0.3674ms)\n  AssertionError [ERR_ASSERTION]: Expected values to be strictly deep-equal:\n  + actual - expected\n  \n    {\n  +   a: 1,\n  -   a: 3,\n      b: 0\n    }\n  \n      at TestContext.<anonymous> (file:///C:/Palbudir/dsh-px/build-test/audit-repro-1790085142491/before/test/checkout.test.js:7:141)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1306:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:897:18)\n      at Test.postRun (node:internal/test_runner/test:1447:19)\n      at Test.run (node:internal/test_runner/test:1372:12)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {\n    generatedMessage: true,\n    code: 'ERR_ASSERTION',\n    actual: { a: 1, b: 0 },\n    expected: { a: 3, b: 0 },\n    operator: 'deepStrictEqual',\n    diff: 'simple'\n  }\n\ntest at test\\checkout.test.js:9:1\n✖ 拒绝负数数量 (0.1564ms)\n  AssertionError [ERR_ASSERTION]: Missing expected exception.\n      at TestContext.<anonymous> (file:///C:/Palbudir/dsh-px/build-test/audit-repro-1790085142491/before/test/checkout.test.js:9:26)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1306:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:897:18)\n      at Test.postRun (node:internal/test_runner/test:1447:19)\n      at Test.run (node:internal/test_runner/test:1372:12)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {\n    generatedMessage: false,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: undefined,\n    operator: 'throws',\n    diff: 'simple'\n  }\n\ntest at test\\checkout.test.js:10:1\n✖ 拒绝小数价格 (0.1544ms)\n  AssertionError [ERR_ASSERTION]: Missing expected exception.\n      at TestContext.<anonymous> (file:///C:/Palbudir/dsh-px/build-test/audit-repro-1790085142491/before/test/checkout.test.js:10:26)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1306:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:897:18)\n      at Test.postRun (node:internal/test_runner/test:1447:19)\n      at Test.run (node:internal/test_runner/test:1372:12)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {\n    generatedMessage: false,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: undefined,\n    operator: 'throws',\n    diff: 'simple'\n  }\n\ntest at test\\checkout.test.js:11:1\n✖ 拒绝未知优惠码 (0.1383ms)\n  AssertionError [ERR_ASSERTION]: Missing expected exception.\n      at TestContext.<anonymous> (file:///C:/Palbudir/dsh-px/build-test/audit-repro-1790085142491/before/test/checkout.test.js:11:27)\n      at Test.runInAsyncScope (node:async_hooks:227:14)\n      at Test.run (node:internal/test_runner/test:1306:25)\n      at Test.processPendingSubtests (node:internal/test_runner/test:897:18)\n      at Test.postRun (node:internal/test_runner/test:1447:19)\n      at Test.run (node:internal/test_runner/test:1372:12)\n      at async Test.processPendingSubtests (node:internal/test_runner/test:897:7) {\n    generatedMessage: false,\n    code: 'ERR_ASSERTION',\n    actual: undefined,\n    expected: undefined,\n    operator: 'throws',\n    diff: 'simple'\n  }\n",
+    "stderr": ""
+  },
+  "after": {
+    "exitCode": 0,
+    "summary": [
+      "ℹ tests 20",
+      "ℹ pass 20",
+      "ℹ fail 0"
+    ],
+    "stdout": "✔ 非法输入不修改库存 (1.6055ms)\n✔ 库存不足时 stock 不被改动且报错 (0.3951ms)\n✔ 返回的 stock 是副本，改动它不影响入参 (0.1873ms)\n✔ 成功时入参 items 不被修改 (0.1841ms)\n✔ 空优惠码等于不打折 (0.159ms)\n✔ SAVE10 按分四舍五入（0.5 分进位） (0.1651ms)\n✔ 多 SKU 与重复 SKU 的库存扣减正确 (0.1547ms)\n✔ 未知 sku 视为零库存 (0.1411ms)\n✔ 拒绝非数组订单与空订单不打折 (0.2796ms)\n✔ 拒绝非安全整数与布尔值输入 (0.2891ms)\n✔ 零价商品合法且不改变库存语义 (0.2023ms)\n✔ 按价格乘数量结算 (0.9867ms)\n✔ 优惠后按分舍入 (0.1744ms)\n✔ 成功不修改原库存 (0.6611ms)\n✔ 后续缺货不污染原库存 (0.2614ms)\n✔ 重复SKU按累计量检查 (0.1428ms)\n✔ 拒绝负数数量 (0.1354ms)\n✔ 拒绝小数价格 (0.1369ms)\n✔ 拒绝未知优惠码 (0.1231ms)\n✔ 空订单 (0.1664ms)\nℹ tests 20\nℹ suites 0\nℹ pass 20\nℹ fail 0\nℹ cancelled 0\nℹ skipped 0\nℹ todo 0\nℹ duration_ms 85.7355\n",
+    "stderr": ""
+  },
+  "holdouts": [
+    {
+      "name": "prototype-key",
+      "expected": "throw under the stated/clarified contract",
+      "threw": false,
+      "actual": {
+        "total": 100,
+        "stock": {
+          "toString": null
+        }
+      },
+      "hasNaN": true
+    },
+    {
+      "name": "NaN-stock (contract clarification)",
+      "expected": "throw under the stated/clarified contract",
+      "threw": false,
+      "actual": {
+        "total": 100,
+        "stock": {
+          "a": null
+        }
+      },
+      "hasNaN": true
+    },
+    {
+      "name": "string-stock (contract clarification)",
+      "expected": "throw under the stated/clarified contract",
+      "threw": false,
+      "actual": {
+        "total": 100,
+        "stock": {
+          "a": 2
+        }
+      },
+      "hasNaN": false
+    }
+  ],
+  "frozenStockCounterexample": {
+    "threw": false,
+    "actual": {
+      "total": 100,
+      "stock": {
+        "a": 1
+      }
+    }
+  },
+  "preservation": {
+    "originalTestUnchanged": true,
+    "humanNotesUnchanged": true
+  }
+}

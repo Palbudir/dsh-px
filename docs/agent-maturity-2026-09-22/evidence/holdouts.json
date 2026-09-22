@@ -1,0 +1,32 @@
+[
+  {
+    "name": "原型链 SKU 应视为缺货",
+    "passed": false,
+    "actual": {
+      "total": 100,
+      "stock": {
+        "toString": null
+      }
+    }
+  },
+  {
+    "name": "NaN 库存应拒绝",
+    "passed": false,
+    "actual": {
+      "total": 100,
+      "stock": {
+        "a": null
+      }
+    }
+  },
+  {
+    "name": "字符串库存应拒绝",
+    "passed": false,
+    "actual": {
+      "total": 100,
+      "stock": {
+        "a": 2
+      }
+    }
+  }
+]
