@@ -1,3 +1,6 @@
+export class RequestError extends Error {
+  constructor (message: string, readonly status: number, readonly code?: string, readonly retryable = true) { super(message); this.name = 'RequestError' }
+}
 /** 保留端点返回的具体错误，不把 409/503 当作安装成功。 */
 export async function requestJson<T> (path: string, init: RequestInit = {}, allowCheckFailure = false): Promise<T> {
   const controller = new AbortController()
@@ -7,7 +10,8 @@ export async function requestJson<T> (path: string, init: RequestInit = {}, allo
       headers: { accept: 'application/json', 'x-dsh-px-request': '1', ...init.headers } })
     const body = await response.json()
     if (!response.ok && !(allowCheckFailure && response.status === 502 && Array.isArray(body?.errors))) {
-      throw new Error(typeof body?.error === 'string' ? body.error : `HTTP ${response.status}`)
+      throw new RequestError(typeof body?.error === 'string' ? body.error : `HTTP ${response.status}`, response.status,
+        typeof body?.code === 'string' ? body.code : undefined, typeof body?.retryable === 'boolean' ? body.retryable : response.status >= 500)
     }
     return body as T
   } catch (error) {

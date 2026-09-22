@@ -78,6 +78,14 @@ function localStatus() {
     profileError = err instanceof Error ? err.message : String(err);
   }
   const service = readServiceState();
+  let network = null;
+  try {
+    const state = JSON.parse(readFileSync(join(process.env.DSH_PX_USER_DATA ?? "", "network-state.json"), "utf8"));
+    if (process.env.DSH_PX_USER_DATA && typeof state.message === "string" && typeof state.source === "string" && Number.isFinite(Date.parse(state.checkedAt))) {
+      network = { source: state.source, message: state.message, checkedAt: state.checkedAt, protocols: Array.isArray(state.protocols) ? state.protocols : [] };
+    }
+  } catch {
+  }
   return {
     checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
     startedAt,
@@ -89,8 +97,37 @@ function localStatus() {
     profileError,
     credentialsFile: Boolean(home && existsSync(join(home, ".credentials.yaml"))),
     service,
-    canRestart: service?.phase === "running"
+    canRestart: service?.phase === "running",
+    network
   };
+}
+
+// packages/dsh-px-workbench/src/network.ts
+var targets = ["https://nodejs.org/api/test.html", "https://www.typescriptlang.org/docs/"];
+function explanation(error) {
+  const code = error?.code;
+  if (code === "WEB_BLOCKED_URL") return "\u516C\u5F00\u9875\u9762\u7684\u5730\u5740\u88AB\u7F51\u7EDC\u7B56\u7565\u62D2\u7EDD\u3002\u8BF7\u68C0\u67E5\u4EE3\u7406\u6765\u6E90\uFF1B\u4E0D\u8981\u5173\u95ED\u5730\u5740\u4FDD\u62A4\u3002";
+  if (code === "WEB_ABORTED" || code === "WEB_FETCH_TIMEOUT" || error?.name === "TimeoutError") return "\u8BFB\u53D6\u8D85\u65F6\uFF0C\u8BF7\u68C0\u67E5\u672C\u673A\u4EE3\u7406\u662F\u5426\u8FD0\u884C\u3002";
+  if (code?.startsWith("WEB_PROVIDER")) return "\u7F51\u9875\u8BFB\u53D6\u670D\u52A1\u4E0D\u53EF\u7528\uFF0C\u8BF7\u68C0\u67E5\u5F53\u524D DSH \u7EC4\u5408\u3002";
+  return "\u7F51\u9875\u8BFB\u53D6\u5931\u8D25\uFF0C\u8BF7\u68C0\u67E5\u4EE3\u7406\u8FDE\u63A5\u4E0E\u670D\u52A1\u65E5\u5FD7\u3002";
+}
+async function checkWebAccess(fetchPage) {
+  return { checkedAt: (/* @__PURE__ */ new Date()).toISOString(), checks: await Promise.all(targets.map(async (url) => {
+    try {
+      const result = await fetchPage({ url }, AbortSignal.timeout(1e4));
+      const ok = result.statusCode >= 200 && result.statusCode < 300 && result.body.content.length > 0;
+      return {
+        url,
+        ok,
+        status: result.statusCode,
+        chars: result.body.content.length,
+        truncated: result.truncated,
+        message: ok ? "\u7F51\u9875\u6B63\u6587\u8BFB\u53D6\u6210\u529F" : `\u670D\u52A1\u8FD4\u56DE HTTP ${result.statusCode}\uFF0C\u5C1A\u672A\u53D6\u5F97\u53EF\u7528\u6B63\u6587`
+      };
+    } catch (error) {
+      return { url, ok: false, status: null, chars: 0, truncated: false, message: explanation(error) };
+    }
+  })) };
 }
 
 // packages/dsh-px-workbench/src/index.ts
@@ -102,6 +139,20 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 function apply(ctx) {
+  ctx.inject(["webServer", "web"], (host) => {
+    const web = host.web;
+    if (!host.webServer || !web) return;
+    let pending = null;
+    host.effect?.(() => host.webServer.register({ kind: "exact", path: `${DEFAULTS.routePrefix}/network-check`, handler: async (req, res) => {
+      if (req.method !== "POST") return json(res, 405, { error: "\u8BF7\u4F7F\u7528 POST" });
+      if (req.headers?.["x-dsh-px-request"] !== "1") return json(res, 403, { error: "\u8BF7\u4ECE\u672C\u673A\u5DE5\u4F5C\u53F0\u63D0\u4EA4\u8BF7\u6C42" });
+      if (new URL(req.url ?? "/", "http://127.0.0.1").search) return json(res, 400, { error: "\u7F51\u7EDC\u68C0\u67E5\u4EC5\u4F7F\u7528\u56FA\u5B9A\u7684\u516C\u5F00\u6587\u6863\u5730\u5740" });
+      pending ??= checkWebAccess((request, signal) => web.fetch(request, signal)).finally(() => {
+        pending = null;
+      });
+      json(res, 200, await pending);
+    } }), "dsh-px-workbench: network check");
+  });
   ctx.inject(["webServer", "workspaceController"], (ctx2) => {
     if (!ctx2.webServer) return;
     const dispose = [

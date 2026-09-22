@@ -32,6 +32,15 @@ window.__ModuleLoader__.load({
 		var import_react = require("react");
 
 		// packages/dsh-px-updater/src/client-data.ts
+		var RequestError = class extends Error {
+		  constructor(message, status, code, retryable = true) {
+		    super(message);
+		    this.status = status;
+		    this.code = code;
+		    this.retryable = retryable;
+		    this.name = "RequestError";
+		  }
+		};
 		async function requestJson(path, init = {}, allowCheckFailure = false) {
 		  const controller = new AbortController();
 		  const timer = setTimeout(() => controller.abort(), 2e4);
@@ -43,7 +52,12 @@ window.__ModuleLoader__.load({
 		    });
 		    const body = await response.json();
 		    if (!response.ok && !(allowCheckFailure && response.status === 502 && Array.isArray(body?.errors))) {
-		      throw new Error(typeof body?.error === "string" ? body.error : `HTTP ${response.status}`);
+		      throw new RequestError(
+		        typeof body?.error === "string" ? body.error : `HTTP ${response.status}`,
+		        response.status,
+		        typeof body?.code === "string" ? body.code : void 0,
+		        typeof body?.retryable === "boolean" ? body.retryable : response.status >= 500
+		      );
 		    }
 		    return body;
 		  } catch (error) {

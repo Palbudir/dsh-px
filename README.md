@@ -4,7 +4,7 @@
 > 当前开发目标：在这台 Windows 电脑上持续可用的 Agent 工作台。跨平台、分发和签名暂不作为验收门槛。
 
 日常使用入口仍为已安装的 **DSH-PX**。新功能通过正式版本发布与应用内更新交付。
-选择本机项目与模型后直接开始任务。会话右侧栏的 **任务进展** 展示交接点和实际执行记录；**设置 → 运行与帮助** 提供入门与诊断。
+选择本机项目与模型后直接开始任务。会话右侧栏的 **任务进展** 支持执行历史分页与按需读取输出；**设置 → 运行与帮助** 提供入门、网络来源和实际网页读取检查。
 目标是以 DSH 原生插件架构交付完整、可靠的 Agent 工作能力。插件是实现方式，产品标准见 [PRODUCT.md](docs/PRODUCT.md)。
 开发验证记录见 [本机使用与验收记录](docs/LOCAL-WORKBENCH.md)，发版步骤见 [RELEASING.md](docs/RELEASING.md)。
 最新调查见 [成熟 Agent 能力审计](docs/agent-maturity-2026-09-22/README.md)：100 项分阶段功能、18 项问题排期、安装版实测及可离线复现证据；[交互清单](docs/agent-maturity-2026-09-22/index.html) 可直接在本机浏览器打开。
@@ -18,7 +18,7 @@
 随附 Node 与 dsh，日常通过已安装应用进入。当前版本针对本机现有环境验收；
 首次升级自管插件使用本机 pnpm 与缓存，工作台会显示依赖检查结果。
 
-> **当前版本 `0.1.0-beta.re.0.7`**（[Releases](https://github.com/Palbudir/dsh-px/releases)）。
+> **当前版本 `0.1.0-beta.re.0.8`**（[Releases](https://github.com/Palbudir/dsh-px/releases)）。
 > 打包后的应用需保留官方 `dsh` 的基础组合，并通过本机实际任务验证。
 > 组合树对比是结构门禁，完整产品能力还需要正常与异常任务验收 —— 见 [验收](#验收)。
 
@@ -132,6 +132,7 @@ npm run verify -- --boot --json     # 机器可读，供 CI 用
 ## 随附插件
 
 新增自制 `dsh-px-taskflow`：项目任务交接、执行证据与会话侧栏。它复用官方工具和会话持久化，不增加另一套执行或权限机制。
+re.0.8 的历史分页、`task_evidence` 和系统代理接入方式见 [版本说明](docs/releases/re.0.8.md)。每版以明确功能验收为硬标准，Agent 整体效果作为软观察，见 [验收分层](docs/PRODUCT.md)。
 
 预装到 web profile（包名均已核验）：
 
@@ -151,7 +152,7 @@ npm run verify -- --boot --json     # 机器可读，供 CI 用
 
 ## 更新
 
-当前发布版本为 re.0.7，后续改动继续通过功能分支、PR、Release 和原安装版更新交付。
+当前版本为 re.0.8，改动通过功能分支、PR、Release 和原安装版更新交付。
 历史接力记录见 [开发交接](docs/DEVELOPMENT-HANDOFF.md)，当前后续事项以 [能力路线图](docs/ROADMAP.md) 为准。
 
 两层东西独立更新：
