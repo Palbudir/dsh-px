@@ -1,7 +1,7 @@
 name: verify
 
-# beta 门禁。这个工作流正是"至少达到官方 dsh 能力"从一个口号变成一条可检查主张的原因：
-# 它从零装配一份运行时，然后把组合出的插件树与官方安装的树逐行 diff。
+# 运行时结构门禁：从零装配并与官方插件树比较，同时验证启动。
+# 模型行为与完整任务能力另按 docs/agent-maturity-2026-09-22/evaluations.md 验收。
 #
 # 重要教训：这个 workflow 在最初几版里**从未真正构建过任何东西** ——
 # stage 脚本那时依赖"本机已装全局 dsh"，而 CI 上根本没有，
@@ -58,13 +58,18 @@ jobs:
       - name: 类型检查
         run: npm run typecheck
 
+      - name: 审计清单与生成文档一致性
+        run: |
+          node scripts/build-agent-audit.mjs
+          git diff --exit-code -- docs/agent-maturity-2026-09-22/feature-catalog.md docs/agent-maturity-2026-09-22/findings.md docs/agent-maturity-2026-09-22/index.html
+
       - name: 单元测试
         run: npm run test
 
       - name: 装配运行时（Node + dsh + 从 npm 构建 profile）
         run: npm run stage -- --with-plugins
 
-      - name: 验证能力平价
+      - name: 验证运行时组合与启动
         run: npm run verify -- --boot --json
 
       - name: 上传装配清单

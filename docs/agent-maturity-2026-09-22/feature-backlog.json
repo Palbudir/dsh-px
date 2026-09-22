@@ -1,0 +1,2976 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-09-22",
+  "baseline": "0.1.0-beta.re.0.7 / DSH 0.1.5-rc.2",
+  "scope": "本台 Windows 电脑上的成熟 Agent 工作能力",
+  "features": [
+    {
+      "id": "S01",
+      "phase": "短期",
+      "category": "可靠执行",
+      "name": "Windows 命令兼容与失败诊断",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "5–10 人日",
+      "status": "部分具备",
+      "intro": "让 npm test、构建和常见 Python 命令在本机稳定运行。",
+      "current": "pwsh 可用；E01/E02 默认测试遇到 spawn EPERM。",
+      "gap": "基础任务被环境差异打断。",
+      "subtasks": [
+        "建立 Node/pnpm/Python 命令样例库",
+        "区分管道限制、权限、PATH 与代码错误",
+        "提供具体命令的原生审批路径及等价验证说明"
+      ],
+      "acceptance": "安装版跑通 10 种常用命令；失败时明确原因，不自动降低全局隔离。",
+      "route": "自制执行适配插件 + DSH 上游协作",
+      "dependencies": [],
+      "evidence": [
+        "C04",
+        "E01",
+        "E02"
+      ]
+    },
+    {
+      "id": "S02",
+      "phase": "短期",
+      "category": "任务流程",
+      "name": "任务完成状态统一",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "3–5 人日",
+      "status": "部分具备",
+      "intro": "让待办、任务交接点和最终交付表达同一个状态。",
+      "current": "E02 交付完成但待办仍为 1 进行中、6 待处理。",
+      "gap": "模型提示没有形成完成前的一致性检查。",
+      "subtasks": [
+        "完成前读取原生 todo 与执行结果",
+        "未完成项显式解释或继续执行",
+        "区分已完成、受阻、待验收和取消"
+      ],
+      "acceptance": "重复 10 次多步骤任务，最终状态与实际未完成项一致，失败不会显示已完成。",
+      "route": "扩展 dsh-px-taskflow",
+      "dependencies": [
+        "S03"
+      ],
+      "evidence": [
+        "C01",
+        "E02"
+      ]
+    },
+    {
+      "id": "S03",
+      "phase": "短期",
+      "category": "证据与验收",
+      "name": "执行结果分类修正",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 2,
+      "fit": 5,
+      "effort": "2–4 人日",
+      "status": "部分具备",
+      "intro": "准确区分命令失败、读取成功、取消和未知结果。",
+      "current": "E08 读含历史退出码的文件被归为失败。",
+      "gap": "文本内容被当作当前工具状态。",
+      "subtasks": [
+        "优先使用工具结构化状态",
+        "仅对相应命令工具解析终止标记",
+        "取消与缺失结果单独分类"
+      ],
+      "acceptance": "读取历史错误日志仍为读取成功；非零退出、取消、超时各自准确。",
+      "route": "扩展 dsh-px-taskflow",
+      "dependencies": [],
+      "evidence": [
+        "C01",
+        "E08"
+      ]
+    },
+    {
+      "id": "S04",
+      "phase": "短期",
+      "category": "证据与验收",
+      "name": "文件变动归因校正",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 2,
+      "fit": 5,
+      "effort": "1–3 人日",
+      "status": "部分具备",
+      "intro": "区别查看文件、实际写入和 Git 当前差异。",
+      "current": "E08 str_replace_editor 的 view 被列入写文件路径。",
+      "gap": "路径清单容易被理解为实际改动清单。",
+      "subtasks": [
+        "按工具子命令判断写操作",
+        "分别显示工具涉及路径与实际 diff",
+        "标注 shell 修改及人工已有改动"
+      ],
+      "acceptance": "view 不产生写入标记；NOTES 人工改动不冒充 Agent 新改动。",
+      "route": "任务插件与 better-sidebar 集成",
+      "dependencies": [
+        "S03"
+      ],
+      "evidence": [
+        "C01",
+        "C03",
+        "E06",
+        "E08"
+      ]
+    },
+    {
+      "id": "S05",
+      "phase": "短期",
+      "category": "任务流程",
+      "name": "交接点过时提示降噪",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 2,
+      "fit": 5,
+      "effort": "1–3 人日",
+      "status": "部分具备",
+      "intro": "只有影响结论的新执行才突出提醒重新核验。",
+      "current": "E02/E08 交接后 read 或 present 也会触发过时提示。",
+      "gap": "正常交付就出现提醒，削弱可信度。",
+      "subtasks": [
+        "引入只读、修改、验证事件类别",
+        "保留后续执行时间线",
+        "区分可能影响结果与仅浏览"
+      ],
+      "acceptance": "交付后纯读取不红黄告警，后续修改仍要求重新验证。",
+      "route": "扩展 dsh-px-taskflow",
+      "dependencies": [
+        "S03"
+      ],
+      "evidence": [
+        "C01",
+        "E02",
+        "E08"
+      ]
+    },
+    {
+      "id": "S06",
+      "phase": "短期",
+      "category": "权限与约束",
+      "name": "只读审查与任务边界",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "4–8 人日",
+      "status": "部分具备",
+      "intro": "把只读和禁止项目外操作落实为可检查的任务约束。",
+      "current": "E03 写了沙箱 TEMP 探测脚本；E04 真正只读模式拒绝 write。",
+      "gap": "自然语言约束与工具实际权限未可靠对应。",
+      "subtasks": [
+        "提供明确的只读审查入口",
+        "工具前检查本任务允许的副作用",
+        "临时目录行为也记入执行证据"
+      ],
+      "acceptance": "只读场景无项目和临时脚本写入；如确需写入先说明并遵循宿主授权。",
+      "route": "任务约束插件 + 原生权限策略",
+      "dependencies": [
+        "S03"
+      ],
+      "evidence": [
+        "C04",
+        "E03",
+        "E04",
+        "R12"
+      ]
+    },
+    {
+      "id": "S07",
+      "phase": "短期",
+      "category": "代码质量",
+      "name": "独立审查与边界用例",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "4–7 人日",
+      "status": "部分具备",
+      "intro": "实现后用独立视角检查隐藏边界，减少自测自证。",
+      "current": "E02 20/20 通过仍漏原型键；E03 另轮审查能发现。",
+      "gap": "审查不会稳定自动发生，发现缺乏逐项验证。",
+      "subtasks": [
+        "保留原验收测试",
+        "审查输入边界、失败路径和副作用",
+        "发现必须附最小复现与证据"
+      ],
+      "acceptance": "固定隐藏样例中的已知缺陷均检出；不能把未复现猜测写为确定 bug。",
+      "route": "自制审查 Skill/预设，复用 DSH workflow",
+      "dependencies": [
+        "S08"
+      ],
+      "evidence": [
+        "E02",
+        "E03",
+        "R02"
+      ]
+    },
+    {
+      "id": "S08",
+      "phase": "短期",
+      "category": "证据与验收",
+      "name": "结构化验证清单",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "3–6 人日",
+      "status": "部分具备",
+      "intro": "交付明确哪些需求已验证、未验证及使用何种测试环境。",
+      "current": "任务记录有调用编号，没有需求与验证的结构化关系。",
+      "gap": "工具正常返回和业务正确容易被混淆。",
+      "subtasks": [
+        "需求对应验收项与命令",
+        "区分基线失败、修复通过与环境阻塞",
+        "保存复现输入和结果摘要"
+      ],
+      "acceptance": "每项交付都可找到对应结果；默认测试未运行时不能被替代命令掩盖。",
+      "route": "扩展 dsh-px-taskflow",
+      "dependencies": [
+        "S03"
+      ],
+      "evidence": [
+        "C01",
+        "E01",
+        "E02"
+      ]
+    },
+    {
+      "id": "S09",
+      "phase": "短期",
+      "category": "代码质量",
+      "name": "人工修改保护基线",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "3–5 人日",
+      "status": "已有且已实测",
+      "intro": "把保留人工未提交内容从一次成功变成稳定规则。",
+      "current": "E01/E02 NOTES 标记和原测试完整保留。",
+      "gap": "同文件交错编辑、重命名、未跟踪文件尚未覆盖。",
+      "subtasks": [
+        "任务前记录 Git 与内容指纹",
+        "同文件冲突提示",
+        "交付时核对无关改动保留"
+      ],
+      "acceptance": "覆盖人工与 Agent 同文件修改、未跟踪、重命名，原内容不被静默覆盖。",
+      "route": "自制变更保护插件",
+      "dependencies": [],
+      "evidence": [
+        "E01",
+        "E02",
+        "C03"
+      ]
+    },
+    {
+      "id": "S10",
+      "phase": "短期",
+      "category": "代码质量",
+      "name": "Git 审阅工作流打磨",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "3–6 人日",
+      "status": "已有且已实测",
+      "intro": "从已有 diff 面板走到可反馈、可确认的交付流程。",
+      "current": "E06 看到了 6 个未暂存项及 inventory unified diff。",
+      "gap": "尚未验证逐块反馈、选择接受和任务范围归属。",
+      "subtasks": [
+        "文件与块级跳转",
+        "评论交给当前 Agent 修改",
+        "明确人工变动与 Agent 交付范围"
+      ],
+      "acceptance": "一项审阅意见能定位、修复、复测并刷新 diff，且不触碰无关文件。",
+      "route": "扩展 better-sidebar 的原生页签",
+      "dependencies": [
+        "S09"
+      ],
+      "evidence": [
+        "E06",
+        "C03",
+        "R02"
+      ]
+    },
+    {
+      "id": "S11",
+      "phase": "短期",
+      "category": "可靠执行",
+      "name": "取消状态与进程收尾",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "3–6 人日",
+      "status": "部分具备",
+      "intro": "停止后明确已取消、可能残留的进程与副作用。",
+      "current": "E05 前台命令停止，但 UI 显示失败；进程树全面清理未验。",
+      "gap": "取消和故障混为一谈，后台子进程边界不明确。",
+      "subtasks": [
+        "取消原因单独展示",
+        "绑定任务与子进程组",
+        "终止后核对作业与可能写入"
+      ],
+      "acceptance": "前台、子进程、后台任务各 5 次取消，无误报成功或重复执行。",
+      "route": "DSH jobs/pwsh 适配 + 任务页签",
+      "dependencies": [
+        "S03"
+      ],
+      "evidence": [
+        "E05",
+        "C04"
+      ]
+    },
+    {
+      "id": "S12",
+      "phase": "短期",
+      "category": "可靠执行",
+      "name": "模型连接与工具能力自检",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "3–5 人日",
+      "status": "部分具备",
+      "intro": "检查模型真实能否对话、调用工具和读取必要输入。",
+      "current": "当前模型能完成 E01–E05；凭据存在不等于每个模型可用。",
+      "gap": "缺少每条模型路由的可见能力矩阵。",
+      "subtasks": [
+        "测试对话和工具参数",
+        "验证流式响应、上下文上限、图像支持",
+        "凭据仅显示状态，失败给可操作原因"
+      ],
+      "acceptance": "无效 key、错误模型名、不支持 tools 的端点均得到准确诊断。",
+      "route": "扩展运行与帮助插件",
+      "dependencies": [],
+      "evidence": [
+        "C02",
+        "E01"
+      ]
+    },
+    {
+      "id": "S13",
+      "phase": "短期",
+      "category": "可靠执行",
+      "name": "网络错误恢复与重试边界",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "4–8 人日",
+      "status": "有基础待验收",
+      "intro": "短暂断连可恢复，已经产生的副作用不会重复。",
+      "current": "DSH 有会话持久化；本轮未注入 429/断流/掉网。",
+      "gap": "缺少安装版故障回归。",
+      "subtasks": [
+        "模拟首包前失败与中途断流",
+        "区分模型重试和工具重试",
+        "可见退避、停止及继续入口"
+      ],
+      "acceptance": "失败矩阵下消息不丢失，修改命令不因网络恢复被重复执行。",
+      "route": "复用 DSH session/provider，必要时上游修复",
+      "dependencies": [
+        "S08",
+        "S11"
+      ],
+      "evidence": [
+        "C05"
+      ]
+    },
+    {
+      "id": "S14",
+      "phase": "短期",
+      "category": "可靠执行",
+      "name": "恢复任务时的副作用核对",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "4–7 人日",
+      "status": "有基础待验收",
+      "intro": "恢复后从真实状态继续，而非盲目重放最后命令。",
+      "current": "持久日志和 re.0.7 交接点已有；本轮刷新保留会话。",
+      "gap": "强杀时已写文件但缺结果的场景未验。",
+      "subtasks": [
+        "显示最后已结算调用",
+        "重新读取 Git/产物/作业",
+        "未知结果留待核对再继续"
+      ],
+      "acceptance": "在写文件、执行测试、提交前分别中断，恢复无重复写入和重复提交。",
+      "route": "扩展任务插件 + DSH 持久会话",
+      "dependencies": [
+        "S03",
+        "S09"
+      ],
+      "evidence": [
+        "C05",
+        "E05"
+      ]
+    },
+    {
+      "id": "S15",
+      "phase": "短期",
+      "category": "质量工程",
+      "name": "安装版任务回归套件",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "4–8 人日",
+      "status": "部分具备",
+      "intro": "让真实任务成为每版发布门槛。",
+      "current": "已有源码单测与结构门禁；本轮构造订单项目实测。",
+      "gap": "结构插件树不能证明实际 Agent 行为。",
+      "subtasks": [
+        "纳入固定正常与异常任务",
+        "隔离 fixture 与用户数据",
+        "保存模型、版本、结果和失败重放"
+      ],
+      "acceptance": "至少 30 类场景有可复现步骤；关键保护项必须全过，概率任务报告重复次数。",
+      "route": "自制 eval 工具链",
+      "dependencies": [],
+      "evidence": [
+        "C06",
+        "E01",
+        "E08"
+      ]
+    },
+    {
+      "id": "S16",
+      "phase": "短期",
+      "category": "上下文",
+      "name": "项目入口与规则可见",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 2,
+      "fit": 5,
+      "effort": "2–4 人日",
+      "status": "已有且已实测",
+      "intro": "进入项目时让 Agent 和用户清楚当前目录、规则与已有修改。",
+      "current": "E01 能读 AGENTS、README、测试与 Git。",
+      "gap": "规则来源与生效范围对用户不够直观。",
+      "subtasks": [
+        "显示当前根目录与读取到的规则",
+        "识别嵌套 AGENTS",
+        "标出规则冲突及未读大文件"
+      ],
+      "acceptance": "含两级 AGENTS 的项目按目录应用规则，切换项目不带入旧约束。",
+      "route": "复用 dsh-agent-instructions + 轻量 UI",
+      "dependencies": [],
+      "evidence": [
+        "C07",
+        "E01"
+      ]
+    },
+    {
+      "id": "S17",
+      "phase": "短期",
+      "category": "证据与验收",
+      "name": "历史执行分页与按编号取回",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "2–5 人日",
+      "status": "部分具备",
+      "intro": "长任务仍可引用早期真实证据。",
+      "current": "E08 第 81 次调用后，首条证据被 validateCheckpoint 拒绝。",
+      "gap": "最近 80 条窗口限制影响长期交接。",
+      "subtasks": [
+        "摘要分页与工具编号查询",
+        "完整输出按需展开",
+        "旧引用独立校验而非靠当前页面窗口"
+      ],
+      "acceptance": "200 次调用后仍可验证第一条真实结果，伪造编号继续被拒绝。",
+      "route": "扩展 dsh-px-taskflow",
+      "dependencies": [
+        "S03"
+      ],
+      "evidence": [
+        "C01",
+        "E08"
+      ]
+    },
+    {
+      "id": "S18",
+      "phase": "短期",
+      "category": "成本与速度",
+      "name": "工具输出预算与摘要",
+      "priority": "P2",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "3–5 人日",
+      "status": "部分具备",
+      "intro": "避免每次查进展都重新注入大量工具文本。",
+      "current": "E08 合成 80 条 review 达 297669 字节；不是实测卡顿。",
+      "gap": "粗略截断仍可形成大上下文载荷。",
+      "subtasks": [
+        "默认返回状态摘要与必要证据",
+        "按需抓取完整输出",
+        "记录每工具输入/输出体积与耗时"
+      ],
+      "acceptance": "相同任务信息不丢失，review 默认响应在设定预算内且可展开追溯。",
+      "route": "任务插件 + 工具输出策略",
+      "dependencies": [
+        "S17"
+      ],
+      "evidence": [
+        "C01",
+        "E08"
+      ]
+    },
+    {
+      "id": "S19",
+      "phase": "短期",
+      "category": "交互与交付",
+      "name": "中文与精简交付规范",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 2,
+      "fit": 5,
+      "effort": "1–3 人日",
+      "status": "部分具备",
+      "intro": "中文任务使用中文进展，结论适度简洁。",
+      "current": "多轮出现英文工具说明/思考展示；要求简短仍输出长报告。",
+      "gap": "提示与 UI 文案未形成一致体验。",
+      "subtasks": [
+        "工具操作说明中文化",
+        "交付先结果后验证与限制",
+        "长证据默认折叠而非重复正文"
+      ],
+      "acceptance": "简短请求只返回必要结论，完整证据可展开，技术原词保留准确性。",
+      "route": "Skill/预设调校与 UI 文案",
+      "dependencies": [
+        "S08"
+      ],
+      "evidence": [
+        "E01",
+        "E03",
+        "E04"
+      ]
+    },
+    {
+      "id": "S20",
+      "phase": "短期",
+      "category": "交互与交付",
+      "name": "产物可打开与可检查",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 2,
+      "fit": 5,
+      "effort": "2–4 人日",
+      "status": "已有且已实测",
+      "intro": "交付文件能直接打开并看出与任务的关系。",
+      "current": "E02 present 交付 5 个代码文件；侧栏已有预览。",
+      "gap": "文件列表与验收状态、版本尚未关联。",
+      "subtasks": [
+        "产物绑定目标和验证",
+        "相对路径安全解析",
+        "缺失/移动产物给明确提示"
+      ],
+      "acceptance": "产物按钮打开正确文件，文件变化后提示版本差异，不展示失效的成功状态。",
+      "route": "复用 DSH present 与 better-sidebar",
+      "dependencies": [
+        "S08"
+      ],
+      "evidence": [
+        "E02",
+        "C03"
+      ]
+    },
+    {
+      "id": "S21",
+      "phase": "短期",
+      "category": "插件集成",
+      "name": "固定并记录实际插件组合",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "3–5 人日",
+      "status": "部分具备",
+      "intro": "每次升级知道实际运行了哪组兼容插件。",
+      "current": "生产装配固定社区版本；仍需验证完整解析与来源。",
+      "gap": "仅顶层版本不足以解释传递依赖漂移。",
+      "subtasks": [
+        "记录已解析版本及兼容宿主",
+        "生成安装前后差异",
+        "冲突时保留可运行组合"
+      ],
+      "acceptance": "同一发布清单复装得到一致核心能力，非自管插件配置仍保留。",
+      "route": "版本化 DSH 组合包 + stage 验证",
+      "dependencies": [],
+      "evidence": [
+        "C06"
+      ]
+    },
+    {
+      "id": "S22",
+      "phase": "短期",
+      "category": "可靠执行",
+      "name": "更新后的任务与配置回归",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "3–6 人日",
+      "status": "有基础待验收",
+      "intro": "更新完成后确认模型、会话、插件和项目仍可使用。",
+      "current": "re.0.7 历史验收保留配置与会话；需要持续门禁。",
+      "gap": "当前与历史验收证据容易混用。",
+      "subtasks": [
+        "安装前数据指纹备份",
+        "更新后实际工具任务",
+        "版本一致性与失败恢复检查"
+      ],
+      "acceptance": "原安装目录连续两版升级成功，原会话和第三方插件不丢失。",
+      "route": "现有 updater + 端到端验收",
+      "dependencies": [
+        "S15",
+        "S21"
+      ],
+      "evidence": [
+        "C02",
+        "C08"
+      ]
+    },
+    {
+      "id": "S23",
+      "phase": "短期",
+      "category": "可靠执行",
+      "name": "安装耗时与进度准确性",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "3–6 人日",
+      "status": "部分具备",
+      "intro": "升级慢时展示真实阶段、原因与耗时。",
+      "current": "同日 re.0.7 历史记录约 8 分钟；1–4 分钟提示偏乐观。",
+      "gap": "依赖迁移耗时缺少细分。",
+      "subtasks": [
+        "统计卸包、解压、插件迁移、服务启动",
+        "优化重复依赖工作",
+        "根据真实阶段显示进展"
+      ],
+      "acceptance": "本机三次升级采样记录 p50/最慢值；不会以固定短时承诺掩盖仍在工作。",
+      "route": "外壳更新流程与自管插件迁移",
+      "dependencies": [
+        "S22"
+      ],
+      "evidence": [
+        "C08"
+      ]
+    },
+    {
+      "id": "S24",
+      "phase": "短期",
+      "category": "可观测性",
+      "name": "错误分层与诊断导出",
+      "priority": "P2",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "3–5 人日",
+      "status": "部分具备",
+      "intro": "读取失败、权限拒绝、文件缺失和日志损坏给不同原因。",
+      "current": "taskflow 路由 catch 统一 404；源码测试含 corrupt 情况。",
+      "gap": "难以区分可重试、需修复和不存在。",
+      "subtasks": [
+        "错误代码与用户提示分离",
+        "导出脱敏环境和调用摘要",
+        "附版本与可复现步骤"
+      ],
+      "acceptance": "模拟不存在、损坏、权限、断连，提示准确且不导出密钥/原始私密对话。",
+      "route": "运行与帮助 + taskflow",
+      "dependencies": [
+        "S03"
+      ],
+      "evidence": [
+        "C01",
+        "C02",
+        "E08"
+      ]
+    },
+    {
+      "id": "S25",
+      "phase": "短期",
+      "category": "产品一致性",
+      "name": "产品文档与入口统一",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 1,
+      "fit": 5,
+      "effort": "1–2 人日",
+      "status": "部分具备",
+      "intro": "所有入口都围绕完成任务与交付产物。",
+      "current": "旧 ROADMAP 声称能力持平为上限，README 有未发布旧文案。",
+      "gap": "方向与当前目标矛盾。",
+      "subtasks": [
+        "替换当前路线图入口",
+        "保留但标记历史决策",
+        "统一工作台、帮助与版本说明"
+      ],
+      "acceptance": "用户可从首页找到真实能力、限制和路线图，不把插件数量当产品收益。",
+      "route": "本轮文档修订 + 后续 UI 文案",
+      "dependencies": [],
+      "evidence": [
+        "C09"
+      ]
+    },
+    {
+      "id": "S26",
+      "phase": "短期",
+      "category": "质量工程",
+      "name": "证据与结论一致性检查",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "3–6 人日",
+      "status": "部分具备",
+      "intro": "审查结论中每个实际行为都能由记录或复现支持。",
+      "current": "E03 冻结库存会抛错的说法被独立调用反证。",
+      "gap": "模型将推断说成事实，影响审查可信度。",
+      "subtasks": [
+        "发现附实际输入输出",
+        "未复现标记为推断",
+        "终稿校验数字、路径和状态"
+      ],
+      "acceptance": "固定审查样例无未经验证的确定性结论；反证后能修正报告。",
+      "route": "审查 Skill + 结构化验证",
+      "dependencies": [
+        "S07",
+        "S08"
+      ],
+      "evidence": [
+        "E03"
+      ]
+    },
+    {
+      "id": "S27",
+      "phase": "短期",
+      "category": "交互与交付",
+      "name": "小窗口与键盘基本可用性",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 2,
+      "fit": 5,
+      "effort": "2–4 人日",
+      "status": "部分具备",
+      "intro": "较小桌面窗口仍可发消息、看状态和关闭面板。",
+      "current": "E09 900×600 对话无页面横向溢出。",
+      "gap": "侧栏与设置组合、长路径和焦点流尚需系统回归。",
+      "subtasks": [
+        "覆盖 900×600 与 1366×768",
+        "键盘发送/取消/面板切换",
+        "长路径折行和焦点可见"
+      ],
+      "acceptance": "关键入口无需拖出窗口寻找，键盘能够完成任务发起与取消。",
+      "route": "复用原生 UI 扩展点与社区组件修复",
+      "dependencies": [],
+      "evidence": [
+        "E09",
+        "C03"
+      ]
+    },
+    {
+      "id": "S28",
+      "phase": "短期",
+      "category": "权限与约束",
+      "name": "审批理由和拒绝后的行为",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "3–5 人日",
+      "status": "有基础待验收",
+      "intro": "用户知道要批准什么；拒绝之后不会换路径重试。",
+      "current": "E04 文件拒绝后未提权或绕过；主动审批流程本轮未验。",
+      "gap": "范围、有效期和具体副作用需更明确。",
+      "subtasks": [
+        "显示命令、目录与需要批准的原因",
+        "单次与会话授权区别",
+        "拒绝终止相同意图的自动重试"
+      ],
+      "acceptance": "拒绝写入、联网、执行三类请求后不绕过；只批准具体动作。",
+      "route": "复用 DSH approvals，补充产品提示",
+      "dependencies": [
+        "S06"
+      ],
+      "evidence": [
+        "E04",
+        "R12"
+      ]
+    },
+    {
+      "id": "S29",
+      "phase": "短期",
+      "category": "网页与研究",
+      "name": "本机网页抓取连通性",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "3–6 人日",
+      "status": "部分具备",
+      "intro": "让搜索后能够真正读取公开网页正文。",
+      "current": "E10 web_search 有结果，web_fetch 多站点因非公网 DNS 地址被拒绝；系统解析 Node.js/GitHub 为 10.100.0.x。",
+      "gap": "研究与技术文档核实流程在本机中断。",
+      "subtasks": [
+        "检查已配置的代理路由与宿主继承",
+        "通过 DSH 原生代理机制适配实际网络",
+        "保留私网目标、重定向与字节上限防护"
+      ],
+      "acceptance": "10 个公开文档站点正常抓取；本机/私网敏感地址仍被拒绝，不靠全局关闭 URL 校验解决。",
+      "route": "配置 DSH http-proxy，必要时补网络诊断插件",
+      "dependencies": [
+        "S12",
+        "S24"
+      ],
+      "evidence": [
+        "E10",
+        "C10"
+      ]
+    },
+    {
+      "id": "S30",
+      "phase": "短期",
+      "category": "网页与研究",
+      "name": "来源等级与引用可核验",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 2,
+      "fit": 5,
+      "effort": "2–4 人日",
+      "status": "部分具备",
+      "intro": "明确官网、社区译文、搜索摘要与实际读取正文的区别。",
+      "current": "E10 把 nodejs.cn 译文称为官方文档，但也如实说明正文未读。",
+      "gap": "链接存在不能证明来源级别或支持全部结论。",
+      "subtasks": [
+        "标记域名归属和来源类型",
+        "正文读取成功后绑定摘录位置",
+        "无法访问时保留未核实状态"
+      ],
+      "acceptance": "研究报告不把搜索摘要写成原文证据；非官方译文标记清楚。",
+      "route": "自制研究 Skill + 来源记录工具",
+      "dependencies": [
+        "S29"
+      ],
+      "evidence": [
+        "E10",
+        "C10"
+      ]
+    },
+    {
+      "id": "M01",
+      "phase": "中短期",
+      "category": "上下文",
+      "name": "项目结构地图",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "5–10 人日",
+      "status": "部分具备",
+      "intro": "快速回答项目入口、模块关系与修改影响范围。",
+      "current": "现有文件搜索和 E01 调查可用，没有可复用结构地图。",
+      "gap": "每次熟悉项目都重复读取。",
+      "subtasks": [
+        "提取目录、构建入口、依赖与测试位置",
+        "按文件变更增量更新",
+        "每条摘要保留源码位置"
+      ],
+      "acceptance": "在 3 个真实项目中准确定位入口及修改相关测试，过时摘要自动提示。",
+      "route": "自制项目上下文插件",
+      "dependencies": [
+        "S16"
+      ],
+      "evidence": [
+        "R07",
+        "C07"
+      ]
+    },
+    {
+      "id": "M02",
+      "phase": "中短期",
+      "category": "上下文",
+      "name": "符号导航与语言服务",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 4,
+      "effort": "10–20 人日",
+      "status": "待确认",
+      "intro": "利用定义、引用和诊断提高跨文件修改精度。",
+      "current": "有文本搜索与编辑器；未确认生产组合有可用 LSP 工具。",
+      "gap": "复杂重构只靠文本匹配风险高。",
+      "subtasks": [
+        "先接 TypeScript/Python 两种语言",
+        "定义、引用与诊断工具",
+        "语言服务不可用时回退文本搜索"
+      ],
+      "acceptance": "重命名跨文件符号不误改字符串，诊断能定位真实文件行。",
+      "route": "适配成熟 LSP 为 DSH 工具",
+      "dependencies": [
+        "M01",
+        "S01"
+      ],
+      "evidence": [
+        "R10",
+        "R07"
+      ]
+    },
+    {
+      "id": "M03",
+      "phase": "中短期",
+      "category": "上下文",
+      "name": "多根工作区与路径归属",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 3,
+      "fit": 4,
+      "effort": "5–8 人日",
+      "status": "有基础待验收",
+      "intro": "同时理解前后端或相关仓库，明确每次操作属于哪里。",
+      "current": "侧栏支持多个工作区；同任务多根策略未实测。",
+      "gap": "容易混淆相对路径、权限和 Git 根。",
+      "subtasks": [
+        "明确每个根的别名和授权范围",
+        "搜索结果附所属仓库",
+        "任务切换不隐式扩大可写范围"
+      ],
+      "acceptance": "两个含同名文件的仓库中检索与编辑均命中预期目标。",
+      "route": "DSH workspace 扩展",
+      "dependencies": [
+        "S06",
+        "M01"
+      ],
+      "evidence": [
+        "R07",
+        "C03"
+      ]
+    },
+    {
+      "id": "M04",
+      "phase": "中短期",
+      "category": "上下文",
+      "name": "持久项目记忆",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "8–15 人日",
+      "status": "有基础待验收",
+      "intro": "跨会话保留稳定约定和已验证决策。",
+      "current": "AGENTS 与持久会话已有，自动记忆/MCP memory 未整合。",
+      "gap": "旧结论可能被当作现状，缺少可编辑来源。",
+      "subtasks": [
+        "项目与个人范围分离",
+        "记录来源、日期、失效条件",
+        "用户可查看、纠正、删除"
+      ],
+      "acceptance": "新会话复用正确约定；变更分支后会核实易过时事实，不保存密钥。",
+      "route": "自制 memory 插件，复用 DSH 原生持久设施",
+      "dependencies": [
+        "M01",
+        "S06"
+      ],
+      "evidence": [
+        "R11",
+        "C07"
+      ]
+    },
+    {
+      "id": "M05",
+      "phase": "中短期",
+      "category": "任务流程",
+      "name": "可编辑计划与执行切换",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "5–8 人日",
+      "status": "有基础待验收",
+      "intro": "复杂需求先澄清和制定计划，再按确认的范围实施。",
+      "current": "原生 plan 已随标准预设挂载；E01 只测试了文字请求。",
+      "gap": "计划模式强制约束与计划编辑闭环尚未验收。",
+      "subtasks": [
+        "结构化目标、步骤、验收和不做项",
+        "计划变更有版本与原因",
+        "切换执行不丢约束"
+      ],
+      "acceptance": "实际 plan 模式不能意外写代码；编辑计划后执行与最新版本一致。",
+      "route": "复用 DSH plan + 任务 UI",
+      "dependencies": [
+        "S06",
+        "S08"
+      ],
+      "evidence": [
+        "R08",
+        "C04"
+      ]
+    },
+    {
+      "id": "M06",
+      "phase": "中短期",
+      "category": "任务流程",
+      "name": "运行中补充指令与任务队列",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "5–8 人日",
+      "status": "有基础待验收",
+      "intro": "不用打断整个任务即可补充限制或安排下一项。",
+      "current": "DSH inbox 基础存在；排队、取消和编辑组合未验。",
+      "gap": "新指令可能被错当新任务或丢失。",
+      "subtasks": [
+        "区分立即转向与排队下一轮",
+        "队列可见、可编辑、可取消",
+        "保留用户最新限制并提示生效点"
+      ],
+      "acceptance": "执行期间追加约束后下一次相关操作遵守；撤回排队项不执行。",
+      "route": "复用 DSH inbox/workflow",
+      "dependencies": [
+        "S02",
+        "S11"
+      ],
+      "evidence": [
+        "R06",
+        "C04"
+      ]
+    },
+    {
+      "id": "M07",
+      "phase": "中短期",
+      "category": "任务流程",
+      "name": "澄清与受阻输入卡片",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "4–7 人日",
+      "status": "有基础待验收",
+      "intro": "必要问题集中展示，独立工作可以继续。",
+      "current": "普通会话能提问，任务相关结构化询问未验。",
+      "gap": "容易无谓停工或遗漏关键答案。",
+      "subtasks": [
+        "提供少量可选项与自由输入",
+        "区别偏好和必需信息",
+        "答案与受影响步骤绑定"
+      ],
+      "acceptance": "等待必需答案时不执行依赖动作，独立调查仍继续且答案不会覆盖原需求。",
+      "route": "自制交互插件",
+      "dependencies": [
+        "M05",
+        "M06"
+      ],
+      "evidence": [
+        "R06"
+      ]
+    },
+    {
+      "id": "M08",
+      "phase": "中短期",
+      "category": "任务流程",
+      "name": "子任务委派与回收",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "8–15 人日",
+      "status": "有基础待验收",
+      "intro": "有边界地把调查、实现或审查交给子任务。",
+      "current": "原生 subagents/workflow 与任务管理面板已有；本轮明确禁用。",
+      "gap": "并行写冲突、失败接管与证据合并未验。",
+      "subtasks": [
+        "职责、文件范围和预算声明",
+        "只读调查与可写实施区别",
+        "回收结果后主任务验收"
+      ],
+      "acceptance": "两个子任务并行不覆盖彼此改动；失败一个仍能定位并接管。",
+      "route": "复用 DSH subagents/workflow",
+      "dependencies": [
+        "S09",
+        "M05"
+      ],
+      "evidence": [
+        "R10",
+        "C03",
+        "C04"
+      ]
+    },
+    {
+      "id": "M09",
+      "phase": "中短期",
+      "category": "代码质量",
+      "name": "托管工作树隔离",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "8–15 人日",
+      "status": "部分具备",
+      "intro": "新开发任务获得独立 checkout，减少相互干扰。",
+      "current": "better-sidebar 已有 worktree 操作；自动按任务分配尚未验。",
+      "gap": "Git 功能存在但任务生命周期未打通。",
+      "subtasks": [
+        "创建、分支选择与环境准备",
+        "人工未提交内容是否带入明确选择",
+        "结束后检查未合并内容再清理"
+      ],
+      "acceptance": "两项任务互不覆盖；用户改动保留；可从工作树交回主目录。",
+      "route": "复用 Git/worktree + 自制任务编排",
+      "dependencies": [
+        "S09",
+        "M03"
+      ],
+      "evidence": [
+        "R03",
+        "C03"
+      ]
+    },
+    {
+      "id": "M10",
+      "phase": "中短期",
+      "category": "代码质量",
+      "name": "分支到 PR 的完整交付",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "6–10 人日",
+      "status": "部分具备",
+      "intro": "修改、验证、提交和 PR 都对应同一项任务。",
+      "current": "能用 shell/Git，侧栏有提交；产品流程未整合。",
+      "gap": "分支、验证证据、PR 状态割裂。",
+      "subtasks": [
+        "任务创建分支与提交范围核对",
+        "生成准确 PR 描述与验证说明",
+        "读取 CI 与审阅反馈并修复"
+      ],
+      "acceptance": "在测试仓库完成 PR，CI 结果可见，合并/发布遵循用户既有授权。",
+      "route": "GitHub CLI/MCP 集成 + DSH Skill",
+      "dependencies": [
+        "S10",
+        "M09"
+      ],
+      "evidence": [
+        "R02",
+        "R16"
+      ]
+    },
+    {
+      "id": "M11",
+      "phase": "中短期",
+      "category": "代码质量",
+      "name": "文件级检查点与恢复",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "10–20 人日",
+      "status": "未集成或缺失",
+      "intro": "出错时可恢复 Agent 修改，同时保留人工内容。",
+      "current": "现有 task_checkpoint 是工作记录；session checkpoint 保障事件持久化。",
+      "gap": "都不是文件快照或撤销保证。",
+      "subtasks": [
+        "写入前快照与内容校验",
+        "按任务/文件选择恢复",
+        "遇到人工后续编辑先展示冲突"
+      ],
+      "acceptance": "多文件及非 Git 项目可恢复到选择点；外部副作用明确不可由文件恢复撤销。",
+      "route": "自制 snapshots 插件，复用文件工具事件",
+      "dependencies": [
+        "S09",
+        "S04"
+      ],
+      "evidence": [
+        "R13",
+        "C01",
+        "C05"
+      ]
+    },
+    {
+      "id": "M12",
+      "phase": "中短期",
+      "category": "可靠执行",
+      "name": "后台作业与终端统一",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "8–12 人日",
+      "status": "部分具备",
+      "intro": "长测试和开发服务可以后台运行、查看、停止与恢复识别。",
+      "current": "DSH jobs、侧栏终端和任务管理已有。",
+      "gap": "不同通道的进程归属与重启后状态未统一。",
+      "subtasks": [
+        "任务绑定进程组与端口",
+        "有限输出缓冲及按需日志",
+        "退出/重启后的遗留检测"
+      ],
+      "acceptance": "同时运行测试与开发服务，取消只影响目标任务，重启后不冒充仍在运行。",
+      "route": "原生 jobs + better-sidebar terminal",
+      "dependencies": [
+        "S11",
+        "S14"
+      ],
+      "evidence": [
+        "C03",
+        "C04"
+      ]
+    },
+    {
+      "id": "M13",
+      "phase": "中短期",
+      "category": "网页与研究",
+      "name": "浏览器 Agent 基础操作",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 4,
+      "effort": "10–20 人日",
+      "status": "未集成或缺失",
+      "intro": "Agent 可以打开页面、点击、输入并看见实际结果。",
+      "current": "现有侧栏是 iframe 浏览器与探测接口，未见完整浏览器操作工具链。",
+      "gap": "嵌入网页不等于能使用网页完成任务。",
+      "subtasks": [
+        "接入 DOM/可访问性树与截图",
+        "操作后验证页面状态",
+        "会话、下载与标签页归属"
+      ],
+      "acceptance": "在本机测试站完成导航、表单与状态验证；需要登录的界面明确交接。",
+      "route": "自制 DSH browser 插件，复用可靠浏览器驱动",
+      "dependencies": [
+        "S06",
+        "S28",
+        "S29"
+      ],
+      "evidence": [
+        "R06",
+        "R09",
+        "C03"
+      ]
+    },
+    {
+      "id": "M14",
+      "phase": "中短期",
+      "category": "网页与研究",
+      "name": "前端预览与浏览器调试",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 4,
+      "effort": "8–15 人日",
+      "status": "部分具备",
+      "intro": "修改前端后用浏览器验证布局、交互及错误。",
+      "current": "有 iframe/HTML 预览；自动读取 console/network 未集成。",
+      "gap": "代码编译成功不能证明用户界面可用。",
+      "subtasks": [
+        "管理 dev server 与预览端口",
+        "收集控制台与网络失败",
+        "多尺寸截图和交互回归"
+      ],
+      "acceptance": "修一个前端 bug 后复现失败路径并确认修好，附前后证据。",
+      "route": "浏览器插件 + jobs + preview",
+      "dependencies": [
+        "M12",
+        "M13"
+      ],
+      "evidence": [
+        "R09",
+        "R15",
+        "C03"
+      ]
+    },
+    {
+      "id": "M15",
+      "phase": "中短期",
+      "category": "插件集成",
+      "name": "MCP 连接与健康管理",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "6–10 人日",
+      "status": "有基础待验收",
+      "intro": "接入本机现有工具时无需手写复杂配置。",
+      "current": "DSH 有 MCP client 包；当前 host 未挂载服务器。",
+      "gap": "从包可用到连接成功、失败恢复还有整合工作。",
+      "subtasks": [
+        "stdio/HTTP 配置与健康检查",
+        "逐工具权限与描述展示",
+        "超时、重连、禁用和凭据隔离"
+      ],
+      "acceptance": "本地测试 MCP 的列举/调用/超时/断连均可见，不把服务器失败当模型失败。",
+      "route": "集成原生 dsh-mcp-client + 管理 UI",
+      "dependencies": [
+        "S06",
+        "S24"
+      ],
+      "evidence": [
+        "R14",
+        "C11"
+      ]
+    },
+    {
+      "id": "M16",
+      "phase": "中短期",
+      "category": "交互与交付",
+      "name": "可追溯资料研究报告",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "6–10 人日",
+      "status": "部分具备",
+      "intro": "把问题、来源、事实、推断与结论组织成可检查报告。",
+      "current": "搜索工具已有；E10 抓取与来源分类存在问题。",
+      "gap": "欠缺来源登记、去重与结论核对。",
+      "subtasks": [
+        "按问题拆解检索与一手来源优先",
+        "记录访问日期和证据片段",
+        "矛盾来源并列、缺证据明确"
+      ],
+      "acceptance": "给定 10 个核验问题，报告每条事实可追到支持来源，无伪造链接。",
+      "route": "自制研究 Skill/来源插件",
+      "dependencies": [
+        "S29",
+        "S30"
+      ],
+      "evidence": [
+        "R15",
+        "E10"
+      ]
+    },
+    {
+      "id": "M17",
+      "phase": "中短期",
+      "category": "交互与交付",
+      "name": "PDF 读取与定位",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "5–10 人日",
+      "status": "部分具备",
+      "intro": "读 PDF 不只提取文字，还能定位页码与图表。",
+      "current": "侧栏 PDF 预览已有；Agent 文本/OCR/表格链路未验。",
+      "gap": "扫描件和多栏表格会损失信息。",
+      "subtasks": [
+        "文本提取与页码绑定",
+        "必要时渲染和 OCR",
+        "识别表格、注释与图像局限"
+      ],
+      "acceptance": "对文本、扫描和混合 PDF 各完成任务，结果保留页码且不把乱码当事实。",
+      "route": "成熟 PDF 库 + DSH 文档插件",
+      "dependencies": [
+        "S20",
+        "S12"
+      ],
+      "evidence": [
+        "R15",
+        "C03"
+      ]
+    },
+    {
+      "id": "M18",
+      "phase": "中短期",
+      "category": "交互与交付",
+      "name": "Word 文档生成与修订",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "8–12 人日",
+      "status": "未集成或缺失",
+      "intro": "生成可编辑、版式可检查的 docx 交付物。",
+      "current": "可写脚本和文件，但默认组合未提供完整 Word 生产链。",
+      "gap": "产出文件存在不等于排版可用。",
+      "subtasks": [
+        "模板、目录、页眉页脚和表格",
+        "按原文约束修订与批注",
+        "渲染后逐页核验"
+      ],
+      "acceptance": "报告可在本机 Word 打开，文字不溢出，修订位置与用户要求一致。",
+      "route": "自制文档 Skill + 成熟 OOXML/渲染组件",
+      "dependencies": [
+        "M17",
+        "S20"
+      ],
+      "evidence": [
+        "R15"
+      ]
+    },
+    {
+      "id": "M19",
+      "phase": "中短期",
+      "category": "数据与办公",
+      "name": "Excel 读写与公式核验",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "10–15 人日",
+      "status": "未集成或缺失",
+      "intro": "处理真实工作簿、公式和格式而不破坏原数据。",
+      "current": "原生 shell/文件基础具备，工作簿专用链路未集成。",
+      "gap": "只写 CSV 不能替代复杂表格操作。",
+      "subtasks": [
+        "多表、类型和公式依赖识别",
+        "保留样式及保护原文件",
+        "重算与抽样核对"
+      ],
+      "acceptance": "含公式和格式的工作簿处理后可打开，关键总数与独立计算一致。",
+      "route": "自制表格插件/Skill + 本机计算引擎",
+      "dependencies": [
+        "S09",
+        "S20"
+      ],
+      "evidence": [
+        "R15"
+      ]
+    },
+    {
+      "id": "M20",
+      "phase": "中短期",
+      "category": "数据与办公",
+      "name": "数据分析与可复现图表",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "8–12 人日",
+      "status": "部分具备",
+      "intro": "从原始表格得到可靠统计与可解释图表。",
+      "current": "Agent 可运行程序；未内置质量检查和分析模板。",
+      "gap": "缺失值、重复、口径和图表误导缺少门禁。",
+      "subtasks": [
+        "记录数据来源、粒度和清洗规则",
+        "自动核对统计量",
+        "输出脚本、图表和可复现报告"
+      ],
+      "acceptance": "分析结果可由独立脚本复算，图表单位/样本范围/缺失数据清晰。",
+      "route": "自制分析 Skills + Python/JS 工具",
+      "dependencies": [
+        "M19",
+        "S08"
+      ],
+      "evidence": [
+        "R15"
+      ]
+    },
+    {
+      "id": "M21",
+      "phase": "中短期",
+      "category": "交互与交付",
+      "name": "演示文稿生成与预览",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "10–15 人日",
+      "status": "未集成或缺失",
+      "intro": "从资料生成可修改、可演讲的 pptx。",
+      "current": "原生 present 能交付文件；默认 Office 渲染未集成。",
+      "gap": "没有逐页视觉验收与版式系统。",
+      "subtasks": [
+        "内容大纲与证据对应",
+        "版式、图表和备注",
+        "渲染后检测遮挡/字号/溢出"
+      ],
+      "acceptance": "本机打开 15 页示例无明显遮挡，内容与来源一致，图表可编辑。",
+      "route": "自制演示 Skill + 成熟 OOXML 库",
+      "dependencies": [
+        "M18",
+        "M20"
+      ],
+      "evidence": [
+        "R15"
+      ]
+    },
+    {
+      "id": "M22",
+      "phase": "中短期",
+      "category": "交互与交付",
+      "name": "HTML 报告与本地产物预览",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "5–8 人日",
+      "status": "部分具备",
+      "intro": "交付能搜索、筛选和钻取的本地报告。",
+      "current": "better-sidebar 已有 HTML 隔离预览。",
+      "gap": "缺少统一产物版本、入口与交互验收。",
+      "subtasks": [
+        "结构化数据到独立 HTML",
+        "预览与原文件一致",
+        "离线使用和导出打印"
+      ],
+      "acceptance": "不用外部服务即可打开报告，筛选/空状态/打印均正常。",
+      "route": "复用 HTML preview + 自制交付 Skill",
+      "dependencies": [
+        "S20",
+        "M20"
+      ],
+      "evidence": [
+        "C03",
+        "R15"
+      ]
+    },
+    {
+      "id": "M23",
+      "phase": "中短期",
+      "category": "上下文",
+      "name": "截图和图像理解",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "5–10 人日",
+      "status": "有基础待验收",
+      "intro": "理解报错截图、界面布局和图表内容。",
+      "current": "图像输入取决于模型及桥接；本轮未测当前模型视觉。",
+      "gap": "附件出现不代表模型实际收到图像。",
+      "subtasks": [
+        "模型视觉能力自检",
+        "图像缩放与坐标对应",
+        "内容不可辨时明确说明"
+      ],
+      "acceptance": "固定截图中的文字、布局和异常可定位，低分辨率不编造细节。",
+      "route": "复用 DSH 多模态输入 + 模型路由",
+      "dependencies": [
+        "S12"
+      ],
+      "evidence": [
+        "R01",
+        "R15"
+      ]
+    },
+    {
+      "id": "M24",
+      "phase": "中短期",
+      "category": "交互与交付",
+      "name": "任务历史检索与产物索引",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "5–8 人日",
+      "status": "部分具备",
+      "intro": "找回上周的决定、文件和未完成任务。",
+      "current": "会话搜索与列表已有；产物和证据索引未整合。",
+      "gap": "只能靠记住会话标题查找。",
+      "subtasks": [
+        "按项目、时间、状态、文件搜索",
+        "定位到产生结论的轮次",
+        "删除会话时索引同步"
+      ],
+      "acceptance": "能从文件名或任务关键词回到准确会话与交付，不泄漏其他项目范围。",
+      "route": "自制本机索引，原会话为真源",
+      "dependencies": [
+        "S17",
+        "S20"
+      ],
+      "evidence": [
+        "C03",
+        "R01"
+      ]
+    },
+    {
+      "id": "M25",
+      "phase": "中短期",
+      "category": "插件集成",
+      "name": "任务导向的精选能力包",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "6–10 人日",
+      "status": "部分具备",
+      "intro": "一组经过验证的代码、研究、办公能力开箱可用。",
+      "current": "已有 3 个自制插件及 4 个社区插件，偏桌面体验。",
+      "gap": "默认组合未覆盖完整工作产出。",
+      "subtasks": [
+        "按真实任务选组件并锁版本",
+        "预置调好的 Skills 与工具说明",
+        "持续评测后才进入默认组合"
+      ],
+      "acceptance": "用户直接提出任务即可用到必要工具，不需要理解插件安装顺序。",
+      "route": "版本化 DSH bundle；复用与自制相结合",
+      "dependencies": [
+        "S15",
+        "S21",
+        "M15"
+      ],
+      "evidence": [
+        "C06",
+        "R10"
+      ]
+    },
+    {
+      "id": "M26",
+      "phase": "中短期",
+      "category": "插件集成",
+      "name": "项目事件钩子",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "5–8 人日",
+      "status": "有基础待验收",
+      "intro": "在编辑、测试、交付等节点执行确定性检查。",
+      "current": "DSH 可扩展 hooks，当前默认组合未挂载相关 overlay。",
+      "gap": "全靠提示词保证流程不稳定。",
+      "subtasks": [
+        "前置参数和范围检查",
+        "后置格式化与诊断",
+        "超时、失败策略和可见日志"
+      ],
+      "acceptance": "钩子失败不静默放行必需验收，重复触发不产生重复副作用。",
+      "route": "集成 DSH 原生 hooks",
+      "dependencies": [
+        "S06",
+        "S08"
+      ],
+      "evidence": [
+        "R17",
+        "C04"
+      ]
+    },
+    {
+      "id": "M27",
+      "phase": "中短期",
+      "category": "任务流程",
+      "name": "本机定时跟进与提醒",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "5–10 人日",
+      "status": "有基础待验收",
+      "intro": "在需要时重新检查任务或提醒用户。",
+      "current": "原生 schedule 为可选 overlay，当前未启用。",
+      "gap": "不等于已有独立后台调度；冷会话行为受限。",
+      "subtasks": [
+        "说明需应用运行和会话状态",
+        "可见排期、暂停和取消",
+        "错过触发时去重补偿"
+      ],
+      "acceptance": "本机运行时按时触发一次，暂停不再执行，重启后不会重复大量补跑。",
+      "route": "先集成 DSH schedule，独立调度另列 L11",
+      "dependencies": [
+        "S14",
+        "S28"
+      ],
+      "evidence": [
+        "R05",
+        "C12"
+      ]
+    },
+    {
+      "id": "M28",
+      "phase": "中短期",
+      "category": "成本与速度",
+      "name": "会话用量与耗时解释",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 2,
+      "fit": 5,
+      "effort": "3–5 人日",
+      "status": "部分具备",
+      "intro": "知道时间和上下文消耗在哪，不误读累计 token。",
+      "current": "UI 显示累计 tokens、缓存率和吞吐。",
+      "gap": "缓存、实际计费和工具等待关系不清晰。",
+      "subtasks": [
+        "输入/输出/缓存与工具耗时分开",
+        "仅在价格可信时估算金额",
+        "按任务展示开销与异常增长"
+      ],
+      "acceptance": "数据能与请求日志对齐；无价格时显示用量而不伪造费用。",
+      "route": "用量展示插件 + 原生统计",
+      "dependencies": [
+        "S18"
+      ],
+      "evidence": [
+        "E01",
+        "E10"
+      ]
+    },
+    {
+      "id": "M29",
+      "phase": "中短期",
+      "category": "可靠执行",
+      "name": "项目环境检查与准备",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "6–10 人日",
+      "status": "部分具备",
+      "intro": "新项目缺依赖时准确识别并准备必要运行条件。",
+      "current": "工作台能检查 git/pnpm/Node；项目级依赖未系统处理。",
+      "gap": "PATH、虚拟环境和启动命令经常成为任务阻塞。",
+      "subtasks": [
+        "识别锁文件、版本与虚拟环境",
+        "确认准备动作范围及缓存",
+        "健康检查与可重试安装日志"
+      ],
+      "acceptance": "在本机 Node/Python 项目中正确识别并运行既有测试，不改全局环境掩盖问题。",
+      "route": "扩展运行与帮助 + 项目准备 Skill",
+      "dependencies": [
+        "S01",
+        "S28"
+      ],
+      "evidence": [
+        "C02"
+      ]
+    },
+    {
+      "id": "M30",
+      "phase": "中短期",
+      "category": "代码质量",
+      "name": "调试与失败最小复现",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "8–15 人日",
+      "status": "部分具备",
+      "intro": "从错误现象到可重复失败，再验证修复。",
+      "current": "E01 能建立测试基线；复杂运行时调试未验。",
+      "gap": "缺少日志、断言和运行环境对应关系。",
+      "subtasks": [
+        "提炼最小输入与触发步骤",
+        "关联堆栈、日志和源码",
+        "修复后重复原失败与回归"
+      ],
+      "acceptance": "3 类真实 bug 均有修复前失败和修复后通过的同一验证。",
+      "route": "自制调试 Skill，复用 terminal/LSP/browser",
+      "dependencies": [
+        "S08",
+        "M02",
+        "M14"
+      ],
+      "evidence": [
+        "R06",
+        "E01"
+      ]
+    },
+    {
+      "id": "L01",
+      "phase": "长期",
+      "category": "上下文",
+      "name": "大项目增量检索",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "15–25 人日",
+      "status": "部分具备",
+      "intro": "在大型仓库中保持检索速度和结果相关性。",
+      "current": "原生文本搜索可用，大项目性能与质量未测。",
+      "gap": "重复全盘扫描、忽略文件和过时结果需要治理。",
+      "subtasks": [
+        "基于实际需求选择文本/符号索引",
+        "增量更新并遵守忽略规则",
+        "查询质量基准与可解释结果"
+      ],
+      "acceptance": "在 10 万文件样例中给出可追溯结果，变更后索引及时更新，资源可控。",
+      "route": "自制索引插件，复用 rg/LSP",
+      "dependencies": [
+        "M01",
+        "M02"
+      ],
+      "evidence": [
+        "R07"
+      ]
+    },
+    {
+      "id": "L02",
+      "phase": "长期",
+      "category": "上下文",
+      "name": "上下文预算与压缩核对",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "10–20 人日",
+      "status": "有基础待验收",
+      "intro": "长任务压缩后仍保留目标、限制和关键证据。",
+      "current": "DSH 有 compaction，当前小任务仅占少量上下文。",
+      "gap": "未测多次压缩导致的约束或证据丢失。",
+      "subtasks": [
+        "保留不可丢的用户约束",
+        "摘要带原事件索引",
+        "压缩后主动核对任务状态"
+      ],
+      "acceptance": "同任务跨 3 次压缩仍遵守范围、保留人工修改、引用有效证据。",
+      "route": "DSH compaction 策略扩展",
+      "dependencies": [
+        "S17",
+        "M04"
+      ],
+      "evidence": [
+        "C04"
+      ]
+    },
+    {
+      "id": "L03",
+      "phase": "长期",
+      "category": "任务流程",
+      "name": "多小时目标推进",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 5,
+      "fit": 5,
+      "effort": "15–30 人日",
+      "status": "有基础待验收",
+      "intro": "长目标可以持续推进，遇到明确边界及时停下。",
+      "current": "DSH goal/workflow 已有；单次短任务不能证明长时可靠性。",
+      "gap": "缺少预算、停机条件、卡住检测与稳定性数据。",
+      "subtasks": [
+        "目标与完成判据分离",
+        "重复失败和无进展检测",
+        "预算到点交接并保留下一步"
+      ],
+      "acceptance": "4 小时样例能完成或准确受阻，不无限重复、不伪报完成。",
+      "route": "复用 DSH goal + 自制监督插件",
+      "dependencies": [
+        "S14",
+        "L02",
+        "M28"
+      ],
+      "evidence": [
+        "R04",
+        "C04"
+      ]
+    },
+    {
+      "id": "L04",
+      "phase": "长期",
+      "category": "任务流程",
+      "name": "跨日恢复与状态重建",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "10–20 人日",
+      "status": "有基础待验收",
+      "intro": "隔天打开能核对项目变化并接续工作。",
+      "current": "会话持久化已有；任务、进程和项目版本的一致性未整合。",
+      "gap": "过夜代码、依赖或外部状态可能变化。",
+      "subtasks": [
+        "恢复时核对 HEAD 与未提交内容",
+        "识别已失效作业和工具授权",
+        "展示变化后继续正确步骤"
+      ],
+      "acceptance": "隔天人工改过项目后恢复不会沿用旧假设覆盖新内容。",
+      "route": "任务插件 + 项目上下文 + jobs",
+      "dependencies": [
+        "M04",
+        "M12",
+        "S14"
+      ],
+      "evidence": [
+        "R04",
+        "C05"
+      ]
+    },
+    {
+      "id": "L05",
+      "phase": "长期",
+      "category": "代码质量",
+      "name": "大规模重构与迁移",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 5,
+      "fit": 4,
+      "effort": "15–30 人日",
+      "status": "部分具备",
+      "intro": "分批完成跨模块迁移并控制回归范围。",
+      "current": "基础多文件编辑已实测，规模仅小型 fixture。",
+      "gap": "需要影响分析、批次验证和可恢复执行。",
+      "subtasks": [
+        "变更依赖图与批次计划",
+        "每批诊断/测试与审查",
+        "中断后识别已迁移文件"
+      ],
+      "acceptance": "真实中型仓库完成一次 API 迁移，重复运行无二次破坏，可逐批回退。",
+      "route": "重构 Skill + LSP + snapshots",
+      "dependencies": [
+        "M02",
+        "M11",
+        "M30"
+      ],
+      "evidence": [
+        "R06"
+      ]
+    },
+    {
+      "id": "L06",
+      "phase": "长期",
+      "category": "代码质量",
+      "name": "PR 审阅与持续修复",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "10–20 人日",
+      "status": "未集成或缺失",
+      "intro": "读取审阅反馈和 CI 失败，修复后更新同一 PR。",
+      "current": "Git 与工具基础有，外部审阅工作流未集成。",
+      "gap": "反馈定位、过时评论和分支状态未统一。",
+      "subtasks": [
+        "按提交版本关联评论",
+        "复现 CI 失败并检查环境",
+        "修复后注明解决证据"
+      ],
+      "acceptance": "一次 PR 两轮反馈闭环，不覆盖审阅期间人工新提交。",
+      "route": "GitHub 集成 + 审查 Skill",
+      "dependencies": [
+        "M10",
+        "S26"
+      ],
+      "evidence": [
+        "R02",
+        "R16"
+      ]
+    },
+    {
+      "id": "L07",
+      "phase": "长期",
+      "category": "网页与研究",
+      "name": "浏览器登录态与人工交接",
+      "priority": "P2",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 4,
+      "effort": "10–20 人日",
+      "status": "未集成或缺失",
+      "intro": "复用明确授权的登录会话，卡在登录时交给用户。",
+      "current": "iframe 浏览器无法构成完整登录态自动化产品。",
+      "gap": "账号、标签页与任务授权边界需要管理。",
+      "subtasks": [
+        "显式选择浏览器会话与站点",
+        "登录/验证码人工接管",
+        "操作前后截图和状态核对"
+      ],
+      "acceptance": "测试站登录后完成授权范围内操作；切换账号不会串用数据。",
+      "route": "浏览器插件 + 原生授权 UI",
+      "dependencies": [
+        "M13",
+        "S28"
+      ],
+      "evidence": [
+        "R09",
+        "R01"
+      ]
+    },
+    {
+      "id": "L08",
+      "phase": "长期",
+      "category": "网页与研究",
+      "name": "浏览器多步骤事务",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 5,
+      "fit": 4,
+      "effort": "15–25 人日",
+      "status": "未集成或缺失",
+      "intro": "网站操作在提交前后都有可见的状态检查。",
+      "current": "无成熟浏览器工作流默认集成。",
+      "gap": "页面变化、重复点击和不确定提交结果风险大。",
+      "subtasks": [
+        "观察—动作—验证循环",
+        "提交前预览与具体授权",
+        "不确定结果先核对再重试"
+      ],
+      "acceptance": "表单、下载、分页、会话过期场景可恢复，不重复提交。",
+      "route": "浏览器工作流插件",
+      "dependencies": [
+        "L07",
+        "S14"
+      ],
+      "evidence": [
+        "R09"
+      ]
+    },
+    {
+      "id": "L09",
+      "phase": "长期",
+      "category": "数据与办公",
+      "name": "Office 原文件协作",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 5,
+      "fit": 4,
+      "effort": "15–30 人日",
+      "status": "未集成或缺失",
+      "intro": "在本机打开的文档中安全协作，保留人工编辑。",
+      "current": "规划 M18–M21 为文件生成；实时应用协作尚缺。",
+      "gap": "文件快照与应用未保存内容可能冲突。",
+      "subtasks": [
+        "识别未保存修改与当前文档",
+        "采用应用受支持接口",
+        "修改前后版本核对与撤销"
+      ],
+      "acceptance": "本机 Word/Excel 测试文件有人同时编辑时不丢内容，明确冲突。",
+      "route": "本机 Office API/插件适配",
+      "dependencies": [
+        "M18",
+        "M19",
+        "M11"
+      ],
+      "evidence": [
+        "R15"
+      ]
+    },
+    {
+      "id": "L10",
+      "phase": "长期",
+      "category": "数据与办公",
+      "name": "本地 SQL 与数据源连接",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 4,
+      "fit": 4,
+      "effort": "10–20 人日",
+      "status": "未集成或缺失",
+      "intro": "从本机数据库读取数据、分析并交付结果。",
+      "current": "可通过 shell 实现，缺少统一连接和查询体验。",
+      "gap": "连接状态、只读范围和大结果集管理不足。",
+      "subtasks": [
+        "SQLite/DuckDB 优先",
+        "只读查询与 schema 发现",
+        "大表分页、取消和查询记录"
+      ],
+      "acceptance": "大表查询可取消；分析结果可复算，连接信息不进入报告。",
+      "route": "自制数据连接工具或已验 MCP",
+      "dependencies": [
+        "M15",
+        "M20",
+        "S06"
+      ],
+      "evidence": [
+        "R14",
+        "R15"
+      ]
+    },
+    {
+      "id": "L11",
+      "phase": "长期",
+      "category": "任务流程",
+      "name": "可靠本机自动化调度",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "15–25 人日",
+      "status": "未集成或缺失",
+      "intro": "定时任务即使重启应用也有明确的执行与错过记录。",
+      "current": "DSH schedule 更接近根会话唤醒，不等价独立调度服务。",
+      "gap": "持续调度、重复去重和失败回执需额外产品层。",
+      "subtasks": [
+        "持久排期与执行幂等键",
+        "睡眠/断网/重启的错过策略",
+        "结果汇总和可取消下一次"
+      ],
+      "acceptance": "跨应用重启只执行应执行的一次；电脑关闭期间明确记为错过而非成功。",
+      "route": "自制 scheduler 插件，遵循本机生命周期",
+      "dependencies": [
+        "M27",
+        "S14",
+        "L04"
+      ],
+      "evidence": [
+        "R05",
+        "C12"
+      ]
+    },
+    {
+      "id": "L12",
+      "phase": "长期",
+      "category": "插件集成",
+      "name": "个人工具连接器",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 4,
+      "fit": 4,
+      "effort": "10–25 人日/连接器",
+      "status": "有基础待验收",
+      "intro": "按实际工作需要接入代码托管、笔记或日程。",
+      "current": "MCP/CLI 可以作为基础；本轮未连接任何个人外部账户。",
+      "gap": "工具可用不等于操作权限和结果验证可靠。",
+      "subtasks": [
+        "从一个真实高频来源开始",
+        "先检索再添加受控写操作",
+        "过期授权及撤销反馈"
+      ],
+      "acceptance": "单个连接器完成检索、结果引用、权限失效和授权写入验收。",
+      "route": "优先成熟 MCP/官方 API，DSH 适配",
+      "dependencies": [
+        "M15",
+        "S28",
+        "S30"
+      ],
+      "evidence": [
+        "R14",
+        "R01"
+      ]
+    },
+    {
+      "id": "L13",
+      "phase": "长期",
+      "category": "插件集成",
+      "name": "工具发现与按需载入",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "10–20 人日",
+      "status": "部分具备",
+      "intro": "工具变多后仍能选择准确，不一次塞进全部描述。",
+      "current": "有插件搜索与注册基础，默认工具选择未做大规模评测。",
+      "gap": "工具越多可能越慢、越容易选错。",
+      "subtasks": [
+        "按任务检索工具与能力",
+        "按需注入 schema 和约束",
+        "记录选择错误及无效调用"
+      ],
+      "acceptance": "100 个工具场景下能稳定找到正确能力，提示体积不线性膨胀。",
+      "route": "自制工具目录插件",
+      "dependencies": [
+        "M25",
+        "M28"
+      ],
+      "evidence": [
+        "R10",
+        "R14"
+      ]
+    },
+    {
+      "id": "L14",
+      "phase": "长期",
+      "category": "成本与速度",
+      "name": "按任务选择模型",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "10–20 人日",
+      "status": "部分具备",
+      "intro": "在速度、质量和成本之间做可解释选择。",
+      "current": "UI 可以选择模型，默认模型能力未系统评估。",
+      "gap": "自动选择缺少任务基准与失败回退依据。",
+      "subtasks": [
+        "按编码/视觉/研究任务分组测评",
+        "显示选择原因和能力限制",
+        "切换时保留任务约束"
+      ],
+      "acceptance": "在固定样例集上比较质量与耗时；性能退化可回退，避免盲目追新型号。",
+      "route": "原生模型配置 + 路由策略插件",
+      "dependencies": [
+        "S12",
+        "M28",
+        "S15"
+      ],
+      "evidence": [
+        "R06"
+      ]
+    },
+    {
+      "id": "L15",
+      "phase": "长期",
+      "category": "成本与速度",
+      "name": "预算与资源上限",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "8–15 人日",
+      "status": "有基础待验收",
+      "intro": "长任务在可控的 token、时间和本机资源内运行。",
+      "current": "有用量与 goal 基础；产品级综合预算未验。",
+      "gap": "长输出和无进展循环可能持续消耗。",
+      "subtasks": [
+        "任务预算及接近上限提示",
+        "子任务预算归属",
+        "超限安全交接而非丢状态"
+      ],
+      "acceptance": "上限触发后不继续新副作用，保留状态和剩余工作，统计一致。",
+      "route": "goal/用量策略扩展",
+      "dependencies": [
+        "M28",
+        "L03"
+      ],
+      "evidence": [
+        "R04"
+      ]
+    },
+    {
+      "id": "L16",
+      "phase": "长期",
+      "category": "交互与交付",
+      "name": "语音输入与文字核对",
+      "priority": "P3",
+      "utility": 3,
+      "difficulty": 3,
+      "fit": 4,
+      "effort": "8–15 人日",
+      "status": "未集成或缺失",
+      "intro": "用语音描述任务，执行前能看见识别文字。",
+      "current": "当前默认交互为文本和附件。",
+      "gap": "代码名词识别、录音状态和误触需要处理。",
+      "subtasks": [
+        "录音状态与快捷键",
+        "转写结果可编辑",
+        "敏感操作不因误识别自动执行"
+      ],
+      "acceptance": "中文混合路径/术语转写可纠正，用户取消录音后不发任务。",
+      "route": "自制语音输入客户端插件",
+      "dependencies": [
+        "M06",
+        "S28"
+      ],
+      "evidence": [
+        "R01",
+        "R15"
+      ]
+    },
+    {
+      "id": "L17",
+      "phase": "长期",
+      "category": "交互与交付",
+      "name": "图像生成与资产管理",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 3,
+      "fit": 4,
+      "effort": "8–15 人日",
+      "status": "未集成或缺失",
+      "intro": "需要插图或界面素材时生成并纳入项目产物。",
+      "current": "模型视觉输入与图像生成是不同能力，当前无专用默认链路。",
+      "gap": "生成、修改、版本和引用未统一。",
+      "subtasks": [
+        "接入实际可用生成服务",
+        "明确输入图片和输出版本",
+        "与代码/报告产物链接"
+      ],
+      "acceptance": "素材保存可打开，修改指定图片不误用另一版本，生成失败可追溯。",
+      "route": "生成服务工具插件 + artifacts",
+      "dependencies": [
+        "M23",
+        "S20"
+      ],
+      "evidence": [
+        "R01",
+        "R15"
+      ]
+    },
+    {
+      "id": "L18",
+      "phase": "长期",
+      "category": "交互与交付",
+      "name": "可视化产物精确修改",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 5,
+      "fit": 4,
+      "effort": "15–30 人日",
+      "status": "未集成或缺失",
+      "intro": "在预览里选中具体元素并把修改要求送给 Agent。",
+      "current": "有 HTML 预览和代码编辑；元素选择到源码映射未集成。",
+      "gap": "用户难以准确描述要改哪个区域。",
+      "subtasks": [
+        "预览元素选择与上下文",
+        "定位对应源码或文档元素",
+        "修改后重渲染和差异核对"
+      ],
+      "acceptance": "选中图表/按钮/文档段落后仅改目标内容，版本变化时重新定位。",
+      "route": "预览扩展 + 浏览器/文档插件",
+      "dependencies": [
+        "M14",
+        "M22"
+      ],
+      "evidence": [
+        "R15"
+      ]
+    },
+    {
+      "id": "L19",
+      "phase": "长期",
+      "category": "上下文",
+      "name": "跨项目知识检索",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 4,
+      "fit": 4,
+      "effort": "15–25 人日",
+      "status": "未集成或缺失",
+      "intro": "在明确选定的本机资料中查找并引用既有知识。",
+      "current": "会话与文件基础存在，统一资料库未集成。",
+      "gap": "跨项目来源、更新和隐私范围需管理。",
+      "subtasks": [
+        "资料集合显式选择",
+        "文档版本、重复和失效处理",
+        "结果返回准确出处"
+      ],
+      "acceptance": "限定资料范围内查到答案；移除资料后不再被检索或引用。",
+      "route": "自制本机知识索引插件",
+      "dependencies": [
+        "M04",
+        "M17",
+        "L01"
+      ],
+      "evidence": [
+        "R11",
+        "R15"
+      ]
+    },
+    {
+      "id": "L20",
+      "phase": "长期",
+      "category": "质量工程",
+      "name": "插件升级故障与回退演练",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "10–20 人日",
+      "status": "部分具备",
+      "intro": "新增能力失败时，日常 Agent 仍能恢复使用。",
+      "current": "已有自管升级和保留数据逻辑，故障覆盖仍有限。",
+      "gap": "依赖安装半完成、客户端不兼容等需演练。",
+      "subtasks": [
+        "记录已知可用组合",
+        "失败隔离与可用界面回退",
+        "数据迁移的前后兼容验证"
+      ],
+      "acceptance": "模拟断网、损坏包和 schema 迁移失败后能恢复旧组合及会话。",
+      "route": "现有 updater/DSH plugin manager 扩展",
+      "dependencies": [
+        "S21",
+        "S22"
+      ],
+      "evidence": [
+        "C02",
+        "C06"
+      ]
+    },
+    {
+      "id": "L21",
+      "phase": "长期",
+      "category": "可观测性",
+      "name": "任务性能剖析",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 3,
+      "fit": 5,
+      "effort": "8–15 人日",
+      "status": "部分具备",
+      "intro": "发现慢在模型、工具、上下文还是本机 I/O。",
+      "current": "有基础用量/时间；没有跨步骤性能分解。",
+      "gap": "优化缺少基线，容易凭感觉。",
+      "subtasks": [
+        "请求、工具、队列与渲染分开计时",
+        "缓存和重复读取统计",
+        "同任务版本前后比较"
+      ],
+      "acceptance": "能解释一项慢任务前 3 个耗时来源，优化前后可重复测量。",
+      "route": "原生事件统计 + 自制诊断 UI",
+      "dependencies": [
+        "M28",
+        "S18"
+      ],
+      "evidence": [
+        "C01"
+      ]
+    },
+    {
+      "id": "L22",
+      "phase": "长期",
+      "category": "质量工程",
+      "name": "故障注入与长期稳定性",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "15–25 人日",
+      "status": "有基础待验收",
+      "intro": "系统性验证磁盘满、断电式中断、服务崩溃和输出洪峰。",
+      "current": "已有部分更新单测，长期任务故障矩阵未建。",
+      "gap": "小样例通过难代表日常可靠性。",
+      "subtasks": [
+        "仅在隔离数据目录注入故障",
+        "验证恢复与数据完整性",
+        "持续运行并记录资源增长"
+      ],
+      "acceptance": "24 小时场景运行无不可恢复数据损坏；每次故障都有准确状态。",
+      "route": "自制集成评测与故障注入工具",
+      "dependencies": [
+        "S15",
+        "L04",
+        "L20"
+      ],
+      "evidence": [
+        "C05",
+        "C06"
+      ]
+    },
+    {
+      "id": "L23",
+      "phase": "长期",
+      "category": "质量工程",
+      "name": "外部内容与工具越权防护",
+      "priority": "P1",
+      "utility": 5,
+      "difficulty": 5,
+      "fit": 5,
+      "effort": "15–30 人日",
+      "status": "有基础待验收",
+      "intro": "读取网页和仓库内容时保持用户指令与工具权限边界。",
+      "current": "原生 web 有不可信内容标记、沙箱与审批；本轮只测少量边界。",
+      "gap": "复杂提示注入、插件组合和路径别名尚未验。",
+      "subtasks": [
+        "恶意网页/文档 fixture",
+        "Windows junction/路径规范化边界",
+        "外部内容不得授权写入或外传"
+      ],
+      "acceptance": "固定攻击样例下拒绝越权且仍能完成合法任务；问题可追溯到防护层。",
+      "route": "复用 DSH guard + 对抗评测",
+      "dependencies": [
+        "S06",
+        "M13",
+        "M15"
+      ],
+      "evidence": [
+        "C10",
+        "R12"
+      ]
+    },
+    {
+      "id": "L24",
+      "phase": "长期",
+      "category": "交互与交付",
+      "name": "统一任务主页与交付历史",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 4,
+      "fit": 5,
+      "effort": "10–20 人日",
+      "status": "部分具备",
+      "intro": "把计划、进展、验证、产物和恢复入口放在同一任务视图。",
+      "current": "当前会话、todo、taskflow、文件页签分别存在。",
+      "gap": "需要频繁切页，状态还可能冲突。",
+      "subtasks": [
+        "概要与详细证据分层",
+        "一处显示等待用户的动作",
+        "历史交付及其验证版本"
+      ],
+      "acceptance": "普通用户不读工具原文也能知道已完成什么、哪里受阻、下一步如何继续。",
+      "route": "扩展原生侧栏与 taskflow，保持单一会话真源",
+      "dependencies": [
+        "S02",
+        "M24",
+        "S20"
+      ],
+      "evidence": [
+        "R01",
+        "R15",
+        "C03"
+      ]
+    },
+    {
+      "id": "F01",
+      "phase": "远目标",
+      "category": "任务流程",
+      "name": "复杂目标的自主拆解与重规划",
+      "priority": "P2",
+      "utility": 5,
+      "difficulty": 5,
+      "fit": 4,
+      "effort": "30–60 人日以上",
+      "status": "有基础待验收",
+      "intro": "面对开放目标持续发现缺口、重排计划并交付可验收结果。",
+      "current": "DSH goal 是基础，复杂业务正确性还没有稳定证据。",
+      "gap": "需要可评价目标、工具可靠性和不确定性处理。",
+      "subtasks": [
+        "将模糊目标变成可验证子目标",
+        "依据真实反馈重规划",
+        "涉及范围变化时明确说明"
+      ],
+      "acceptance": "跨代码、研究、文档的综合任务重复多轮达到验收，失败可解释且可接管。",
+      "route": "goal/workflow 上层策略，不重写运行时",
+      "dependencies": [
+        "L03",
+        "L23",
+        "L24"
+      ],
+      "evidence": [
+        "R04",
+        "R15"
+      ]
+    },
+    {
+      "id": "F02",
+      "phase": "远目标",
+      "category": "任务流程",
+      "name": "主动个人工作助理",
+      "priority": "P3",
+      "utility": 4,
+      "difficulty": 5,
+      "fit": 4,
+      "effort": "30–60 人日以上",
+      "status": "未集成或缺失",
+      "intro": "在明确授权的工作范围内主动发现待办并提出行动。",
+      "current": "本机定时与连接器尚待整合。",
+      "gap": "误提醒、错误行动和长久授权很难控制。",
+      "subtasks": [
+        "用户定义关注范围与安静时段",
+        "只在有意义变化时通知",
+        "建议、草稿与实际执行分开"
+      ],
+      "acceptance": "一周真实使用提醒有用、可关闭；没有授权不会对外发布或承诺。",
+      "route": "本机调度 + 连接器 + 任务策略",
+      "dependencies": [
+        "L11",
+        "L12",
+        "F01"
+      ],
+      "evidence": [
+        "R05",
+        "R15"
+      ]
+    },
+    {
+      "id": "F03",
+      "phase": "远目标",
+      "category": "网页与研究",
+      "name": "Windows 原生电脑操作",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 5,
+      "fit": 4,
+      "effort": "30–60 人日以上",
+      "status": "未集成或缺失",
+      "intro": "操作没有 API 的本机应用，完成最后一公里任务。",
+      "current": "当前 dsh-px 的 shell 和 iframe 不构成通用原生 UI 操作。",
+      "gap": "窗口选择、焦点、坐标、敏感操作与恢复复杂。",
+      "subtasks": [
+        "优先 UIA 与应用 API",
+        "截图坐标和窗口绑定",
+        "操作后验证及人工接管"
+      ],
+      "acceptance": "在限定 3 个本机应用完成稳定流程，不在焦点变化后误操作其他窗口。",
+      "route": "自制 Windows computer-use 插件",
+      "dependencies": [
+        "M23",
+        "S28",
+        "L23"
+      ],
+      "evidence": [
+        "R01"
+      ]
+    },
+    {
+      "id": "F04",
+      "phase": "远目标",
+      "category": "数据与办公",
+      "name": "跨应用完整工作流",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 5,
+      "fit": 4,
+      "effort": "30–60 人日以上",
+      "status": "未集成或缺失",
+      "intro": "把网页资料、表格分析、文档和应用操作连成一次交付。",
+      "current": "各专用能力尚待建成，当前为分散工具。",
+      "gap": "跨应用版本与副作用很难回滚。",
+      "subtasks": [
+        "数据来源到产物的关联",
+        "各应用明确完成检查点",
+        "中途人工接管与恢复"
+      ],
+      "acceptance": "同一示例从资料收集到最终报告可重做、可核对、不重复外部动作。",
+      "route": "工作流插件组合",
+      "dependencies": [
+        "F03",
+        "L09",
+        "L08",
+        "M20"
+      ],
+      "evidence": [
+        "R15"
+      ]
+    },
+    {
+      "id": "F05",
+      "phase": "远目标",
+      "category": "插件集成",
+      "name": "从已验任务沉淀可复用流程",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 5,
+      "fit": 5,
+      "effort": "20–40 人日",
+      "status": "部分具备",
+      "intro": "把成功步骤整理为下次可调用的 Skill 或模板。",
+      "current": "DSH Skills 已有；从轨迹安全提炼的产品流程未建。",
+      "gap": "一次成功不能直接变成可靠自动化。",
+      "subtasks": [
+        "由用户选择可复用任务",
+        "提取参数、约束和验收",
+        "用新样例复测后才启用"
+      ],
+      "acceptance": "生成的流程在 3 个不同输入上通过，敏感信息不会固化到模板。",
+      "route": "自制 workflow-author 插件 + Skills",
+      "dependencies": [
+        "M25",
+        "S15",
+        "L23"
+      ],
+      "evidence": [
+        "R10"
+      ]
+    },
+    {
+      "id": "F06",
+      "phase": "远目标",
+      "category": "上下文",
+      "name": "有质量门槛的经验记忆",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 5,
+      "fit": 4,
+      "effort": "20–40 人日",
+      "status": "未集成或缺失",
+      "intro": "记住有效经验，同时淘汰被反证和过时的结论。",
+      "current": "普通记忆能力尚在 M04；自动更新质量未解决。",
+      "gap": "模型错误可能积累为长期偏见。",
+      "subtasks": [
+        "记忆需证据与适用条件",
+        "反证回溯与撤销",
+        "评估记忆是否提高任务成功率"
+      ],
+      "acceptance": "有记忆组在固定样例优于无记忆组，错误记忆能被定位和删除。",
+      "route": "memory 插件扩展与评测",
+      "dependencies": [
+        "M04",
+        "L19",
+        "S26"
+      ],
+      "evidence": [
+        "R11"
+      ]
+    },
+    {
+      "id": "F07",
+      "phase": "远目标",
+      "category": "代码质量",
+      "name": "多策略独立验证",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 5,
+      "fit": 4,
+      "effort": "20–40 人日",
+      "status": "有基础待验收",
+      "intro": "关键任务采用独立实现、审查或属性验证降低共同盲点。",
+      "current": "可委派子任务，但独立性和收益尚未测。",
+      "gap": "多 Agent 不天然提高正确性，可能共同犯错。",
+      "subtasks": [
+        "隔离初次实现的结论",
+        "属性测试与差分测试",
+        "按风险选择额外验证预算"
+      ],
+      "acceptance": "对隐藏缺陷集检出率提升且误报可控，报告额外成本。",
+      "route": "subagents + 验证插件",
+      "dependencies": [
+        "M08",
+        "S07",
+        "L15"
+      ],
+      "evidence": [
+        "R10"
+      ]
+    },
+    {
+      "id": "F08",
+      "phase": "远目标",
+      "category": "交互与交付",
+      "name": "设计到可用界面的迭代",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 5,
+      "fit": 4,
+      "effort": "25–50 人日",
+      "status": "部分具备",
+      "intro": "从草图或截图做到能交互、视觉接近的本机页面。",
+      "current": "编辑代码与预览有基础，图像到布局的验收链未建。",
+      "gap": "视觉相似、可访问性与真实功能需一起验证。",
+      "subtasks": [
+        "结构与交互规格提取",
+        "截图对照与差异定位",
+        "小屏、键盘与异常状态验证"
+      ],
+      "acceptance": "参考界面的关键布局与交互通过验收，不只生成一张静态图。",
+      "route": "视觉模型 + 浏览器 + UI Skills",
+      "dependencies": [
+        "L18",
+        "M23",
+        "M14"
+      ],
+      "evidence": [
+        "R09",
+        "R15"
+      ]
+    },
+    {
+      "id": "F09",
+      "phase": "远目标",
+      "category": "数据与办公",
+      "name": "交互式分析工作簿",
+      "priority": "P3",
+      "utility": 3,
+      "difficulty": 4,
+      "fit": 4,
+      "effort": "20–35 人日",
+      "status": "未集成或缺失",
+      "intro": "像 notebook 一样保留分析步骤并可重跑局部。",
+      "current": "现有终端和产物可承载脚本，单元级交互未整合。",
+      "gap": "执行顺序、变量状态与结果缓存复杂。",
+      "subtasks": [
+        "代码单元、输出和来源绑定",
+        "重启运行环境可完整重放",
+        "导出脚本与静态报告"
+      ],
+      "acceptance": "清空运行环境后从头执行得到一致关键结果，旧输出标记失效。",
+      "route": "Notebook/Jupyter 适配插件",
+      "dependencies": [
+        "M20",
+        "L10"
+      ],
+      "evidence": [
+        "R15"
+      ]
+    },
+    {
+      "id": "F10",
+      "phase": "远目标",
+      "category": "交互与交付",
+      "name": "音视频资料处理",
+      "priority": "P3",
+      "utility": 3,
+      "difficulty": 4,
+      "fit": 3,
+      "effort": "20–40 人日",
+      "status": "未集成或缺失",
+      "intro": "把会议录音、视频与字幕转成可定位的工作资料。",
+      "current": "当前未提供成熟默认音视频链路。",
+      "gap": "长文件时序、识别质量和引用粒度需处理。",
+      "subtasks": [
+        "分段转写和时间戳",
+        "画面与发言关联",
+        "摘要可跳回原片段"
+      ],
+      "acceptance": "固定音视频样例的关键结论能追到时间片段，听不清处不编造。",
+      "route": "本机媒体工具 + 可用识别服务",
+      "dependencies": [
+        "M23",
+        "S20",
+        "S30"
+      ],
+      "evidence": [
+        "R01"
+      ]
+    },
+    {
+      "id": "F11",
+      "phase": "远目标",
+      "category": "可靠执行",
+      "name": "离线或本地模型工作模式",
+      "priority": "P3",
+      "utility": 3,
+      "difficulty": 5,
+      "fit": 4,
+      "effort": "20–50 人日",
+      "status": "待确认",
+      "intro": "在网络不可用时保留部分本机任务能力。",
+      "current": "能配置模型不代表本机有足够算力和工具能力。",
+      "gap": "质量、硬件占用与模型协议尚未评估。",
+      "subtasks": [
+        "盘点本机硬件与可运行模型",
+        "建立离线可用工具集",
+        "明确质量和上下文限制"
+      ],
+      "acceptance": "断网时限定任务可运行，界面准确说明不可用能力，不伪称完全离线。",
+      "route": "原生模型适配与能力裁剪",
+      "dependencies": [
+        "S12",
+        "L14"
+      ],
+      "evidence": [
+        "R10"
+      ]
+    },
+    {
+      "id": "F12",
+      "phase": "远目标",
+      "category": "代码质量",
+      "name": "行内编辑与补全体验",
+      "priority": "P3",
+      "utility": 3,
+      "difficulty": 4,
+      "fit": 2,
+      "effort": "20–40 人日",
+      "status": "部分具备",
+      "intro": "需要时在编辑器中快速改一段代码或接受补全。",
+      "current": "better-sidebar 有代码编辑器，未确认完整补全体验。",
+      "gap": "对当前以任务为核心的产品收益低于可靠交付。",
+      "subtasks": [
+        "选中代码局部修改",
+        "小 diff 预览与接受",
+        "低延迟补全评测"
+      ],
+      "acceptance": "补全不会覆盖未保存内容，局部编辑可撤回；先确认实际使用频率再投入。",
+      "route": "编辑器插件扩展",
+      "dependencies": [
+        "M02",
+        "M11"
+      ],
+      "evidence": [
+        "C03",
+        "R06"
+      ]
+    },
+    {
+      "id": "F13",
+      "phase": "远目标",
+      "category": "代码质量",
+      "name": "交互式调试器整合",
+      "priority": "P3",
+      "utility": 3,
+      "difficulty": 5,
+      "fit": 3,
+      "effort": "25–50 人日",
+      "status": "待确认",
+      "intro": "断点、变量和调用栈成为 Agent 可用的调试证据。",
+      "current": "shell 调试可用；未发现默认 DAP 产品链路。",
+      "gap": "语言调试器与运行时会话管理成本高。",
+      "subtasks": [
+        "先支持一个真实常用语言",
+        "断点、栈帧与变量读取",
+        "调试状态与源码版本对应"
+      ],
+      "acceptance": "Agent 能依据断点状态定位一类日志无法解释的问题，停止后无遗留进程。",
+      "route": "成熟 DAP 适配为 DSH 工具",
+      "dependencies": [
+        "M30",
+        "M12"
+      ],
+      "evidence": [
+        "R06"
+      ]
+    },
+    {
+      "id": "F14",
+      "phase": "远目标",
+      "category": "任务流程",
+      "name": "可视化可复用流程编排",
+      "priority": "P3",
+      "utility": 3,
+      "difficulty": 5,
+      "fit": 3,
+      "effort": "25–50 人日",
+      "status": "有基础待验收",
+      "intro": "让经常重复的多步任务可查看、调整和重跑。",
+      "current": "原生 workflow 是基础，面向用户的流程编辑器未集成。",
+      "gap": "过早做通用编排会挤占核心能力建设。",
+      "subtasks": [
+        "少量经过验证的流程模板",
+        "参数、分支与等待点可视化",
+        "每次运行记录与重跑范围"
+      ],
+      "acceptance": "3 个实际高频流程减少重复操作且失败能从明确节点恢复。",
+      "route": "DSH workflow 客户端插件",
+      "dependencies": [
+        "F05",
+        "L11"
+      ],
+      "evidence": [
+        "R10"
+      ]
+    },
+    {
+      "id": "F15",
+      "phase": "远目标",
+      "category": "质量工程",
+      "name": "真实任务回放与模型版本比较",
+      "priority": "P2",
+      "utility": 4,
+      "difficulty": 5,
+      "fit": 5,
+      "effort": "20–40 人日",
+      "status": "未集成或缺失",
+      "intro": "升级模型或插件前量化是否影响本机任务效果。",
+      "current": "本轮样例和门禁可作为起点。",
+      "gap": "开放任务难评分，录制也可能含隐私。",
+      "subtasks": [
+        "脱敏任务与环境快照",
+        "固定隐藏验收集和多次运行",
+        "比较质量、错误类型、时间与成本"
+      ],
+      "acceptance": "每次变更有可复核差异，不能只报平均成功率掩盖严重回归。",
+      "route": "自制 eval/replay 工具链",
+      "dependencies": [
+        "S15",
+        "L22",
+        "L14"
+      ],
+      "evidence": [
+        "C06"
+      ]
+    },
+    {
+      "id": "F16",
+      "phase": "远目标",
+      "category": "交互与交付",
+      "name": "个性化工作方式与适应性界面",
+      "priority": "P3",
+      "utility": 3,
+      "difficulty": 4,
+      "fit": 4,
+      "effort": "15–30 人日",
+      "status": "部分具备",
+      "intro": "记住用户常用任务、交付格式与界面偏好。",
+      "current": "设置和 Skills 可保存部分偏好，任务级个性化未整合。",
+      "gap": "偏好不能覆盖明确新指令或变成隐藏限制。",
+      "subtasks": [
+        "偏好可见可编辑",
+        "推荐常用流程及输出模板",
+        "当前指令优先于历史习惯"
+      ],
+      "acceptance": "修改偏好后下次生效，临时指令可覆盖且不会改写长期偏好。",
+      "route": "个人配置 + memory/Skills",
+      "dependencies": [
+        "M04",
+        "M25",
+        "L24"
+      ],
+      "evidence": [
+        "R11",
+        "R01"
+      ]
+    }
+  ]
+}

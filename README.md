@@ -7,6 +7,7 @@
 选择本机项目与模型后直接开始任务。会话右侧栏的 **任务进展** 展示交接点和实际执行记录；**设置 → 运行与帮助** 提供入门与诊断。
 目标是以 DSH 原生插件架构交付完整、可靠的 Agent 工作能力。插件是实现方式，产品标准见 [PRODUCT.md](docs/PRODUCT.md)。
 开发验证记录见 [本机使用与验收记录](docs/LOCAL-WORKBENCH.md)，发版步骤见 [RELEASING.md](docs/RELEASING.md)。
+最新调查见 [成熟 Agent 能力审计](docs/agent-maturity-2026-09-22/README.md)：100 项分阶段功能、18 项问题排期、安装版实测及可离线复现证据；[交互清单](docs/agent-maturity-2026-09-22/index.html) 可直接在本机浏览器打开。
 
 > **非官方项目。** 本项目与深度求索（DeepSeek）公司**无任何从属、合作或授权关系**，
 > 是一个基于 DeepSeek Harness 构建的第三方客户端。项目名使用官方品牌规范建议的缩写
@@ -18,21 +19,21 @@
 首次升级自管插件使用本机 pnpm 与缓存，工作台会显示依赖检查结果。
 
 > **当前版本 `0.1.0-beta.re.0.7`**（[Releases](https://github.com/Palbudir/dsh-px/releases)）。
-> beta 的验收标准是刻意写得具体的：**打包后的应用必须至少达到官方 `dsh` 的能力。**
-> 这条标准是被**度量**出来的，不是被声明的 —— 见 [验收](#验收)。
+> 打包后的应用需保留官方 `dsh` 的基础组合，并通过本机实际任务验证。
+> 组合树对比是结构门禁，完整产品能力还需要正常与异常任务验收 —— 见 [验收](#验收)。
 
 ---
 
 ## 核心思路
 
 `dsh` 本身就已经是一个 Web 应用：`dsh --profile web` 会在 `127.0.0.1` 上提供浏览器界面。
-所以桌面客户端**不需要重新实现任何 harness 行为**，它只需要做两件事：
+桌面外壳沿用官方 harness，产品能力通过原生插件扩展：
 
-1. **拥有运行时** —— 自带一份固定版本的 Node 和官方 dsh 安装，于是用户机器上的环境变得无关紧要。
+1. **拥有运行时** —— 自带固定版本的 Node 和官方 dsh；本机 Git、pnpm、代理和项目环境仍需检查。
 2. **拥有窗口** —— 拉起这份 dsh，等它的 HTTP 面就绪，然后嵌进原生窗口。
+3. **交付经过验收的能力组合** —— 复用原生工具与社区插件，自制项目任务、验证和产物能力，并在安装版里验证完整流程。
 
-其余一切（智能体、工具、沙箱、会话、插件组合、设置）都是官方 dsh 在做它本来就在做的事。
-这就是为什么"至少达到官方能力"是一个可达的目标，而不是一次重写。
+DSH 继续管理 Agent 执行、沙箱、会话、插件组合与设置。DSH-PX 通过这些扩展点完善任务体验；当前可用范围和缺口见 [产品目标](docs/PRODUCT.md) 与 [审计报告](docs/agent-maturity-2026-09-22/README.md)。
 
 ```
 Electron 主进程
@@ -72,12 +73,14 @@ src/
   renderer/               首启进度页（真 renderer 入口，非 data: URL）
   preload/index.ts        进度页 preload（窗口标题看守）
 packages/dsh-px-updater/  自研 dsh 插件（宿主半边 + 客户端半边，均为预构建产物）
+packages/dsh-px-workbench/  本机入门与运行诊断
+packages/dsh-px-taskflow/   任务交接与执行证据
 scripts/                  构建与验证脚本（TypeScript 源码，经 scripts/run.mjs 编译执行）
 docs/
   PACKAGING.md            运行时如何装配，以及 10 条踩出来的约束
   design-first-run.md     首启物化的设计与实测数据
   RELEASING.md            发版流程，以及**版本号那个坑**
-  ROADMAP.md              beta 到底指什么，以及之后做什么
+  ROADMAP.md              当前能力路线图入口
 ```
 
 `runtime/` 与 `out/`、`dist/`、`build-scripts/`、`build-test/` 都是**生成物，永不入库**。
@@ -97,7 +100,7 @@ npm run stage -- --from-existing
 npm run typecheck        # 主进程 + 插件两半 + 构建脚本，三套配置
 npm run test             # 含首启物化、插件两个半边的产物形态校验
 
-# 证明装配出的运行时是真的、且能力达标
+# 校验装配结构与真实启动；任务能力另做安装版验收
 npm run verify -- --boot
 
 # 启动桌面客户端
@@ -112,11 +115,12 @@ npm start
 |---|---|
 | `npm run typecheck` | 三套 tsconfig 全绿（主进程/渲染、插件两半、构建脚本）。 |
 | `npm run test` | 首启物化的行为（硬链接、跨卷/上限回退、幂等、链接规则）+ 插件两个半边产物的形态与导出面。 |
-| `npm run verify -- --boot` | **结构**、**能力平价**、**真实启动**。 |
+| `npm run verify -- --boot` | **组合结构**、**官方基础插件树保留**、**真实启动**。 |
 
-其中**能力平价**是关键：它把装配版的组合插件树与**官方**安装的插件树分别 dump 出来
+其中组合树门禁把装配版与**官方**安装的插件树分别 dump 出来
 **逐行对比**。官方有而装配版缺的任何一行都是能力缺口，直接判定失败。
 随附插件合理地让装配版成为**超集**；门禁只对**缺失**的行报错。
+这不能证明每个工具在本机可用、模型正确使用工具或异常恢复可靠；实际任务与限制见 [安装版评测](docs/agent-maturity-2026-09-22/evaluations.md)。
 
 ```sh
 npm run verify -- --boot --json     # 机器可读，供 CI 用
@@ -138,6 +142,8 @@ npm run verify -- --boot --json     # 机器可读，供 CI 用
 | `dsh-mermaid-render` | 把 mermaid 代码块渲染成图表卡 |
 | `dsh-find-plugin` | 让智能体搜索 GitHub 上的 DSH 插件 |
 | `dsh-px-updater` | **本项目自研**：版本/更新状态查询，并在 dsh 设置页注册一个「版本与更新」分区 |
+| `dsh-px-workbench` | **本项目自研**：运行与帮助、环境诊断、项目入口 |
+| `dsh-px-taskflow` | **本项目自研**：任务工作记录、实际执行证据和任务侧栏 |
 
 插件组合**不是硬编码的**，它就是 profile 的 `dsh.profile.bundles` 列表 —— 官方机制本身。
 应用是**继承**它，而不是重新实现它。自研插件同样走官方范式：声明 `dsh.bundle.patch`
@@ -145,8 +151,8 @@ npm run verify -- --boot --json     # 机器可读，供 CI 用
 
 ## 更新
 
-工作区正在完善更新可靠性，接力记录、验证范围和后续事项见
-[开发交接](docs/DEVELOPMENT-HANDOFF.md)。此轮代码尚未发布新版本。
+当前发布版本为 re.0.7，后续改动继续通过功能分支、PR、Release 和原安装版更新交付。
+历史接力记录见 [开发交接](docs/DEVELOPMENT-HANDOFF.md)，当前后续事项以 [能力路线图](docs/ROADMAP.md) 为准。
 
 两层东西独立更新：
 
@@ -187,10 +193,10 @@ npm run dist                      # electron-builder -> dist/
 - **在应用内安装插件需要 PATH 上有 `pnpm`。** 初始插件集已预装在随附 profile 里，
   所以应用开箱可用；但要从市场添加更多插件目前需要 pnpm
   （市场在检测到缺失时会提供一键安装引导）。
-- 安装包约 **212 MB**（NSIS），自包含 Node + 官方 dsh + 全套插件。
+- 早期 re.0.2 安装包约 **212 MB**（NSIS）；当前文件大小以对应 Release 为准。
 - 卸载时**不会**提示"数据目录仍占用空间"。硬链接与安装目录共享数据，
   两边都删才真正释放 —— 这一提示尚未实现。
-- `dsh` 核心固定为装配时锁定的版本（当前 `0.1.5-rc.2`，即 npm 上的 `latest`）。
+- `dsh` 核心固定为装配时锁定的版本（当前 `0.1.5-rc.2`）。
   换核心版本要重新装配外壳，不能单独升级。
 
 ### 在 Windows 上验证 Electron 本身

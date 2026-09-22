@@ -1,0 +1,36 @@
+[
+  {
+    "id": "B04",
+    "case": "读取包含历史退出码的文本",
+    "expected": "returned",
+    "actual": "error"
+  },
+  {
+    "id": "B05",
+    "case": "str_replace_editor 的 view 子命令",
+    "expected": [],
+    "actual": [
+      "readme.md"
+    ]
+  },
+  {
+    "id": "B03",
+    "case": "交接点之后只读文件",
+    "expected": false,
+    "actual": true
+  },
+  {
+    "id": "B06",
+    "case": "81 次执行后引用第一条真实证据",
+    "expected": "可按编号取回历史证据（改进目标）",
+    "actual": "Error: 证据 c0 不存在、已超出近期记录，或没有已结算结果；请先 task_review 核对。"
+  },
+  {
+    "id": "B07",
+    "case": "80 条长输出及输入的单次 review 大小",
+    "bytes": 297669,
+    "executions": 80,
+    "total": 81,
+    "truncated": true
+  }
+]
