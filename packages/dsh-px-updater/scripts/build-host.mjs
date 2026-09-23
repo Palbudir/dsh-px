@@ -20,7 +20,7 @@
  * 用法：`node scripts/build-host.mjs`
  */
 import { build } from 'esbuild'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -44,6 +44,7 @@ const result = await build({
 })
 
 const code = result.outputFiles[0].text
+mkdirSync(dirname(OUT), { recursive: true })
 writeFileSync(OUT, code, 'utf8')
 
 // ── 结构性校验 ───────────────────────────────────────────────────────────────

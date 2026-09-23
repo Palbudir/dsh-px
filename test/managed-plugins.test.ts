@@ -9,7 +9,7 @@ test('旧 profile 通过官方安装回调接入新插件：备份、幂等、�
   const root = mkdtempSync(join(tmpdir(), 'dshpx-migrate-'))
   const home = join(root, 'home'), seedHome = join(root, 'seed')
   const profile = join(home, 'profiles/web')
-  const names = ['dsh-px-workbench', 'dsh-px-taskflow']
+  const names = ['dsh-px-workbench', 'dsh-px-taskflow', 'dsh-px-workspace']
   mkdirSync(profile, { recursive: true })
   for (const name of names) {
     const source = join(seedHome, 'profiles/web/node_modules', name)
@@ -24,7 +24,7 @@ test('旧 profile 通过官方安装回调接入新插件：备份、幂等、�
     calls++
     assert.ok(specs[0].startsWith('file:'))
     const next = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8'))
-    assert.equal(specs.length, 2)
+    assert.equal(specs.length, names.length)
     names.forEach((name, index) => {
       next.dependencies[name] = specs[index]
       if (!next.dsh.profile.bundles.includes(name)) next.dsh.profile.bundles.push(name)

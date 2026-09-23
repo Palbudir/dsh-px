@@ -23,6 +23,7 @@ declare module 'react' {
     readonly __reactElementBrand?: never
   }
   export function useState<T> (initial: T | (() => T)): [T, (next: T | ((prev: T) => T)) => void]
+  export function useRef<T> (initial: T): { current: T }
   export function useEffect (effect: () => void | (() => void), deps?: readonly unknown[]): void
   export function useCallback<T extends (...args: never[]) => unknown> (fn: T, deps: readonly unknown[]): T
   export function useMemo<T> (factory: () => T, deps: readonly unknown[]): T

@@ -188,7 +188,7 @@ function collect (
   }
 }
 
-const MANAGED_PLUGINS = new Set(['dsh-px-updater', 'dsh-px-workbench', 'dsh-px-taskflow'])
+const MANAGED_PLUGINS = new Set(['dsh-px-updater', 'dsh-px-workbench', 'dsh-px-taskflow', 'dsh-px-workspace'])
 
 /** 迁移种子留下的 pnpm 绝对路径。只改确切的种子引用，保留用户自定义 store。 */
 export function repairPnpmMetadata (opts: Pick<MaterializeOptions, 'seedHome' | 'home' | 'profileName'>): boolean {
