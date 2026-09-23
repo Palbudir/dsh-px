@@ -5,6 +5,17 @@ import type { UpdateBridgeState } from './update-bridge'
 type State = Omit<UpdateBridgeState, 'updatedAt'>
 type Updater = Pick<AppUpdater, 'on' | 'removeListener' | 'checkForUpdates' | 'downloadUpdate' | 'quitAndInstall' | 'autoDownload' | 'autoInstallOnAppQuit'>
 
+/** 手动检查只接触更新器及启动检查计时器，不参与 Agent 服务的生命周期。 */
+export function createManualUpdateCheck (
+  getController: () => Pick<UpdateController, 'check'> | null,
+  cancelStartupCheck: () => void
+): () => Promise<void> {
+  return async () => {
+    cancelStartupCheck()
+    await getController()?.check()
+  }
+}
+
 /** 更新事件只注册一次；托盘、启动检查和设置页共用同一条状态机。 */
 export class UpdateController {
   private state: State

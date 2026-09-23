@@ -1,6 +1,6 @@
 {
   "name": "dsh-px-workspace",
-  "version": "0.1.0-beta.re.0.10",
+  "version": "0.1.0-beta.re.0.10.1",
   "private": true,
   "type": "module",
   "description": "DSH-PX 会话标签、产物、引用批注与会话定时任务",

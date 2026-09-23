@@ -32,7 +32,7 @@ import type { AppUpdater } from 'electron-updater'
 import { materializeSeedHome, repairPnpmMetadata } from './materialize'
 import type { SeedProgress } from './materialize'
 import { setUpdateState, watchShellActions, resetUpdateBridge, getUpdateState } from './update-bridge'
-import { UpdateController } from './update-controller'
+import { UpdateController, createManualUpdateCheck } from './update-controller'
 import { createServiceState } from './service-state'
 import { HarnessOutput } from './harness-output'
 import { ensureManagedPlugins } from './managed-plugins'
@@ -743,8 +743,8 @@ function publishUpdateState (next: UpdateState, bridge: Partial<Omit<UpdateBridg
  * 因为它会重启应用。这也是主流桌面应用的做法。
  */
 function setupAutoUpdate (): void {
-  setUpdateState({ supported: app.isPackaged && autoUpdater !== null })
   resetUpdateBridge()
+  setUpdateState({ supported: app.isPackaged && autoUpdater !== null })
   if (autoUpdater && app.isPackaged) {
     updateController = new UpdateController(autoUpdater, {
       lastCheckedAt: getUpdateState().lastCheckedAt,
@@ -924,11 +924,10 @@ function installUpdateNow (): void {
   updateController?.install()
 }
 
-async function checkUpdatesManually (): Promise<void> {
-  serviceState?.dispose()
-  clearTimeout(startupUpdateTimer)
-  if (updateController) await updateController.check()
-}
+const checkUpdatesManually = createManualUpdateCheck(
+  () => updateController,
+  () => { clearTimeout(startupUpdateTimer) }
+)
 
 /**
  * 关掉当前 harness 并重新拉起一个，然后把窗口重新指向新的鉴权 URL。
