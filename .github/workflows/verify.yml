@@ -58,6 +58,9 @@ jobs:
       - name: 类型检查
         run: npm run typecheck
 
+      - name: 插件清单与源码格式
+        run: npm run check:repo
+
       - name: 审计清单与生成文档一致性
         run: |
           node scripts/build-agent-audit.mjs
@@ -65,6 +68,9 @@ jobs:
 
       - name: 单元测试
         run: npm run test
+
+      - name: 预构建插件与源码一致
+        run: git diff --exit-code -- packages
 
       - name: 装配运行时（Node + dsh + 从 npm 构建 profile）
         run: npm run stage -- --with-plugins

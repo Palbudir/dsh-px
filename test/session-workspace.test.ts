@@ -1,3 +1,4 @@
+import { localHandler } from './http-fixture'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -118,7 +119,7 @@ test('authenticated API rejects write-by-GET and missing CSRF header; uses nativ
   try {
     apply({ inject: (_services, cb) => cb({ sessions: { get: id => ({ header: { id, origin: id === 'child' ? 'subagent' : undefined }, snapshotEvents: () => events }) },
       sessionController: { inspect: async () => { throw new Error('not needed') }, prompt: async (r, signal) => { signal.throwIfAborted(); admitted.push(r); return { accepted: true } } },
-      effect: fn => { disposers.push(fn()) }, webServer: { register: r => { routes.set(r.path, r.handler); return () => {} } } }) })
+      effect: fn => { disposers.push(fn()) }, webServer: { register: r => { routes.set(r.path, localHandler(r.handler)); return () => {} } } }) })
     async function request (route: string, method: string, value: unknown, header = true): Promise<{ status: number, data: any }> {
       let status = 0, data: any
       const req = Object.assign(Readable.from([JSON.stringify(value)]), { method, url: basePath(route), headers: { 'content-type': 'application/json', ...(header ? { 'x-dsh-px-request': '1' } : {}) } })

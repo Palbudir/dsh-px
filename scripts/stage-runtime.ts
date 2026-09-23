@@ -30,15 +30,16 @@ import { pipeline } from 'node:stream/promises'
 import { Readable } from 'node:stream'
 import { repoRoot } from './paths'
 import { copyHoistedDependencies } from './copy-hoisted-dependencies'
+import { MANAGED_PLUGIN_NAMES, COMMUNITY_VERSIONS, RUNTIME_VERSIONS } from '../src/shared/plugin-catalog'
 import type { Dirent } from 'node:fs'
 
 const REPO = repoRoot()
 const OUT = join(REPO, 'runtime')
 
 /** 锁定的 dsh 版本。要改动请有意为之，改完重跑 `npm run verify`。 */
-const DSH_VERSION = process.env.DSH_PX_DSH_VERSION ?? '0.1.5-rc.2'
+const DSH_VERSION = process.env.DSH_PX_DSH_VERSION ?? RUNTIME_VERSIONS.dsh
 /** 随附的独立 Node 运行时。必须满足 dsh 的 engines（>=20）。 */
-const NODE_VERSION = process.env.DSH_PX_NODE_VERSION ?? '24.16.0'
+const NODE_VERSION = process.env.DSH_PX_NODE_VERSION ?? RUNTIME_VERSIONS.node
 const PROFILE = process.env.DSH_PX_PROFILE ?? 'web'
 
 /**
@@ -50,22 +51,12 @@ const PROFILE = process.env.DSH_PX_PROFILE ?? 'web'
  * 同样声明 `dsh.bundle.patch`、同样由 bundle 协调进入层栈。
  * 换言之，我们对自己的插件不做任何特殊处理，用的是官方机制本身。
  */
-const DEFAULT_PLUGINS = [
-  'dshmarket',
-  'dsh-better-sidebar',
-  'dsh-mermaid-render',
-  'dsh-find-plugin',
-  'file:packages/dsh-px-updater',
-  'file:packages/dsh-px-workbench',
-  'file:packages/dsh-px-taskflow',
-  'file:packages/dsh-px-workspace'
-]
+const DEFAULT_PLUGINS = [...Object.keys(COMMUNITY_VERSIONS), ...MANAGED_PLUGIN_NAMES.map(name => `file:packages/${name}`)]
 
 /**
  * 上述 `file:` 项对应的包名（bundle 协调要用真实包名，而不是 file: 路径）。
  */
-const LOCAL_PLUGIN_NAMES = ['dsh-px-updater', 'dsh-px-workbench', 'dsh-px-taskflow', 'dsh-px-workspace']
-const COMMUNITY_VERSIONS: Record<string, string> = { dshmarket: '1.48.0', 'dsh-better-sidebar': '0.19.1', 'dsh-mermaid-render': '0.1.11', 'dsh-find-plugin': '0.3.7' }
+const LOCAL_PLUGIN_NAMES = MANAGED_PLUGIN_NAMES
 
 /**
  * 用 `link:` 而不是 `file:` 安装本仓库自带的插件。

@@ -1,3 +1,4 @@
+import { localHandler } from './http-fixture'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { evidenceDetail, reviewEvents, validateCheckpoint, type Event } from '../packages/dsh-px-taskflow/src/evidence'
@@ -56,7 +57,7 @@ test('任务插件使用当前会话与只读持久句柄；错误也关闭句�
     sessionPersistence: { open: async (_: string, mode: string) => {
       assert.equal(mode, 'read'); return { read: async () => { throw Object.assign(new Error('corrupt'), { name: 'SessionPersistenceCorruptionError' }) }, close: async () => { closed++; throw new Error('close failed') } }
     } },
-    webServer: { register: (r: any) => { routes.set(r.path, r.handler); return () => routes.delete(r.path) } }
+    webServer: { register: (r: any) => { routes.set(r.path, localHandler(r.handler)); return () => routes.delete(r.path) } }
   }
   apply(ctx)
   const request = async (method: string, id: string): Promise<number> => {
@@ -159,7 +160,7 @@ test('读取错误类型和 HTTP 查询参数明确，未知执行不误报会�
     systemPrompt: { section: () => () => {} }, tools: { register: () => {} },
     sessions: { get: (id: string) => id === 'live' ? { snapshotEvents: () => events } : undefined },
     sessionPersistence: { open: async () => { throw Object.assign(new Error('missing'), { name: 'SessionPersistenceNotFoundError' }) } },
-    webServer: { register: (r: any) => { routes.set(r.path, r.handler); return () => {} } }
+    webServer: { register: (r: any) => { routes.set(r.path, localHandler(r.handler)); return () => {} } }
   }), effect: () => {} })
   async function request (kind: string, query: string): Promise<{ status: number, data: any }> {
     let status = 0, data: any

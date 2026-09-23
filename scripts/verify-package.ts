@@ -25,6 +25,7 @@ import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { listZipEntries } from './unzip-list'
 import { repoRoot } from './paths'
+import { managedArtifacts } from '../src/shared/plugin-catalog'
 
 /** 从 unknown 的 catch 变量里取出可读消息（strict 下 catch 变量是 unknown）。 */
 function errText (err: unknown): string {
@@ -45,12 +46,7 @@ const REQUIRED = [
   'resources/runtime/node/node.exe',
   'resources/runtime/dsh/lib/bin.js',
   'resources/runtime/dsh-home/profiles/web/package.json',
-  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-updater/lib/index.js',
-  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-updater/lib/client.js',
-  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-workbench/lib/index.js',
-  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-workbench/lib/client.js',
-  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-taskflow/lib/index.js',
-  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-px-taskflow/lib/client.js'
+  ...managedArtifacts('resources/runtime/dsh-home/profiles/web/node_modules')
 ]
 
 /** 绝不该出现在交付物里的构建中间产物。 */

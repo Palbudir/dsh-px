@@ -1,3 +1,5 @@
+import { rejectUntrustedRequest } from '../../shared/request-trust'
+import { fetchMetadata } from './metadata'
 /**
  * dsh-px 更新插件（宿主半边）。
  *
@@ -22,7 +24,7 @@
  * 用户机不需要构建步骤），而**写作**形态用 TypeScript 才能在改动时得到类型检查。
  * 客户端半边（`src/client.tsx` → `lib/client.js`）走的是同一套模式。
  *
- * 关键约束：**产物里不能有任何 import**。见 `DEFAULTS` 上方的说明。
+ * 关键约束：产物只保留 node: 内置模块 import；其他依赖在构建时打包。
  *
  * @module dsh-px-updater
  */
@@ -83,7 +85,7 @@ interface AppInfo {
  * 严格类型检查。这里用一次显式读取把类型收窄，而不是把它标成 `any` ——
  * 那样会让后续对这个值的所有使用都失去检查。
  */
-function resourcesPath (): string | null {
+function resourcesPath(): string | null {
   const v = (process as unknown as { resourcesPath?: unknown }).resourcesPath
   return typeof v === 'string' && v.length > 0 ? v : null
 }
@@ -100,7 +102,7 @@ function resourcesPath (): string | null {
  *
  * 刻意都做成"找不到就返回 null"：版本信息缺失不该让整个插件加载失败。
  */
-function readAppInfo (): AppInfo {
+function readAppInfo(): AppInfo {
   const empty: AppInfo = { appVersion: null, dshVersion: null, platform: null, manifestPath: null }
 
   const candidates: string[] = []
@@ -146,7 +148,7 @@ function readAppInfo (): AppInfo {
  * 只能由外壳告知：插件在 harness 进程里跑，拿不到 Electron 的 `app.getPath()`。
  * 拿不到就返回 null —— 更新状态缺失不该让插件加载失败，更不该抛错。
  */
-function shellUserData (): string | null {
+function shellUserData(): string | null {
   const fromEnv = process.env.DSH_PX_USER_DATA
   return typeof fromEnv === 'string' && fromEnv.length > 0 ? fromEnv : null
 }
@@ -167,7 +169,7 @@ interface ShellState {
  * 文件由外壳**原子写**（先写 .tmp 再 rename），所以这里正常不会读到半截 JSON。
  * 但读到任何异常都返回 null：状态文件是"锦上添花"，不该影响插件可用性。
  */
-function readShellState (): ShellState | null {
+function readShellState(): ShellState | null {
   const dir = shellUserData()
   if (dir === null) return null
   try {
@@ -191,7 +193,7 @@ function readShellState (): ShellState | null {
  *
  * @param action 动作名，必须是外壳认识的白名单值
  */
-function requestShellAction (action: 'install' | 'check' | 'open-data' | 'open-log'): boolean {
+function requestShellAction(action: 'install' | 'check' | 'open-data' | 'open-log'): boolean {
   const dir = shellUserData()
   if (dir === null) return false
   try {
@@ -204,28 +206,12 @@ function requestShellAction (action: 'install' | 'check' | 'open-data' | 'open-l
   }
 }
 
-/** 带超时的 fetch，避免更新检查把宿主拖住。 */
-async function fetchJson (url: string, timeoutMs: number): Promise<Record<string, unknown>> {
-  const ctl = new AbortController()
-  const timer = setTimeout(() => ctl.abort(), timeoutMs)
-  try {
-    const res = await fetch(url, {
-      signal: ctl.signal,
-      headers: { accept: 'application/json', 'user-agent': 'dsh-px-updater' }
-    })
-    if (!res.ok) throw new Error(`HTTP ${String(res.status)}`)
-    return await res.json() as Record<string, unknown>
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
 /** `checkUpdates()` 的结构化结果；失败信息放进 `errors`，不抛错。 */
 export interface UpdateCheckResult {
   checkedAt: string
-  current: { app: string, dsh: string, platform: string }
-  latest: { app: string | null, dsh: string | null }
-  updateAvailable: { app: boolean, dsh: boolean }
+  current: { app: string; dsh: string; platform: string }
+  latest: { app: string | null; dsh: string | null }
+  updateAvailable: { app: boolean; dsh: boolean }
   releaseUrl: string | null
   releaseNotes: string | null
   errors: string[]
@@ -238,7 +224,7 @@ export interface UpdateCheckResult {
  * 外壳二进制（GitHub Releases）与随附的 dsh 核心（npm）。
  * 只报其中一个，会让用户以为"已是最新"，而另一层其实落后。
  */
-async function checkUpdates (config: UpdaterConfig): Promise<UpdateCheckResult> {
+async function checkUpdates(config: UpdaterConfig): Promise<UpdateCheckResult> {
   const info = readAppInfo()
   const result: UpdateCheckResult = {
     checkedAt: new Date().toISOString(),
@@ -256,7 +242,10 @@ async function checkUpdates (config: UpdaterConfig): Promise<UpdateCheckResult> 
 
   // 外壳：GitHub Releases
   try {
-    const rel = await fetchJson(`https://api.github.com/repos/${config.repository}/releases/latest`, config.timeoutMs)
+    const rel = await fetchMetadata(
+      `https://api.github.com/repos/${config.repository}/releases/latest`,
+      config.timeoutMs
+    )
     if (!isValidVersion(rel.tag_name)) throw new Error('发布页未返回有效版本号')
     result.latest.app = typeof rel.tag_name === 'string' ? rel.tag_name : null
     result.releaseUrl = typeof rel.html_url === 'string' ? rel.html_url : null
@@ -268,9 +257,8 @@ async function checkUpdates (config: UpdaterConfig): Promise<UpdateCheckResult> 
 
   // dsh 核心：npm
   try {
-    const pkg = await fetchJson('https://registry.npmjs.org/@deepseek-ai%2Fdsh', config.timeoutMs)
-    const distTags = pkg['dist-tags'] as Record<string, string> | undefined
-    const latest = distTags?.latest ?? null
+    const pkg = await fetchMetadata('https://registry.npmjs.org/@deepseek-ai%2Fdsh/latest', config.timeoutMs)
+    const latest = typeof pkg.version === 'string' ? pkg.version : null
     if (!isValidVersion(latest)) throw new Error('npm 未返回有效版本号')
     result.latest.dsh = latest
     result.updateAvailable.dsh = isNewer(latest, info.dshVersion)
@@ -282,7 +270,7 @@ async function checkUpdates (config: UpdaterConfig): Promise<UpdateCheckResult> 
 }
 
 /** 把 unknown 的错误变成可读文本（strict 下 catch 变量是 unknown）。 */
-function errText (err: unknown): string {
+function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err)
 }
 
@@ -291,7 +279,7 @@ function errText (err: unknown): string {
  * @param ctx Cordis 插件上下文
  * @param rawConfig 用户传入的配置（与 {@link DEFAULTS} 合并）
  */
-export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>): void {
+export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>): void {
   // 自己合并默认值：见 DEFAULTS 上的说明（不引入 schemastery）。
   const config: UpdaterConfig = { ...DEFAULTS, ...(rawConfig ?? {}) }
   const info = readAppInfo()
@@ -305,7 +293,9 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
     try {
       const sink = ctx.logger?.info ?? ctx.logger?.debug ?? console.log
       sink.call(ctx.logger ?? console, `[dsh-px-updater] ${msg}`)
-    } catch { /* 日志失败不该致命 */ }
+    } catch {
+      /* 日志失败不该致命 */
+    }
   }
   say(`已加载（dsh ${info.dshVersion ?? '未知'}，${info.platform ?? process.platform}）`)
 
@@ -336,6 +326,7 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
       kind: 'exact',
       path: `${config.routePrefix}/status`,
       handler: (_req: HostRequest, res: HostResponse) => {
+        if (rejectUntrustedRequest(_req, res)) return
         sendJson(res, 200, {
           plugin: name,
           version: '0.1.0',
@@ -350,6 +341,7 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
       kind: 'exact',
       path: `${config.routePrefix}/check`,
       handler: async (_req: HostRequest, res: HostResponse) => {
+        if (rejectUntrustedRequest(_req, res)) return
         const outcome = await checkUpdates(config)
         // 只有"两个来源都拿不到"才算网关故障；单一来源失败仍返回 200 并附 errors。
         const bothFailed = outcome.errors.length >= 2
@@ -362,14 +354,19 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
       kind: 'exact',
       path: `${config.routePrefix}/check-shell`,
       handler: (req: HostRequest, res: HostResponse) => {
+        if (rejectUntrustedRequest(req, res)) return
         if (req.method !== 'POST') {
           sendJson(res, 405, { ok: false, error: '只接受 POST' })
           return
         }
         const ok = requestShellAction('check')
-        sendJson(res, ok ? 202 : 503, ok
-          ? { ok: true, message: '已请求桌面客户端检查更新' }
-          : { ok: false, error: '桌面客户端未连接，只能查询版本信息' })
+        sendJson(
+          res,
+          ok ? 202 : 503,
+          ok
+            ? { ok: true, message: '已请求桌面客户端检查更新' }
+            : { ok: false, error: '桌面客户端未连接，只能查询版本信息' }
+        )
       }
     })
 
@@ -383,17 +380,22 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
       kind: 'exact',
       path: `${config.routePrefix}/shell-state`,
       handler: (_req: HostRequest, res: HostResponse) => {
+        if (rejectUntrustedRequest(_req, res)) return
         const bridge = readShellState()
         // 外壳没写（开发态未打包、或应用刚启动）时给一个明确的空状态，
         // 而不是 404：界面只需渲染一次，不必处理两种失败形态。
-        sendJson(res, 200, bridge ?? {
-          phase: 'idle',
-          status: '外壳未提供更新状态（开发态正常）',
-          version: null,
-          percent: null,
-          error: null,
-          available: false
-        })
+        sendJson(
+          res,
+          200,
+          bridge ?? {
+            phase: 'idle',
+            status: '外壳未提供更新状态（开发态正常）',
+            version: null,
+            percent: null,
+            error: null,
+            available: false
+          }
+        )
       }
     })
 
@@ -406,6 +408,7 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
       kind: 'exact',
       path: `${config.routePrefix}/install`,
       handler: (req: HostRequest, res: HostResponse) => {
+        if (rejectUntrustedRequest(req, res)) return
         if (req.method !== 'POST') {
           sendJson(res, 405, { ok: false, error: '只接受 POST' })
           return
@@ -416,9 +419,13 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
           return
         }
         const ok = requestShellAction('install')
-        sendJson(res, ok ? 202 : 503, ok
-          ? { ok: true, message: '已请求外壳重启并安装' }
-          : { ok: false, error: '找不到外壳数据目录，无法请求安装' })
+        sendJson(
+          res,
+          ok ? 202 : 503,
+          ok
+            ? { ok: true, message: '已请求外壳重启并安装' }
+            : { ok: false, error: '找不到外壳数据目录，无法请求安装' }
+        )
       }
     })
 
@@ -430,6 +437,7 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
       kind: 'exact',
       path: `${config.routePrefix}/open`,
       handler: (req: HostRequest, res: HostResponse) => {
+        if (rejectUntrustedRequest(req, res)) return
         if (req.method !== 'POST') {
           sendJson(res, 405, { ok: false, error: '只接受 POST' })
           return
@@ -446,9 +454,13 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
           return
         }
         const ok = requestShellAction(raw)
-        sendJson(res, ok ? 202 : 503, ok
-          ? { ok: true, message: `已请求外壳打开${raw === 'open-data' ? '数据目录' : '日志'}` }
-          : { ok: false, error: '找不到外壳数据目录' })
+        sendJson(
+          res,
+          ok ? 202 : 503,
+          ok
+            ? { ok: true, message: `已请求外壳打开${raw === 'open-data' ? '数据目录' : '日志'}` }
+            : { ok: false, error: '找不到外壳数据目录' }
+        )
       }
     })
 
@@ -456,14 +468,17 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
 
     // 路由注册属于 effect，插件卸载时自动清理 —— 这是 dsh 的约定，
     // 不需要手写 removeRoute。
-    hostCtx.effect?.(() => () => {
-      disposeStatus()
-      disposeCheck()
-      disposeShellCheck()
-      disposeShellState()
-      disposeInstall()
-      disposeOpen()
-    }, 'dsh-px-updater: http routes')
+    hostCtx.effect?.(
+      () => () => {
+        disposeStatus()
+        disposeCheck()
+        disposeShellCheck()
+        disposeShellState()
+        disposeInstall()
+        disposeOpen()
+      },
+      'dsh-px-updater: http routes'
+    )
   })
 
   // ── 模型可见的工具 ────────────────────────────────────────────────────────
@@ -501,7 +516,7 @@ export function apply (ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig
           schema: { type: 'string' },
           render: (_args: unknown, value: string) => [{ type: 'text', text: value }]
         },
-        async execute (args: { checkRemote?: boolean } | undefined) {
+        async execute(args: { checkRemote?: boolean } | undefined) {
           if (args?.checkRemote === false) {
             return `本地版本：dsh ${info.dshVersion ?? '未知'}（${info.platform ?? process.platform}）`
           }

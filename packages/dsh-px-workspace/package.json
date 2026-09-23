@@ -1,12 +1,30 @@
 {
   "name": "dsh-px-workspace",
-  "version": "0.1.0-beta.re.0.9",
+  "version": "0.1.0-beta.re.0.10",
   "private": true,
   "type": "module",
   "description": "DSH-PX 会话标签、产物、引用批注与会话定时任务",
   "main": "lib/index.js",
-  "exports": { ".": "./lib/index.js", "./client": "./lib/client.js", "./package.json": "./package.json", "./cordis.patch.yml": "./cordis.patch.yml" },
-  "files": ["lib", "cordis.patch.yml"],
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json",
+    "./cordis.patch.yml": "./cordis.patch.yml"
+  },
+  "files": [
+    "lib",
+    "cordis.patch.yml"
+  ],
   "license": "MIT",
-  "dsh": { "bundle": { "patch": "./cordis.patch.yml" }, "client": { "platform": "web", "inject": ["dsh-better-sidebar"] } }
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "dsh-better-sidebar"
+      ]
+    }
+  }
 }

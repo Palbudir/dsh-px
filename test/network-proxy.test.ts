@@ -1,3 +1,4 @@
+import { localHandler } from './http-fixture'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { homeHasProxy, selectProxy } from '../src/main/network-proxy'
@@ -53,7 +54,7 @@ test('网页检查路由拒绝外部简单 POST 和自定目标；并发点击�
   const ready = new Promise<void>(resolve => { release = resolve })
   const host: any = {
     effect: (fn: any) => { cleanups.push(fn()) },
-    webServer: { register: (r: any) => { routes.set(r.path, r.handler); return () => routes.delete(r.path) } },
+    webServer: { register: (r: any) => { routes.set(r.path, localHandler(r.handler)); return () => routes.delete(r.path) } },
     web: { fetch: async () => { calls++; await ready; return { statusCode: 200, body: { content: 'ok' }, truncated: false } } }
   }
   apply({ inject: (_: unknown, fn: any) => fn(host) })

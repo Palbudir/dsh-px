@@ -1,3 +1,4 @@
+import { localHandler } from './http-fixture'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from 'node:fs'
@@ -49,7 +50,7 @@ test('工作台：诊断不读取密钥内容；过期心跳不可重启，路�
   const created: string[] = []
   const mod = await import(pathToFileURL(resolve('packages/dsh-px-workbench/lib/index.js')).href)
   mod.apply({ inject: (_: unknown, callback: (ctx: unknown) => void) => callback({
-    webServer: { register: (r: { path: string, handler: (req: unknown, res: unknown) => void }) => { routes.set(r.path, r.handler); return () => routes.delete(r.path) } },
+    webServer: { register: (r: { path: string, handler: (req: unknown, res: unknown) => void }) => { routes.set(r.path, localHandler(r.handler)); return () => routes.delete(r.path) } },
     workspaceController: { create: async ({ path }: { path: string }) => { created.push(path); return { created: true } } },
     effect: (fn: () => () => void) => { dispose = fn() }
   }) })

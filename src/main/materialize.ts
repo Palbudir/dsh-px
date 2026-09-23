@@ -30,6 +30,7 @@ import {
 } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import type { Dirent } from 'node:fs'
+import { MANAGED_PLUGIN_NAMES } from '../shared/plugin-catalog'
 
 /** 播种进度：已处理项数 / 总计项数 / 已回退复制的项数 / 当前阶段文案。 */
 export interface SeedProgress {
@@ -188,7 +189,7 @@ function collect (
   }
 }
 
-const MANAGED_PLUGINS = new Set(['dsh-px-updater', 'dsh-px-workbench', 'dsh-px-taskflow', 'dsh-px-workspace'])
+const MANAGED_PLUGINS = new Set(MANAGED_PLUGIN_NAMES)
 
 /** 迁移种子留下的 pnpm 绝对路径。只改确切的种子引用，保留用户自定义 store。 */
 export function repairPnpmMetadata (opts: Pick<MaterializeOptions, 'seedHome' | 'home' | 'profileName'>): boolean {
