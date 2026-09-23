@@ -563,6 +563,104 @@ var require_gt = __commonJS({
   }
 });
 
+// packages/shared/request-trust.ts
+function trustedLocalRequest(req) {
+  const headers = req.headers ?? {}, host = headers.host, origin = headers.origin;
+  if (typeof host !== "string" || headers["sec-fetch-site"] === "cross-site") return false;
+  try {
+    const target = new URL("http://" + host);
+    if (target.username || target.password || target.pathname !== "/" || target.search || target.hash)
+      return false;
+    const parts = target.hostname.split(".");
+    const loopback = target.hostname === "localhost" || target.hostname === "[::1]" || parts.length === 4 && parts[0] === "127" && parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
+    if (!loopback) return false;
+    if (origin === void 0) return true;
+    if (typeof origin !== "string") return false;
+    const source = new URL(origin);
+    return ["http:", "https:"].includes(source.protocol) && source.hostname === target.hostname && (!source.port || source.port === target.port);
+  } catch {
+    return false;
+  }
+}
+function rejectUntrustedRequest(req, res) {
+  if (trustedLocalRequest(req)) return false;
+  res.writeHead(403, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff"
+  });
+  res.end(
+    JSON.stringify({
+      code: "UNTRUSTED_REQUEST",
+      error: "\u6B64\u8BF7\u6C42\u7684\u6765\u6E90\u4E0D\u53D7\u4FE1\u4EFB\uFF0C\u8BF7\u4ECE\u672C\u673A DSH-PX \u754C\u9762\u91CD\u8BD5\u3002",
+      retryable: false
+    })
+  );
+  return true;
+}
+
+// packages/dsh-px-updater/src/metadata.ts
+import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
+var LIMIT = 2 * 1024 * 1024;
+function decodeMetadata(bytes, encoding) {
+  if (bytes.byteLength > LIMIT) throw new Error("\u7248\u672C\u4FE1\u606F\u8D85\u8FC7\u8BFB\u53D6\u4E0A\u9650");
+  let body = Buffer.from(bytes);
+  const plain = () => /^[\s\uFEFF]*[\[{]/u.test(body.toString("utf8", 0, Math.min(256, body.length)));
+  if (!plain()) {
+    try {
+      for (const item of (encoding ?? "").split(",").map((s) => s.trim().toLowerCase()).filter(Boolean).reverse()) {
+        if (item === "gzip" || item === "x-gzip") body = gunzipSync(body, { maxOutputLength: LIMIT });
+        else if (item === "br") body = brotliDecompressSync(body, { maxOutputLength: LIMIT });
+        else if (item === "deflate") body = inflateSync(body, { maxOutputLength: LIMIT });
+        else if (item !== "identity") throw new Error("unsupported encoding");
+      }
+    } catch {
+      throw new Error("\u7248\u672C\u670D\u52A1\u8FD4\u56DE\u7684\u538B\u7F29\u6570\u636E\u65E0\u6CD5\u8BFB\u53D6\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5");
+    }
+  }
+  try {
+    const value = JSON.parse(body.toString("utf8").replace(/^\uFEFF/u, ""));
+    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
+    return value;
+  } catch {
+    throw new Error("\u7248\u672C\u670D\u52A1\u672A\u8FD4\u56DE\u6709\u6548\u7684 JSON \u4FE1\u606F\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5");
+  }
+}
+async function fetchMetadata(url, timeoutMs) {
+  const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { accept: "application/json", "accept-encoding": "identity", "user-agent": "dsh-px-updater" }
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("\u7248\u672C\u670D\u52A1\u8FD4\u56DE\u4E86\u7A7A\u54CD\u5E94");
+    const chunks = [];
+    let length = 0;
+    try {
+      for (; ; ) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        length += value.length;
+        if (length > LIMIT) {
+          await reader.cancel();
+          throw new Error("\u7248\u672C\u4FE1\u606F\u8D85\u8FC7\u8BFB\u53D6\u4E0A\u9650");
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    return decodeMetadata(Buffer.concat(chunks), response.headers.get("content-encoding"));
+  } catch (error) {
+    if (controller.signal.aborted) throw new Error("\u7248\u672C\u67E5\u8BE2\u8D85\u65F6\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // packages/dsh-px-updater/src/index.ts
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -654,20 +752,6 @@ function requestShellAction(action) {
     return false;
   }
 }
-async function fetchJson(url, timeoutMs) {
-  const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, {
-      signal: ctl.signal,
-      headers: { accept: "application/json", "user-agent": "dsh-px-updater" }
-    });
-    if (!res.ok) throw new Error(`HTTP ${String(res.status)}`);
-    return await res.json();
-  } finally {
-    clearTimeout(timer);
-  }
-}
 async function checkUpdates(config) {
   const info = readAppInfo();
   const result = {
@@ -684,7 +768,10 @@ async function checkUpdates(config) {
     errors: []
   };
   try {
-    const rel = await fetchJson(`https://api.github.com/repos/${config.repository}/releases/latest`, config.timeoutMs);
+    const rel = await fetchMetadata(
+      `https://api.github.com/repos/${config.repository}/releases/latest`,
+      config.timeoutMs
+    );
     if (!isValidVersion(rel.tag_name)) throw new Error("\u53D1\u5E03\u9875\u672A\u8FD4\u56DE\u6709\u6548\u7248\u672C\u53F7");
     result.latest.app = typeof rel.tag_name === "string" ? rel.tag_name : null;
     result.releaseUrl = typeof rel.html_url === "string" ? rel.html_url : null;
@@ -694,9 +781,8 @@ async function checkUpdates(config) {
     result.errors.push(`\u67E5\u8BE2 GitHub Releases \u5931\u8D25\uFF1A${errText(err)}`);
   }
   try {
-    const pkg = await fetchJson("https://registry.npmjs.org/@deepseek-ai%2Fdsh", config.timeoutMs);
-    const distTags = pkg["dist-tags"];
-    const latest = distTags?.latest ?? null;
+    const pkg = await fetchMetadata("https://registry.npmjs.org/@deepseek-ai%2Fdsh/latest", config.timeoutMs);
+    const latest = typeof pkg.version === "string" ? pkg.version : null;
     if (!isValidVersion(latest)) throw new Error("npm \u672A\u8FD4\u56DE\u6709\u6548\u7248\u672C\u53F7");
     result.latest.dsh = latest;
     result.updateAvailable.dsh = isNewer(latest, info.dshVersion);
@@ -736,6 +822,7 @@ function apply(ctx, rawConfig) {
       kind: "exact",
       path: `${config.routePrefix}/status`,
       handler: (_req, res) => {
+        if (rejectUntrustedRequest(_req, res)) return;
         sendJson(res, 200, {
           plugin: name,
           version: "0.1.0",
@@ -749,6 +836,7 @@ function apply(ctx, rawConfig) {
       kind: "exact",
       path: `${config.routePrefix}/check`,
       handler: async (_req, res) => {
+        if (rejectUntrustedRequest(_req, res)) return;
         const outcome = await checkUpdates(config);
         const bothFailed = outcome.errors.length >= 2;
         sendJson(res, bothFailed ? 502 : 200, outcome);
@@ -758,33 +846,44 @@ function apply(ctx, rawConfig) {
       kind: "exact",
       path: `${config.routePrefix}/check-shell`,
       handler: (req, res) => {
+        if (rejectUntrustedRequest(req, res)) return;
         if (req.method !== "POST") {
           sendJson(res, 405, { ok: false, error: "\u53EA\u63A5\u53D7 POST" });
           return;
         }
         const ok = requestShellAction("check");
-        sendJson(res, ok ? 202 : 503, ok ? { ok: true, message: "\u5DF2\u8BF7\u6C42\u684C\u9762\u5BA2\u6237\u7AEF\u68C0\u67E5\u66F4\u65B0" } : { ok: false, error: "\u684C\u9762\u5BA2\u6237\u7AEF\u672A\u8FDE\u63A5\uFF0C\u53EA\u80FD\u67E5\u8BE2\u7248\u672C\u4FE1\u606F" });
+        sendJson(
+          res,
+          ok ? 202 : 503,
+          ok ? { ok: true, message: "\u5DF2\u8BF7\u6C42\u684C\u9762\u5BA2\u6237\u7AEF\u68C0\u67E5\u66F4\u65B0" } : { ok: false, error: "\u684C\u9762\u5BA2\u6237\u7AEF\u672A\u8FDE\u63A5\uFF0C\u53EA\u80FD\u67E5\u8BE2\u7248\u672C\u4FE1\u606F" }
+        );
       }
     });
     const disposeShellState = webServer.register({
       kind: "exact",
       path: `${config.routePrefix}/shell-state`,
       handler: (_req, res) => {
+        if (rejectUntrustedRequest(_req, res)) return;
         const bridge = readShellState();
-        sendJson(res, 200, bridge ?? {
-          phase: "idle",
-          status: "\u5916\u58F3\u672A\u63D0\u4F9B\u66F4\u65B0\u72B6\u6001\uFF08\u5F00\u53D1\u6001\u6B63\u5E38\uFF09",
-          version: null,
-          percent: null,
-          error: null,
-          available: false
-        });
+        sendJson(
+          res,
+          200,
+          bridge ?? {
+            phase: "idle",
+            status: "\u5916\u58F3\u672A\u63D0\u4F9B\u66F4\u65B0\u72B6\u6001\uFF08\u5F00\u53D1\u6001\u6B63\u5E38\uFF09",
+            version: null,
+            percent: null,
+            error: null,
+            available: false
+          }
+        );
       }
     });
     const disposeInstall = webServer.register({
       kind: "exact",
       path: `${config.routePrefix}/install`,
       handler: (req, res) => {
+        if (rejectUntrustedRequest(req, res)) return;
         if (req.method !== "POST") {
           sendJson(res, 405, { ok: false, error: "\u53EA\u63A5\u53D7 POST" });
           return;
@@ -795,13 +894,18 @@ function apply(ctx, rawConfig) {
           return;
         }
         const ok = requestShellAction("install");
-        sendJson(res, ok ? 202 : 503, ok ? { ok: true, message: "\u5DF2\u8BF7\u6C42\u5916\u58F3\u91CD\u542F\u5E76\u5B89\u88C5" } : { ok: false, error: "\u627E\u4E0D\u5230\u5916\u58F3\u6570\u636E\u76EE\u5F55\uFF0C\u65E0\u6CD5\u8BF7\u6C42\u5B89\u88C5" });
+        sendJson(
+          res,
+          ok ? 202 : 503,
+          ok ? { ok: true, message: "\u5DF2\u8BF7\u6C42\u5916\u58F3\u91CD\u542F\u5E76\u5B89\u88C5" } : { ok: false, error: "\u627E\u4E0D\u5230\u5916\u58F3\u6570\u636E\u76EE\u5F55\uFF0C\u65E0\u6CD5\u8BF7\u6C42\u5B89\u88C5" }
+        );
       }
     });
     const disposeOpen = webServer.register({
       kind: "exact",
       path: `${config.routePrefix}/open`,
       handler: (req, res) => {
+        if (rejectUntrustedRequest(req, res)) return;
         if (req.method !== "POST") {
           sendJson(res, 405, { ok: false, error: "\u53EA\u63A5\u53D7 POST" });
           return;
@@ -813,18 +917,25 @@ function apply(ctx, rawConfig) {
           return;
         }
         const ok = requestShellAction(raw);
-        sendJson(res, ok ? 202 : 503, ok ? { ok: true, message: `\u5DF2\u8BF7\u6C42\u5916\u58F3\u6253\u5F00${raw === "open-data" ? "\u6570\u636E\u76EE\u5F55" : "\u65E5\u5FD7"}` } : { ok: false, error: "\u627E\u4E0D\u5230\u5916\u58F3\u6570\u636E\u76EE\u5F55" });
+        sendJson(
+          res,
+          ok ? 202 : 503,
+          ok ? { ok: true, message: `\u5DF2\u8BF7\u6C42\u5916\u58F3\u6253\u5F00${raw === "open-data" ? "\u6570\u636E\u76EE\u5F55" : "\u65E5\u5FD7"}` } : { ok: false, error: "\u627E\u4E0D\u5230\u5916\u58F3\u6570\u636E\u76EE\u5F55" }
+        );
       }
     });
     say(`\u5DF2\u6CE8\u518C HTTP \u7AEF\u70B9 ${config.routePrefix}/{status,check,check-shell,shell-state,install,open}`);
-    hostCtx.effect?.(() => () => {
-      disposeStatus();
-      disposeCheck();
-      disposeShellCheck();
-      disposeShellState();
-      disposeInstall();
-      disposeOpen();
-    }, "dsh-px-updater: http routes");
+    hostCtx.effect?.(
+      () => () => {
+        disposeStatus();
+        disposeCheck();
+        disposeShellCheck();
+        disposeShellState();
+        disposeInstall();
+        disposeOpen();
+      },
+      "dsh-px-updater: http routes"
+    );
   });
   if (config.registerTool) {
     ctx.inject(["tools"], (toolCtx) => {

@@ -29,6 +29,7 @@ import { existsSync, statSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { repoRoot } from './paths'
+import { managedArtifacts } from '../src/shared/plugin-catalog'
 
 const REPO = repoRoot()
 
@@ -42,12 +43,7 @@ const REQUIRED = [
   ['out/main/index.js', 'Electron 主进程（package.json 的 main 指向它）'],
   ['out/renderer/index.html', '首启/重启进度页（主进程用 loadFile 加载它）'],
   ['out/preload/index.cjs', '进度页 preload'],
-  [join('packages', 'dsh-px-updater', 'lib', 'index.js'), '自研插件的宿主半边'],
-  [join('packages', 'dsh-px-updater', 'lib', 'client.js'), '自研插件的客户端半边（设置页分区）'],
-  [join('packages', 'dsh-px-workbench', 'lib', 'index.js'), '本机工作台宿主插件'],
-  [join('packages', 'dsh-px-workbench', 'lib', 'client.js'), '本机工作台客户端插件'],
-  [join('packages', 'dsh-px-taskflow', 'lib', 'index.js'), '项目任务宿主插件'],
-  [join('packages', 'dsh-px-taskflow', 'lib', 'client.js'), '项目任务客户端插件']
+  ...managedArtifacts().map(path => [path, '自制插件构建产物'])
 ]
 
 let failed = false

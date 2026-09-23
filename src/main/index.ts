@@ -743,6 +743,7 @@ function publishUpdateState (next: UpdateState, bridge: Partial<Omit<UpdateBridg
  * 因为它会重启应用。这也是主流桌面应用的做法。
  */
 function setupAutoUpdate (): void {
+  setUpdateState({ supported: app.isPackaged && autoUpdater !== null })
   resetUpdateBridge()
   if (autoUpdater && app.isPackaged) {
     updateController = new UpdateController(autoUpdater, {
@@ -763,7 +764,7 @@ function setupAutoUpdate (): void {
   } else {
     publishUpdateState({ status: '自动更新不可用', version: null }, {
       phase: 'idle', status: app.isPackaged ? '更新器不可用，请打开日志排查' : '开发态不支持自动更新（仅打包后可用）',
-      version: null, percent: null, error: null
+      version: null, percent: null, error: null, supported: false
     })
   }
 

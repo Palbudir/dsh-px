@@ -1,6 +1,6 @@
 {
   "name": "dsh-px",
-  "version": "0.1.0-beta.re.0.9",
+  "version": "0.1.0-beta.re.0.10",
   "private": true,
   "description": "dsh-px: a self-contained Electron desktop client that packages DeepSeek Harness (dsh) into one app.",
   "license": "MIT",
@@ -12,7 +12,7 @@
     "url": "git+https://github.com/Palbudir/dsh-px.git"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=24"
   },
   "scripts": {
     "postinstall": "node scripts/run.mjs repair-electron",
@@ -20,11 +20,11 @@
     "build:main": "electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.client.json && tsc --noEmit -p tsconfig.scripts.json",
     "//build:plugins": "自研插件的两个半边都是**预构建产物**（lib/index.js、lib/client.js），入库交付。宿主半边先构建：它决定 lib/ 是否完整。",
-    "build:plugins": "npm run build:plugin-host && npm run build:plugin-client",
-    "build:plugin-host": "node packages/dsh-px-updater/scripts/build-host.mjs && node packages/dsh-px-updater/scripts/build-host.mjs packages/dsh-px-workbench && node packages/dsh-px-updater/scripts/build-host.mjs packages/dsh-px-taskflow && node packages/dsh-px-updater/scripts/build-host.mjs packages/dsh-px-workspace",
-    "build:plugin-client": "node packages/dsh-px-updater/scripts/build-client.mjs && node packages/dsh-px-updater/scripts/build-client.mjs packages/dsh-px-workbench && node packages/dsh-px-updater/scripts/build-client.mjs packages/dsh-px-taskflow && node packages/dsh-px-updater/scripts/build-client.mjs packages/dsh-px-workspace",
+    "build:plugins": "node scripts/build-plugins.mjs",
+    "build:plugin-host": "node scripts/build-plugins.mjs --host",
+    "build:plugin-client": "node scripts/build-plugins.mjs --client",
     "test": "npm run build:plugins && esbuild test/**/*.test.ts --bundle --platform=node --format=esm --packages=external --outdir=build-test --log-level=warning && node --test build-test/*.test.js",
-    "dev": "npm run build && electron out/main/index.js",
+    "dev": "node scripts/dev.mjs",
     "//scripts": "scripts/*.ts 是源码，by scripts/run.mjs 编译到 build-scripts/ 后运行 —— 不用 Node 的 .ts 原生支持（实验特性，CI 上不该依赖）。",
     "stage": "node scripts/run.mjs stage-runtime",
     "stage:plugins": "node scripts/run.mjs stage-runtime --with-plugins",
@@ -34,19 +34,25 @@
     "icon": "node scripts/run.mjs build-icon",
     "//screenshot": "用 Playwright 驱动 Electron 截图，做「界面是否正常」的视觉验证（截图落在 build/screenshots/）。首次需 npm run build。",
     "screenshot": "node scripts/run.mjs screenshot-app",
-    "start": "npm run build && electron out/main/index.js",
+    "start": "node scripts/dev.mjs",
     "pack": "npm run build && electron-builder --dir && node scripts/run.mjs write-app-update-yml",
     "dist": "npm run build && npm run prune && electron-builder --publish never && npm run verify:package",
-    "clean": "node -e \"require('node:fs').rmSync('runtime',{recursive:true,force:true});require('node:fs').rmSync('dist',{recursive:true,force:true});require('node:fs').rmSync('out',{recursive:true,force:true})\""
+    "clean": "node -e \"require('node:fs').rmSync('runtime',{recursive:true,force:true});require('node:fs').rmSync('dist',{recursive:true,force:true});require('node:fs').rmSync('out',{recursive:true,force:true})\"",
+    "check:plugins": "node scripts/check-plugins.mjs",
+    "format": "prettier --write packages scripts/plugins scripts/build-plugins.mjs scripts/check-plugins.mjs scripts/dev.mjs config/plugins.json test/quality-review.test.ts",
+    "format:check": "prettier --check packages scripts/plugins scripts/build-plugins.mjs scripts/check-plugins.mjs scripts/dev.mjs config/plugins.json test/quality-review.test.ts",
+    "audit:logs": "node scripts/run.mjs analyze-quality",
+    "check:repo": "npm run check:plugins && npm run format:check"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",
     "@types/semver": "^7.8.0",
-    "electron": "^38.0.0",
+    "electron": "44.4.5",
     "electron-builder": "^26.0.0",
     "electron-vite": "^5.0.0",
     "esbuild": "^0.25.12",
     "playwright-core": "^1.63.0",
+    "prettier": "3.9.9",
     "semver": "^7.8.5",
     "typescript": "^7.0.2"
   },

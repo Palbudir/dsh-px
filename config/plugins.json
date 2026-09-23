@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "runtime": { "node": "24.16.0", "dsh": "0.1.5-rc.2" },
+  "managed": ["dsh-px-updater", "dsh-px-workbench", "dsh-px-taskflow", "dsh-px-workspace"],
+  "community": {
+    "dshmarket": "1.48.0",
+    "dsh-better-sidebar": "0.19.1",
+    "dsh-mermaid-render": "0.1.11",
+    "dsh-find-plugin": "0.3.7"
+  }
+}

@@ -22,11 +22,11 @@ declare module 'react' {
   export interface ReactElement {
     readonly __reactElementBrand?: never
   }
-  export function useState<T> (initial: T | (() => T)): [T, (next: T | ((prev: T) => T)) => void]
-  export function useRef<T> (initial: T): { current: T }
-  export function useEffect (effect: () => void | (() => void), deps?: readonly unknown[]): void
-  export function useCallback<T extends (...args: never[]) => unknown> (fn: T, deps: readonly unknown[]): T
-  export function useMemo<T> (factory: () => T, deps: readonly unknown[]): T
+  export function useState<T>(initial: T | (() => T)): [T, (next: T | ((prev: T) => T)) => void]
+  export function useRef<T>(initial: T): { current: T }
+  export function useEffect(effect: () => void | (() => void), deps?: readonly unknown[]): void
+  export function useCallback<T extends (...args: never[]) => unknown>(fn: T, deps: readonly unknown[]): T
+  export function useMemo<T>(factory: () => T, deps: readonly unknown[]): T
   const React: {
     createElement: (type: unknown, props?: unknown, ...children: unknown[]) => ReactElement
   }
@@ -35,8 +35,8 @@ declare module 'react' {
 
 declare module 'react/jsx-runtime' {
   /** automatic JSX 运行时：tsc 会把 `<div/>` 编译成 jsx(...) / jsxs(...)。 */
-  export function jsx (type: unknown, props: unknown, key?: unknown): unknown
-  export function jsxs (type: unknown, props: unknown, key?: unknown): unknown
+  export function jsx(type: unknown, props: unknown, key?: unknown): unknown
+  export function jsxs(type: unknown, props: unknown, key?: unknown): unknown
   export const Fragment: unknown
 }
 
@@ -49,7 +49,9 @@ declare module 'react/jsx-runtime' {
  * 在这里复刻一遍既不可能也不必要 —— 宿主版本一变就会失配。
  */
 declare namespace JSX {
-  interface IntrinsicAttributes { key?: string | number }
+  interface IntrinsicAttributes {
+    key?: string | number
+  }
   /** 任意标签、任意属性都接受（见上面的说明）。 */
   interface IntrinsicElements {
     [tag: string]: Record<string, unknown>
@@ -74,7 +76,7 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     label?: string | (() => string)
     locale?: string
     inject?: (() => SlotInject) | SlotInject
-    children?: Record<string, { kind: 'list' | 'single', scope?: 'root' }>
+    children?: Record<string, { kind: 'list' | 'single'; scope?: 'root' }>
   }
 
   /** 渲染函数收到的 props：本站点只依赖宿主注入面。 */
@@ -85,15 +87,15 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
      * 等目标插槽被声明后再注册 —— 与官方插件一致。
      * 注意：**必须**用它而不是 `get()`，否则插槽尚未声明时会静默拿不到。
      */
-    inject (name: string, register: () => unknown): unknown
-    register (registration: SlotRegistration, component: (props: SlotComponentProps) => unknown): unknown
+    inject(name: string, register: () => unknown): unknown
+    register(registration: SlotRegistration, component: (props: SlotComponentProps) => unknown): unknown
   }
 }
 
 declare module '@deepseek-ai/dsh-client-locale' {
   export interface LocaleRuntime {
-    register (ns: string, locale: string, dict: Record<string, string>): () => void
-    bind (ns: string): (key: string, params?: Record<string, unknown>) => string
+    register(ns: string, locale: string, dict: Record<string, string>): () => void
+    bind(ns: string): (key: string, params?: Record<string, unknown>) => string
   }
 }
 
@@ -103,15 +105,15 @@ declare module '@deepseek-ai/cordis' {
     slots: import('@deepseek-ai/dsh-client-ui-slots').SlotsService
     locale: import('@deepseek-ai/dsh-client-locale').LocaleRuntime
     effect?: (fn: () => (() => void) | void, label?: string) => void
-    logger?: { info?: (...args: unknown[]) => void, warn?: (...args: unknown[]) => void }
+    logger?: { info?: (...args: unknown[]) => void; warn?: (...args: unknown[]) => void }
   }
 
   // ── 宿主半边（src/index.ts）用到的成员 ─────────────────────────────────────
 
   /** HTTP 响应（只用得到这几个成员）。 */
   export interface HostResponse {
-    writeHead (status: number, headers: Record<string, string>): void
-    end (body?: string): void
+    writeHead(status: number, headers: Record<string, string>): void
+    end(body?: string): void
   }
 
   /** HTTP 请求（本站点用到 method 与 url）。 */
@@ -132,7 +134,7 @@ declare module '@deepseek-ai/cordis' {
 
   /** webServer 服务。 */
   export interface WebServer {
-    register (route: {
+    register(route: {
       kind: 'exact' | 'prefix'
       path: string
       handler: (req: HostRequest, res: HostResponse) => void | Promise<void>
@@ -141,11 +143,11 @@ declare module '@deepseek-ai/cordis' {
 
   /** 工具注册表服务。 */
   export interface ToolRegistry {
-    register (tool: {
+    register(tool: {
       name: string
       description: string
       parameters: Record<string, unknown>
-      output: { schema: Record<string, unknown>, render: (args: unknown, value: string) => unknown[] }
+      output: { schema: Record<string, unknown>; render: (args: unknown, value: string) => unknown[] }
       execute: (args: { checkRemote?: boolean } | undefined) => Promise<string>
     }): unknown
   }
@@ -158,11 +160,16 @@ declare module '@deepseek-ai/cordis' {
    * 而 `ctx.inject([...])` 会等到服务就绪后再回调。
    */
   export interface HostPluginContext {
-    logger?: { info?: (...args: unknown[]) => void, debug?: (...args: unknown[]) => void }
-    inject (services: readonly string[], callback: (ctx: HostPluginContext & {
-      webServer?: WebServer
-      tools?: ToolRegistry
-    }) => void): unknown
+    logger?: { info?: (...args: unknown[]) => void; debug?: (...args: unknown[]) => void }
+    inject(
+      services: readonly string[],
+      callback: (
+        ctx: HostPluginContext & {
+          webServer?: WebServer
+          tools?: ToolRegistry
+        }
+      ) => void
+    ): unknown
     effect?: (fn: () => (() => void) | void, label?: string) => void
   }
 }

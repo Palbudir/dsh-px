@@ -1,3 +1,4 @@
+import { localHandler } from './http-fixture'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs'
@@ -27,7 +28,7 @@ test('真实宿主产物路由：检查请求、安装状态门禁、打开目�
     logger: { info: () => {} },
     inject: (_: string[], callback: (ctx: unknown) => void) => callback({
       webServer: { register: (route: { path: string, handler: Handler }) => {
-        routes.set(route.path, route.handler)
+        routes.set(route.path, localHandler(route.handler))
         return () => routes.delete(route.path)
       } },
       effect: (fn: () => () => void) => { dispose = fn() }
@@ -58,12 +59,12 @@ test('真实宿主产物路由：检查请求、安装状态门禁、打开目�
   assert.equal((await request('open?what=open-data')).status, 202)
   assert.equal((await request('open?what=open-log')).status, 202)
   t.mock.method(globalThis, 'fetch', async (url: string) => new Response(JSON.stringify(url.includes('github')
-    ? { tag_name: 'v0.1.0-beta.re.0.6' } : { 'dist-tags': { latest: '0.1.5-rc.3' } })))
+    ? { tag_name: 'v0.1.0-beta.re.0.6' } : { version: '0.1.5-rc.3' })))
   const complete = await request('check', 'GET')
   assert.equal(complete.status, 200)
   assert.deepEqual(complete.body.updateAvailable, { app: true, dsh: true })
   t.mock.method(globalThis, 'fetch', async (url: string) => new Response(JSON.stringify(url.includes('github')
-    ? { tag_name: 'v0.1.0-beta.re.0.6' } : { 'dist-tags': { latest: 'invalid' } })))
+    ? { tag_name: 'v0.1.0-beta.re.0.6' } : { version: 'invalid' })))
   const partial = await request('check', 'GET')
   assert.equal(partial.status, 200)
   assert.match(String(partial.body.errors), /npm 未返回有效版本号/)

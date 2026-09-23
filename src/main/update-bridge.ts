@@ -36,6 +36,8 @@ export type UpdatePhase = 'idle' | 'checking' | 'downloading' | 'ready' | 'insta
 
 /** 写进 state.json 的内容（字段名即协议，插件侧按它读）。 */
 export interface UpdateBridgeState {
+  /** Explicit capability; connected development shells cannot install updates. */
+  supported?: boolean
   phase: UpdatePhase
   /** 面向用户的短句，界面直接显示。 */
   status: string
