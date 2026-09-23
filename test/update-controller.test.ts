@@ -2,7 +2,11 @@ import { test } from 'node:test'
 import type { TestContext } from 'node:test'
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
-import { UpdateController } from '../src/main/update-controller'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { UpdateController, createManualUpdateCheck } from '../src/main/update-controller'
+import { createServiceState } from '../src/main/service-state'
 
 class FakeUpdater extends EventEmitter {
   autoDownload = true
@@ -31,6 +35,38 @@ function setup (t: TestContext) {
   })
   t.after(() => controller.dispose())
   return { updater, controller, notices: () => notices }
+}
+
+for (const mode of ['success', 'failure'] as const) {
+  test(`手动更新检查 ${mode}：只取消启动检查，服务心跳持续，退出才停止`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 10000 })
+    const dir = mkdtempSync(join(tmpdir(), 'dshpx-update-heartbeat-'))
+    const service = createServiceState(dir)
+    t.after(() => { service.dispose(); rmSync(dir, { recursive: true, force: true }) })
+    const read = () => JSON.parse(readFileSync(join(dir, 'service-state.json'), 'utf8'))
+    service.set('running', '服务正在运行', 123)
+    const before = read()
+    const { updater, controller } = setup(t)
+    if (mode === 'failure') updater.checkResult = async () => { throw new Error('offline') }
+    const startup = setTimeout(() => { void controller.check() }, 8000)
+    const check = createManualUpdateCheck(() => controller, () => clearTimeout(startup))
+    await check()
+    assert.equal(updater.checks, 1)
+    assert.equal(controller.getState().phase, mode === 'success' ? 'idle' : 'error')
+    // 超过界面 15 秒新鲜度窗口，不能只看检查刚结束时的旧文件。
+    for (let i = 0; i < 5; i++) t.mock.timers.tick(4000)
+    const after = read()
+    assert.equal(after.phase, 'running')
+    assert.equal(after.pid, 123)
+    assert.ok(Date.parse(after.updatedAt) > Date.parse(before.updatedAt))
+    assert.ok(Date.now() - Date.parse(after.updatedAt) < 4000)
+    assert.equal(updater.checks, 1)
+    service.dispose()
+    assert.equal(read().phase, 'stopped')
+    const stoppedAt = read().updatedAt
+    t.mock.timers.tick(8000)
+    assert.equal(read().updatedAt, stoppedAt)
+  })
 }
 
 test('首次检查先 emit error 再 reject：可见失败时间，随后可重试', async (t) => {

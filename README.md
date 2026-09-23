@@ -19,7 +19,7 @@
 随附 Node 与 dsh，日常通过已安装应用进入。当前版本针对本机现有环境验收；
 首次升级自管插件使用本机 pnpm 与缓存，工作台会显示依赖检查结果。
 
-> **当前版本 `0.1.0-beta.re.0.10`**（[Releases](https://github.com/Palbudir/dsh-px/releases)）。
+> **当前版本 `0.1.0-beta.re.0.10.1`**（[Releases](https://github.com/Palbudir/dsh-px/releases)）。[维护修订说明](docs/releases/re.0.10.1.md)。
 > 打包后的应用需保留官方 `dsh` 的基础组合，并通过本机实际任务验证。
 > 组合树对比是结构门禁，完整产品能力还需要正常与异常任务验收 —— 见 [验收](#验收)。
 
@@ -155,7 +155,7 @@ re.0.8 的历史分页、`task_evidence` 和系统代理接入方式见 [版本�
 
 ## 更新
 
-当前版本为 re.0.10，改动通过功能分支、PR、Release 和原安装版更新交付。
+当前版本为 re.0.10.1，改动通过功能分支、PR、Release 和原安装版更新交付。
 历史接力记录见 [开发交接](docs/DEVELOPMENT-HANDOFF.md)，当前后续事项以 [能力路线图](docs/ROADMAP.md) 为准。
 
 两层东西独立更新：
