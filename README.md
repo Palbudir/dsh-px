@@ -5,6 +5,7 @@
 
 日常使用入口仍为已安装的 **DSH-PX**。新功能通过正式版本发布与应用内更新交付。
 选择本机项目与模型后直接开始任务。会话右侧栏的 **任务进展** 支持执行历史分页与按需读取输出；**设置 → 运行与帮助** 提供入门、网络来源和实际网页读取检查。
+re.0.9 新增顶部会话标签与文件、终端、产物、后台任务入口，支持保存原文引用和批注，以及向指定会话定时投递任务。操作与边界见 [会话工作区](docs/releases/re.0.9.md)。
 目标是以 DSH 原生插件架构交付完整、可靠的 Agent 工作能力。插件是实现方式，产品标准见 [PRODUCT.md](docs/PRODUCT.md)。
 开发验证记录见 [本机使用与验收记录](docs/LOCAL-WORKBENCH.md)，发版步骤见 [RELEASING.md](docs/RELEASING.md)。
 最新调查见 [成熟 Agent 能力审计](docs/agent-maturity-2026-09-22/README.md)：100 项分阶段功能、18 项问题排期、安装版实测及可离线复现证据；[交互清单](docs/agent-maturity-2026-09-22/index.html) 可直接在本机浏览器打开。
@@ -18,7 +19,7 @@
 随附 Node 与 dsh，日常通过已安装应用进入。当前版本针对本机现有环境验收；
 首次升级自管插件使用本机 pnpm 与缓存，工作台会显示依赖检查结果。
 
-> **当前版本 `0.1.0-beta.re.0.8`**（[Releases](https://github.com/Palbudir/dsh-px/releases)）。
+> **当前版本 `0.1.0-beta.re.0.9`**（[Releases](https://github.com/Palbudir/dsh-px/releases)）。
 > 打包后的应用需保留官方 `dsh` 的基础组合，并通过本机实际任务验证。
 > 组合树对比是结构门禁，完整产品能力还需要正常与异常任务验收 —— 见 [验收](#验收)。
 
@@ -75,6 +76,7 @@ src/
 packages/dsh-px-updater/  自研 dsh 插件（宿主半边 + 客户端半边，均为预构建产物）
 packages/dsh-px-workbench/  本机入门与运行诊断
 packages/dsh-px-taskflow/   任务交接与执行证据
+packages/dsh-px-workspace/  会话标签、产物、引用批注与定时任务
 scripts/                  构建与验证脚本（TypeScript 源码，经 scripts/run.mjs 编译执行）
 docs/
   PACKAGING.md            运行时如何装配，以及 10 条踩出来的约束
@@ -145,6 +147,7 @@ re.0.8 的历史分页、`task_evidence` 和系统代理接入方式见 [版本�
 | `dsh-px-updater` | **本项目自研**：版本/更新状态查询，并在 dsh 设置页注册一个「版本与更新」分区 |
 | `dsh-px-workbench` | **本项目自研**：运行与帮助、环境诊断、项目入口 |
 | `dsh-px-taskflow` | **本项目自研**：任务工作记录、实际执行证据和任务侧栏 |
+| `dsh-px-workspace` | **本项目自研**：会话标签、常用面板入口、产物汇总、引用批注与会话定时任务 |
 
 插件组合**不是硬编码的**，它就是 profile 的 `dsh.profile.bundles` 列表 —— 官方机制本身。
 应用是**继承**它，而不是重新实现它。自研插件同样走官方范式：声明 `dsh.bundle.patch`
@@ -152,7 +155,7 @@ re.0.8 的历史分页、`task_evidence` 和系统代理接入方式见 [版本�
 
 ## 更新
 
-当前版本为 re.0.8，改动通过功能分支、PR、Release 和原安装版更新交付。
+当前版本为 re.0.9，改动通过功能分支、PR、Release 和原安装版更新交付。
 历史接力记录见 [开发交接](docs/DEVELOPMENT-HANDOFF.md)，当前后续事项以 [能力路线图](docs/ROADMAP.md) 为准。
 
 两层东西独立更新：

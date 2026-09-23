@@ -1,6 +1,6 @@
 {
   "name": "dsh-px-updater",
-  "version": "0.1.0-beta.re.0.8",
+  "version": "0.1.0-beta.re.0.9",
   "private": true,
   "description": "DSH-PX 的更新插件：版本/更新状态查询的宿主半边，加上 dsh 设置页里的 DSH-PX 分区",
   "_note": "两个半边都是**预构建产物**（lib/index.js、lib/client.js），源在 src/（TypeScript）。宿主半边刻意保持零运行时依赖与零 peerDependencies：pnpm 的 file:/link: 安装不会安装 peer 依赖，而 link: 下 Node 又按真实路径（仓库外）解析模块，于是任何 import 的宿主包都会 ERR_MODULE_NOT_FOUND。配置默认值自己合并即可，无需 schemastery。客户端半边的 react 等由**前端静态模块表**提供，是浏览器侧的 require，不受此限制。",

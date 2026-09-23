@@ -57,13 +57,14 @@ const DEFAULT_PLUGINS = [
   'dsh-find-plugin',
   'file:packages/dsh-px-updater',
   'file:packages/dsh-px-workbench',
-  'file:packages/dsh-px-taskflow'
+  'file:packages/dsh-px-taskflow',
+  'file:packages/dsh-px-workspace'
 ]
 
 /**
  * 上述 `file:` 项对应的包名（bundle 协调要用真实包名，而不是 file: 路径）。
  */
-const LOCAL_PLUGIN_NAMES = ['dsh-px-updater', 'dsh-px-workbench', 'dsh-px-taskflow']
+const LOCAL_PLUGIN_NAMES = ['dsh-px-updater', 'dsh-px-workbench', 'dsh-px-taskflow', 'dsh-px-workspace']
 const COMMUNITY_VERSIONS: Record<string, string> = { dshmarket: '1.48.0', 'dsh-better-sidebar': '0.19.1', 'dsh-mermaid-render': '0.1.11', 'dsh-find-plugin': '0.3.7' }
 
 /**
