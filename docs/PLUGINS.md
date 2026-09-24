@@ -11,7 +11,7 @@
 | dsh-px-taskflow    | 执行记录、按需证据、可选工作摘要             | 原生会话日志；侧栏展示依赖 betterSidebar，Agent 工具不依赖侧栏       |
 | dsh-px-workspace   | 会话标签、产物、批注、定时任务               | 会话与输入服务；面板依赖 betterSidebar，终端依赖 sidebarRight        |
 | dshmarket          | 插件发现与管理                               | 安装额外插件可能需要包管理器和网络                                   |
-| dsh-better-sidebar | 文件、编辑器、终端、代码变更与任务视图       | 原生终端及对应工具依赖                                               |
+| dsh-better-sidebar | 文件、编辑器、终端、文件变动与任务视图       | 原生终端及对应工具依赖                                               |
 | dsh-mermaid-render | Mermaid 图表展示                             | 客户端渲染扩展                                                       |
 | dsh-find-plugin    | DSH 插件检索                                 | 对应检索与网络能力                                                   |
 

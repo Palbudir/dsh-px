@@ -10,7 +10,7 @@ const panels = [
   ['editor', '文件', 'file'],
   ['terminal', '终端', 'terminal'],
   ['px-artifacts', '产物', 'artifact'],
-  ['git', '代码变更', 'git'],
+  ['git', '文件变动', 'git'],
   ['dsh-px-taskflow', '执行记录', 'jobs'],
   ['subagent', '后台任务', 'jobs'],
   ['px-notes', '引用与批注', 'note'],

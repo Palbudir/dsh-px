@@ -441,10 +441,10 @@ window.__ModuleLoader__.load({
 		            data.changedFilesTruncated ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { style: { opacity: 0.65 }, children: [
 		              "\u5F53\u524D\u4EC5\u663E\u793A\u6700\u8FD1 ",
 		              data.changedFiles.length,
-		              " \u4E2A\u8DEF\u5F84\u3002\u5B8C\u6574\u6700\u7EC8\u5DEE\u5F02\u8BF7\u5728\u4EE3\u7801\u53D8\u66F4\u9762\u677F\u6838\u5BF9\u3002"
+		              " \u4E2A\u8DEF\u5F84\u3002\u6700\u7EC8\u6587\u4EF6\u72B6\u6001\u8BF7\u5728\u201C\u6587\u4EF6\u53D8\u52A8\u201D\u7684 Git \u89C6\u56FE\u4E2D\u6838\u5BF9\u3002"
 		            ] }) : null,
 		            data.changedFiles.map((path) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { paddingTop: 6 }, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { children: path }) }, path)),
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { marginBottom: 0, opacity: 0.65 }, children: "\u6765\u81EA\u6210\u529F\u8FD4\u56DE\u7684\u6587\u4EF6\u5199\u5DE5\u5177\uFF0C\u4E0D\u5305\u542B\u53EA\u8BFB\u67E5\u770B\u3002\u547D\u4EE4\u884C\u6539\u52A8\u3001\u6700\u7EC8\u5DEE\u5F02\u4E0E\u4EBA\u5DE5\u5DF2\u6709\u4FEE\u6539\u8BF7\u5728\u4EE3\u7801\u53D8\u66F4\u9762\u677F\u6838\u5BF9\u3002" })
+		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { marginBottom: 0, opacity: 0.65 }, children: "\u6765\u81EA\u6210\u529F\u8FD4\u56DE\u7684\u6587\u4EF6\u5199\u5DE5\u5177\uFF0C\u4E0D\u5305\u542B\u53EA\u8BFB\u67E5\u770B\u3002\u547D\u4EE4\u884C\u6539\u52A8\u3001\u6700\u7EC8\u5DEE\u5F02\u4E0E\u4EBA\u5DE5\u5DF2\u6709\u4FEE\u6539\u8BF7\u5728\u201C\u6587\u4EF6\u53D8\u52A8\u201D\u7684 Git \u89C6\u56FE\u4E2D\u6838\u5BF9\u3002" })
 		          ] }) : null,
 		          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { "aria-label": "\u5B9E\u9645\u6267\u884C\u8BB0\u5F55", children: [
 		            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("h4", { children: [

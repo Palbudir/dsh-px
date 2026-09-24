@@ -594,7 +594,7 @@ window.__ModuleLoader__.load({
 		  ["editor", "\u6587\u4EF6", "file"],
 		  ["terminal", "\u7EC8\u7AEF", "terminal"],
 		  ["px-artifacts", "\u4EA7\u7269", "artifact"],
-		  ["git", "\u4EE3\u7801\u53D8\u66F4", "git"],
+		  ["git", "\u6587\u4EF6\u53D8\u52A8", "git"],
 		  ["dsh-px-taskflow", "\u6267\u884C\u8BB0\u5F55", "jobs"],
 		  ["subagent", "\u540E\u53F0\u4EFB\u52A1", "jobs"],
 		  ["px-notes", "\u5F15\u7528\u4E0E\u6279\u6CE8", "note"],
@@ -1167,6 +1167,7 @@ window.__ModuleLoader__.load({
 		  const [operationBusy, runOperation] = useOperation(`notes:${scope.sessionId}`);
 		  const busy = localBusy || operationBusy;
 		  const [replacement, setReplacement] = (0, import_react8.useState)(null);
+		  const [sourceRetry, setSourceRetry] = (0, import_react8.useState)(null);
 		  const revision = (0, import_react8.useRef)(0);
 		  const active = (0, import_react8.useRef)(true), sourceRequest = (0, import_react8.useRef)(null);
 		  (0, import_react8.useEffect)(() => {
@@ -1176,14 +1177,24 @@ window.__ModuleLoader__.load({
 		      sourceRequest.current?.abort();
 		    };
 		  }, []);
-		  async function choose(id, existing = null, offset = 0, replace = false) {
+		  async function choose(id, existing = null, offset = 0, replace = false, request) {
 		    if (operationBusy || !draftAvailable) return;
-		    quoteRequests.consume(scope.sessionId, selection?.token);
+		    const pending = quoteRequests.getSnapshot()[scope.sessionId];
+		    const requestToken = typeof request === "object" ? request.token : void 0;
+		    if (requestToken && pending?.token !== requestToken) return;
+		    if (request === "initial" && pending) return;
+		    if (request === void 0) {
+		      setEditor((old) => ({ ...old, initialized: true, requestToken: pending?.token ?? old.requestToken }));
+		      if (pending) quoteRequests.consume(scope.sessionId, pending.token);
+		    }
 		    if ((editor.dirty || note !== (editing?.note ?? "") || Boolean(source && quote !== (editing?.quote ?? source.text.slice(0, 8e3)))) && !replace) {
+		      setEditor((old) => ({ ...old, initialized: true, requestToken: requestToken ?? old.requestToken }));
+		      if (requestToken) quoteRequests.consume(scope.sessionId, requestToken);
 		      setReplacement({ id, existing, offset });
 		      return;
 		    }
 		    setReplacement(null);
+		    setSourceRetry(null);
 		    const rev = ++revision.current;
 		    sourceRequest.current?.abort();
 		    const controller = new AbortController();
@@ -1205,18 +1216,25 @@ window.__ModuleLoader__.load({
 		        initialized: true,
 		        collapsed: false,
 		        dirty: false,
-		        requestToken: selection?.token ?? ""
+		        requestToken: requestToken ?? ""
 		      });
+		      if (requestToken) quoteRequests.consume(scope.sessionId, requestToken);
 		    } catch (e) {
-		      if (active.current && rev === revision.current && !controller.signal.aborted) setFailure(errorText(e));
+		      if (active.current && rev === revision.current && !controller.signal.aborted) {
+		        setFailure(errorText(e));
+		        setSourceRetry({ id, existing, offset });
+		      }
 		    } finally {
 		      if (active.current && rev === revision.current) setBusy(false);
 		    }
 		  }
 		  (0, import_react8.useEffect)(() => {
-		    if (selection && selection.token !== editor.requestToken) void choose(selection.messageId);
-		    else if (!editor.initialized && tab.meta?.messageId) void choose(tab.meta.messageId);
-		  }, [selection, tab.meta?.messageId, operationBusy]);
+		    const pending = quoteRequests.getSnapshot()[scope.sessionId];
+		    if (pending && pending.token !== editor.requestToken)
+		      void choose(pending.messageId, null, 0, false, { token: pending.token });
+		    else if (!pending && !editor.initialized && tab.meta?.messageId)
+		      void choose(tab.meta.messageId, null, 0, false, "initial");
+		  }, [selection, tab.meta?.messageId, operationBusy, draftAvailable]);
 		  const draft = source ? { sessionId: scope.sessionId, messageId: source.id, seq: source.seq, quote, note } : null;
 		  const validQuote = !!quote && (!!source?.text.includes(quote) || editing?.quote === quote);
 		  async function action(fn, success) {
@@ -1274,6 +1292,14 @@ window.__ModuleLoader__.load({
 		    ] }) : null,
 		    source && editor.collapsed ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { onClick: () => setEditor((old) => ({ ...old, collapsed: false })), children: "\u7EE7\u7EED\u7F16\u8F91\u8349\u7A3F" }) : null,
 		    failure || error || notes.error ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { role: "alert", children: failure || error || notes.error }) : null,
+		    sourceRetry ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		      "button",
+		      {
+		        disabled: busy || !draftAvailable,
+		        onClick: () => void choose(sourceRetry.id, sourceRetry.existing, sourceRetry.offset),
+		        children: "\u91CD\u8BD5\u8BFB\u53D6\u539F\u6587"
+		      }
+		    ) : null,
 		    notice ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { role: "status", className: "px-feedback", children: notice }) : null,
 		    source && !editor.collapsed ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("section", { className: "px-card", "aria-label": "\u6279\u6CE8\u7F16\u8F91\u5668", children: /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("fieldset", { disabled: busy || !draftAvailable, children: [
 		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("h4", { children: [

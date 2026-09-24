@@ -21,6 +21,11 @@ interface NoteDraft {
   collapsed: boolean
   dirty: boolean
 }
+interface SourceChoice {
+  id: string
+  existing: Annotation | null
+  offset: number
+}
 export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }): unknown {
   const selection = useSnapshot(quoteRequests)[scope.sessionId]
   const [before, setBefore] = useState<number | null>(null)
@@ -66,11 +71,8 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
     [localBusy, setBusy] = useState(false)
   const [operationBusy, runOperation] = useOperation(`notes:${scope.sessionId}`)
   const busy = localBusy || operationBusy
-  const [replacement, setReplacement] = useState<{
-    id: string
-    existing: Annotation | null
-    offset: number
-  } | null>(null)
+  const [replacement, setReplacement] = useState<SourceChoice | null>(null)
+  const [sourceRetry, setSourceRetry] = useState<SourceChoice | null>(null)
   const revision = useRef(0)
   const active = useRef(true),
     sourceRequest = useRef<AbortController | null>(null)
@@ -85,20 +87,35 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
     id: string,
     existing: Annotation | null = null,
     offset = 0,
-    replace = false
+    replace = false,
+    request?: { token: string } | 'initial'
   ): Promise<void> {
     if (operationBusy || !draftAvailable) return
-    quoteRequests.consume(scope.sessionId, selection?.token)
+    const pending = quoteRequests.getSnapshot()[scope.sessionId]
+    const requestToken = typeof request === 'object' ? request.token : undefined
+    if (requestToken && pending?.token !== requestToken) return
+    if (request === 'initial' && pending) return
+    if (request === undefined) {
+      // A direct list/edit/retry choice is newer than any queued quote request.
+      // Claim it before consuming that request so initial metadata cannot return.
+      setEditor((old) => ({ ...old, initialized: true, requestToken: pending?.token ?? old.requestToken }))
+      if (pending) quoteRequests.consume(scope.sessionId, pending.token)
+    }
     if (
       (editor.dirty ||
         note !== (editing?.note ?? '') ||
         Boolean(source && quote !== (editing?.quote ?? source.text.slice(0, 8000)))) &&
       !replace
     ) {
+      // Keep the existing draft while the user decides. A consumed request must
+      // not expose the tab's old initial message as a new selection.
+      setEditor((old) => ({ ...old, initialized: true, requestToken: requestToken ?? old.requestToken }))
+      if (requestToken) quoteRequests.consume(scope.sessionId, requestToken)
       setReplacement({ id, existing, offset })
       return
     }
     setReplacement(null)
+    setSourceRetry(null)
     const rev = ++revision.current
     sourceRequest.current?.abort()
     const controller = new AbortController()
@@ -120,18 +137,27 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
         initialized: true,
         collapsed: false,
         dirty: false,
-        requestToken: selection?.token ?? ''
+        requestToken: requestToken ?? ''
       })
+      // Retain the selection until its source is loaded. Clearing it earlier
+      // lets the initial tab.meta fallback abort a newer in-flight selection.
+      if (requestToken) quoteRequests.consume(scope.sessionId, requestToken)
     } catch (e) {
-      if (active.current && rev === revision.current && !controller.signal.aborted) setFailure(errorText(e))
+      if (active.current && rev === revision.current && !controller.signal.aborted) {
+        setFailure(errorText(e))
+        setSourceRetry({ id, existing, offset })
+      }
     } finally {
       if (active.current && rev === revision.current) setBusy(false)
     }
   }
   useEffect(() => {
-    if (selection && selection.token !== editor.requestToken) void choose(selection.messageId)
-    else if (!editor.initialized && tab.meta?.messageId) void choose(tab.meta.messageId)
-  }, [selection, tab.meta?.messageId, operationBusy])
+    const pending = quoteRequests.getSnapshot()[scope.sessionId]
+    if (pending && pending.token !== editor.requestToken)
+      void choose(pending.messageId, null, 0, false, { token: pending.token })
+    else if (!pending && !editor.initialized && tab.meta?.messageId)
+      void choose(tab.meta.messageId, null, 0, false, 'initial')
+  }, [selection, tab.meta?.messageId, operationBusy, draftAvailable])
   const draft = source
     ? { sessionId: scope.sessionId, messageId: source.id, seq: source.seq, quote, note }
     : null
@@ -195,6 +221,14 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
         <button onClick={() => setEditor((old) => ({ ...old, collapsed: false }))}>继续编辑草稿</button>
       ) : null}
       {failure || error || notes.error ? <p role="alert">{failure || error || notes.error}</p> : null}
+      {sourceRetry ? (
+        <button
+          disabled={busy || !draftAvailable}
+          onClick={() => void choose(sourceRetry.id, sourceRetry.existing, sourceRetry.offset)}
+        >
+          重试读取原文
+        </button>
+      ) : null}
       {notice ? (
         <p role="status" className="px-feedback">
           {notice}

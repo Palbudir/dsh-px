@@ -310,7 +310,8 @@ function SessionTaskPanel({
               <strong>已记录的文件写入 · 共 {data.changedFilesTotal} 个路径</strong>
               {data.changedFilesTruncated ? (
                 <p style={{ opacity: 0.65 }}>
-                  当前仅显示最近 {data.changedFiles.length} 个路径。完整最终差异请在代码变更面板核对。
+                  当前仅显示最近 {data.changedFiles.length} 个路径。最终文件状态请在“文件变动”的 Git
+                  视图中核对。
                 </p>
               ) : null}
               {data.changedFiles.map((path) => (
@@ -319,7 +320,8 @@ function SessionTaskPanel({
                 </div>
               ))}
               <p style={{ marginBottom: 0, opacity: 0.65 }}>
-                来自成功返回的文件写工具，不包含只读查看。命令行改动、最终差异与人工已有修改请在代码变更面板核对。
+                来自成功返回的文件写工具，不包含只读查看。命令行改动、最终差异与人工已有修改请在“文件变动”的
+                Git 视图中核对。
               </p>
             </section>
           ) : null}
