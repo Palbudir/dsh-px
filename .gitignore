@@ -1,52 +1,32 @@
-# 装配出的运行时：随附的 Node + dsh 安装 + profile 树。
-# 由 npm run stage 生成；绝不入库（数百 MB 的第三方代码）。
-#
-# 用通配符而不是写死 /runtime/：手工调试时很容易留下 runtime.bak/ 这类旁支目录，
-# 而一次 git add -A 就会把整个 Node 发行版（十万级文件）扫进索引 —— 这个坑真的踩过。
-/runtime/
+# Dependencies and generated runtime/build outputs
+/node_modules/
 /runtime*/
-
-# 构建产物
-#
-# `/build-scripts/` 是 `scripts/*.ts` 经 `scripts/run.mjs` 编译出的中间产物。
-# 它曾经被误提交（我加忽略规则的那条命令因引号问题没执行到），
-# 危害是 CI 可能跑到**陈旧的编译结果**：`git checkout` 出来的旧 .js 与源码不一致，
-# 而症状是"改的代码没生效"，极难归因。与 out/、dist/ 同等对待。
 /build-scripts/
 /build-test/
 /dist/
 /out/
+/output/
 
-# 依赖
-/node_modules/
-
-# 本地环境与密钥
+# Local configuration and credentials
 .env
 .env.*
 *.local
+*.pem
+*.p12
+*.key
 
-# 系统与编辑器噪音
-.DS_Store
-Thumbs.db
-*.log
-
-# 图标「素材」不入库；成品托盘图标**必须入库** ——
-# 它是运行期要读的资源（经 extraResources 打进应用），不能依赖构建机重新生成。
+# Downloaded artwork and generated UI evidence
 /build/icon-source.png
 /build/icon.png
 /build/icon-256.png
-
-# 视觉验证的截图（`npm run screenshot` 产出）。是**看**的结果，不是源，
-# 因此不入库；需要时重新生成即可，且不同机器渲染会有细微差异。
 /build/screenshots/
-
-# 构建工具（运行时按需下载）
 /build/tools/
 
-# 临时文件
+# Local diagnostics and editor files
+*.log
+*.out.txt
+.DS_Store
+Thumbs.db
 commit-msg.tmp
 .git-commit-msg.txt
-# 提交信息草稿（用 git commit -F 时生成；曾误提交进仓库一次）
 .commit-msg*.txt
-# 构建/检查命令的落盘输出（排查用，不入库）
-*.out.txt

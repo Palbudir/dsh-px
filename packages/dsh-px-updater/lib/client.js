@@ -152,6 +152,15 @@ window.__ModuleLoader__.load({
 		  if (shell.phase === "idle" && shell.version && shell.lastCheckedAt) return "upToDate";
 		  return "notChecked";
 		}
+		function safeReleaseUrl(value, repository) {
+		  if (!repository || !/^[\w.-]+\/[\w.-]+$/.test(repository)) return false;
+		  try {
+		    const url = new URL(value);
+		    return url.protocol === "https:" && url.hostname === "github.com" && !url.username && !url.password && !url.port && url.pathname.startsWith(`/${repository}/releases/`);
+		  } catch {
+		    return false;
+		  }
+		}
 
 		// packages/dsh-px-updater/src/client.tsx
 		var import_jsx_runtime2 = require("react/jsx-runtime");
@@ -162,7 +171,7 @@ window.__ModuleLoader__.load({
 		  zh: {
 		    nav: "\u7248\u672C\u4E0E\u66F4\u65B0",
 		    loading: "\u6B63\u5728\u8BFB\u53D6\u7248\u672C\u4FE1\u606F\u2026",
-		    "section.app": "DSH-PX \u6574\u5408\u5305",
+		    "section.app": "DSH-PX",
 		    "section.dsh": "\u968F\u9644 dsh \u6838\u5FC3",
 		    "section.update": "\u66F4\u65B0",
 		    check: "\u68C0\u67E5\u66F4\u65B0",
@@ -197,12 +206,12 @@ window.__ModuleLoader__.load({
 		    readyPrefix: "\u65B0\u7248\u672C\u5DF2\u4E0B\u8F7D\u5B8C\u6210\uFF1A",
 		    installNow: "\u91CD\u542F\u5E76\u5B89\u88C5",
 		    installing: "\u6B63\u5728\u8BF7\u6C42\u2026",
-		    note: "\u6574\u5408\u5305\u5305\u542B\u684C\u9762\u7AEF\u3001DSH \u6838\u5FC3\u548C\u7CBE\u9009 Mods\u3002\u66F4\u65B0\u5728\u540E\u53F0\u4E0B\u8F7D\uFF0C\u4E0B\u8F7D\u5B8C\u6210\u540E\u53EF\u91CD\u542F\u5B89\u88C5\u3002\u81EA\u884C\u6DFB\u52A0\u7684\u63D2\u4EF6\u4E0E\u914D\u7F6E\u4F1A\u4FDD\u7559\u3002\u4E0A\u6E38 DSH \u7248\u672C\u4EC5\u4F9B\u53C2\u8003\uFF0C\u968F\u6574\u5408\u5305\u9A8C\u8BC1\u540E\u5347\u7EA7\u3002"
+		    note: "\u66F4\u65B0\u4F1A\u5728\u540E\u53F0\u4E0B\u8F7D\u3002\u70B9\u51FB\u5B89\u88C5\u540E\uFF0C\u6709\u4EFB\u52A1\u8FD0\u884C\u65F6\u4F1A\u7B49\u5F85\u4EFB\u52A1\u7ED3\u675F\uFF0C\u4E5F\u53EF\u4EE5\u53D6\u6D88\u7B49\u5F85\u3002\u5DF2\u6709\u4F1A\u8BDD\u3001\u914D\u7F6E\u4E0E\u81EA\u884C\u6DFB\u52A0\u7684\u63D2\u4EF6\u4F1A\u4FDD\u7559\u3002"
 		  },
 		  en: {
 		    nav: "Versions & updates",
 		    loading: "Reading version information\u2026",
-		    "section.app": "Desktop client",
+		    "section.app": "DSH-PX",
 		    "section.dsh": "Bundled dsh core",
 		    "section.update": "Updates",
 		    check: "Check for updates",
@@ -237,7 +246,7 @@ window.__ModuleLoader__.load({
 		    readyPrefix: "Update downloaded: ",
 		    installNow: "Restart and install",
 		    installing: "Requesting\u2026",
-		    note: "Updates download in the background. Restart to install when ready, or install automatically when you quit."
+		    note: "Updates download in the background. Installation waits for active work to finish and can be cancelled while waiting. Existing conversations, settings, and added plugins are preserved."
 		  }
 		};
 		async function getJson(path) {
@@ -433,7 +442,31 @@ window.__ModuleLoader__.load({
 		  })();
 		  const lastChecked = [checkedAt, shell?.lastCheckedAt].filter((value) => typeof value === "string" && Number.isFinite(Date.parse(value))).sort((a, b) => Date.parse(b) - Date.parse(a))[0];
 		  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "px-ui", style: { padding: "4px 2px 24px", maxWidth: 620 }, children: [
-		    shell !== null && ["ready", "error", "downloading", "installing"].includes(shell.phase) ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(UpdateBanner, { state: shell, onInstall: doInstall, installing: installing || shellError, t: tr }) : null,
+		    shell !== null && ["ready", "error", "downloading", "installing"].includes(shell.phase) ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		      UpdateBanner,
+		      {
+		        state: shell,
+		        onInstall: doInstall,
+		        installing: installing || shellError || !!shell.pendingOperation,
+		        t: tr
+		      }
+		    ) : null,
+		    shell?.pendingOperation ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "status", style: { marginBottom: 12 }, children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: shell.pendingOperation.message }),
+		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		        "button",
+		        {
+		          disabled: shell.pendingOperation.canCancel === false,
+		          onClick: () => {
+		            void requestJson(`${ROUTE_PREFIX}/open?what=cancel-pending`, { method: "POST" }).catch(
+		              (error) => setInstallError(error instanceof Error ? error.message : String(error))
+		            );
+		          },
+		          children: "\u53D6\u6D88\u7B49\u5F85"
+		        }
+		      )
+		    ] }) : null,
+		    shell?.lastAction && ["failed", "rejected"].includes(shell.lastAction.status) ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { role: "alert", children: shell.lastAction.message }) : null,
 		    installError !== null ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { role: "alert", style: { overflowWrap: "anywhere" }, children: installError }) : null,
 		    shellError ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { role: "status", children: tr("shellDisconnected") }) : null,
 		    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h2", { style: { margin: "0 0 8px" }, children: tr("section.app") }),
@@ -443,9 +476,6 @@ window.__ModuleLoader__.load({
 		      statusError,
 		      "\uFF09"
 		    ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Row, { label: tr("current"), value: status?.current.app ?? tr("loading") }),
-		    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Heading, { children: tr("section.dsh") }),
-		    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Row, { label: tr("current"), value: status?.current.dsh ?? tr("loading") }),
-		    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Row, { label: tr("platform"), value: status?.current.platform ?? "\u2014" }),
 		    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Heading, { children: tr("section.update") }),
 		    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
 		      Row,
@@ -454,7 +484,6 @@ window.__ModuleLoader__.load({
 		        value: shell?.available && shell.supported !== false && !shellError ? shell.version ?? "\u2014" : check?.latest.app ?? "\u2014"
 		      }
 		    ),
-		    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Row, { label: tr("latestCore"), value: check?.latest.dsh ?? "\u2014" }),
 		    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
 		      Row,
 		      {
@@ -462,13 +491,6 @@ window.__ModuleLoader__.load({
 		        value: lastChecked ? new Date(lastChecked).toLocaleString() : tr("notChecked")
 		      }
 		    ),
-		    shell?.available === true ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-		      Row,
-		      {
-		        label: tr("shellState"),
-		        value: shell.phase === "downloading" && shell.percent !== null ? `${shell.status} (${shell.percent}%)` : shell.status
-		      }
-		    ) : null,
 		    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", padding: "6px 0" }, children: [
 		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: { flex: "0 0 132px", opacity: 0.62, fontSize: 13 }, children: tr("section.update") }),
 		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { style: { fontSize: 14 }, children: updateLabel }),
@@ -492,11 +514,16 @@ window.__ModuleLoader__.load({
 		        }
 		      )
 		    ] }),
-		    check?.releaseUrl !== null && check?.releaseUrl !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Row, { label: tr("openRelease"), value: check.releaseUrl }) : null,
+		    check?.releaseUrl && safeReleaseUrl(check.releaseUrl, status?.repository) ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("a", { href: check.releaseUrl, target: "_blank", rel: "noreferrer", children: tr("openRelease") }) }) : null,
 		    checkError !== null ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { role: "alert", style: { fontSize: 12.5, opacity: 0.8, overflowWrap: "anywhere" }, children: checkError }) : null,
 		    check !== null && check.errors.length > 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { role: "status", style: { fontSize: 12.5, opacity: 0.8, overflowWrap: "anywhere" }, children: check.errors.join("\uFF1B") }) : null,
 		    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { style: { marginTop: 24, borderTop: "1px solid #8883", paddingTop: 16 }, children: [
 		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { style: { cursor: "pointer" }, children: tr("paths") }),
+		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Heading, { children: tr("section.dsh") }),
+		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Row, { label: tr("current"), value: status?.current.dsh ?? tr("loading") }),
+		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Row, { label: tr("latestCore"), value: check?.latest.dsh ?? "\u2014" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Row, { label: tr("platform"), value: status?.current.platform ?? "\u2014" }),
+		      shell?.available ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Row, { label: tr("shellState"), value: shell.status }) : null,
 		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { fontSize: 12, opacity: 0.6, marginBottom: 2 }, children: tr("copyHint") }),
 		      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", gap: 8, margin: "8px 0 4px" }, children: [
 		        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(OpenButton, { what: "open-data", label: tr("openDataDir"), t: tr }),

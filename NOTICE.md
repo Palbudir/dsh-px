@@ -2,22 +2,17 @@
 
 ## 应用图标
 
-`build/icon.png` 由 `scripts/build-icon.mjs` 在构建时生成，素材**不入库**（避免把第三方美术资源
-直接放进本仓库），而是下载后按 SHA-256 校验再缩放。
+`build/icon.png` 由 `node scripts/run.mjs build-icon` 在构建时生成，源码位于
+`scripts/build-icon.ts`。素材下载后按 SHA-256 校验再缩放，不纳入源码仓库。
 
-| 项 | 内容 |
-|---|---|
-| 素材来源 | [GarfieldZhung/DeepSeek-Whale-Girl](https://github.com/GarfieldZhung/DeepSeek-Whale-Girl) 的 `assets/whale/whale-maid.png` |
-| 该仓库许可 | MIT |
-| 素材摘要 | `20b8c0d6b580e23c88de1f01f68a1326c568edc7951f5f45ae98da3cae3c8ee6` |
+| 项         | 内容                                                                                                                       |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------- |
+| 素材来源   | [GarfieldZhung/DeepSeek-Whale-Girl](https://github.com/GarfieldZhung/DeepSeek-Whale-Girl) 的 `assets/whale/whale-maid.png` |
+| 该仓库许可 | MIT                                                                                                                        |
+| 素材摘要   | `20b8c0d6b580e23c88de1f01f68a1326c568edc7951f5f45ae98da3cae3c8ee6`                                                         |
 
-**关于权利状态的诚实说明**（不想含糊其辞）：
-
-- 上游仓库以 MIT 发布其代码与仓库内素材，因此按该声明我们有权再分发。
-- 但该图**很可能是 AI 生成或同人（fan art）作品**。AI 生成内容的著作权归属在多数法域
-  尚无定论；同人形象的权利也可能归属于原始角色设计者。
-- 因此：本项目**不对该图标主张任何权利**，仅作"标识用途"使用，并在此完整署名来源。
-- 如果你是该形象的权利人并认为此处使用不妥，请开 issue，我会立即替换或移除。
+上游的许可声明见 [LICENSE](https://github.com/GarfieldZhung/DeepSeek-Whale-Girl/blob/main/LICENSE)。
+本项目不对素材主张原创权利；素材来源或授权问题可通过仓库 Issue 反馈。
 
 ## 为什么没有使用官方 favicon
 
@@ -40,10 +35,12 @@ DeepSeek Harness 自己的 `website/public/favicon.svg` 与 wordmark 是**官方
 
 `dsh-px` 在构建时会把下列软件装配进生成的 `runtime/` 目录（该目录不入库）：
 
-| 组件 | 许可 |
-|---|---|
-| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`@deepseek-ai/dsh`）及其全部 `@deepseek-ai/*` 传递依赖 | MIT |
-| [Node.js](https://nodejs.org) | MIT 及其他 |
-| `dshmarket`、`dsh-better-sidebar`、`dsh-mermaid-render`、`dsh-find-plugin` | 各自上游许可 |
+| 组件                                                                                                                        | 许可         |
+| --------------------------------------------------------------------------------------------------------------------------- | ------------ |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`@deepseek-ai/dsh`）及其全部 `@deepseek-ai/*` 传递依赖 | MIT          |
+| [Node.js](https://nodejs.org)                                                                                               | MIT 及其他   |
+| `dshmarket`、`dsh-better-sidebar`、`dsh-mermaid-render`、`dsh-find-plugin`                                                  | 各自上游许可 |
 
 打包产物会再分发这些组件，因此在分发二进制前请逐一核对各上游许可要求。
+
+DSH-PX 对 `dsh-better-sidebar 0.19.1` 的宿主入口应用版本及摘要限定的终端生命周期兼容补丁；原项目采用 MIT 许可，版权声明为 `Copyright (c) 2026 dsh-external`。原包许可保留在运行时中，补丁来源与范围见 [插件合约](docs/PLUGINS.md)。

@@ -1,79 +1,87 @@
-# GitHub 仓库设置与保护
+# 仓库治理与发布门禁
 
-本目录下的 JSON 是**记录**，不是构建输入。它们保存了 `dsh-px` 仓库在 GitHub 上
-实际生效的设置，以便在别处重建、或日后审计时对照。
+本目录保存期望配置。`reviewAppId: 0`、`workflowId: 0`、`UNCONFIGURED` 和空公钥表示尚未启用，必须阻止门禁放行及发布，不能当成通过记录。线上配置需另行核对。
 
-## 当前生效的设置
+## 专用 GitHub App 的权限
 
-| 项 | 值 | 如何设置 |
-|---|---|---|
-| 可见性 | **public** | `gh api -X PATCH repos/Palbudir/dsh-px -f private=false` |
-| 默认分支 | `master` | — |
-| 密钥扫描 | 启用 | `.github/security.json` |
-| 推送保护 | 启用（阻止把密钥推上去） | 同上 |
-| 分支保护（master） | 禁止强推、禁止删除、**管理员同样受约束** | `.github/protection.json` |
-| 规则集 `protect-master` | `deletion` + `non_fast_forward`，**无绕过者** | `.github/ruleset.json` |
+[app-manifest.json](app-manifest.json) 是需要明确授权的注册清单：私有 App，只选择 `Palbudir/dsh-px` 安装，关闭 webhook 与安装时 OAuth。
 
-重放命令：
+| 权限          | 级别  | 用途                                            |
+| ------------- | ----- | ----------------------------------------------- |
+| Contents      | read  | 核对目标提交、受保护主分支和可信控制器源码      |
+| Pull requests | read  | 核对当前 PR 的 head/base；拒绝自动处理外部 fork |
+| Actions       | read  | 核对可信 workflow 的真实运行与构建产物          |
+| Checks        | write | 发布两个必需检查                                |
 
-```sh
-gh api -X PATCH repos/<owner>/dsh-px --input .github/security.json
-gh api -X PUT   repos/<owner>/dsh-px/branches/master/protection --input .github/protection.json
-gh api -X POST  repos/<owner>/dsh-px/branches/master/protection/enforce_admins
-RULESET_ID=$(gh api -X POST repos/<owner>/dsh-px/rulesets --input .github/ruleset.json --jq .id)
+App 没有代码、tag 或 Release 的写权限。RSA 私钥只存本机可信目录的 `github-app.pem`，不进入仓库、日志或 Actions secrets。安装 token 被进一步限制为这个仓库及上述权限，并只存在于本机进程内存。[GitHub App manifest](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest)、[安装 token 权限](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app)
+
+## 身份与检查
+
+必需检查为 `dsh-px/independent-review` 和 `dsh-px/quality`，都必须来自专用 App ID。同仓分支创建的同名 GitHub Actions job 无法满足这个身份条件。不要填通用 GitHub Actions App ID `15368`。
+
+1. `review-request.yml` 在所有分支 push 和 PR 变更时只记录元数据，不检出 PR 代码。请求按 run ID/attempt 定位。
+2. 本机可信 worker 读取精确 Git 对象，保留文件名原始空白和 UTF-8 内容。大文本分批完整审阅；二进制、缺少上下文、未完成批次均阻断。每批使用独立 Codex 会话，关闭工具、插件、hooks、记忆及项目指令加载。
+3. worker 沿用用户配置的模型和连接方式，只导入必要字段。已有 Codex 登录由 CLI 使用；GitHub 凭据不传给模型子进程。本次 CLI 最终响应必须与本次随机唯一输出文件一致，旧文件不能冒充新结果。
+4. 本地 Ed25519 证明绑定 repository、head、base、tree、批次、源码摘要、CLI/配置身份、worker 摘要和时间。全部批次通过且无 P0/P1/P2 或阻塞项，才能通过。
+5. App 核对证明后发布独立审查 check。维护者已有 gh 登录触发默认分支的只读 `trusted-quality.yml`。
+6. App 核对质量运行的 `workflow_id`、路径、事件、controller SHA、源码白名单摘要，以及 run-name 绑定的目标 SHA。通过后才发布 `dsh-px/quality`。
+
+新 SHA 需要新证据。缺失或离线保持等待，失败不能通过。同 head/base/worker/模型配置的已签名通过结果可去重。CI 的新 attempt 重新结算；状态不变时不重复发布 check，新请求优先处理。SQLite 锁在进程退出时自动释放。
+
+本项目采用单维护者流程：每次 push 前先由本机独立 reviewer 复核当前提交 SHA（包含 workflow 修改），保留对应结论。Fork PR 需维护者先审查来源并导入本仓库分支。
+
+专用 App 约束合并检查来源，本机控制器约束规定的正式发布流程。GitHub 默认 workflow 权限为 read 并不是权限上限；持有仓库 write/admin 权限的维护者仍能另写高权限 workflow、修改规则或直接改 Release。本机制不声称防御维护者故意违反前置审查和发布流程。
+
+## 本机配置
+
+先完成实现的独立复核，取得本次 App 创建和安装权限授权。注册清单不执行安装；下面的安装器也不会创建 App 或修改 GitHub 设置。
+
+```powershell
+$reviewWorker = Join-Path $env:LOCALAPPDATA 'DSH-PX-review-worker'
+node scripts/review-install.mjs "--directory=$reviewWorker"
 ```
 
-## 为什么是公开仓库 —— 一个实测出来的理由
+安装器复制已审查的 `review-*.mjs`、`release-*.mjs`，记录摘要并生成本地签名密钥。目录必须在仓库外，`..name` 前缀的仓库子目录也会被拒绝。重新安装保留既有身份配置；程序、CLI 或模型配置变化需要重新验证。
 
-**私有仓库在 GitHub 免费计划下没有分支保护。** 这不是推测，是这台机器上实测到的：
+用户授权并创建私有 App 后：
 
+1. 仅选择 dsh-px 安装，将 GitHub PEM 安全保存到可信目录，勿显示密钥内容。
+2. 读取 App ID、installation ID、repository ID；默认分支两个可信 workflow 注册后读取 workflow ID。
+3. 再执行安装器，填写 `--app-id=... --installation-id=... --repository-id=... --quality-workflow-id=... --build-workflow-id=...`。`--app-private-key=绝对路径` 可导入 PEM；`--seven-zip=绝对路径` 可指定本机 7-Zip。
+4. 检查生成的 `public-policy.json`，经审查提交公共配置到 `review-policy.json`。将 `protection.json` 中两个 `app_id: 0` 替换为该 App ID，通过在线验收后再应用。
+
+```powershell
+node scripts/review-smoke.mjs
+npm test
+node (Join-Path $reviewWorker 'review-worker.mjs') --publish
 ```
-$ gh api repos/Palbudir/dsh-px/branches/master/protection
-{"message":"Upgrade to GitHub Pro or make this repository public to enable this feature.","status":"403"}
+
+`review-smoke` 使用现有 Codex 登录执行正常/缺陷两个样例，不调用 GitHub 写接口。worker 默认不发布 check，`--publish` 才调用已授权 App。每次默认处理一个请求，`DSH_PX_REVIEW_MAX_JOBS` 可调整数量；`--rerun=运行ID --publish` 强制重审。常驻调度另行配置。
+
+## 只读构建与本机发布
+
+`release.yml` 仅响应明确的 workflow_dispatch，从受保护 master 加载可信控制器。它不响应 tag 自动公开，也不持有发布写权限。构建产物包含版本、候选 SHA、controller SHA 及四个资产的摘要。
+
+最终发布由仓库外的本机 `release-controller.mjs` 使用维护者原有 gh 身份执行。它核对当前受保护 master、专用 App check、签名、最新可信质量运行、指定可信构建、版本顺序，以及下载和上传摘要；不执行 tag 或候选提交中的发布脚本。
+
+```powershell
+node (Join-Path $reviewWorker 'release-controller.mjs') --head=完整SHA --version=完整版本 --build-run=构建运行ID
 ```
 
-同一个调用在转公开之后立刻成功。所以"公开"不只是可见性选择，
-它是**解锁分支保护这一步的前置条件**。
+默认只准备可检查的 `release-plan.json`，不创建 tag 或 Release。公开说明放在可信目录 `releases/<版本>/notes.md`。完成原生窗口/Web/数据保留验收并得到本次发版确认后，使用同一参数加 `--publish`：先创建草稿资产，复核远端摘要及门禁后才公开。发布过程持有本机排他锁；已发布 tag/资产不重写。失败留下草稿时保留现场，核对后重试。
 
-## 能封到什么程度，以及封不住什么
+## 首次启用与在线验收
 
-必须如实说明，因为这里有一个 GitHub 层面的硬限制：
+默认分支尚无可信 workflow 时，先完成独立 agent review、本机正常/故障测试及普通 CI，引入已审查的控制器。随后在用户授权的 App 下验证真实 check 来源，最后启用必需检查。初始化过程不能伪造通过记录。
 
-**能做的（已全部生效）**
+发布前必须在线确认：同名 Actions job 不能放行；新 SHA、旧证明、错误 workflow/controller、worker 离线/失败、CLI 输出写入失败和 CI rerun 均能阻断或正确恢复。
 
-- 任何人（包括仓库所有者自己）**都不能强推** master —— 历史不可被改写。
-- 任何人**都不能删除** master 分支。
-- 管理员**同样受约束**（`enforce_admins: true`），所以不存在"我手滑就毁了"的路径。
-- 规则集 `protect-master` 的 `bypass_actors` 为空 —— 没有任何账号能绕过。
-- 密钥扫描 + 推送保护：往仓库里推密钥会被拦下。
+```powershell
+gh api repos/Palbudir/dsh-px/branches/master/protection
+gh api repos/Palbudir/dsh-px/commits/master/check-runs
+gh api -X PUT repos/Palbudir/dsh-px/branches/master/protection --input docs/github/protection.json
+```
 
-**做不到的（GitHub 没有提供这个开关）**
+`ruleset.json` 只负责禁止删除和非快进，`security.json` 保存密钥扫描的期望设置。更新规则集前先查现有 ID，避免重复创建。只有在线验收结果可以写成“已生效”。
 
-- **无法禁止他人创建分支或提交合并请求（PR）。** 在公开仓库上，任何人都可以
-  fork 本仓库、在自己的 fork 里随便建分支并开 PR。GitHub 没有"关闭 PR 提交"的选项。
-  `allow_forking` 这个设置项**在个人账号的公开仓库上不可用**，实测会被拒绝：
-
-  ```
-  $ gh api -X PATCH repos/Palbudir/dsh-px -F allow_forking=false
-  {"message":"Allow forks setting can only be changed on org-owned private repositories","status":422}
-  ```
-
-**但这不构成风险**，原因值得说清楚：
-
-1. 别人的分支存在于**他们自己的 fork**里，动不了本仓库的 `master`。
-2. PR 只是一份**请求**。它不会自动合入，只有仓库所有者点击合并才会生效。
-3. `master` 已被保护 + 无绕过者，即便有人成功合入也无法强推改写历史。
-
-换句话说：**能提交 PR ≠ 能改动这个仓库。** 真正的写权限只属于所有者。
-
-如果你希望连"收到 PR"都不发生，唯一的办法是把仓库改回私有 ——
-代价是同时失去分支保护。这是一个真实的取舍，取决于你更看重哪一边。
-
-## 给仓库所有者的开发流程提示
-
-由于管理员的强推也被禁止，请注意：
-
-- 日常提交和推送**完全不受影响**（限制的是 `--force` 和删除，不是普通推送）。
-- 不要用 `git commit --amend` 去改一个**已经推送**的提交 —— 那需要强推，会被拒绝。
-- 尚未推送的提交可以随意 amend / rebase。
-- 推送前建议核对 `git log origin/master..HEAD`，确认要推的内容。
+CLI 依据：[OpenAI 非交互模式](https://learn.chatgpt.com/docs/non-interactive-mode)。检查来源配置：[GitHub 分支保护](https://docs.github.com/en/rest/branches/branch-protection#update-branch-protection)。

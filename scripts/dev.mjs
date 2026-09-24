@@ -12,6 +12,16 @@ const build = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run'
   windowsHide: true
 })
 if (build.status !== 0) process.exit(build.status ?? 1)
+const staged = spawnSync(
+  process.execPath,
+  [join(root, 'scripts/run.mjs'), 'stage-runtime', '--with-plugins'],
+  {
+    cwd: root,
+    stdio: 'inherit',
+    windowsHide: true
+  }
+)
+if (staged.status !== 0) process.exit(staged.status ?? 1)
 const electron = createRequire(import.meta.url)('electron')
 const data = process.env.DSH_PX_USER_DATA_DIR || join(process.env.APPDATA || homedir(), 'dsh-px-development')
 process.stdout.write(`开发实例数据目录：${data}\n`)

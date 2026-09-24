@@ -1,40 +1,10 @@
+/** User-facing update state and actions in the native DSH settings slot. */
 import { installUiStyles } from '../../shared/ui'
-/**
- * dsh-px 更新插件的**客户端半边**：在 dsh 设置页里加一个「DSH-PX」分区。
- *
- * 存在的理由：更新相关信息（当前版本、随附 dsh 版本、有没有新版）此前只能从
- * 外壳的托盘菜单看到，或者问智能体。放进设置页之后，它与其它插件能力处在同一个
- * 位置 —— 用户不必知道"外壳"和"插件"的区别就能找到它。
- *
- * ## 产物形态（改本文件前务必先读）
- *
- * 本文件**不是**直接交付物。它由 `scripts/build-client.mjs` 用 esbuild 打包成
- * `lib/client.js`，并包成 dsh 客户端插件约定的形态：
- *
- * ```js
- * window.__ModuleLoader__.load({ id, factory: (require) => { ...exports... } })
- * ```
- *
- * 因此约定：
- *   - `react` 与 `react/jsx-runtime` 必须**留成外部 require**，交给宿主前端解析。
- *     宿主已在前端的静态模块表里提供它们（`dsh-client-modules` 的 seed 表），
- *     自带一份 React 会打破 hooks 的模块单例。
- *   - 只导出 `apply` / `inject`，与官方客户端插件一致。
- *   - 不要在这里 import 任何 node: 内置模块 —— 这是浏览器代码。
- *
- * ## 为什么用 slots.inject 而不是 slots.get
- *
- * `settings.section` 插槽由官方 `dsh-client-ui-settings` 的 apply 声明，而两者
- * 的激活顺序**没有保证**。`inject` 会等目标插槽出现在账本上再注册；
- * 直接 `get()` 在插槽尚未声明时会静默失败 —— 表现为"插件加载了但设置页没有它"。
- * 这与宿主半边里 `webServer` 那次踩的坑是同一类问题。
- *
- * @module dsh-px-updater/client
- */
+
 import { useCallback, useEffect, useState } from 'react'
 import type { ClientContext } from '@deepseek-ai/cordis'
 import type { SlotComponentProps } from '@deepseek-ai/dsh-client-ui-slots'
-import { requestJson, checkLabel, desktopCheckLabel } from './client-data'
+import { requestJson, checkLabel, desktopCheckLabel, safeReleaseUrl } from './client-data'
 
 /** 本插件的客户端模块 id；必须与 package.json 的包名一致（宿主用它索引模块）。 */
 const NS = 'dsh-px-updater'
@@ -50,7 +20,7 @@ const DICT: Record<string, Record<string, string>> = {
   zh: {
     nav: '版本与更新',
     loading: '正在读取版本信息…',
-    'section.app': 'DSH-PX 整合包',
+    'section.app': 'DSH-PX',
     'section.dsh': '随附 dsh 核心',
     'section.update': '更新',
     check: '检查更新',
@@ -85,12 +55,12 @@ const DICT: Record<string, Record<string, string>> = {
     readyPrefix: '新版本已下载完成：',
     installNow: '重启并安装',
     installing: '正在请求…',
-    note: '整合包包含桌面端、DSH 核心和精选 Mods。更新在后台下载，下载完成后可重启安装。自行添加的插件与配置会保留。上游 DSH 版本仅供参考，随整合包验证后升级。'
+    note: '更新会在后台下载。点击安装后，有任务运行时会等待任务结束，也可以取消等待。已有会话、配置与自行添加的插件会保留。'
   },
   en: {
     nav: 'Versions & updates',
     loading: 'Reading version information…',
-    'section.app': 'Desktop client',
+    'section.app': 'DSH-PX',
     'section.dsh': 'Bundled dsh core',
     'section.update': 'Updates',
     check: 'Check for updates',
@@ -125,7 +95,7 @@ const DICT: Record<string, Record<string, string>> = {
     readyPrefix: 'Update downloaded: ',
     installNow: 'Restart and install',
     installing: 'Requesting…',
-    note: 'Updates download in the background. Restart to install when ready, or install automatically when you quit.'
+    note: 'Updates download in the background. Installation waits for active work to finish and can be cancelled while waiting. Existing conversations, settings, and added plugins are preserved.'
   }
 }
 
@@ -147,14 +117,10 @@ interface CheckPayload {
   errors: string[]
 }
 
-/**
- * `/shell-state` 端点的响应：**外壳**真实的更新进度。
- *
- * 为什么需要它：插件自己只能查"有没有新版"，而下载进度与"已就绪"只有外壳知道
- * （下载/安装必须由 Electron 侧的 electron-updater 做）。界面跑在浏览器里够不到
- * 外壳，因此状态经 `update-bridge` 文件 → 插件端点 → 这里。
- */
 interface ShellStatePayload {
+  instanceId?: string
+  lastAction?: { id: string; status: string; message: string }
+  pendingOperation?: { action: string; message: string; canCancel?: boolean }
   supported?: boolean
   phase: 'idle' | 'checking' | 'downloading' | 'ready' | 'installing' | 'error'
   status: string
@@ -240,13 +206,7 @@ function PathRow({
   )
 }
 
-/**
- * 非阻塞的更新就绪提示。
- *
- * 刻意不用模态对话框：更新是后台行为，弹窗会夺走焦点、挡住正在看的界面，
- * 而且在它被处理掉之前用户没法继续 —— 对一个"每天开着"的客户端这是明显的倒退。
- * 这里只是一条横幅：可以忽略，也可以点一下重启安装。
- */
+/** Update availability stays in a nonmodal banner so active work keeps keyboard focus. */
 function UpdateBanner({
   state,
   onInstall,
@@ -423,7 +383,30 @@ function DshPxSection({ t }: SlotComponentProps): unknown {
     <div className="px-ui" style={{ padding: '4px 2px 24px', maxWidth: 620 }}>
       {/* 更新就绪/失败时，先给一条**非阻塞**横幅（见 UpdateBanner 的说明）。 */}
       {shell !== null && ['ready', 'error', 'downloading', 'installing'].includes(shell.phase) ? (
-        <UpdateBanner state={shell} onInstall={doInstall} installing={installing || shellError} t={tr} />
+        <UpdateBanner
+          state={shell}
+          onInstall={doInstall}
+          installing={installing || shellError || !!shell.pendingOperation}
+          t={tr}
+        />
+      ) : null}
+      {shell?.pendingOperation ? (
+        <div role="status" style={{ marginBottom: 12 }}>
+          <p>{shell.pendingOperation.message}</p>
+          <button
+            disabled={shell.pendingOperation.canCancel === false}
+            onClick={() => {
+              void requestJson(`${ROUTE_PREFIX}/open?what=cancel-pending`, { method: 'POST' }).catch(
+                (error: unknown) => setInstallError(error instanceof Error ? error.message : String(error))
+              )
+            }}
+          >
+            取消等待
+          </button>
+        </div>
+      ) : null}
+      {shell?.lastAction && ['failed', 'rejected'].includes(shell.lastAction.status) ? (
+        <p role="alert">{shell.lastAction.message}</p>
       ) : null}
       {installError !== null ? (
         <div role="alert" style={{ overflowWrap: 'anywhere' }}>
@@ -441,10 +424,6 @@ function DshPxSection({ t }: SlotComponentProps): unknown {
         <Row label={tr('current')} value={status?.current.app ?? tr('loading')} />
       )}
 
-      <Heading>{tr('section.dsh')}</Heading>
-      <Row label={tr('current')} value={status?.current.dsh ?? tr('loading')} />
-      <Row label={tr('platform')} value={status?.current.platform ?? '—'} />
-
       <Heading>{tr('section.update')}</Heading>
       <Row
         label={tr('latest')}
@@ -454,22 +433,10 @@ function DshPxSection({ t }: SlotComponentProps): unknown {
             : (check?.latest.app ?? '—')
         }
       />
-      <Row label={tr('latestCore')} value={check?.latest.dsh ?? '—'} />
       <Row
         label={tr('lastChecked')}
         value={lastChecked ? new Date(lastChecked).toLocaleString() : tr('notChecked')}
       />
-      {/* 外壳侧的进度：只有它能给出"正在下载 42%"/"已就绪"。 */}
-      {shell?.available === true ? (
-        <Row
-          label={tr('shellState')}
-          value={
-            shell.phase === 'downloading' && shell.percent !== null
-              ? `${shell.status} (${shell.percent}%)`
-              : shell.status
-          }
-        />
-      ) : null}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', padding: '6px 0' }}>
         <span style={{ flex: '0 0 132px', opacity: 0.62, fontSize: 13 }}>{tr('section.update')}</span>
         <span style={{ fontSize: 14 }}>{updateLabel}</span>
@@ -491,8 +458,12 @@ function DshPxSection({ t }: SlotComponentProps): unknown {
           {checking ? tr('checking') : tr('check')}
         </button>
       </div>
-      {check?.releaseUrl !== null && check?.releaseUrl !== undefined ? (
-        <Row label={tr('openRelease')} value={check.releaseUrl} />
+      {check?.releaseUrl && safeReleaseUrl(check.releaseUrl, status?.repository) ? (
+        <p>
+          <a href={check.releaseUrl} target="_blank" rel="noreferrer">
+            {tr('openRelease')}
+          </a>
+        </p>
       ) : null}
       {checkError !== null ? (
         <div role="alert" style={{ fontSize: 12.5, opacity: 0.8, overflowWrap: 'anywhere' }}>
@@ -509,6 +480,11 @@ function DshPxSection({ t }: SlotComponentProps): unknown {
           因此：路径可复制，另有按钮经宿主端点请外壳去打开。 */}
       <details style={{ marginTop: 24, borderTop: '1px solid #8883', paddingTop: 16 }}>
         <summary style={{ cursor: 'pointer' }}>{tr('paths')}</summary>
+        <Heading>{tr('section.dsh')}</Heading>
+        <Row label={tr('current')} value={status?.current.dsh ?? tr('loading')} />
+        <Row label={tr('latestCore')} value={check?.latest.dsh ?? '—'} />
+        <Row label={tr('platform')} value={status?.current.platform ?? '—'} />
+        {shell?.available ? <Row label={tr('shellState')} value={shell.status} /> : null}
         <div style={{ fontSize: 12, opacity: 0.6, marginBottom: 2 }}>{tr('copyHint')}</div>
 
         <div style={{ display: 'flex', gap: 8, margin: '8px 0 4px' }}>

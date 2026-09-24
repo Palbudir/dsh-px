@@ -3,8 +3,8 @@ export class HarnessOutput {
   private pending = ''
   private tail = ''
   private announced: string | null = null
-  constructor (private readonly log: (text: string) => void) {}
-  push (text: string): string | null {
+  constructor(private readonly log: (text: string) => void) {}
+  push(text: string): string | null {
     this.pending += text
     const lines = this.pending.split('\n')
     this.pending = lines.pop() ?? ''
@@ -13,13 +13,18 @@ export class HarnessOutput {
     if (this.pending.length > 32768) this.pending = '[超长日志行已截断]'
     return this.announced
   }
-  private consume (line: string): void {
+  private consume(line: string): void {
     const match = line.match(/dsh web:\s*(http:\/\/\S+)/)
     if (match) this.announced = match[1]
     const safe = line.replace(/([?&]token=)[^\s&]+/g, '$1[redacted]')
     this.tail = (this.tail + safe + '\n').slice(-4000)
     this.log(safe + '\n')
   }
-  flush (): void { if (this.pending) this.consume(this.pending); this.pending = '' }
-  get diagnostic (): string { return this.tail }
+  flush(): void {
+    if (this.pending) this.consume(this.pending)
+    this.pending = ''
+  }
+  get diagnostic(): string {
+    return this.tail
+  }
 }

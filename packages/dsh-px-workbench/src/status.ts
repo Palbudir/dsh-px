@@ -1,12 +1,19 @@
 import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
 import type { NetworkStatus } from '../../../src/shared/network-status'
+import { serviceIdentity } from './layout'
+import type { Activity } from './activity'
+import { freshHeartbeat, type ShellReceipt } from '../../shared/shell-protocol'
 
 export interface ServiceState {
-  phase: 'starting' | 'running' | 'restarting' | 'error' | 'stopped'
+  phase: 'starting' | 'running' | 'restarting' | 'draining' | 'error' | 'stopped'
   message: string
   updatedAt: string
   pid: number | null
+  instanceId?: string
+  runtimeMode?: 'packaged' | 'development'
+  appVersion?: string
+  currentOrigin?: string
 }
 export interface LocalStatus {
   checkedAt: string
@@ -21,6 +28,16 @@ export interface LocalStatus {
   service: ServiceState | null
   canRestart: boolean
   network: NetworkStatus | null
+  serviceId: string | null
+  runtime: {
+    mode: 'packaged' | 'development' | 'standalone' | 'disconnected'
+    owner: 'desktop' | 'standalone'
+    shared: true
+    capabilities: { restart: boolean; install: boolean }
+  }
+  activity: Activity
+  lastAction: ShellReceipt | null
+  pendingOperation: { action: 'quit' | 'restart' | 'install'; message: string; canCancel: boolean } | null
 }
 
 const startedAt = new Date().toISOString()
@@ -39,24 +56,12 @@ export function findCommand(name: string, path = process.env.PATH ?? ''): string
 }
 
 export function readServiceState(userData = process.env.DSH_PX_USER_DATA): ServiceState | null {
-  if (!userData) return null
-  try {
-    const value = JSON.parse(readFileSync(join(userData, 'service-state.json'), 'utf8')) as ServiceState
-    if (
-      !['starting', 'running', 'restarting', 'error', 'stopped'].includes(value.phase) ||
-      typeof value.message !== 'string' ||
-      !Number.isFinite(Date.parse(value.updatedAt))
-    )
-      return null
-    // 心跳过期不能继续显示为“运行正常”。
-    if (Date.now() - Date.parse(value.updatedAt) > 15_000) return null
-    return value
-  } catch {
-    return null
-  }
+  return freshHeartbeat(userData)
 }
 
-export function localStatus(): LocalStatus {
+export function localStatus(
+  activity: Activity = { known: false, runningAgents: 0, queuedInputs: 0, runningJobs: 0, openTerminals: 0 }
+): LocalStatus {
   const home = process.env.DSH_HOME ?? null
   const profile = home ? join(home, 'profiles', process.env.DSH_PX_PROFILE ?? 'web') : null
   const plugins: LocalStatus['plugins'] = []
@@ -96,6 +101,32 @@ export function localStatus(): LocalStatus {
     profileError = err instanceof Error ? err.message : String(err)
   }
   const service = readServiceState()
+  let lastAction: LocalStatus['lastAction'] = null
+  let pendingOperation: LocalStatus['pendingOperation'] = null
+  if (service?.instanceId && process.env.DSH_PX_USER_DATA) {
+    try {
+      const bridge = JSON.parse(
+        readFileSync(join(process.env.DSH_PX_USER_DATA, 'update-bridge', 'state.json'), 'utf8')
+      )
+      if (bridge.instanceId === service.instanceId) {
+        if (
+          bridge.lastAction?.instanceId === service.instanceId &&
+          typeof bridge.lastAction.message === 'string'
+        )
+          lastAction = bridge.lastAction
+        if (
+          ['quit', 'restart', 'install'].includes(bridge.pendingOperation?.action) &&
+          typeof bridge.pendingOperation.message === 'string'
+        )
+          pendingOperation = {
+            ...bridge.pendingOperation,
+            canCancel: bridge.pendingOperation.canCancel === true
+          }
+      }
+    } catch {
+      /* Not every standalone or old service has a desktop action bridge. */
+    }
+  }
   let network: NetworkStatus | null = null
   try {
     const state = JSON.parse(
@@ -129,6 +160,19 @@ export function localStatus(): LocalStatus {
     credentialsFile: Boolean(home && existsSync(join(home, '.credentials.yaml'))),
     service,
     canRestart: service?.phase === 'running',
-    network
+    network,
+    serviceId: home ? serviceIdentity(home) : null,
+    runtime: {
+      mode: service?.runtimeMode ?? (process.env.DSH_PX_USER_DATA ? 'disconnected' : 'standalone'),
+      owner: process.env.DSH_PX_USER_DATA ? 'desktop' : 'standalone',
+      shared: true,
+      capabilities: {
+        restart: service?.phase === 'running',
+        install: service?.phase === 'running' && service.runtimeMode === 'packaged'
+      }
+    },
+    activity,
+    lastAction,
+    pendingOperation
   }
 }

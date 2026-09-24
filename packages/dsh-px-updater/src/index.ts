@@ -1,33 +1,14 @@
+/** Update metadata and instance-bound desktop actions exposed through the DSH plugin host. */
 import { rejectUntrustedRequest } from '../../shared/request-trust'
+import {
+  freshHeartbeat,
+  requestShellAction as sendShellAction,
+  ShellUnavailable,
+  type ShellAction,
+  type ShellReceipt
+} from '../../shared/shell-protocol'
 import { fetchMetadata } from './metadata'
-/**
- * dsh-px 更新插件（宿主半边）。
- *
- * 存在的理由：把"检查更新"做成 **dsh 生态内的正式组合包**，而不是只藏在外壳里。
- * 这样它天然获得插件该有的一切 —— 可配置、可热重载、可被其他插件消费、
- * 出错时按 dsh 的方式报告，而不是变成只有外壳知道的私有逻辑。
- *
- * 职责边界（刻意划清，避免和外壳重复造轮子）：
- *   - **本插件**：告诉你"现在是什么版本、有没有更新、更新了什么"，
- *     并把外壳的更新状态转给界面；同时暴露 HTTP 端点与模型工具供人与智能体查询。
- *   - **外壳**：真正的下载与安装。Electron 侧用 electron-updater，
- *     它自带差分下载（blockmap）、sha512 校验与失败回滚。
- *     本插件**不碰**安装 —— 在一个正在运行的 exe 上做文件替换是外壳的活，
- *     插件去做只会更脆弱。
- *
- * 一句话：插件负责"知情"，外壳负责"动手"。
- *
- * ## 本文件是**源码**，不是交付物
- *
- * 交付物是 `lib/index.js`，由 `scripts/build-host.mjs` 用 esbuild 从本文件产出。
- * 这么做是因为：交付形态必须与 dsh 官方随附插件一致（可直接 import 的纯 ESM JS，
- * 用户机不需要构建步骤），而**写作**形态用 TypeScript 才能在改动时得到类型检查。
- * 客户端半边（`src/client.tsx` → `lib/client.js`）走的是同一套模式。
- *
- * 关键约束：产物只保留 node: 内置模块 import；其他依赖在构建时打包。
- *
- * @module dsh-px-updater
- */
+
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -51,18 +32,6 @@ export interface UpdaterConfig {
   routePrefix: string
 }
 
-/**
- * 默认配置。
- *
- * **刻意不使用 schemastery 定义 Schema**（虽然官方教程推荐）：
- * 本插件是仓库自带的本地插件，通过 `link:`/`file:` 安装，而 pnpm 的这两种协议
- * **不会安装 peerDependencies**；`link:` 下 Node 又按真实路径（仓库外）解析模块，
- * 于是 `import Schema from '@deepseek-ai/schemastery'` 会直接
- * `ERR_MODULE_NOT_FOUND`，整棵插件树随之启动失败（实测踩到）。
- *
- * 结论：**自研插件应当零运行时依赖**，默认值自己合并即可。
- * 官方教程里的 Schema 写法适用于发布到 npm、由 pnpm 正常解析依赖的包。
- */
 export const DEFAULTS: UpdaterConfig = {
   repository: 'Palbudir/dsh-px',
   timeoutMs: 8000,
@@ -155,6 +124,9 @@ function shellUserData(): string | null {
 
 /** 外壳写下的更新状态（字段由外壳的 update-bridge 决定）。 */
 interface ShellState {
+  instanceId: string
+  lastAction?: ShellReceipt
+  pendingOperation?: { action: 'quit' | 'restart' | 'install'; message: string }
   phase: string
   status: string
   version: string | null
@@ -173,37 +145,21 @@ function readShellState(): ShellState | null {
   const dir = shellUserData()
   if (dir === null) return null
   try {
+    const heartbeat = freshHeartbeat(dir)
+    if (!heartbeat) return null
     const raw = readFileSync(join(dir, 'update-bridge', 'state.json'), 'utf8')
     const parsed = JSON.parse(raw) as Record<string, unknown>
-    if (typeof parsed !== 'object' || parsed === null) return null
+    if (typeof parsed !== 'object' || parsed === null || parsed.instanceId !== heartbeat.instanceId)
+      return null
     return { ...(parsed as unknown as ShellState), available: true }
   } catch {
     return null
   }
 }
 
-/**
- * 向外壳投递一个**动作请求**（写一个文件，外壳轮询并执行）。
- *
- * 界面跑在 harness 的浏览器里，够不到 Electron，因此"重启并安装"、
- * "打开数据目录"、"打开日志目录"这类事只能这样转达。
- *
- * 这里刻意**不**等待外壳的回应（安装会让外壳退出，回应不可能到达），
- * 返回 true 只表示"请求已写入"。
- *
- * @param action 动作名，必须是外壳认识的白名单值
- */
-function requestShellAction(action: 'install' | 'check' | 'open-data' | 'open-log'): boolean {
-  const dir = shellUserData()
-  if (dir === null) return false
-  try {
-    const bridgeDir = join(dir, 'update-bridge')
-    mkdirSync(bridgeDir, { recursive: true })
-    writeFileSync(join(bridgeDir, `${action}.req`), `${new Date().toISOString()}\n`)
-    return true
-  } catch {
-    return false
-  }
+/** Send an instance-bound desktop action and await its durable acknowledgement receipt. */
+async function requestShellAction(action: ShellAction): Promise<ShellReceipt> {
+  return sendShellAction(shellUserData() ?? undefined, action)
 }
 
 /** `checkUpdates()` 的结构化结果；失败信息放进 `errors`，不抛错。 */
@@ -217,12 +173,8 @@ export interface UpdateCheckResult {
   errors: string[]
 }
 
-/**
- * 执行一次更新检查：同时看外壳版本（GitHub Releases）与 dsh 版本（npm）。
- *
- * 为什么两个来源都要看：这个应用有两层独立更新的东西 ——
- * 外壳二进制（GitHub Releases）与随附的 dsh 核心（npm）。
- * 只报其中一个，会让用户以为"已是最新"，而另一层其实落后。
+/** Check the application release channel and display npm's core version as a reference.
+ * The pinned core is delivered with the application, not installed independently by this plugin.
  */
 async function checkUpdates(config: UpdaterConfig): Promise<UpdateCheckResult> {
   const info = readAppInfo()
@@ -299,14 +251,6 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
   }
   say(`已加载（dsh ${info.dshVersion ?? '未知'}，${info.platform ?? process.platform}）`)
 
-  // ── HTTP 端点 ─────────────────────────────────────────────────────────────
-  // webServer 用 **inject** 而不是 ctx.get()。
-  //
-  // 这是踩过的坑：在插件 apply 期间 webServer 可能尚未提供，
-  // `ctx.get('webServer')` 会静默拿到 undefined，于是整个路由注册被跳过 ——
-  // 而插件本身加载成功、组合树里也有它，表现为"装了但端点 404"，且没有任何报错。
-  // `inject` 会等到服务就绪后再执行回调，这才是正确的依赖方式
-  // （生态内其他插件如 dshmarket 也是这么写的）。
   ctx.inject(['webServer'], (hostCtx) => {
     const webServer = hostCtx.webServer
     if (webServer?.register === undefined) {
@@ -353,20 +297,22 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
     const disposeShellCheck = webServer.register({
       kind: 'exact',
       path: `${config.routePrefix}/check-shell`,
-      handler: (req: HostRequest, res: HostResponse) => {
+      handler: async (req: HostRequest, res: HostResponse) => {
         if (rejectUntrustedRequest(req, res)) return
         if (req.method !== 'POST') {
           sendJson(res, 405, { ok: false, error: '只接受 POST' })
           return
         }
-        const ok = requestShellAction('check')
-        sendJson(
-          res,
-          ok ? 202 : 503,
-          ok
-            ? { ok: true, message: '已请求桌面客户端检查更新' }
-            : { ok: false, error: '桌面客户端未连接，只能查询版本信息' }
-        )
+        if (req.headers?.['x-dsh-px-request'] !== '1')
+          return sendJson(res, 403, { ok: false, error: '请从 DSH-PX 界面提交操作。' })
+        try {
+          sendJson(res, 202, { ok: true, ...(await requestShellAction('check')) })
+        } catch (error) {
+          sendJson(res, error instanceof ShellUnavailable ? error.status : 503, {
+            ok: false,
+            error: errText(error)
+          })
+        }
       }
     })
 
@@ -407,25 +353,27 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
     const disposeInstall = webServer.register({
       kind: 'exact',
       path: `${config.routePrefix}/install`,
-      handler: (req: HostRequest, res: HostResponse) => {
+      handler: async (req: HostRequest, res: HostResponse) => {
         if (rejectUntrustedRequest(req, res)) return
         if (req.method !== 'POST') {
           sendJson(res, 405, { ok: false, error: '只接受 POST' })
           return
         }
+        if (req.headers?.['x-dsh-px-request'] !== '1')
+          return sendJson(res, 403, { ok: false, error: '请从 DSH-PX 界面提交操作。' })
         const state = readShellState()
         if (state?.phase !== 'ready') {
           sendJson(res, 409, { ok: false, error: '更新尚未下载完成，或安装已在进行中' })
           return
         }
-        const ok = requestShellAction('install')
-        sendJson(
-          res,
-          ok ? 202 : 503,
-          ok
-            ? { ok: true, message: '已请求外壳重启并安装' }
-            : { ok: false, error: '找不到外壳数据目录，无法请求安装' }
-        )
+        try {
+          sendJson(res, 202, { ok: true, ...(await requestShellAction('install')) })
+        } catch (error) {
+          sendJson(res, error instanceof ShellUnavailable ? error.status : 503, {
+            ok: false,
+            error: errText(error)
+          })
+        }
       }
     })
 
@@ -436,12 +384,14 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
     const disposeOpen = webServer.register({
       kind: 'exact',
       path: `${config.routePrefix}/open`,
-      handler: (req: HostRequest, res: HostResponse) => {
+      handler: async (req: HostRequest, res: HostResponse) => {
         if (rejectUntrustedRequest(req, res)) return
         if (req.method !== 'POST') {
           sendJson(res, 405, { ok: false, error: '只接受 POST' })
           return
         }
+        if (req.headers?.['x-dsh-px-request'] !== '1')
+          return sendJson(res, 403, { ok: false, error: '请从 DSH-PX 界面提交操作。' })
         // 端点不解析 body（宿主侧给的 req 不一定带 body 读取能力），
         // 因此把目标放在**查询串**里，简单且够用。
         //
@@ -449,18 +399,18 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
         // 直接传给只接受白名单枚举的 requestShellAction 过不了严格检查。
         const params = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams
         const raw = params.getAll('what').length === 1 ? params.get('what') : null
-        if (raw !== 'open-data' && raw !== 'open-log') {
+        if (raw !== 'open-data' && raw !== 'open-log' && raw !== 'cancel-pending') {
           sendJson(res, 400, { ok: false, error: 'what 必须是 open-data 或 open-log' })
           return
         }
-        const ok = requestShellAction(raw)
-        sendJson(
-          res,
-          ok ? 202 : 503,
-          ok
-            ? { ok: true, message: `已请求外壳打开${raw === 'open-data' ? '数据目录' : '日志'}` }
-            : { ok: false, error: '找不到外壳数据目录' }
-        )
+        try {
+          sendJson(res, 202, { ok: true, ...(await requestShellAction(raw)) })
+        } catch (error) {
+          sendJson(res, error instanceof ShellUnavailable ? error.status : 503, {
+            ok: false,
+            error: errText(error)
+          })
+        }
       }
     })
 

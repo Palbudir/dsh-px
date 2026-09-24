@@ -1,8 +1,8 @@
-export const css = `
-body[data-dsh-px-workspace] div:has(> [data-shell-overlay]){padding-top:86px;box-sizing:border-box}
-body[data-dsh-px-workspace] div[data-rightbar-fullscreen]:has(> [data-shell-overlay]){padding-top:0}
-[data-rightbar-fullscreen] .px-bar{display:none}
-.px-bar{position:absolute;inset:0 0 auto;height:86px;box-sizing:border-box;pointer-events:auto;background:var(--px-bg);border-bottom:1px solid var(--px-border);display:flex;flex-direction:column;padding:6px 12px;gap:6px;isolation:isolate}
+import { hostLayoutCss } from './host-layout'
+export const css =
+  hostLayoutCss +
+  `
+.px-bar{position:absolute;inset:0 0 auto;min-height:86px;box-sizing:border-box;pointer-events:auto;background:var(--px-bg);border-bottom:1px solid var(--px-border);display:flex;flex-direction:column;padding:6px 12px;gap:6px;isolation:isolate}
 .px-brand{flex:none;font-size:12px;letter-spacing:.04em;margin:0 7px 0 2px;color:var(--px-muted)}
 .px-tabs,.px-tools{display:flex;align-items:center;gap:6px;min-width:0;height:34px;flex:none}
 .px-tabstrip{display:flex;flex:1;overflow-x:auto;overflow-y:hidden;gap:5px;min-width:50px;scrollbar-width:thin;padding:2px}
@@ -16,7 +16,8 @@ body[data-dsh-px-workspace] div[data-rightbar-fullscreen]:has(> [data-shell-over
 .px-tabs>button,.px-tabs>select{flex:none}.px-tabs>select{max-width:155px;height:32px;padding:3px 7px}.px-restore{width:32px;padding:0!important}
 .px-tools{overflow-x:auto;scrollbar-width:thin}.px-tools>button{white-space:nowrap;flex:none;border-color:transparent;background:transparent;padding:4px 8px}
 .px-status{margin-left:auto;white-space:nowrap;color:var(--px-muted);font-size:12px;padding:0 5px}
-.px-bar-error{position:absolute;right:12px;top:88px;max-width:min(540px,calc(100vw - 24px));border:1px solid var(--px-error);background:var(--px-bg);padding:9px 12px;border-radius:9px;display:flex;gap:10px;align-items:center;box-shadow:0 4px 18px #0002}
+.px-bar-error{position:absolute;right:12px;top:calc(100% + 2px);max-width:min(540px,calc(100vw - 24px));border:1px solid var(--px-error);background:var(--px-bg);padding:9px 12px;border-radius:9px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;box-shadow:0 4px 18px #0002;z-index:2}
+.px-dependency-warning{font-size:12px;line-height:1.5;color:var(--px-muted)}
 .px-panel{padding:16px;height:100%;overflow:auto;overflow-wrap:anywhere;box-sizing:border-box;animation:px-panel-in 130ms ease-out}
 .px-panel h3{font-size:17px;line-height:1.45;margin:0 0 8px}.px-panel h4{font-size:14px;margin:4px 0}.px-panel p{margin:8px 0 12px}
 .px-panel label{display:block;font-size:13px}.px-panel :is(textarea,input,select){display:block;width:100%;margin:5px 0 12px}.px-panel textarea{min-height:80px}
@@ -27,4 +28,5 @@ body[data-dsh-px-workspace] div[data-rightbar-fullscreen]:has(> [data-shell-over
 .px-quote-action{font-size:12px!important;min-height:28px!important;padding:3px 8px!important}
 @keyframes px-panel-in{from{opacity:.6}to{opacity:1}}
 @media(max-width:1000px){.px-status{display:none}.px-brand{display:none}.px-tabs>select{max-width:116px}.px-bar{padding-left:6px;padding-right:6px}.px-tools>button{padding-inline:6px}}
+@media(max-width:560px){.px-tabs{height:auto;flex-wrap:wrap}.px-tabstrip{flex-basis:100%;min-height:32px}.px-tabs>select{flex:1;max-width:none}.px-tools{min-height:34px}.px-tab{max-width:235px}}
 `

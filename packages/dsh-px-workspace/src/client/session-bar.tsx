@@ -1,34 +1,34 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Client } from './contracts'
-import { errorText, useSnapshot } from './data'
-import { closeTabState, parseTabs, visibleTabs } from './tab-state'
+import { errorText, useSnapshot, quoteRequests } from './data'
+import { closeTabState, visibleTabs } from './tab-state'
 import { Icon } from '../../../shared/ui'
+import { useSessionLayout } from './layout'
+import { attachToolbarLayout, isTypingTarget } from './host-layout'
 
-const tabKey = 'dsh-px.session-tabs.v1'
 const panels = [
   ['editor', '文件', 'file'],
   ['terminal', '终端', 'terminal'],
   ['px-artifacts', '产物', 'artifact'],
-  ['git', '变更', 'git'],
+  ['git', '代码变更', 'git'],
+  ['dsh-px-taskflow', '执行记录', 'jobs'],
   ['subagent', '后台任务', 'jobs'],
   ['px-notes', '引用与批注', 'note'],
   ['px-schedules', '定时任务', 'schedule']
 ] as const
 export function SessionBar({ ctx }: { ctx: Client }): unknown {
   const sessions = useSnapshot(ctx.sessions.list)
-  const [sidebarStore] = useState(() => ({
-    getSnapshot: ctx.betterSidebar.getSnapshot,
-    subscribe: ctx.betterSidebar.subscribeState
-  }))
-  useSnapshot(sidebarStore)
-  const [tabs, setTabs] = useState(() => {
-    try {
-      return parseTabs(localStorage.getItem(tabKey))
-    } catch {
-      return parseTabs(null)
-    }
-  })
+  const capabilities = useSnapshot(ctx.capabilities)
+  const [, refreshSidebar] = useState(0)
+  useEffect(
+    () => capabilities.sidebar?.subscribeState(() => refreshSidebar((n) => n + 1)),
+    [capabilities.sidebar]
+  )
+  const layout = useSessionLayout()
+  const { tabs, setTabs, ready } = layout
   const [error, setError] = useState('')
+  const bar = useRef<HTMLDivElement | null>(null)
+  useEffect(() => (bar.current ? attachToolbarLayout(bar.current) : undefined), [])
   const selected = useRef<HTMLButtonElement | null>(null)
   const current = sessions.current,
     row = current ? sessions.byId[current] : undefined
@@ -46,6 +46,7 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
   }
   useEffect(() => {
     if (
+      !ready ||
       !ordinaryCurrent ||
       !sessions.byId[ordinaryCurrent] ||
       sessions.byId[ordinaryCurrent].origin === 'subagent'
@@ -60,7 +61,7 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
             closed: old.closed.filter((id) => id !== ordinaryCurrent)
           }
     )
-  }, [ordinaryCurrent, sessions.phase])
+  }, [ordinaryCurrent, sessions.phase, ready])
   useEffect(() => {
     setTabs((old) => {
       const titles = { ...old.titles }
@@ -78,13 +79,6 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
     })
   }, [sessions])
   useEffect(() => {
-    try {
-      localStorage.setItem(tabKey, JSON.stringify(tabs))
-    } catch {
-      setError('标签仍可使用，但浏览器未能保存布局。')
-    }
-  }, [tabs])
-  useEffect(() => {
     selected.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }, [ordinaryCurrent, tabs.ids.length])
   const open = (id: string, focus = false): void => {
@@ -97,6 +91,7 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
     }
   }
   const close = (id: string): void => {
+    quoteRequests.consume(id)
     const result = closeTabState(
       tabs,
       id,
@@ -121,6 +116,7 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
     const keydown = (e: KeyboardEvent): void => {
       if (
         e.defaultPrevented ||
+        isTypingTarget(e.target) ||
         e.isComposing ||
         !e.ctrlKey ||
         !e.altKey ||
@@ -141,19 +137,23 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
   const panel = (type: string): void => {
     if (!current) return
     try {
-      if (!ctx.betterSidebar.isTabEnabled(type)) {
-        setError('此面板已关闭，可在“侧边卡片”设置中启用。')
+      if (!enabled(type)) {
+        setError('此面板尚未启用。可在“运行与帮助”检查实际服务，并在“侧边卡片”设置中启用。')
         return
       }
-      if (type === 'terminal') ctx.sidebarRight.openTabIn(current, 'terminal', { revealIfOpened: true })
-      else ctx.betterSidebar.openTab({ type }, { sessionId: current, cwd: row?.cwd })
+      if (type === 'terminal') capabilities.terminal!.openTabIn(current, 'terminal', { revealIfOpened: true })
+      else capabilities.sidebar!.openTab({ type }, { sessionId: current, cwd: row?.cwd })
       setError('')
     } catch (e) {
       setError(errorText(e))
     }
   }
+  const enabled = (type: string): boolean =>
+    type === 'terminal'
+      ? Boolean(capabilities.terminal && (!capabilities.sidebar || capabilities.sidebar.isTabEnabled(type)))
+      : Boolean(capabilities.sidebar?.isTabEnabled(type))
   return (
-    <div className="px-ui px-bar" aria-label="DSH-PX 会话工作区">
+    <div ref={bar} className="px-ui px-bar" aria-label="DSH-PX 会话工作区">
       <div className="px-tabs">
         <strong className="px-brand">DSH-PX</strong>
         <div className="px-tabstrip" role="tablist" aria-label="已打开会话">
@@ -176,7 +176,9 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
                       cycle(e.key === 'ArrowRight' ? 1 : -1, true)
                     } else if (e.key === 'Home' || e.key === 'End') {
                       e.preventDefault()
-                      const available = ids.filter((id) => sessions.byId[id])
+                      const available = ids.filter(
+                        (id) => sessions.byId[id] && sessions.byId[id].origin !== 'subagent'
+                      )
                       const next = e.key === 'Home' ? available[0] : available[available.length - 1]
                       if (next) open(next, true)
                     }
@@ -193,6 +195,7 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
                   title={tabs.pins.includes(id) ? '取消固定' : '固定标签'}
                   aria-label={`${tabs.pins.includes(id) ? '取消固定' : '固定'} ${label(id)}`}
                   aria-pressed={tabs.pins.includes(id)}
+                  disabled={!ready}
                   onClick={() =>
                     setTabs((old) => ({
                       ...old,
@@ -204,7 +207,8 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
                 </button>
                 <button
                   className="px-tab-action"
-                  title="关闭标签（任务继续运行）"
+                  title="关闭标签（任务继续运行，未保存草稿保留在此窗口）"
+                  disabled={!ready}
                   aria-label={`关闭标签 ${label(id)}`}
                   onClick={() => close(id)}
                 >
@@ -242,8 +246,8 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
         {panels.map(([type, text, icon]) => (
           <button
             key={type}
-            disabled={!current || !ctx.betterSidebar.isTabEnabled(type)}
-            title={ctx.betterSidebar.isTabEnabled(type) ? text : `${text}已在侧边卡片设置中关闭`}
+            disabled={!current || !enabled(type)}
+            title={enabled(type) ? text : `${text}不可用：检查侧边卡片设置与运行诊断`}
             onClick={() => panel(type)}
           >
             <Icon name={icon} />
@@ -260,6 +264,21 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
             : '选择或新建会话开始'}
         </span>
       </div>
+      {!capabilities.sidebar || !capabilities.terminal ? (
+        <div role="status" className="px-dependency-warning">
+          {!capabilities.sidebar ? '侧边卡片服务未启用，文件、产物、批注与定时面板暂不可用。' : ''}
+          {!capabilities.terminal ? '终端服务未启用。' : ''} 可到设置 → 运行与帮助检查依赖；会话仍可使用。
+        </div>
+      ) : null}
+      {layout.warning ? (
+        <div className="px-bar-error" role="alert">
+          {layout.warning}
+          <button onClick={() => void layout.restore()}>恢复服务布局</button>
+          <button onClick={() => void layout.keepCurrent()}>
+            {layout.conflict ? '保存此窗口布局' : '重试保存布局'}
+          </button>
+        </div>
+      ) : null}
       {error ? (
         <div className="px-bar-error" role="alert">
           {error}

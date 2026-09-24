@@ -5,6 +5,8 @@ import { ConfirmDelete } from '../../../shared/ui'
 import type { Panel, Client } from './contracts'
 import type { Schedule, Timing } from '../model'
 import { base, stamp, useData, errorText, post, useSnapshot } from './data'
+import { StorageNotice } from './storage-notice'
+import { validScheduleDraft } from './draft-validation'
 function localTime(time: number): string {
   const d = new Date(time)
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16)
@@ -15,7 +17,7 @@ export function SchedulesPanel({ ctx, scope, visible }: Panel & { ctx: Client })
       `${base}/schedules`,
       visible
     )
-  const [draft, setDraft, draftWarning] = useDraft<{
+  const [draft, setDraft, draftWarning, draftAvailable, clearDraft, unreadableDraft] = useDraft<{
     editing: Schedule | null
     form: boolean
     title: string
@@ -26,33 +28,46 @@ export function SchedulesPanel({ ctx, scope, visible }: Panel & { ctx: Client })
     minutes: string
     daily: string
     enabled: boolean
-  }>(`schedules:${scope.sessionId}`, () => ({
-    editing: null,
-    form: false,
-    title: '',
-    prompt: '',
-    sessionId: scope.sessionId,
-    kind: 'once',
-    at: localTime(Date.now() + 300000),
-    minutes: '60',
-    daily: '09:00',
-    enabled: true
-  }))
+    dirty: boolean
+  }>(
+    `schedules:${scope.sessionId}`,
+    () => ({
+      editing: null,
+      form: false,
+      title: '',
+      prompt: '',
+      sessionId: scope.sessionId,
+      kind: 'once',
+      at: localTime(Date.now() + 300000),
+      minutes: '60',
+      daily: '09:00',
+      enabled: true,
+      dirty: false
+    }),
+    validScheduleDraft
+  )
   const { editing, form, title, prompt, sessionId, kind, at, minutes, daily, enabled } = draft
   const setEditing = (editing: Schedule | null): void => setDraft((old) => ({ ...old, editing }))
   const setForm = (form: boolean): void => setDraft((old) => ({ ...old, form }))
-  const setTitle = (title: string): void => setDraft((old) => ({ ...old, title }))
-  const setPrompt = (prompt: string): void => setDraft((old) => ({ ...old, prompt }))
-  const setSessionId = (sessionId: string): void => setDraft((old) => ({ ...old, sessionId }))
-  const setKind = (kind: Timing['kind']): void => setDraft((old) => ({ ...old, kind }))
-  const setAt = (at: string): void => setDraft((old) => ({ ...old, at }))
-  const setMinutes = (minutes: string): void => setDraft((old) => ({ ...old, minutes }))
-  const setDaily = (daily: string): void => setDraft((old) => ({ ...old, daily }))
-  const setEnabled = (enabled: boolean): void => setDraft((old) => ({ ...old, enabled }))
+  const setTitle = (title: string): void => setDraft((old) => ({ ...old, title, dirty: true }))
+  const setPrompt = (prompt: string): void => setDraft((old) => ({ ...old, prompt, dirty: true }))
+  const setSessionId = (sessionId: string): void => setDraft((old) => ({ ...old, sessionId, dirty: true }))
+  const setKind = (kind: Timing['kind']): void => setDraft((old) => ({ ...old, kind, dirty: true }))
+  const setAt = (at: string): void => setDraft((old) => ({ ...old, at, dirty: true }))
+  const setMinutes = (minutes: string): void => setDraft((old) => ({ ...old, minutes, dirty: true }))
+  const setDaily = (daily: string): void => setDraft((old) => ({ ...old, daily, dirty: true }))
+  const setEnabled = (enabled: boolean): void => setDraft((old) => ({ ...old, enabled, dirty: true }))
   const [localBusy, setBusy] = useState(false),
     [failure, setFailure] = useState(''),
     [notice, setNotice] = useState('')
-  const begin = (s: Schedule | null): void => {
+  const [replacement, setReplacement] = useState<{ schedule: Schedule | null } | null>(null)
+  const begin = (s: Schedule | null, replace = false): void => {
+    if (!draftAvailable) return
+    if ((draft.dirty || title.trim() || prompt.trim()) && !replace) {
+      setReplacement({ schedule: s })
+      return
+    }
+    setReplacement(null)
     setEditing(s)
     setTitle(s?.title ?? '')
     setPrompt(s?.prompt ?? '')
@@ -63,6 +78,7 @@ export function SchedulesPanel({ ctx, scope, visible }: Panel & { ctx: Client })
     setMinutes(String(s?.timing.kind === 'interval' ? s.timing.minutes : 60))
     setDaily(s?.timing.kind === 'daily' ? s.timing.time : '09:00')
     setForm(true)
+    setDraft((old) => ({ ...old, dirty: false }))
     setFailure('')
     setNotice('')
   }
@@ -102,12 +118,35 @@ export function SchedulesPanel({ ctx, scope, visible }: Panel & { ctx: Client })
         {data?.timeZone ?? '读取中'}。
       </p>
       <div className="px-actions">
-        <button className="px-primary" disabled={busy} onClick={() => begin(null)}>
+        <button className="px-primary" disabled={busy || !draftAvailable} onClick={() => begin(null)}>
           新建定时任务
         </button>
         <button onClick={refresh}>刷新任务</button>
       </div>
       {draftWarning ? <p role="alert">{draftWarning}</p> : null}
+      {unreadableDraft ? (
+        <ConfirmDelete label="放弃无法恢复的草稿" onConfirm={async () => clearDraft()} />
+      ) : null}
+      <StorageNotice visible={visible} onRestored={refresh} />
+      {!form && (draft.dirty || title.trim() || prompt.trim()) ? (
+        <button onClick={() => setForm(true)}>继续编辑草稿</button>
+      ) : null}
+      {replacement ? (
+        <section className="px-card" role="alert">
+          <p>当前窗口已有定时任务草稿。请先保存，或明确放弃后再打开另一项。</p>
+          <div className="px-actions">
+            <button
+              onClick={() => {
+                setReplacement(null)
+                setForm(true)
+              }}
+            >
+              保留当前草稿
+            </button>
+            <button onClick={() => begin(replacement.schedule, true)}>放弃草稿并打开</button>
+          </div>
+        </section>
+      ) : null}
       {failure || error ? <p role="alert">{failure || error}</p> : null}
       {notice ? (
         <p role="status" className="px-feedback">
@@ -116,7 +155,7 @@ export function SchedulesPanel({ ctx, scope, visible }: Panel & { ctx: Client })
       ) : null}
       {form ? (
         <section className="px-card" aria-label="定时任务编辑器">
-          <fieldset disabled={busy}>
+          <fieldset disabled={busy || !draftAvailable}>
             <h4>{editing ? '编辑任务' : '新建任务'}</h4>
             <label>
               任务名称
@@ -220,15 +259,23 @@ export function SchedulesPanel({ ctx, scope, visible }: Panel & { ctx: Client })
                       timing: rule(),
                       enabled
                     })
-                    setForm(false)
+                    clearDraft()
                   }, '定时任务已保存')
                 }
               >
                 保存定时任务
               </button>
               <button disabled={busy} onClick={() => setForm(false)}>
-                取消编辑
+                收起编辑器（保留草稿）
               </button>
+              <ConfirmDelete
+                label="放弃草稿"
+                disabled={busy}
+                onConfirm={async () => {
+                  clearDraft()
+                  setReplacement(null)
+                }}
+              />
             </div>
           </fieldset>
         </section>
@@ -251,7 +298,12 @@ export function SchedulesPanel({ ctx, scope, visible }: Panel & { ctx: Client })
             <p role="alert">{s.history[0].detail} 检查会话后再手动投递或启用。</p>
           ) : null}
           <div className="px-actions">
-            <button onClick={() => ctx.uiWorkspace.openSession(s.sessionId)}>打开会话</button>
+            <button
+              disabled={!sessions.byId[s.sessionId]}
+              onClick={() => ctx.uiWorkspace.openSession(s.sessionId)}
+            >
+              打开会话
+            </button>
             <button disabled={busy} onClick={() => begin(s)}>
               编辑任务
             </button>
@@ -271,7 +323,7 @@ export function SchedulesPanel({ ctx, scope, visible }: Panel & { ctx: Client })
               onClick={() =>
                 void action(async () => {
                   const result = await post<Schedule>('schedules', { action: 'run', id: s.id })
-                  if (result.history[0]?.status !== 'queued')
+                  if (!['queued', 'running', 'completed'].includes(result.history[0]?.status))
                     throw new Error(result.history[0]?.detail ?? '投递尚未确认')
                 }, '已投递到目标会话；这不代表 Agent 已完成。')
               }
@@ -290,12 +342,27 @@ export function SchedulesPanel({ ctx, scope, visible }: Panel & { ctx: Client })
             />
           </div>
           <details>
-            <summary>最近投递 · {s.history.length} 次</summary>
-            <p className="px-muted">“已投递”表示会话接收。执行进展和最终结果请打开目标会话查看。</p>
+            <summary>最近触发 · {s.history.length} 次</summary>
+            <p className="px-muted">
+              已入队表示会话已接收；轮次结束不代表任务内容验证通过。请打开目标会话核对输出。
+            </p>
             {s.history.map((h) => (
               <p key={h.requestId}>
                 {stamp(h.time)} ·{' '}
-                {h.status === 'queued' ? '已投递' : h.status === 'dispatching' ? '投递中' : '未确认 / 已暂停'}
+                {
+                  {
+                    queued: '已入队',
+                    dispatching: '投递中',
+                    uncertain: '未确认 / 已暂停',
+                    running: '执行中',
+                    completed: '轮次结束',
+                    failed: '执行失败',
+                    cancelled: '已取消',
+                    interrupted: '执行中断'
+                  }[h.status]
+                }
+                {h.turn !== undefined ? ` · 第 ${h.turn} 轮` : ''}
+                {h.finishedAt ? ` · 结束于 ${stamp(h.finishedAt)}` : ''}
                 {h.detail ? (
                   <small>
                     <br />

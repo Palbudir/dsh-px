@@ -6,6 +6,7 @@ import {
   integerOption,
   reviewEvents,
   validateCheckpoint,
+  EvidenceIndex,
   type Event,
   type ReviewOptions,
   type EvidenceOptions
@@ -26,8 +27,7 @@ interface Context {
   inject: (names: string[], callback: (ctx: any) => void) => unknown
   effect: (fn: () => (() => void) | void, name?: string) => unknown
 }
-const POLICY = `You are working inside DSH-PX, a local agent product. Respond in the user's language; for Chinese requests, write progress and final delivery in Chinese. For non-trivial implementation tasks, carry the work through inspection, implementation, relevant validation, and a reviewable delivery. Read repository instructions, inspect existing changes, and preserve unrelated work. Use the host's todo, file, shell, permission, and delivery tools; obey plan mode and user instructions. Do not invent a separate execution or approval mechanism.
-For a multi-step implementation task, record the goal and next action with task_checkpoint. On resuming or being asked for progress, call task_review to recover the latest checkpoint and compact execution summaries. Follow nextBeforeSeq to page older calls. Use task_evidence with a callId to read its recorded output in bounded pages; a summary may omit essential test output. Before final delivery, inspect the changes with the existing Git/file tools, run the relevant checks, then call task_review and record a ready_for_review checkpoint referencing actual call ids. Any settled non-internal call in this session may be cited, including older pages. Tool return success does not prove tests passed: read the output and state what was and was not verified. If blocked, record the concrete blocker and next action. Never retry a possibly mutating interrupted call blindly; reconcile its effect first. Skip checkpoints for simple questions or trivial edits. A checkpoint is a work note, not user approval or permission to continue autonomously in the background.`
+export const POLICY = `Execution evidence is recorded automatically by the host. When prior results are needed, task_review reads compact execution summaries and task_evidence reads a recorded call's output in bounded pages; neither tool re-executes work. Tool return success does not prove tests passed: inspect the output and state what was verified. Follow the host's native plan, permissions, and the user's instructions. task_checkpoint is an optional work note only when the user requests a saved handoff or a task preset calls for it; do not create or maintain a second todo system by default. A checkpoint is not approval or permission to continue in the background. Before retrying an interrupted mutation, reconcile its recorded effect.`
 
 function queryInteger(
   params: URLSearchParams,
@@ -42,6 +42,22 @@ function queryInteger(
   return integerOption(Number(value), fallback, min, max)
 }
 export function apply(ctx: Context): void {
+  const liveIndexes = new Map<Session, EvidenceIndex>()
+  ctx.effect(() => () => liveIndexes.clear(), 'taskflow: evidence cache')
+  const liveEvidence = (session: Session): EvidenceIndex => {
+    let index = liveIndexes.get(session)
+    if (!index) index = new EvidenceIndex()
+    index.update(session.snapshotEvents())
+    liveIndexes.delete(session)
+    liveIndexes.set(session, index)
+    let chars = [...liveIndexes.values()].reduce((sum, item) => sum + item.cacheCost, 0)
+    while (liveIndexes.size > 8 || chars > 16_000_000) {
+      const oldest = liveIndexes.keys().next().value!
+      chars -= liveIndexes.get(oldest)!.cacheCost
+      liveIndexes.delete(oldest)
+    }
+    return index
+  }
   ctx.inject(['systemPrompt'], (host) => {
     host.effect(
       () => host.systemPrompt.section({ name: 'dsh-px-delivery-workflow', order: 9900, text: POLICY }),
@@ -72,7 +88,7 @@ export function apply(ctx: Context): void {
       },
       output,
       execute: async (args: ReviewOptions, exec: Run) =>
-        JSON.stringify(reviewEvents(session(exec).snapshotEvents(), true, args))
+        JSON.stringify(reviewEvents(liveEvidence(session(exec)), true, args))
     })
     host.tools.register({
       name: 'task_evidence',
@@ -90,7 +106,7 @@ export function apply(ctx: Context): void {
       },
       output,
       execute: async (args: EvidenceOptions & { callId: string }, exec: Run) => {
-        const value = evidenceDetail(session(exec).snapshotEvents(), args.callId, true, args)
+        const value = evidenceDetail(liveEvidence(session(exec)), args.callId, true, args)
         if (!value) throw new Error('此会话没有这条执行记录，请先 task_review 核对编号。')
         return JSON.stringify(value)
       }
@@ -113,10 +129,12 @@ export function apply(ctx: Context): void {
       },
       output,
       execute: async (args: unknown, exec: Run) =>
-        JSON.stringify({ checkpoint: validateCheckpoint(args, session(exec).snapshotEvents()) })
+        JSON.stringify({ checkpoint: validateCheckpoint(args, liveEvidence(session(exec))) })
     })
   })
   ctx.inject(['webServer', 'sessions', 'sessionPersistence'], (host) => {
+    const coldIndexes = new Map<string, { revision: string; index: EvidenceIndex }>()
+    host.effect(() => () => coldIndexes.clear(), 'taskflow: stored evidence cache')
     for (const kind of ['review', 'evidence'] as const)
       host.effect(
         () =>
@@ -144,7 +162,7 @@ export function apply(ctx: Context): void {
                 !/^[a-zA-Z0-9_-]+$/.test(id)
               )
                 return invalid('会话标识无效')
-              let select: (events: readonly Event[], live: boolean) => unknown
+              let select: (events: readonly Event[] | EvidenceIndex, live: boolean) => unknown
               try {
                 const allowed =
                   kind === 'review'
@@ -177,7 +195,7 @@ export function apply(ctx: Context): void {
               } catch {
                 return invalid('分页参数无效')
               }
-              const respond = (events: readonly Event[], live: boolean): void => {
+              const respond = (events: readonly Event[] | EvidenceIndex, live: boolean): void => {
                 const value = select(events, live)
                 if (value === null)
                   send(404, {
@@ -189,7 +207,17 @@ export function apply(ctx: Context): void {
               }
               try {
                 const live = host.sessions.get(id) as Session | undefined
-                if (live) return respond(live.snapshotEvents(), true)
+                if (live) {
+                  coldIndexes.delete(id)
+                  return respond(liveEvidence(live), true)
+                }
+                const revision = (await host.sessionPersistence.stat?.(id))?.revision
+                const cached = coldIndexes.get(id)
+                if (revision && cached && cached.revision === revision) {
+                  coldIndexes.delete(id)
+                  coldIndexes.set(id, cached)
+                  return respond(cached.index, false)
+                }
                 const handle = await host.sessionPersistence.open(id, 'read')
                 let events: readonly Event[]
                 let readFailed = false
@@ -205,7 +233,19 @@ export function apply(ctx: Context): void {
                     if (!readFailed) throw closeError
                   }
                 }
-                respond(events, false)
+                const index = new EvidenceIndex().update(events)
+                const after = (await host.sessionPersistence.stat?.(id))?.revision
+                coldIndexes.delete(id)
+                if (revision && revision === after && index.cacheCost <= 16_000_000) {
+                  coldIndexes.set(id, { revision, index })
+                  let chars = [...coldIndexes.values()].reduce((sum, entry) => sum + entry.index.cacheCost, 0)
+                  while (coldIndexes.size > 8 || chars > 16_000_000) {
+                    const oldest = coldIndexes.keys().next().value!
+                    chars -= coldIndexes.get(oldest)!.index.cacheCost
+                    coldIndexes.delete(oldest)
+                  }
+                }
+                respond(index, false)
               } catch (error) {
                 const failure = readFailure(error)
                 send(failure.status, failure)

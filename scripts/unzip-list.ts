@@ -1,19 +1,3 @@
-/**
- * 直接读取 ZIP 的中央目录，列出条目路径 —— 不依赖任何外部工具。
- *
- * 为什么需要它：校验安装包内容原本靠调用 7-Zip 读取 NSIS 载荷，
- * 但同一份安装包在本地与 CI 上表现不一致（本地列出 14 万条，CI 只列出 2 行），
- * 排查成本高且方向不确定。而 electron-builder 每次都会同时产出
- * `*-win.zip`，且其内容与安装包来自**同一个 win-unpacked 目录** ——
- * 校验 ZIP 同样能证明"交付物里有没有必备文件、有没有混入构建产物"。
- *
- * ZIP 是自描述的：末尾的中央目录记录了全部条目名。这里用 zlib 解压
- * 中央目录即可，纯 JS、跨平台、零依赖、结果确定。
- *
- * 用法：
- *   node scripts/unzip-list.mjs <zip 路径>          # 打印条目数与前若干条
- *   import { listZipEntries } from './unzip-list.mjs'
- */
 import { readFileSync, existsSync } from 'node:fs'
 import { inflateRawSync } from 'node:zlib'
 
@@ -26,7 +10,7 @@ import { inflateRawSync } from 'node:zlib'
  * @param {string} zipPath
  * @returns {string[]} 条目路径（正斜杠分隔）
  */
-export function listZipEntries (zipPath) {
+export function listZipEntries(zipPath) {
   const buf = readFileSync(zipPath)
   const EOCD_SIG = 0x06054b50
   const CD_SIG = 0x02014b50
@@ -36,7 +20,10 @@ export function listZipEntries (zipPath) {
   let eocd = -1
   for (let i = buf.length - 22; i >= buf.length - maxBack; i -= 1) {
     if (i < 0) break
-    if (buf.readUInt32LE(i) === EOCD_SIG) { eocd = i; break }
+    if (buf.readUInt32LE(i) === EOCD_SIG) {
+      eocd = i
+      break
+    }
   }
   if (eocd < 0) throw new Error('不是有效的 ZIP：找不到 EOCD 记录')
 

@@ -6,7 +6,7 @@
  *   - 忘了包 `window.__ModuleLoader__.load(...)` → 前端整条组合脚本解析失败
  *   - 模块 id 与包名不一致 → 宿主按包名索引不到，设置页静默没有这一项
  *   - 导出面缺 `apply` / `inject` → 前端报 "did not export the bootstrap module face"
- *   - 把 react 内联进产物 → 打破宿主 React 的模块单例，hooks 报错（最难查）
+ *   - 把 react 内联进产物 → 打破宿主 React 的模块单例，hooks 报错
  *   - 残留裸 `import` → 浏览器无法解析
  *
  * 这些都必须**在构建期**炸掉，而不是留到用户机器上。因此本测试既静态检查形态，
@@ -17,11 +17,9 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
-import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join, resolve } from 'node:path'
 
-const HERE = dirname(fileURLToPath(import.meta.url))
-const PKG = resolve(HERE, '..', 'packages', 'dsh-px-updater')
+const PKG = resolve(process.cwd(), 'packages', 'dsh-px-updater')
 const CLIENT = join(PKG, 'lib', 'client.js')
 
 /** 前端静态模块表提供的模块（实测自 dsh-web-frontend 的 staticModules）。 */
@@ -39,7 +37,7 @@ const HOST_PROVIDED = new Set([
 ])
 
 test('客户端半边：产物存在且形态正确', () => {
-  assert.ok(existsSync(CLIENT), `缺少产物 ${CLIENT}；请先运行 npm run build:client`)
+  assert.ok(existsSync(CLIENT), `缺少产物 ${CLIENT}；请先运行 npm run build:plugin-client`)
   const src = readFileSync(CLIENT, 'utf8')
 
   assert.ok(src.includes('window.__ModuleLoader__.load('), '缺少 __ModuleLoader__.load 包裹')
@@ -52,19 +50,32 @@ test('客户端半边：产物存在且形态正确', () => {
 test('客户端半边：工厂可物化，导出 apply/inject，宿主模块请求都在静态表内', () => {
   const src = readFileSync(CLIENT, 'utf8')
 
-  let registration: { id: string, factory: (req: (s: string) => unknown) => Record<string, unknown> } | null = null
-  const sandboxWindow = { __ModuleLoader__: { load: (r: never) => { registration = r } } }
+  let registration: { id: string; factory: (req: (s: string) => unknown) => Record<string, unknown> } | null =
+    null
+  const sandboxWindow = {
+    __ModuleLoader__: {
+      load: (r: never) => {
+        registration = r
+      }
+    }
+  }
   // 只注入 window；不提供 fetch/process 等，确保工厂不依赖 Node 或浏览器全局。
   const run = new Function('window', `${src}; return window.__ModuleLoader__;`)
   run(sandboxWindow)
 
   assert.ok(registration !== null, '产物没有调用 __ModuleLoader__.load')
-  const reg = registration as unknown as { id: string, factory: (req: (s: string) => unknown) => Record<string, unknown> }
+  const reg = registration as unknown as {
+    id: string
+    factory: (req: (s: string) => unknown) => Record<string, unknown>
+  }
   assert.equal(reg.id, 'dsh-px-updater', '模块 id 必须与包名一致，宿主按它索引')
   assert.equal(typeof reg.factory, 'function', '注册里缺少 factory')
 
   const requested: string[] = []
-  const exportsFace = reg.factory((spec: string) => { requested.push(spec); return {} })
+  const exportsFace = reg.factory((spec: string) => {
+    requested.push(spec)
+    return {}
+  })
 
   assert.equal(typeof exportsFace.apply, 'function', '导出面必须提供 apply')
   assert.ok(Array.isArray(exportsFace.inject), '导出面必须提供 inject 数组')

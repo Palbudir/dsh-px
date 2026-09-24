@@ -1,19 +1,4 @@
-/**
- * 把 `scripts/*.ts` 编译到 `build-scripts/*.js` 再运行。
- *
- * ## 为什么需要这一层
- *
- * 这些脚本的源码是 TypeScript（项目约定：自研代码用 TS 写），但**运行**必须
- * 用普通的 `.js`：
- *
- *   - Node 对 `.ts` 的原生支持（`--experimental-strip-types`）在 22.6+ 才有，
- *     且长期带 "experimental" 标记。CI 的 Node 版本一旦回退就会全线失败，
- *     而这类失败与脚本逻辑无关、很难归因。
- *   - 用 esbuild 做**纯类型擦除**（不做打包）产出的 `.js` 在任何 Node 20+ 上都能跑，
- *     且产物与源码一一对应，报错时的行号仍然可读。
- *
- * 本文件的职责只是"编译 + 原样转发参数"，不改变任何脚本的语义。
- */
+/** Compile a maintained TypeScript script with esbuild, then forward its arguments. */
 import { build } from 'esbuild'
 import { readdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -27,7 +12,11 @@ const OUT_DIR = join(REPO, 'build-scripts')
 const target = process.argv[2]
 if (target === undefined || target.length === 0) {
   process.stderr.write('用法：node scripts/run.mjs <脚本名> [参数…]\n')
-  process.stderr.write(`可用脚本：${readdirSync(SRC_DIR).filter((f) => f.endsWith('.ts')).join('、')}\n`)
+  process.stderr.write(
+    `可用脚本：${readdirSync(SRC_DIR)
+      .filter((f) => f.endsWith('.ts'))
+      .join('、')}\n`
+  )
   process.exit(2)
 }
 
@@ -41,7 +30,7 @@ await build({
   packages: 'external',
   format: 'esm',
   platform: 'node',
-  target: 'node20',
+  target: 'node24',
   outfile: join(OUT_DIR, `${target}.js`),
   // 注入仓库根：编译产物的 `import.meta.url` 指向 build-scripts/，
   // 任何"从自身位置上溯"的写法都会算错一层。见 scripts/paths.ts。

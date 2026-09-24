@@ -8,6 +8,8 @@ import { insertQuote } from '../client-input'
 import { base, stamp, useData, errorText, post, quoteRequests, useSnapshot } from './data'
 import { useDraft } from './drafts'
 import { ConfirmDelete } from '../../../shared/ui'
+import { StorageNotice } from './storage-notice'
+import { validNoteDraft } from './draft-validation'
 type Source = Message & { length: number; offset: number; nextOffset: number | null }
 interface NoteDraft {
   source: Source | null
@@ -17,6 +19,7 @@ interface NoteDraft {
   initialized: boolean
   requestToken?: string
   collapsed: boolean
+  dirty: boolean
 }
 export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }): unknown {
   const selection = useSnapshot(quoteRequests)[scope.sessionId]
@@ -30,25 +33,44 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
     `${base}/annotations?sessionId=${encodeURIComponent(scope.sessionId)}${noteBefore ? '&before=' + encodeURIComponent(noteBefore) : ''}`,
     visible
   )
-  const [editor, setEditor, draftWarning] = useDraft<NoteDraft>(`notes:${scope.sessionId}`, () => ({
-    source: null,
-    quote: '',
-    note: '',
-    editing: null,
-    initialized: false,
-    collapsed: false
-  }))
+  const [editor, setEditor, draftWarning, draftAvailable, clearDraft, unreadableDraft] = useDraft<NoteDraft>(
+    `notes:${scope.sessionId}`,
+    () => ({
+      source: null,
+      quote: '',
+      note: '',
+      editing: null,
+      initialized: false,
+      collapsed: false,
+      dirty: false,
+      requestToken: ''
+    }),
+    validNoteDraft
+  )
   const { source, quote, note, editing } = editor
-  const setQuote = (quote: string): void => setEditor((old) => ({ ...old, quote }))
-  const setNote = (note: string): void => setEditor((old) => ({ ...old, note }))
-  const setEditing = (editing: Annotation | null): void => setEditor((old) => ({ ...old, editing }))
-  const setSource = (source: Source | null): void =>
-    setEditor((old) => ({ ...old, source, initialized: true }))
+  const resetEditor = (): void =>
+    clearDraft({
+      source: null,
+      quote: '',
+      note: '',
+      editing: null,
+      initialized: true,
+      collapsed: false,
+      dirty: false,
+      requestToken: ''
+    })
+  const setQuote = (quote: string): void => setEditor((old) => ({ ...old, quote, dirty: true }))
+  const setNote = (note: string): void => setEditor((old) => ({ ...old, note, dirty: true }))
   const [notice, setNotice] = useState(''),
     [failure, setFailure] = useState(''),
     [localBusy, setBusy] = useState(false)
   const [operationBusy, runOperation] = useOperation(`notes:${scope.sessionId}`)
   const busy = localBusy || operationBusy
+  const [replacement, setReplacement] = useState<{
+    id: string
+    existing: Annotation | null
+    offset: number
+  } | null>(null)
   const revision = useRef(0)
   const active = useRef(true),
     sourceRequest = useRef<AbortController | null>(null)
@@ -59,8 +81,24 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
       sourceRequest.current?.abort()
     }
   }, [])
-  async function choose(id: string, existing: Annotation | null = null, offset = 0): Promise<void> {
-    if (operationBusy) return
+  async function choose(
+    id: string,
+    existing: Annotation | null = null,
+    offset = 0,
+    replace = false
+  ): Promise<void> {
+    if (operationBusy || !draftAvailable) return
+    quoteRequests.consume(scope.sessionId, selection?.token)
+    if (
+      (editor.dirty ||
+        note !== (editing?.note ?? '') ||
+        Boolean(source && quote !== (editing?.quote ?? source.text.slice(0, 8000)))) &&
+      !replace
+    ) {
+      setReplacement({ id, existing, offset })
+      return
+    }
+    setReplacement(null)
     const rev = ++revision.current
     sourceRequest.current?.abort()
     const controller = new AbortController()
@@ -81,7 +119,8 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
         note: existing?.note ?? '',
         initialized: true,
         collapsed: false,
-        requestToken: selection?.token
+        dirty: false,
+        requestToken: selection?.token ?? ''
       })
     } catch (e) {
       if (active.current && rev === revision.current && !controller.signal.aborted) setFailure(errorText(e))
@@ -124,8 +163,34 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
   return (
     <div className="px-ui px-panel">
       <h3>引用与批注</h3>
-      <p className="px-muted">选择原文并添加批注。切换面板会保留草稿；点击引用才会加入会话输入框。</p>
+      <p className="px-muted">
+        选择原文并添加批注。草稿属于当前窗口，切换面板或刷新会保留；关闭窗口前请保存。点击引用才会加入会话输入框。
+      </p>
       {draftWarning ? <p role="alert">{draftWarning}</p> : null}
+      {unreadableDraft ? (
+        <ConfirmDelete label="放弃无法恢复的草稿" onConfirm={async () => resetEditor()} />
+      ) : null}
+      <StorageNotice
+        visible={visible}
+        onRestored={() => {
+          notes.refresh()
+          refresh()
+        }}
+      />
+      {replacement ? (
+        <section className="px-card" role="alert">
+          <p>当前批注有未保存修改。保存或保留当前草稿后，再切换引用。</p>
+          <div className="px-actions">
+            <button onClick={() => setReplacement(null)}>保留当前草稿</button>
+            <button
+              disabled={busy}
+              onClick={() => void choose(replacement.id, replacement.existing, replacement.offset, true)}
+            >
+              放弃修改并切换
+            </button>
+          </div>
+        </section>
+      ) : null}
       {source && editor.collapsed ? (
         <button onClick={() => setEditor((old) => ({ ...old, collapsed: false }))}>继续编辑草稿</button>
       ) : null}
@@ -137,7 +202,7 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
       ) : null}
       {source && !editor.collapsed ? (
         <section className="px-card" aria-label="批注编辑器">
-          <fieldset disabled={busy}>
+          <fieldset disabled={busy || !draftAvailable}>
             <h4>
               {source.role === 'user' ? '用户' : '助手'} · 记录 {source.seq}
             </h4>
@@ -202,7 +267,7 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
                       ...draft,
                       ...(editing ? { id: editing.id, updatedAt: editing.updatedAt } : {})
                     })
-                    setEditing(saved)
+                    clearDraft({ ...editor, editing: saved, dirty: false })
                   }, '批注已保存')
                 }
               >
@@ -214,6 +279,14 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
               <button disabled={busy} onClick={() => setEditor((old) => ({ ...old, collapsed: true }))}>
                 收起编辑器
               </button>
+              <ConfirmDelete
+                label="放弃草稿"
+                disabled={busy}
+                onConfirm={async () => {
+                  resetEditor()
+                  setReplacement(null)
+                }}
+              />
             </div>
           </fieldset>
         </section>
@@ -249,8 +322,7 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
                 action(async () => {
                   await post('annotations', { action: 'delete', id: a.id, updatedAt: a.updatedAt })
                   if (editing?.id === a.id) {
-                    setEditing(null)
-                    setSource(null)
+                    resetEditor()
                   }
                 }, '批注已删除')
               }

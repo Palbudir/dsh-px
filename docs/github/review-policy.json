@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "repository": "Palbudir/dsh-px",
+  "branch": "master",
+  "publisher": "Palbudir",
+  "workerDigest": "UNCONFIGURED",
+  "reviewAppId": 0,
+  "maxAgeHours": 168,
+  "requiredChecks": ["dsh-px/independent-review", "dsh-px/quality"],
+  "trustedQuality": { "workflowId": 0, "path": ".github/workflows/trusted-quality.yml", "files": {} },
+  "trustedBuild": { "workflowId": 0, "path": ".github/workflows/release.yml", "files": {} },
+  "keys": {}
+}

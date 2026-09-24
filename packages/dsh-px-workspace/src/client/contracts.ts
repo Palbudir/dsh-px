@@ -40,20 +40,24 @@ export interface Client {
       }
     }
   }
-  betterSidebar: {
-    registerTab: (tab: any) => () => void
-    openTab: (seed: any, scope?: Scope) => void
-    openFile: (scope: Scope, path: string, title?: string) => void
-    isTabEnabled: (type: string) => boolean
-    getSnapshot: () => unknown
-    subscribeState: (cb: () => void) => () => void
-  }
-  sidebarRight: {
-    openTabIn: (sessionId: string, kind: string, options?: { revealIfOpened?: boolean }) => void
-  }
+  capabilities: Snapshot<{
+    sidebar?: Sidebar
+    terminal?: {
+      openTabIn: (sessionId: string, kind: string, options?: { revealIfOpened?: boolean }) => void
+    }
+  }>
+  inject: (services: string[], callback: (ctx: any) => void) => unknown
   slots: {
     inject: (name: string, fn: () => unknown) => unknown
     register: (entry: any, component: any) => unknown
   }
   effect: (fn: () => () => void, name?: string) => void
+}
+export interface Sidebar {
+  registerTab: (tab: any) => () => void
+  openTab: (seed: any, scope?: Scope) => void
+  openFile: (scope: Scope, path: string, title?: string) => void
+  isTabEnabled: (type: string) => boolean
+  getSnapshot: () => unknown
+  subscribeState: (cb: () => void) => () => void
 }

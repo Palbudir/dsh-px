@@ -10,8 +10,8 @@
  * 因此这里只做"下载 + 缩放"，不做二次创作。
  *
  * 用法：
- *   node scripts/build-icon.mjs
- *   node scripts/build-icon.mjs --source <本地png路径>   # 离线路径
+ *   node scripts/run.mjs build-icon
+ *   node scripts/run.mjs build-icon --source <本地png路径>
  */
 import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
@@ -38,7 +38,7 @@ const SOURCE = {
 const log = (m) => process.stdout.write(`[icon] ${m}\n`)
 
 /** sharp 从随附的 dsh 运行时借用，避免为构建再装一个原生依赖。 */
-function loadSharp () {
+function loadSharp() {
   const candidates = [
     join(REPO, 'runtime', 'dsh', 'node_modules', 'sharp'),
     join(REPO, 'runtime', 'dsh-home', 'profiles', 'web', 'node_modules', 'sharp')
@@ -50,7 +50,7 @@ function loadSharp () {
   return createRequire(import.meta.url)('sharp')
 }
 
-async function fetchSource (localPath) {
+async function fetchSource(localPath) {
   if (localPath) {
     log(`使用本地素材：${localPath}`)
     return readFileSync(localPath)
@@ -64,11 +64,14 @@ async function fetchSource (localPath) {
   if (!res.ok) throw new Error(`素材下载失败：HTTP ${res.status}`)
   mkdirSync(BUILD, { recursive: true })
   if (res.body === null) throw new Error('素材响应没有 body')
-  await pipeline(Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]), createWriteStream(CACHE))
+  await pipeline(
+    Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]),
+    createWriteStream(CACHE)
+  )
   return readFileSync(CACHE)
 }
 
-async function main () {
+async function main() {
   const localIdx = process.argv.indexOf('--source')
   const localPath = localIdx >= 0 ? process.argv[localIdx + 1] : null
 
@@ -80,19 +83,25 @@ async function main () {
   if (SOURCE.sha256 && digest !== SOURCE.sha256) {
     throw new Error(
       `素材摘要不匹配。\n  期望 ${SOURCE.sha256}\n  实际 ${digest}\n` +
-      '上游可能已更新素材。确认后把新摘要写入 SOURCE.sha256 或环境变量 DSH_PX_ICON_SHA256。'
+        '上游可能已更新素材。确认后把新摘要写入 SOURCE.sha256 或环境变量 DSH_PX_ICON_SHA256。'
     )
   }
 
   const sharp = loadSharp()
 
   // electron-builder 直接吃 build/icon.png（≥256px）。1024 足够各平台缩放。
-  const png = await sharp(buf).resize(1024, 1024, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toBuffer()
+  const png = await sharp(buf)
+    .resize(1024, 1024, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .png()
+    .toBuffer()
   writeFileSync(join(BUILD, 'icon.png'), png)
   log('已生成 build/icon.png (1024x1024)')
 
   // Windows 用 .ico（electron-builder 也能自己转，但显式给出更稳）。
-  const ico = await sharp(buf).resize(256, 256, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toBuffer()
+  const ico = await sharp(buf)
+    .resize(256, 256, { fit: 'contain', background: { r: 0, g: 0, b: 0, alpha: 0 } })
+    .png()
+    .toBuffer()
   writeFileSync(join(BUILD, 'icon-256.png'), ico)
 
   // 专用托盘图标。
