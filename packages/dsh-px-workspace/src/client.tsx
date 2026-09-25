@@ -61,22 +61,15 @@ export function apply(raw: Omit<Client, 'capabilities'>): void {
       },
       'workspace: sidebar capability'
     )
-    // A slot contribution must be owned by an effect: when this provider unloads, the
-    // returned disposer has to run with the rest of the injection scope, otherwise the
-    // footer action stays registered against a sidebar service that is already gone.
     host.slots.inject('conversation.chat.assistant-actions', () =>
-      host.effect(
-        () =>
-          host.slots.register(
-            {
-              name: 'conversation.chat.assistant-actions',
-              id: 'dsh-px-quote',
-              order: 95,
-              registrant: 'dsh-px-workspace'
-            },
-            (p: { sessionId: string; messageId: string }) => <QuoteAction {...p} ctx={ctx} />
-          ),
-        'workspace: quote action'
+      host.slots.register(
+        {
+          name: 'conversation.chat.assistant-actions',
+          id: 'dsh-px-quote',
+          order: 95,
+          registrant: 'dsh-px-workspace'
+        },
+        (p: { sessionId: string; messageId: string }) => <QuoteAction {...p} ctx={ctx} />
       )
     )
     for (const [id, title, component, icon] of [

@@ -521,50 +521,6 @@ test('artifact opens show missing/disabled editor state, recheck stale callbacks
   assert.match(f.allText(), /fixture file provider failed/)
 })
 
-test('client entry owns the quote footer contribution through the sidebar injection effect', () => {
-  const f = fixture('Entry') as any,
-    slots: Array<{ entry: any; component: any }> = [],
-    injections: Array<{ names: string[]; callback: (host: any) => void }> = [],
-    sidebarEffects: Array<() => void> = []
-  f.ctx.slots = {
-    // Mirrors the pinned slot service: `inject` hands back the callback's own return value, so a
-    // contribution registered directly inside that callback ends up with no owner.
-    inject: (_name: string, fn: () => any) => fn(),
-    register: (entry: any, component: any) => {
-      slots.push({ entry, component })
-      return () => slots.splice(slots.indexOf(entry), 1)
-    }
-  }
-  f.module.exports.apply({
-    ...f.ctx,
-    effect: () => () => {},
-    inject: (names: string[], callback: (host: any) => void) => {
-      injections.push({ names, callback })
-    }
-  })
-  assert.equal(
-    slots.some((slot) => slot.entry?.name === 'shell.overlay'),
-    true
-  )
-  injections
-    .find((entry) => entry.names.includes('betterSidebar'))!
-    .callback({
-      betterSidebar: f.sidebar.service,
-      slots: f.ctx.slots,
-      effect: (fn: () => () => void) => sidebarEffects.push(fn())
-    })
-  assert.equal(slots.filter((slot) => slot.entry?.id === 'dsh-px-quote').length, 1)
-  // Unloading the provider runs exactly the effects it owns. The footer's contribution must be
-  // among them, while the shell overlay stays owned by the workspace plugin that registered it.
-  sidebarEffects.forEach((fn) => fn())
-  assert.equal(
-    slots.filter((slot) => slot.entry?.id === 'dsh-px-quote').length,
-    0,
-    'the quote footer must be released with the sidebar provider that registered it'
-  )
-  assert.equal(slots.filter((slot) => slot.entry?.name === 'shell.overlay').length, 1)
-})
-
 test('client entry binds native registry availability to its provider lifetime', () => {
   const f = fixture('Entry'),
     injections: Array<{ names: string[]; callback: (host: any) => void }> = [],

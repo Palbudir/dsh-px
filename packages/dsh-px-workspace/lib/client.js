@@ -2002,17 +2002,14 @@ window.__ModuleLoader__.load({
 		    );
 		    host.slots.inject(
 		      "conversation.chat.assistant-actions",
-		      () => host.effect(
-		        () => host.slots.register(
-		          {
-		            name: "conversation.chat.assistant-actions",
-		            id: "dsh-px-quote",
-		            order: 95,
-		            registrant: "dsh-px-workspace"
-		          },
-		          (p) => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(QuoteAction, { ...p, ctx })
-		        ),
-		        "workspace: quote action"
+		      () => host.slots.register(
+		        {
+		          name: "conversation.chat.assistant-actions",
+		          id: "dsh-px-quote",
+		          order: 95,
+		          registrant: "dsh-px-workspace"
+		        },
+		        (p) => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(QuoteAction, { ...p, ctx })
 		      )
 		    );
 		    for (const [id, title, component, icon] of [
