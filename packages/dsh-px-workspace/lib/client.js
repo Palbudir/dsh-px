@@ -324,57 +324,58 @@ window.__ModuleLoader__.load({
 		  return { data, error, loading, refresh: () => revise((n) => n + 1) };
 		}
 
-		// packages/dsh-px-workspace/src/client/session-bar.tsx
-		var import_react4 = require("react");
-
-		// packages/shared/session-layout.ts
-		function parseTabs(raw) {
+		// packages/dsh-px-workspace/src/client/panel-availability.ts
+		var import_react2 = require("react");
+		var unavailable = (state, reason) => ({ enabled: false, state, reason });
+		function panelAvailability(capabilities, type) {
+		  const { sidebar, terminal, nativeTabs } = capabilities;
 		  try {
-		    const p = JSON.parse(raw ?? "{}");
-		    const ids = (v) => Array.isArray(v) ? [...new Set(v.filter((x) => typeof x === "string" && /^[\w-]{1,200}$/.test(x)))] : [];
-		    const open = ids(p.ids), closed = ids(p.closed).slice(0, 10), titles = {};
-		    for (const id of [...open, ...closed])
-		      if (typeof p.titles?.[id] === "string")
-		        Object.defineProperty(titles, id, {
-		          value: p.titles[id].slice(0, 160),
-		          enumerable: true,
-		          writable: true,
-		          configurable: true
-		        });
-		    return { ids: open, pins: ids(p.pins).filter((id) => open.includes(id)), closed, titles };
+		    if (type === "terminal") {
+		      if (sidebar) {
+		        if (typeof sidebar.isTabEnabled !== "function")
+		          return unavailable("unknown", "\u65E0\u6CD5\u786E\u8BA4\u7EC8\u7AEF\u8BBE\u7F6E\uFF0C\u8BF7\u68C0\u67E5\u4FA7\u8FB9\u5361\u7247\u7248\u672C\u3002");
+		        const preference = sidebar.isTabEnabled(type);
+		        if (preference === false) return unavailable("disabled", "\u5DF2\u5728\u201C\u4FA7\u8FB9\u5361\u7247\u201D\u8BBE\u7F6E\u4E2D\u7981\u7528\u3002");
+		        if (preference !== true) return unavailable("unknown", "\u6682\u65F6\u65E0\u6CD5\u786E\u8BA4\u7EC8\u7AEF\u8BBE\u7F6E\u3002");
+		      }
+		      if (typeof terminal?.openTabIn !== "function") return unavailable("missing", "\u539F\u751F\u7EC8\u7AEF\u5165\u53E3\u5C1A\u672A\u52A0\u8F7D\u3002");
+		      if (typeof nativeTabs?.get !== "function" || typeof nativeTabs.subscribe !== "function")
+		        return unavailable("missing", "\u539F\u751F\u7EC8\u7AEF\u9762\u677F\u72B6\u6001\u5C1A\u672A\u5C31\u7EEA\u3002");
+		      if (!nativeTabs.get(type)) return unavailable("missing", "\u7EC8\u7AEF\u63D2\u4EF6\u5C1A\u672A\u52A0\u8F7D\u3002");
+		    } else {
+		      if (!sidebar) return unavailable("missing", "\u4FA7\u8FB9\u5361\u7247\u670D\u52A1\u5C1A\u672A\u52A0\u8F7D\u3002");
+		      if (typeof sidebar.getTab !== "function" || typeof sidebar.subscribe !== "function" || typeof sidebar.subscribeState !== "function" || typeof sidebar.isTabEnabled !== "function")
+		        return unavailable("unknown", "\u4FA7\u8FB9\u5361\u7247\u7248\u672C\u672A\u63D0\u4F9B\u5B8C\u6574\u9762\u677F\u72B6\u6001\uFF0C\u8BF7\u68C0\u67E5\u63D2\u4EF6\u7248\u672C\u3002");
+		      if (!sidebar.getTab(type)) return unavailable("missing", "\u63D0\u4F9B\u6B64\u9762\u677F\u7684\u63D2\u4EF6\u5C1A\u672A\u52A0\u8F7D\u3002");
+		      const preference = sidebar.isTabEnabled(type);
+		      if (preference === false) return unavailable("disabled", "\u5DF2\u5728\u201C\u4FA7\u8FB9\u5361\u7247\u201D\u8BBE\u7F6E\u4E2D\u7981\u7528\u3002");
+		      if (preference !== true) return unavailable("unknown", "\u6682\u65F6\u65E0\u6CD5\u786E\u8BA4\u9762\u677F\u8BBE\u7F6E\u3002");
+		    }
+		    return { enabled: true, state: "ready", reason: "" };
 		  } catch {
-		    return { ids: [], pins: [], closed: [], titles: {} };
+		    return unavailable("unknown", "\u9762\u677F\u72B6\u6001\u6682\u65F6\u65E0\u6CD5\u8BFB\u53D6\uFF0C\u8BF7\u5230\u201C\u8FD0\u884C\u4E0E\u5E2E\u52A9\u201D\u68C0\u67E5\u3002");
 		  }
 		}
-
-		// packages/dsh-px-workspace/src/client/tab-state.ts
-		function visibleTabs(tabs) {
-		  return [
-		    ...tabs.ids.filter((id) => tabs.pins.includes(id)),
-		    ...tabs.ids.filter((id) => !tabs.pins.includes(id))
-		  ];
-		}
-		function closeTabState(tabs, id, available) {
-		  const ordered = visibleTabs(tabs), at = ordered.indexOf(id);
-		  const candidates = [...ordered.slice(at + 1), ...ordered.slice(0, at).reverse()];
-		  const ids = tabs.ids.filter((x) => x !== id);
-		  const closed = [id, ...tabs.closed.filter((x) => x !== id)].slice(0, 10);
-		  return {
-		    tabs: {
-		      ...tabs,
-		      ids,
-		      pins: tabs.pins.filter((x) => x !== id),
-		      closed,
-		      titles: Object.fromEntries(
-		        [...ids, ...closed].filter((id2) => tabs.titles[id2]).map((id2) => [id2, tabs.titles[id2]])
-		      )
-		    },
-		    next: candidates.find((x) => available.includes(x))
-		  };
+		function usePanelCapabilities(ctx) {
+		  const capabilities = useSnapshot(ctx.capabilities);
+		  const [, refresh] = (0, import_react2.useState)(0);
+		  (0, import_react2.useEffect)(() => {
+		    const changed = () => refresh((value) => value + 1);
+		    const offRegistry = typeof capabilities.sidebar?.subscribe === "function" ? capabilities.sidebar.subscribe(changed) : void 0;
+		    const offState = typeof capabilities.sidebar?.subscribeState === "function" ? capabilities.sidebar.subscribeState(changed) : void 0;
+		    const offNative = typeof capabilities.nativeTabs?.subscribe === "function" ? capabilities.nativeTabs.subscribe(changed) : void 0;
+		    changed();
+		    return () => {
+		      offRegistry?.();
+		      offState?.();
+		      offNative?.();
+		    };
+		  }, [capabilities.sidebar, capabilities.nativeTabs]);
+		  return capabilities;
 		}
 
 		// packages/shared/ui.tsx
-		var import_react2 = require("react");
+		var import_react3 = require("react");
 		var import_jsx_runtime = require("react/jsx-runtime");
 		var uiCss = `
 		.px-ui{--px-bg:var(--dsw-alias-bg-base,#fff);--px-layer:var(--dsw-alias-bg-layer-1,#f8f9fb);--px-fg:var(--dsw-alias-label-primary,#20242d);--px-muted:var(--dsw-alias-label-secondary,#657080);--px-border:var(--dsw-alias-border-l2,#d9dee7);--px-accent:var(--dsw-alias-state-business-primary,#466dea);--px-error:var(--dsw-alias-state-error-primary,#bc3946);color:var(--px-fg);font-size:13px;line-height:1.6}
@@ -447,7 +448,7 @@ window.__ModuleLoader__.load({
 		  disabled,
 		  onConfirm
 		}) {
-		  const [confirm, setConfirm] = (0, import_react2.useState)(false);
+		  const [confirm, setConfirm] = (0, import_react3.useState)(false);
 		  return confirm ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "px-confirm-delete", children: [
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
 		      "\u786E\u8BA4",
@@ -472,20 +473,107 @@ window.__ModuleLoader__.load({
 		  ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "px-danger", disabled, onClick: () => setConfirm(true), children: label });
 		}
 
+		// packages/dsh-px-workspace/src/client/quote-action.tsx
+		var import_jsx_runtime2 = require("react/jsx-runtime");
+		function QuoteAction({
+		  ctx,
+		  sessionId,
+		  messageId
+		}) {
+		  const availability = panelAvailability(usePanelCapabilities(ctx), "px-notes");
+		  return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "px-ui", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+		    "button",
+		    {
+		      className: "px-quote-action",
+		      disabled: !availability.enabled,
+		      title: availability.enabled ? "\u5F15\u7528\u6216\u6279\u6CE8\u8FD9\u6761\u6D88\u606F" : `\u5F15\u7528\u4E0E\u6279\u6CE8\u4E0D\u53EF\u7528\uFF1A${availability.reason}`,
+		      onClick: () => {
+		        let requestToken;
+		        try {
+		          const live = ctx.capabilities.getSnapshot();
+		          const current = panelAvailability(live, "px-notes");
+		          if (!current.enabled) throw new Error(current.reason);
+		          requestQuote(sessionId, messageId);
+		          requestToken = quoteRequests.getSnapshot()[sessionId]?.token;
+		          live.sidebar.openTab({ type: "px-notes", meta: { messageId } }, { sessionId });
+		        } catch (err) {
+		          if (requestToken) quoteRequests.consume(sessionId, requestToken);
+		          const scope = ctx.sessions.scope(sessionId);
+		          if (scope)
+		            ctx.conversation.input.for(scope).notify("error", err instanceof Error ? err.message : String(err));
+		        }
+		      },
+		      children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Icon, { name: "note" }),
+		        "\u5F15\u7528 / \u6279\u6CE8"
+		      ]
+		    }
+		  ) });
+		}
+
+		// packages/dsh-px-workspace/src/client/session-bar.tsx
+		var import_react5 = require("react");
+
+		// packages/shared/session-layout.ts
+		function parseTabs(raw) {
+		  try {
+		    const p = JSON.parse(raw ?? "{}");
+		    const ids = (v) => Array.isArray(v) ? [...new Set(v.filter((x) => typeof x === "string" && /^[\w-]{1,200}$/.test(x)))] : [];
+		    const open = ids(p.ids), closed = ids(p.closed).slice(0, 10), titles = {};
+		    for (const id of [...open, ...closed])
+		      if (typeof p.titles?.[id] === "string")
+		        Object.defineProperty(titles, id, {
+		          value: p.titles[id].slice(0, 160),
+		          enumerable: true,
+		          writable: true,
+		          configurable: true
+		        });
+		    return { ids: open, pins: ids(p.pins).filter((id) => open.includes(id)), closed, titles };
+		  } catch {
+		    return { ids: [], pins: [], closed: [], titles: {} };
+		  }
+		}
+
+		// packages/dsh-px-workspace/src/client/tab-state.ts
+		function visibleTabs(tabs) {
+		  return [
+		    ...tabs.ids.filter((id) => tabs.pins.includes(id)),
+		    ...tabs.ids.filter((id) => !tabs.pins.includes(id))
+		  ];
+		}
+		function closeTabState(tabs, id, available) {
+		  const ordered = visibleTabs(tabs), at = ordered.indexOf(id);
+		  const candidates = [...ordered.slice(at + 1), ...ordered.slice(0, at).reverse()];
+		  const ids = tabs.ids.filter((x) => x !== id);
+		  const closed = [id, ...tabs.closed.filter((x) => x !== id)].slice(0, 10);
+		  return {
+		    tabs: {
+		      ...tabs,
+		      ids,
+		      pins: tabs.pins.filter((x) => x !== id),
+		      closed,
+		      titles: Object.fromEntries(
+		        [...ids, ...closed].filter((id2) => tabs.titles[id2]).map((id2) => [id2, tabs.titles[id2]])
+		      )
+		    },
+		    next: candidates.find((x) => available.includes(x))
+		  };
+		}
+
 		// packages/dsh-px-workspace/src/client/layout.ts
-		var import_react3 = require("react");
+		var import_react4 = require("react");
 		var route = "/dsh-px-workbench/layout";
 		var legacyKey = "dsh-px.session-tabs.v1";
 		function useSessionLayout() {
-		  const [tabs, setTabs] = (0, import_react3.useState)(() => parseTabs(null));
-		  const [ready, setReady] = (0, import_react3.useState)(false);
-		  const [warning, setWarning] = (0, import_react3.useState)("");
-		  const [conflict, setConflict] = (0, import_react3.useState)(false);
-		  const metadata = (0, import_react3.useRef)(null);
-		  const latest = (0, import_react3.useRef)(tabs);
+		  const [tabs, setTabs] = (0, import_react4.useState)(() => parseTabs(null));
+		  const [ready, setReady] = (0, import_react4.useState)(false);
+		  const [warning, setWarning] = (0, import_react4.useState)("");
+		  const [conflict, setConflict] = (0, import_react4.useState)(false);
+		  const metadata = (0, import_react4.useRef)(null);
+		  const latest = (0, import_react4.useRef)(tabs);
 		  latest.current = tabs;
-		  const pending = (0, import_react3.useRef)(false), blocked = (0, import_react3.useRef)(false), active = (0, import_react3.useRef)(true);
-		  const saved = (0, import_react3.useRef)("");
+		  const pending = (0, import_react4.useRef)(false), blocked = (0, import_react4.useRef)(false), active = (0, import_react4.useRef)(true);
+		  const saved = (0, import_react4.useRef)("");
 		  const backup = (value) => {
 		    try {
 		      localStorage.setItem(
@@ -540,7 +628,7 @@ window.__ModuleLoader__.load({
 		      if (active.current) setWarning(err instanceof Error ? err.message : String(err));
 		    }
 		  }
-		  (0, import_react3.useEffect)(() => {
+		  (0, import_react4.useEffect)(() => {
 		    active.current = true;
 		    const controller = new AbortController();
 		    void requestJson(route, { signal: controller.signal }).then((result) => {
@@ -572,7 +660,7 @@ window.__ModuleLoader__.load({
 		      controller.abort();
 		    };
 		  }, []);
-		  (0, import_react3.useEffect)(() => {
+		  (0, import_react4.useEffect)(() => {
 		    if (!ready) return;
 		    backup(tabs);
 		    void save();
@@ -589,7 +677,7 @@ window.__ModuleLoader__.load({
 		}
 
 		// packages/dsh-px-workspace/src/client/session-bar.tsx
-		var import_jsx_runtime2 = require("react/jsx-runtime");
+		var import_jsx_runtime3 = require("react/jsx-runtime");
 		var panels = [
 		  ["editor", "\u6587\u4EF6", "file"],
 		  ["terminal", "\u7EC8\u7AEF", "terminal"],
@@ -602,18 +690,13 @@ window.__ModuleLoader__.load({
 		];
 		function SessionBar({ ctx }) {
 		  const sessions = useSnapshot(ctx.sessions.list);
-		  const capabilities = useSnapshot(ctx.capabilities);
-		  const [, refreshSidebar] = (0, import_react4.useState)(0);
-		  (0, import_react4.useEffect)(
-		    () => capabilities.sidebar?.subscribeState(() => refreshSidebar((n) => n + 1)),
-		    [capabilities.sidebar]
-		  );
+		  const capabilities = usePanelCapabilities(ctx);
 		  const layout = useSessionLayout();
 		  const { tabs, setTabs, ready } = layout;
-		  const [error, setError] = (0, import_react4.useState)("");
-		  const bar = (0, import_react4.useRef)(null);
-		  (0, import_react4.useEffect)(() => bar.current ? attachToolbarLayout(bar.current) : void 0, []);
-		  const selected = (0, import_react4.useRef)(null);
+		  const [error, setError] = (0, import_react5.useState)("");
+		  const bar = (0, import_react5.useRef)(null);
+		  (0, import_react5.useEffect)(() => bar.current ? attachToolbarLayout(bar.current) : void 0, []);
+		  const selected = (0, import_react5.useRef)(null);
 		  const current = sessions.current, row = current ? sessions.byId[current] : void 0;
 		  const ordinaryCurrent = row?.origin === "subagent" ? row.parentId : current;
 		  const ids = visibleTabs(tabs);
@@ -621,7 +704,7 @@ window.__ModuleLoader__.load({
 		    const s = sessions.byId[id];
 		    return s?.blank ? `\u65B0\u4F1A\u8BDD${s.cwd ? " \xB7 " + s.cwd.split(/[\\/]/).filter(Boolean).pop() : ""}` : s?.title ?? tabs.titles[id] ?? s?.displayTitle ?? (sessions.phase === "pending" ? "\u52A0\u8F7D\u4F1A\u8BDD\u2026" : "\u4F1A\u8BDD\u4E0D\u53EF\u7528");
 		  };
-		  (0, import_react4.useEffect)(() => {
+		  (0, import_react5.useEffect)(() => {
 		    if (!ready || !ordinaryCurrent || !sessions.byId[ordinaryCurrent] || sessions.byId[ordinaryCurrent].origin === "subagent")
 		      return;
 		    setTabs(
@@ -632,7 +715,7 @@ window.__ModuleLoader__.load({
 		      }
 		    );
 		  }, [ordinaryCurrent, sessions.phase, ready]);
-		  (0, import_react4.useEffect)(() => {
+		  (0, import_react5.useEffect)(() => {
 		    setTabs((old) => {
 		      const titles = { ...old.titles };
 		      let changed = false;
@@ -648,7 +731,7 @@ window.__ModuleLoader__.load({
 		      return changed ? { ...old, titles } : old;
 		    });
 		  }, [sessions]);
-		  (0, import_react4.useEffect)(() => {
+		  (0, import_react5.useEffect)(() => {
 		    selected.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
 		  }, [ordinaryCurrent, tabs.ids.length]);
 		  const open = (id, focus = false) => {
@@ -681,7 +764,7 @@ window.__ModuleLoader__.load({
 		    const available = ids.filter((id) => sessions.byId[id] && sessions.byId[id].origin !== "subagent"), index = available.indexOf(ordinaryCurrent ?? "");
 		    if (available.length) open(available[(index + direction + available.length) % available.length], focus);
 		  };
-		  (0, import_react4.useEffect)(() => {
+		  (0, import_react5.useEffect)(() => {
 		    const keydown = (e) => {
 		      if (e.defaultPrevented || isTypingTarget(e.target) || e.isComposing || !e.ctrlKey || !e.altKey || document.querySelector("[role=dialog],[role=alertdialog]"))
 		        return;
@@ -699,25 +782,33 @@ window.__ModuleLoader__.load({
 		  const panel = (type) => {
 		    if (!current) return;
 		    try {
-		      if (!enabled(type)) {
-		        setError("\u6B64\u9762\u677F\u5C1A\u672A\u542F\u7528\u3002\u53EF\u5728\u201C\u8FD0\u884C\u4E0E\u5E2E\u52A9\u201D\u68C0\u67E5\u5B9E\u9645\u670D\u52A1\uFF0C\u5E76\u5728\u201C\u4FA7\u8FB9\u5361\u7247\u201D\u8BBE\u7F6E\u4E2D\u542F\u7528\u3002");
+		      const live = ctx.capabilities.getSnapshot();
+		      const availability = panelAvailability(live, type);
+		      if (!availability.enabled) {
+		        setError(availability.reason);
 		        return;
 		      }
-		      if (type === "terminal") capabilities.terminal.openTabIn(current, "terminal", { revealIfOpened: true });
-		      else capabilities.sidebar.openTab({ type }, { sessionId: current, cwd: row?.cwd });
+		      if (type === "terminal") live.terminal.openTabIn(current, "terminal", { revealIfOpened: true });
+		      else live.sidebar.openTab({ type }, { sessionId: current, cwd: row?.cwd });
 		      setError("");
 		    } catch (e) {
 		      setError(errorText(e));
 		    }
 		  };
-		  const enabled = (type) => type === "terminal" ? Boolean(capabilities.terminal && (!capabilities.sidebar || capabilities.sidebar.isTabEnabled(type))) : Boolean(capabilities.sidebar?.isTabEnabled(type));
-		  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { ref: bar, className: "px-ui px-bar", "aria-label": "DSH-PX \u4F1A\u8BDD\u5DE5\u4F5C\u533A", children: [
-		    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "px-tabs", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { className: "px-brand", children: "DSH-PX" }),
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "px-tabstrip", role: "tablist", "aria-label": "\u5DF2\u6253\u5F00\u4F1A\u8BDD", children: ids.map((id) => {
+		  const panelStates = panels.map(([type, text, icon]) => ({
+		    type,
+		    text,
+		    icon,
+		    ...panelAvailability(capabilities, type)
+		  }));
+		  const missingPanels = panelStates.filter((panel2) => panel2.state === "missing" || panel2.state === "unknown");
+		  return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { ref: bar, className: "px-ui px-bar", "aria-label": "DSH-PX \u4F1A\u8BDD\u5DE5\u4F5C\u533A", children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-tabs", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("strong", { className: "px-brand", children: "DSH-PX" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "px-tabstrip", role: "tablist", "aria-label": "\u5DF2\u6253\u5F00\u4F1A\u8BDD", children: ids.map((id) => {
 		        const active = id === ordinaryCurrent;
-		        return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "px-tab", "data-active": active, children: [
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+		        return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-tab", "data-active": active, children: [
+		          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
 		            "button",
 		            {
 		              role: "tab",
@@ -742,18 +833,18 @@ window.__ModuleLoader__.load({
 		                }
 		              },
 		              children: [
-		                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
 		                  "span",
 		                  {
 		                    className: `px-session-dot${sessions.byId[id]?.running ? " is-running" : sessions.byId[id]?.completed ? " is-done" : ""}`,
 		                    "aria-hidden": "true"
 		                  }
 		                ),
-		                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "px-tab-title", children: label(id) })
+		                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-tab-title", children: label(id) })
 		              ]
 		            }
 		          ),
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
 		            "button",
 		            {
 		              className: "px-tab-action",
@@ -765,10 +856,10 @@ window.__ModuleLoader__.load({
 		                ...old,
 		                pins: old.pins.includes(id) ? old.pins.filter((x) => x !== id) : [...old.pins, id]
 		              })),
-		              children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Icon, { name: "pin" })
+		              children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: "pin" })
 		            }
 		          ),
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
 		            "button",
 		            {
 		              className: "px-tab-action",
@@ -776,20 +867,20 @@ window.__ModuleLoader__.load({
 		              disabled: !ready,
 		              "aria-label": `\u5173\u95ED\u6807\u7B7E ${label(id)}`,
 		              onClick: () => close(id),
-		              children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Icon, { name: "close" })
+		              children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: "close" })
 		            }
 		          )
 		        ] }, id);
 		      }) }),
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { onClick: () => ctx.uiWorkspace.startSession(), title: "\u5728\u5F53\u524D\u5DE5\u4F5C\u533A\u65B0\u5EFA\u4F1A\u8BDD", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Icon, { name: "plus" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("button", { onClick: () => ctx.uiWorkspace.startSession(), title: "\u5728\u5F53\u524D\u5DE5\u4F5C\u533A\u65B0\u5EFA\u4F1A\u8BDD", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: "plus" }),
 		        "\u65B0\u4F1A\u8BDD"
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("select", { "aria-label": "\u6253\u5F00\u5DF2\u6709\u4F1A\u8BDD", value: "", onChange: (e) => open(e.target.value), children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "", children: "\u6253\u5F00\u4F1A\u8BDD\u2026" }),
-		        sessions.ids.filter((id) => sessions.byId[id]?.origin !== "subagent").map((id) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: id, children: label(id) }, id))
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("select", { "aria-label": "\u6253\u5F00\u5DF2\u6709\u4F1A\u8BDD", value: "", onChange: (e) => open(e.target.value), children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "", children: "\u6253\u5F00\u4F1A\u8BDD\u2026" }),
+		        sessions.ids.filter((id) => sessions.byId[id]?.origin !== "subagent").map((id) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: id, children: label(id) }, id))
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
 		        "button",
 		        {
 		          className: "px-restore",
@@ -797,57 +888,59 @@ window.__ModuleLoader__.load({
 		          disabled: !tabs.closed.some((id) => sessions.byId[id]),
 		          onClick: reopen,
 		          title: "\u6062\u590D\u6700\u8FD1\u5173\u95ED \xB7 Ctrl+Alt+T",
-		          children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Icon, { name: "restore" })
+		          children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: "restore" })
 		        }
 		      )
 		    ] }),
-		    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "px-tools", children: [
-		      panels.map(([type, text, icon]) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+		    /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-tools", children: [
+		      panelStates.map(({ type, text, icon, enabled, reason }) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
 		        "button",
 		        {
-		          disabled: !current || !enabled(type),
-		          title: enabled(type) ? text : `${text}\u4E0D\u53EF\u7528\uFF1A\u68C0\u67E5\u4FA7\u8FB9\u5361\u7247\u8BBE\u7F6E\u4E0E\u8FD0\u884C\u8BCA\u65AD`,
+		          disabled: !current || !enabled,
+		          title: !current ? "\u8BF7\u5148\u9009\u62E9\u6216\u65B0\u5EFA\u4F1A\u8BDD" : enabled ? text : `${text}\u4E0D\u53EF\u7528\uFF1A${reason}`,
 		          onClick: () => panel(type),
 		          children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Icon, { name: icon }),
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: icon }),
 		            text
 		          ]
 		        },
 		        type
 		      )),
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "px-status", children: current ? row?.origin === "subagent" ? "\u6B63\u5728\u67E5\u770B\u5B50 Agent \xB7 \u8FD4\u56DE\u4E0A\u7EA7\u53EF\u7EE7\u7EED\u4EFB\u52A1" : row?.running ? "Agent \u6267\u884C\u4E2D" : "\u5C31\u7EEA" : "\u9009\u62E9\u6216\u65B0\u5EFA\u4F1A\u8BDD\u5F00\u59CB" })
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-status", children: current ? row?.origin === "subagent" ? "\u6B63\u5728\u67E5\u770B\u5B50 Agent \xB7 \u8FD4\u56DE\u4E0A\u7EA7\u53EF\u7EE7\u7EED\u4EFB\u52A1" : row?.running ? "Agent \u6267\u884C\u4E2D" : "\u5C31\u7EEA" : "\u9009\u62E9\u6216\u65B0\u5EFA\u4F1A\u8BDD\u5F00\u59CB" })
 		    ] }),
-		    !capabilities.sidebar || !capabilities.terminal ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "status", className: "px-dependency-warning", children: [
-		      !capabilities.sidebar ? "\u4FA7\u8FB9\u5361\u7247\u670D\u52A1\u672A\u542F\u7528\uFF0C\u6587\u4EF6\u3001\u4EA7\u7269\u3001\u6279\u6CE8\u4E0E\u5B9A\u65F6\u9762\u677F\u6682\u4E0D\u53EF\u7528\u3002" : "",
-		      !capabilities.terminal ? "\u7EC8\u7AEF\u670D\u52A1\u672A\u542F\u7528\u3002" : "",
-		      " \u53EF\u5230\u8BBE\u7F6E \u2192 \u8FD0\u884C\u4E0E\u5E2E\u52A9\u68C0\u67E5\u4F9D\u8D56\uFF1B\u4F1A\u8BDD\u4ECD\u53EF\u4F7F\u7528\u3002"
+		    missingPanels.length ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { role: "status", className: "px-dependency-warning", children: [
+		      "\u6682\u4E0D\u53EF\u7528\u7684\u9762\u677F\uFF1A",
+		      missingPanels.map((panel2) => panel2.text).join("\u3001"),
+		      "\u3002\u53EF\u5728\u201C\u63D2\u4EF6\u201D\u8BBE\u7F6E\u4E2D\u68C0\u67E5\u662F\u5426\u542F\u7528\uFF0C\u6216\u5230\u201C\u8FD0\u884C\u4E0E\u5E2E\u52A9\u201D\u67E5\u770B\u4F9D\u8D56\uFF1B\u4F1A\u8BDD\u4ECD\u53EF\u4F7F\u7528\u3002"
 		    ] }) : null,
-		    layout.warning ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "px-bar-error", role: "alert", children: [
+		    layout.warning ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-bar-error", role: "alert", children: [
 		      layout.warning,
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { onClick: () => void layout.restore(), children: "\u6062\u590D\u670D\u52A1\u5E03\u5C40" }),
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { onClick: () => void layout.keepCurrent(), children: layout.conflict ? "\u4FDD\u5B58\u6B64\u7A97\u53E3\u5E03\u5C40" : "\u91CD\u8BD5\u4FDD\u5B58\u5E03\u5C40" })
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: () => void layout.restore(), children: "\u6062\u590D\u670D\u52A1\u5E03\u5C40" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: () => void layout.keepCurrent(), children: layout.conflict ? "\u4FDD\u5B58\u6B64\u7A97\u53E3\u5E03\u5C40" : "\u91CD\u8BD5\u4FDD\u5B58\u5E03\u5C40" })
 		    ] }) : null,
-		    error ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "px-bar-error", role: "alert", children: [
+		    error ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-bar-error", role: "alert", children: [
 		      error,
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { "aria-label": "\u5173\u95ED\u63D0\u793A", onClick: () => setError(""), children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Icon, { name: "close" }) })
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { "aria-label": "\u5173\u95ED\u63D0\u793A", onClick: () => setError(""), children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: "close" }) })
 		    ] }) : null
 		  ] });
 		}
 
 		// packages/dsh-px-workspace/src/client/artifacts.tsx
-		var import_react5 = require("react");
-		var import_jsx_runtime3 = require("react/jsx-runtime");
+		var import_react6 = require("react");
+		var import_jsx_runtime4 = require("react/jsx-runtime");
 		function ArtifactsPanel({ ctx, scope, visible }) {
-		  const [pages, setPages] = (0, import_react5.useState)([void 0]);
+		  const filePanel = panelAvailability(usePanelCapabilities(ctx), "editor");
+		  const [openError, setOpenError] = (0, import_react6.useState)("");
+		  const [pages, setPages] = (0, import_react6.useState)([void 0]);
 		  const before = pages[pages.length - 1];
 		  const { data, error, refresh, loading } = useData(
 		    `${base}/content?sessionId=${encodeURIComponent(scope.sessionId)}${before ? "&artifactBefore=" + encodeURIComponent(before) : ""}`,
 		    visible
 		  );
-		  return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-ui px-panel", children: [
-		    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h3", { children: "\u4F1A\u8BDD\u4EA7\u7269" }),
-		    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-muted", children: "\u6C47\u603B Agent \u4F7F\u7528 present \u58F0\u660E\u7684\u4EA4\u4ED8\u3002\u6253\u5F00\u7684\u662F\u6587\u4EF6\u5F53\u524D\u5185\u5BB9\uFF1B\u539F\u6587\u4EF6\u79FB\u52A8\u6216\u5220\u9664\u540E\u9700\u8981\u91CD\u65B0\u5B9A\u4F4D\u3002" }),
-		    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+		  return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "px-ui px-panel", children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("h3", { children: "\u4F1A\u8BDD\u4EA7\u7269" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "px-muted", children: "\u6C47\u603B Agent \u4F7F\u7528 present \u58F0\u660E\u7684\u4EA4\u4ED8\u3002\u6253\u5F00\u7684\u662F\u6587\u4EF6\u5F53\u524D\u5185\u5BB9\uFF1B\u539F\u6587\u4EF6\u79FB\u52A8\u6216\u5220\u9664\u540E\u9700\u8981\u91CD\u65B0\u5B9A\u4F4D\u3002" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
 		      "button",
 		      {
 		        disabled: loading,
@@ -858,36 +951,59 @@ window.__ModuleLoader__.load({
 		        children: "\u5237\u65B0\u4EA7\u7269"
 		      }
 		    ),
-		    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-load-status", role: "status", children: loading ? "\u6B63\u5728\u8BFB\u53D6\u4EA7\u7269\u2026" : "" }),
-		    error ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { role: "alert", children: error }) : null,
-		    !data && !error ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u2026" }) : null,
-		    data?.artifacts.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-empty", children: "\u6B64\u4F1A\u8BDD\u8FD8\u6CA1\u6709\u4EA4\u4ED8\u6587\u4EF6\u3002\u53EF\u4EE5\u8BA9 Agent \u5B8C\u6210\u4EFB\u52A1\u540E\u5C55\u793A\u4EA7\u7269\u3002" }) : null,
-		    data?.artifacts.map((a) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("article", { className: "px-card", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("strong", { children: a.path.split(/[\\/]/).pop() }),
-		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: a.description || "\u672A\u586B\u5199\u8BF4\u660E" }),
-		      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { className: "px-muted", children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "px-load-status", role: "status", children: loading ? "\u6B63\u5728\u8BFB\u53D6\u4EA7\u7269\u2026" : "" }),
+		    error ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "alert", children: error }) : null,
+		    !filePanel.enabled ? /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("p", { role: "status", children: [
+		      "\u6587\u4EF6\u9884\u89C8\u6682\u4E0D\u53EF\u7528\uFF1A",
+		      filePanel.reason
+		    ] }) : null,
+		    openError ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "alert", children: openError }) : null,
+		    !data && !error ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u2026" }) : null,
+		    data?.artifacts.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "px-empty", children: "\u6B64\u4F1A\u8BDD\u8FD8\u6CA1\u6709\u4EA4\u4ED8\u6587\u4EF6\u3002\u53EF\u4EE5\u8BA9 Agent \u5B8C\u6210\u4EFB\u52A1\u540E\u5C55\u793A\u4EA7\u7269\u3002" }) : null,
+		    data?.artifacts.map((a) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("article", { className: "px-card", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("strong", { children: a.path.split(/[\\/]/).pop() }),
+		      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: a.description || "\u672A\u586B\u5199\u8BF4\u660E" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("p", { className: "px-muted", children: [
 		        a.path,
-		        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("br", {}),
+		        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("br", {}),
 		        stamp(a.time)
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: () => ctx.capabilities.getSnapshot().sidebar?.openFile(scope, a.path), children: "\u6253\u5F00\u4EA7\u7269" })
+		      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+		        "button",
+		        {
+		          disabled: !filePanel.enabled,
+		          title: filePanel.enabled ? "\u6253\u5F00\u4EA7\u7269" : filePanel.reason,
+		          onClick: () => {
+		            try {
+		              const live = ctx.capabilities.getSnapshot();
+		              const current = panelAvailability(live, "editor");
+		              if (!current.enabled) throw new Error(current.reason);
+		              live.sidebar.openFile(scope, a.path);
+		              setOpenError("");
+		            } catch (err) {
+		              setOpenError(errorText(err));
+		            }
+		          },
+		          children: "\u6253\u5F00\u4EA7\u7269"
+		        }
+		      )
 		    ] }, a.path)),
-		    data ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-actions", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("small", { children: [
+		    data ? /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "px-actions", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("small", { children: [
 		        "\u5171 ",
 		        data.artifactTotal,
 		        " \u9879 \xB7 \u7B2C ",
 		        pages.length,
 		        " \u9875"
 		      ] }),
-		      pages.length > 1 ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: () => setPages((old) => old.slice(0, -1)), children: "\u8F83\u65B0\u4E00\u9875" }) : null,
-		      data.nextArtifactBefore ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: () => setPages((old) => [...old, data.nextArtifactBefore]), children: "\u66F4\u65E9\u4EA7\u7269" }) : null
+		      pages.length > 1 ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { onClick: () => setPages((old) => old.slice(0, -1)), children: "\u8F83\u65B0\u4E00\u9875" }) : null,
+		      data.nextArtifactBefore ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { onClick: () => setPages((old) => [...old, data.nextArtifactBefore]), children: "\u66F4\u65E9\u4EA7\u7269" }) : null
 		    ] }) : null
 		  ] });
 		}
 
 		// packages/dsh-px-workspace/src/client/notes.tsx
-		var import_react8 = require("react");
+		var import_react9 = require("react");
 
 		// packages/dsh-px-workspace/src/model.ts
 		function quoteDraft(a) {
@@ -912,7 +1028,7 @@ window.__ModuleLoader__.load({
 		}
 
 		// packages/dsh-px-workspace/src/client/drafts.ts
-		var import_react6 = require("react");
+		var import_react7 = require("react");
 
 		// packages/shared/draft-store.ts
 		function createDraftCell(key, initial, storage, validate = () => true) {
@@ -1017,7 +1133,7 @@ window.__ModuleLoader__.load({
 		var prefix = "dsh-px.draft.v1.";
 		var cells = createDraftRegistry(48, (key) => !isOperationPending(key.slice(prefix.length)));
 		function useDraft(key, initial, validate) {
-		  const [{ cell, available }] = (0, import_react6.useState)(() => {
+		  const [{ cell, available }] = (0, import_react7.useState)(() => {
 		    let storage;
 		    try {
 		      storage = sessionStorage;
@@ -1041,28 +1157,28 @@ window.__ModuleLoader__.load({
 		}
 
 		// packages/dsh-px-workspace/src/client/storage-notice.tsx
-		var import_react7 = require("react");
-		var import_jsx_runtime4 = require("react/jsx-runtime");
+		var import_react8 = require("react");
+		var import_jsx_runtime5 = require("react/jsx-runtime");
 		function StorageNotice({
 		  visible,
 		  onRestored
 		}) {
 		  const status = useData(`${base}/storage`, visible);
-		  const [selected, setSelected] = (0, import_react7.useState)(null);
-		  const [failure, setFailure] = (0, import_react7.useState)("");
+		  const [selected, setSelected] = (0, import_react8.useState)(null);
+		  const [failure, setFailure] = (0, import_react8.useState)("");
 		  const [busy, run] = useOperation("storage:restore");
 		  if (!status.data || status.data.ready) return null;
-		  return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("section", { className: "px-card", role: "alert", children: [
-		    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("h4", { children: "\u6279\u6CE8\u4E0E\u5B9A\u65F6\u5B58\u50A8\u9700\u8981\u6062\u590D" }),
-		    /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("p", { children: [
+		  return /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("section", { className: "px-card", role: "alert", children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("h4", { children: "\u6279\u6CE8\u4E0E\u5B9A\u65F6\u5B58\u50A8\u9700\u8981\u6062\u590D" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("p", { children: [
 		      status.data.error,
 		      " \u4F1A\u8BDD\u6B63\u6587\u4E0E\u4EA7\u7269\u4ECD\u53EF\u67E5\u770B\u3002"
 		    ] }),
-		    failure ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: failure }) : null,
-		    status.data.snapshots.length ? /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(import_jsx_runtime4.Fragment, { children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: "\u6062\u590D\u4F1A\u4FDD\u7559\u5F53\u524D\u635F\u574F\u6587\u4EF6\uFF0C\u5E76\u6682\u505C\u5168\u90E8\u5B9A\u65F6\u4EFB\u52A1\uFF1B\u6838\u5BF9\u540E\u518D\u542F\u7528\u3002" }),
-		      status.data.snapshots.map((snapshot) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "px-actions", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("span", { children: [
+		    failure ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { children: failure }) : null,
+		    status.data.snapshots.length ? /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)(import_jsx_runtime5.Fragment, { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { children: "\u6062\u590D\u4F1A\u4FDD\u7559\u5F53\u524D\u635F\u574F\u6587\u4EF6\uFF0C\u5E76\u6682\u505C\u5168\u90E8\u5B9A\u65F6\u4EFB\u52A1\uFF1B\u6838\u5BF9\u540E\u518D\u542F\u7528\u3002" }),
+		      status.data.snapshots.map((snapshot) => /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("span", { children: [
 		          new Date(snapshot.createdAt).toLocaleString(),
 		          " \xB7 ",
 		          snapshot.annotations,
@@ -1071,10 +1187,10 @@ window.__ModuleLoader__.load({
 		          snapshot.schedules,
 		          " \u4E2A\u4EFB\u52A1"
 		        ] }),
-		        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { disabled: busy, onClick: () => setSelected(snapshot.id), children: "\u9009\u62E9\u6B64\u5FEB\u7167" })
+		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { disabled: busy, onClick: () => setSelected(snapshot.id), children: "\u9009\u62E9\u6B64\u5FEB\u7167" })
 		      ] }, snapshot.id)),
-		      selected ? /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "px-actions", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+		      selected ? /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
 		          "button",
 		          {
 		            disabled: busy,
@@ -1096,9 +1212,9 @@ window.__ModuleLoader__.load({
 		            children: busy ? "\u6062\u590D\u4E2D\u2026" : "\u786E\u8BA4\u6062\u590D\u6240\u9009\u5FEB\u7167"
 		          }
 		        ),
-		        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { disabled: busy, onClick: () => setSelected(null), children: "\u53D6\u6D88" })
+		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { disabled: busy, onClick: () => setSelected(null), children: "\u53D6\u6D88" })
 		      ] }) : null
-		    ] }) : /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: "\u6CA1\u6709\u53EF\u6062\u590D\u5FEB\u7167\uFF0C\u8BF7\u4ECE\u6570\u636E\u76EE\u5F55\u5907\u4EFD\u6062\u590D\uFF1B\u4E0D\u4F1A\u4EE5\u7A7A\u6570\u636E\u8986\u76D6\u5F53\u524D\u6587\u4EF6\u3002" })
+		    ] }) : /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { children: "\u6CA1\u6709\u53EF\u6062\u590D\u5FEB\u7167\uFF0C\u8BF7\u4ECE\u6570\u636E\u76EE\u5F55\u5907\u4EFD\u6062\u590D\uFF1B\u4E0D\u4F1A\u4EE5\u7A7A\u6570\u636E\u8986\u76D6\u5F53\u524D\u6587\u4EF6\u3002" })
 		  ] });
 		}
 
@@ -1123,15 +1239,15 @@ window.__ModuleLoader__.load({
 		}
 
 		// packages/dsh-px-workspace/src/client/notes.tsx
-		var import_jsx_runtime5 = require("react/jsx-runtime");
+		var import_jsx_runtime6 = require("react/jsx-runtime");
 		function NotesPanel({ ctx, scope, visible, tab }) {
 		  const selection = useSnapshot(quoteRequests)[scope.sessionId];
-		  const [before, setBefore] = (0, import_react8.useState)(null);
+		  const [before, setBefore] = (0, import_react9.useState)(null);
 		  const { data, error, refresh } = useData(
 		    `${base}/content?sessionId=${encodeURIComponent(scope.sessionId)}${before === null ? "" : "&before=" + before}`,
 		    visible
 		  );
-		  const [noteBefore, setNoteBefore] = (0, import_react8.useState)(null);
+		  const [noteBefore, setNoteBefore] = (0, import_react9.useState)(null);
 		  const notes = useData(
 		    `${base}/annotations?sessionId=${encodeURIComponent(scope.sessionId)}${noteBefore ? "&before=" + encodeURIComponent(noteBefore) : ""}`,
 		    visible
@@ -1163,14 +1279,14 @@ window.__ModuleLoader__.load({
 		  });
 		  const setQuote = (quote2) => setEditor((old) => ({ ...old, quote: quote2, dirty: true }));
 		  const setNote = (note2) => setEditor((old) => ({ ...old, note: note2, dirty: true }));
-		  const [notice, setNotice] = (0, import_react8.useState)(""), [failure, setFailure] = (0, import_react8.useState)(""), [localBusy, setBusy] = (0, import_react8.useState)(false);
+		  const [notice, setNotice] = (0, import_react9.useState)(""), [failure, setFailure] = (0, import_react9.useState)(""), [localBusy, setBusy] = (0, import_react9.useState)(false);
 		  const [operationBusy, runOperation] = useOperation(`notes:${scope.sessionId}`);
 		  const busy = localBusy || operationBusy;
-		  const [replacement, setReplacement] = (0, import_react8.useState)(null);
-		  const [sourceRetry, setSourceRetry] = (0, import_react8.useState)(null);
-		  const revision = (0, import_react8.useRef)(0);
-		  const active = (0, import_react8.useRef)(true), sourceRequest = (0, import_react8.useRef)(null);
-		  (0, import_react8.useEffect)(() => {
+		  const [replacement, setReplacement] = (0, import_react9.useState)(null);
+		  const [sourceRetry, setSourceRetry] = (0, import_react9.useState)(null);
+		  const revision = (0, import_react9.useRef)(0);
+		  const active = (0, import_react9.useRef)(true), sourceRequest = (0, import_react9.useRef)(null);
+		  (0, import_react9.useEffect)(() => {
 		    active.current = true;
 		    return () => {
 		      active.current = false;
@@ -1228,7 +1344,7 @@ window.__ModuleLoader__.load({
 		      if (active.current && rev === revision.current) setBusy(false);
 		    }
 		  }
-		  (0, import_react8.useEffect)(() => {
+		  (0, import_react9.useEffect)(() => {
 		    const pending = quoteRequests.getSnapshot()[scope.sessionId];
 		    if (pending && pending.token !== editor.requestToken)
 		      void choose(pending.messageId, null, 0, false, { token: pending.token });
@@ -1261,12 +1377,12 @@ window.__ModuleLoader__.load({
 		      setFailure(errorText(e));
 		    }
 		  }
-		  return /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "px-ui px-panel", children: [
-		    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("h3", { children: "\u5F15\u7528\u4E0E\u6279\u6CE8" }),
-		    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { className: "px-muted", children: "\u9009\u62E9\u539F\u6587\u5E76\u6DFB\u52A0\u6279\u6CE8\u3002\u8349\u7A3F\u5C5E\u4E8E\u5F53\u524D\u7A97\u53E3\uFF0C\u5207\u6362\u9762\u677F\u6216\u5237\u65B0\u4F1A\u4FDD\u7559\uFF1B\u5173\u95ED\u7A97\u53E3\u524D\u8BF7\u4FDD\u5B58\u3002\u70B9\u51FB\u5F15\u7528\u624D\u4F1A\u52A0\u5165\u4F1A\u8BDD\u8F93\u5165\u6846\u3002" }),
-		    draftWarning ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { role: "alert", children: draftWarning }) : null,
-		    unreadableDraft ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(ConfirmDelete, { label: "\u653E\u5F03\u65E0\u6CD5\u6062\u590D\u7684\u8349\u7A3F", onConfirm: async () => resetEditor() }) : null,
-		    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		  return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-ui px-panel", children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("h3", { children: "\u5F15\u7528\u4E0E\u6279\u6CE8" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { className: "px-muted", children: "\u9009\u62E9\u539F\u6587\u5E76\u6DFB\u52A0\u6279\u6CE8\u3002\u8349\u7A3F\u5C5E\u4E8E\u5F53\u524D\u7A97\u53E3\uFF0C\u5207\u6362\u9762\u677F\u6216\u5237\u65B0\u4F1A\u4FDD\u7559\uFF1B\u5173\u95ED\u7A97\u53E3\u524D\u8BF7\u4FDD\u5B58\u3002\u70B9\u51FB\u5F15\u7528\u624D\u4F1A\u52A0\u5165\u4F1A\u8BDD\u8F93\u5165\u6846\u3002" }),
+		    draftWarning ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "alert", children: draftWarning }) : null,
+		    unreadableDraft ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(ConfirmDelete, { label: "\u653E\u5F03\u65E0\u6CD5\u6062\u590D\u7684\u8349\u7A3F", onConfirm: async () => resetEditor() }) : null,
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		      StorageNotice,
 		      {
 		        visible,
@@ -1276,11 +1392,11 @@ window.__ModuleLoader__.load({
 		        }
 		      }
 		    ),
-		    replacement ? /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("section", { className: "px-card", role: "alert", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { children: "\u5F53\u524D\u6279\u6CE8\u6709\u672A\u4FDD\u5B58\u4FEE\u6539\u3002\u4FDD\u5B58\u6216\u4FDD\u7559\u5F53\u524D\u8349\u7A3F\u540E\uFF0C\u518D\u5207\u6362\u5F15\u7528\u3002" }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "px-actions", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { onClick: () => setReplacement(null), children: "\u4FDD\u7559\u5F53\u524D\u8349\u7A3F" }),
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		    replacement ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("section", { className: "px-card", role: "alert", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { children: "\u5F53\u524D\u6279\u6CE8\u6709\u672A\u4FDD\u5B58\u4FEE\u6539\u3002\u4FDD\u5B58\u6216\u4FDD\u7559\u5F53\u524D\u8349\u7A3F\u540E\uFF0C\u518D\u5207\u6362\u5F15\u7528\u3002" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { onClick: () => setReplacement(null), children: "\u4FDD\u7559\u5F53\u524D\u8349\u7A3F" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		          "button",
 		          {
 		            disabled: busy,
@@ -1290,9 +1406,9 @@ window.__ModuleLoader__.load({
 		        )
 		      ] })
 		    ] }) : null,
-		    source && editor.collapsed ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { onClick: () => setEditor((old) => ({ ...old, collapsed: false })), children: "\u7EE7\u7EED\u7F16\u8F91\u8349\u7A3F" }) : null,
-		    failure || error || notes.error ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { role: "alert", children: failure || error || notes.error }) : null,
-		    sourceRetry ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		    source && editor.collapsed ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { onClick: () => setEditor((old) => ({ ...old, collapsed: false })), children: "\u7EE7\u7EED\u7F16\u8F91\u8349\u7A3F" }) : null,
+		    failure || error || notes.error ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "alert", children: failure || error || notes.error }) : null,
+		    sourceRetry ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		      "button",
 		      {
 		        disabled: busy || !draftAvailable,
@@ -1300,16 +1416,16 @@ window.__ModuleLoader__.load({
 		        children: "\u91CD\u8BD5\u8BFB\u53D6\u539F\u6587"
 		      }
 		    ) : null,
-		    notice ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { role: "status", className: "px-feedback", children: notice }) : null,
-		    source && !editor.collapsed ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("section", { className: "px-card", "aria-label": "\u6279\u6CE8\u7F16\u8F91\u5668", children: /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("fieldset", { disabled: busy || !draftAvailable, children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("h4", { children: [
+		    notice ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "status", className: "px-feedback", children: notice }) : null,
+		    source && !editor.collapsed ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("section", { className: "px-card", "aria-label": "\u6279\u6CE8\u7F16\u8F91\u5668", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("fieldset", { disabled: busy || !draftAvailable, children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("h4", { children: [
 		        source.role === "user" ? "\u7528\u6237" : "\u52A9\u624B",
 		        " \xB7 \u8BB0\u5F55 ",
 		        source.seq
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("label", { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
 		        "\u6D88\u606F\u539F\u6587\uFF08\u53EF\u9009\u4E2D\u4E00\u6BB5\u4F5C\u4E3A\u5F15\u7528\uFF09",
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		          "textarea",
 		          {
 		            "aria-label": "\u6D88\u606F\u539F\u6587",
@@ -1324,7 +1440,7 @@ window.__ModuleLoader__.load({
 		          }
 		        )
 		      ] }),
-		      source.length > source.text.length ? /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("p", { className: "px-muted", children: [
+		      source.length > source.text.length ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("p", { className: "px-muted", children: [
 		        "\u663E\u793A ",
 		        source.offset + 1,
 		        "\u2013",
@@ -1332,14 +1448,14 @@ window.__ModuleLoader__.load({
 		        " / ",
 		        source.length,
 		        " \u5B57\u7B26\u3002",
-		        source.nextOffset !== null ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { disabled: busy, onClick: () => void choose(source.id, null, source.nextOffset), children: "\u540E\u7EED\u6B63\u6587" }) : null,
-		        source.offset > 0 ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { onClick: () => void choose(source.id), children: "\u8FD4\u56DE\u5F00\u5934" }) : null
+		        source.nextOffset !== null ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => void choose(source.id, null, source.nextOffset), children: "\u540E\u7EED\u6B63\u6587" }) : null,
+		        source.offset > 0 ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { onClick: () => void choose(source.id), children: "\u8FD4\u56DE\u5F00\u5934" }) : null
 		      ] }) : null,
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("label", { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
 		        "\u5F15\u7528\u7247\u6BB5 \xB7 ",
 		        quote.length,
 		        " \u5B57\u7B26\uFF08\u6700\u591A 8000\uFF09",
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		          "textarea",
 		          {
 		            "aria-label": "\u5F15\u7528\u7247\u6BB5",
@@ -1351,11 +1467,11 @@ window.__ModuleLoader__.load({
 		          }
 		        )
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { className: "px-muted", children: "\u53EF\u9009\u4E2D\u4E0A\u65B9\u539F\u6587\uFF0C\u4E5F\u53EF\u5728\u8FD9\u91CC\u5220\u53BB\u4E0D\u9700\u8981\u7684\u90E8\u5206\uFF1B\u987B\u4FDD\u7559\u8FDE\u7EED\u7684\u539F\u6587\u3002" }),
-		      quote && !validQuote ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { role: "alert", children: "\u6B64\u7247\u6BB5\u4E0D\u5728\u5F53\u524D\u539F\u6587\u4E2D\uFF0C\u8BF7\u6062\u590D\u539F\u6587\uFF1B\u8865\u5145\u610F\u89C1\u8BF7\u5199\u5728\u6279\u6CE8\u91CC\u3002" }) : null,
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("label", { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { className: "px-muted", children: "\u53EF\u9009\u4E2D\u4E0A\u65B9\u539F\u6587\uFF0C\u4E5F\u53EF\u5728\u8FD9\u91CC\u5220\u53BB\u4E0D\u9700\u8981\u7684\u90E8\u5206\uFF1B\u987B\u4FDD\u7559\u8FDE\u7EED\u7684\u539F\u6587\u3002" }),
+		      quote && !validQuote ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "alert", children: "\u6B64\u7247\u6BB5\u4E0D\u5728\u5F53\u524D\u539F\u6587\u4E2D\uFF0C\u8BF7\u6062\u590D\u539F\u6587\uFF1B\u8865\u5145\u610F\u89C1\u8BF7\u5199\u5728\u6279\u6CE8\u91CC\u3002" }) : null,
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
 		        "\u6211\u7684\u6279\u6CE8",
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		          "textarea",
 		          {
 		            "aria-label": "\u6211\u7684\u6279\u6CE8",
@@ -1366,8 +1482,8 @@ window.__ModuleLoader__.load({
 		          }
 		        )
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "px-actions", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		          "button",
 		          {
 		            className: "px-primary",
@@ -1383,9 +1499,9 @@ window.__ModuleLoader__.load({
 		            children: editing ? "\u66F4\u65B0\u6279\u6CE8" : "\u4FDD\u5B58\u6279\u6CE8"
 		          }
 		        ),
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { disabled: busy || !validQuote, onClick: () => draft && insert(draft), children: "\u5F15\u7528\u5230\u8F93\u5165\u6846" }),
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { disabled: busy, onClick: () => setEditor((old) => ({ ...old, collapsed: true })), children: "\u6536\u8D77\u7F16\u8F91\u5668" }),
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy || !validQuote, onClick: () => draft && insert(draft), children: "\u5F15\u7528\u5230\u8F93\u5165\u6846" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => setEditor((old) => ({ ...old, collapsed: true })), children: "\u6536\u8D77\u7F16\u8F91\u5668" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		          ConfirmDelete,
 		          {
 		            label: "\u653E\u5F03\u8349\u7A3F",
@@ -1398,28 +1514,28 @@ window.__ModuleLoader__.load({
 		        )
 		      ] })
 		    ] }) }) : null,
-		    /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("h4", { children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("h4", { children: [
 		      "\u5DF2\u4FDD\u5B58 \xB7 ",
 		      notes.data?.total ?? 0
 		    ] }),
-		    /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "px-actions", children: [
-		      noteBefore ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { onClick: () => setNoteBefore(null), children: "\u6700\u65B0\u6279\u6CE8" }) : null,
-		      notes.data?.nextBefore ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { onClick: () => setNoteBefore(notes.data.nextBefore), children: "\u66F4\u65E9\u6279\u6CE8" }) : null
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
+		      noteBefore ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { onClick: () => setNoteBefore(null), children: "\u6700\u65B0\u6279\u6CE8" }) : null,
+		      notes.data?.nextBefore ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { onClick: () => setNoteBefore(notes.data.nextBefore), children: "\u66F4\u65E9\u6279\u6CE8" }) : null
 		    ] }),
-		    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("span", { className: "px-load-status", role: "status", children: notes.loading ? "\u6B63\u5728\u8BFB\u53D6\u6279\u6CE8\u2026" : "" }),
-		    notes.data?.annotations.map((a) => /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("article", { className: "px-card", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("small", { className: "px-muted", children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "px-load-status", role: "status", children: notes.loading ? "\u6B63\u5728\u8BFB\u53D6\u6279\u6CE8\u2026" : "" }),
+		    notes.data?.annotations.map((a) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("article", { className: "px-card", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("small", { className: "px-muted", children: [
 		        "\u8BB0\u5F55 ",
 		        a.seq,
 		        " \xB7 ",
 		        stamp(a.updatedAt)
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("blockquote", { children: a.quote }),
-		      a.note ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { children: a.note }) : null,
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "px-actions", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { disabled: busy, onClick: () => insert(a), children: "\u5F15\u7528\u5230\u8F93\u5165\u6846" }),
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { disabled: busy, onClick: () => void choose(a.messageId, a), children: "\u67E5\u770B\u539F\u6587 / \u7F16\u8F91" }),
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("blockquote", { children: a.quote }),
+		      a.note ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { children: a.note }) : null,
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => insert(a), children: "\u5F15\u7528\u5230\u8F93\u5165\u6846" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => void choose(a.messageId, a), children: "\u67E5\u770B\u539F\u6587 / \u7F16\u8F91" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		          ConfirmDelete,
 		          {
 		            label: "\u5220\u9664\u6279\u6CE8",
@@ -1434,9 +1550,9 @@ window.__ModuleLoader__.load({
 		        )
 		      ] })
 		    ] }, a.id)),
-		    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("h4", { children: "\u4F1A\u8BDD\u6B63\u6587" }),
-		    /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "px-actions", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("h4", { children: "\u4F1A\u8BDD\u6B63\u6587" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		        "button",
 		        {
 		          onClick: () => {
@@ -1446,24 +1562,24 @@ window.__ModuleLoader__.load({
 		          children: "\u6700\u65B0\u6B63\u6587"
 		        }
 		      ),
-		      data?.nextBefore !== null && data?.nextBefore !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { onClick: () => setBefore(data.nextBefore), children: "\u66F4\u65E9\u6B63\u6587" }) : null
+		      data?.nextBefore !== null && data?.nextBefore !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { onClick: () => setBefore(data.nextBefore), children: "\u66F4\u65E9\u6B63\u6587" }) : null
 		    ] }),
-		    data?.messages.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { children: "\u8FD8\u6CA1\u6709\u53EF\u5F15\u7528\u7684\u6B63\u6587\u3002" }) : null,
-		    data?.messages.map((m) => /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("article", { className: "px-card", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("small", { children: [
+		    data?.messages.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { children: "\u8FD8\u6CA1\u6709\u53EF\u5F15\u7528\u7684\u6B63\u6587\u3002" }) : null,
+		    data?.messages.map((m) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("article", { className: "px-card", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("small", { children: [
 		        m.role === "user" ? "\u7528\u6237" : "\u52A9\u624B",
 		        " \xB7 ",
 		        stamp(m.time)
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { children: m.text }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { disabled: busy, onClick: () => void choose(m.id), children: "\u5F15\u7528 / \u6279\u6CE8\u6B64\u6D88\u606F" })
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { children: m.text }),
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => void choose(m.id), children: "\u5F15\u7528 / \u6279\u6CE8\u6B64\u6D88\u606F" })
 		    ] }, m.id))
 		  ] });
 		}
 
 		// packages/dsh-px-workspace/src/client/schedules.tsx
-		var import_react9 = require("react");
-		var import_jsx_runtime6 = require("react/jsx-runtime");
+		var import_react10 = require("react");
+		var import_jsx_runtime7 = require("react/jsx-runtime");
 		function localTime(time) {
 		  const d = new Date(time);
 		  return new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 16);
@@ -1501,8 +1617,8 @@ window.__ModuleLoader__.load({
 		  const setMinutes = (minutes2) => setDraft((old) => ({ ...old, minutes: minutes2, dirty: true }));
 		  const setDaily = (daily2) => setDraft((old) => ({ ...old, daily: daily2, dirty: true }));
 		  const setEnabled = (enabled2) => setDraft((old) => ({ ...old, enabled: enabled2, dirty: true }));
-		  const [localBusy, setBusy] = (0, import_react9.useState)(false), [failure, setFailure] = (0, import_react9.useState)(""), [notice, setNotice] = (0, import_react9.useState)("");
-		  const [replacement, setReplacement] = (0, import_react9.useState)(null);
+		  const [localBusy, setBusy] = (0, import_react10.useState)(false), [failure, setFailure] = (0, import_react10.useState)(""), [notice, setNotice] = (0, import_react10.useState)("");
+		  const [replacement, setReplacement] = (0, import_react10.useState)(null);
 		  const begin = (s, replace = false) => {
 		    if (!draftAvailable) return;
 		    if ((draft.dirty || title.trim() || prompt.trim()) && !replace) {
@@ -1542,25 +1658,25 @@ window.__ModuleLoader__.load({
 		  }
 		  const rule = () => kind === "once" ? { kind, at: new Date(at).getTime() } : kind === "interval" ? { kind, minutes: Number(minutes) } : { kind, time: daily };
 		  const timingText = (t) => t.kind === "once" ? "\u4E00\u6B21 \xB7 " + stamp(t.at) : t.kind === "interval" ? `\u6BCF ${t.minutes} \u5206\u949F` : `\u6BCF\u5929 ${t.time}`;
-		  return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-ui px-panel", children: [
-		    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("h3", { children: "\u5B9A\u65F6\u4EFB\u52A1" }),
-		    /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("p", { className: "px-muted", children: [
+		  return /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "px-ui px-panel", children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("h3", { children: "\u5B9A\u65F6\u4EFB\u52A1" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("p", { className: "px-muted", children: [
 		      "\u5E94\u7528\u8FD0\u884C\u65F6\u5411\u6307\u5B9A\u4F1A\u8BDD\u6295\u9012\uFF0C\u6CBF\u7528\u8BE5\u4F1A\u8BDD\u7684\u6A21\u578B\u4E0E\u6743\u9650\u3002\u5FD9\u788C\u65F6\u8FDB\u5165\u961F\u5217\uFF1B\u9000\u51FA\u671F\u95F4\u4E0D\u6267\u884C\uFF0C\u6062\u590D\u540E\u91CD\u590D\u4EFB\u52A1\u53EA\u8865\u6700\u65B0\u4E00\u6B21\u3002\u65F6\u533A\uFF1A",
 		      data?.timeZone ?? "\u8BFB\u53D6\u4E2D",
 		      "\u3002"
 		    ] }),
-		    /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { className: "px-primary", disabled: busy || !draftAvailable, onClick: () => begin(null), children: "\u65B0\u5EFA\u5B9A\u65F6\u4EFB\u52A1" }),
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { onClick: refresh, children: "\u5237\u65B0\u4EFB\u52A1" })
+		    /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "px-actions", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { className: "px-primary", disabled: busy || !draftAvailable, onClick: () => begin(null), children: "\u65B0\u5EFA\u5B9A\u65F6\u4EFB\u52A1" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { onClick: refresh, children: "\u5237\u65B0\u4EFB\u52A1" })
 		    ] }),
-		    draftWarning ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "alert", children: draftWarning }) : null,
-		    unreadableDraft ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(ConfirmDelete, { label: "\u653E\u5F03\u65E0\u6CD5\u6062\u590D\u7684\u8349\u7A3F", onConfirm: async () => clearDraft() }) : null,
-		    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(StorageNotice, { visible, onRestored: refresh }),
-		    !form && (draft.dirty || title.trim() || prompt.trim()) ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { onClick: () => setForm(true), children: "\u7EE7\u7EED\u7F16\u8F91\u8349\u7A3F" }) : null,
-		    replacement ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("section", { className: "px-card", role: "alert", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { children: "\u5F53\u524D\u7A97\u53E3\u5DF2\u6709\u5B9A\u65F6\u4EFB\u52A1\u8349\u7A3F\u3002\u8BF7\u5148\u4FDD\u5B58\uFF0C\u6216\u660E\u786E\u653E\u5F03\u540E\u518D\u6253\u5F00\u53E6\u4E00\u9879\u3002" }),
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		    draftWarning ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { role: "alert", children: draftWarning }) : null,
+		    unreadableDraft ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(ConfirmDelete, { label: "\u653E\u5F03\u65E0\u6CD5\u6062\u590D\u7684\u8349\u7A3F", onConfirm: async () => clearDraft() }) : null,
+		    /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(StorageNotice, { visible, onRestored: refresh }),
+		    !form && (draft.dirty || title.trim() || prompt.trim()) ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { onClick: () => setForm(true), children: "\u7EE7\u7EED\u7F16\u8F91\u8349\u7A3F" }) : null,
+		    replacement ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("section", { className: "px-card", role: "alert", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { children: "\u5F53\u524D\u7A97\u53E3\u5DF2\u6709\u5B9A\u65F6\u4EFB\u52A1\u8349\u7A3F\u3002\u8BF7\u5148\u4FDD\u5B58\uFF0C\u6216\u660E\u786E\u653E\u5F03\u540E\u518D\u6253\u5F00\u53E6\u4E00\u9879\u3002" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "button",
 		          {
 		            onClick: () => {
@@ -1570,16 +1686,16 @@ window.__ModuleLoader__.load({
 		            children: "\u4FDD\u7559\u5F53\u524D\u8349\u7A3F"
 		          }
 		        ),
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { onClick: () => begin(replacement.schedule, true), children: "\u653E\u5F03\u8349\u7A3F\u5E76\u6253\u5F00" })
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { onClick: () => begin(replacement.schedule, true), children: "\u653E\u5F03\u8349\u7A3F\u5E76\u6253\u5F00" })
 		      ] })
 		    ] }) : null,
-		    failure || error ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "alert", children: failure || error }) : null,
-		    notice ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "status", className: "px-feedback", children: notice }) : null,
-		    form ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("section", { className: "px-card", "aria-label": "\u5B9A\u65F6\u4EFB\u52A1\u7F16\u8F91\u5668", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("fieldset", { disabled: busy || !draftAvailable, children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("h4", { children: editing ? "\u7F16\u8F91\u4EFB\u52A1" : "\u65B0\u5EFA\u4EFB\u52A1" }),
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+		    failure || error ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { role: "alert", children: failure || error }) : null,
+		    notice ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { role: "status", className: "px-feedback", children: notice }) : null,
+		    form ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("section", { className: "px-card", "aria-label": "\u5B9A\u65F6\u4EFB\u52A1\u7F16\u8F91\u5668", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("fieldset", { disabled: busy || !draftAvailable, children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("h4", { children: editing ? "\u7F16\u8F91\u4EFB\u52A1" : "\u65B0\u5EFA\u4EFB\u52A1" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { children: [
 		        "\u4EFB\u52A1\u540D\u79F0",
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "input",
 		          {
 		            "aria-label": "\u4EFB\u52A1\u540D\u79F0",
@@ -1589,27 +1705,27 @@ window.__ModuleLoader__.load({
 		          }
 		        )
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { children: [
 		        "\u76EE\u6807\u4F1A\u8BDD",
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
 		          "select",
 		          {
 		            "aria-label": "\u76EE\u6807\u4F1A\u8BDD",
 		            value: sessionId,
 		            onChange: (e) => setSessionId(e.target.value),
 		            children: [
-		              !sessions.byId[sessionId] ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("option", { value: sessionId, children: [
+		              !sessions.byId[sessionId] ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("option", { value: sessionId, children: [
 		                sessionId,
 		                "\uFF08\u6682\u4E0D\u53EF\u7528\uFF09"
 		              ] }) : null,
-		              sessions.ids.filter((id) => sessions.byId[id]?.origin !== "subagent").map((id) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: id, children: sessions.byId[id].displayTitle }, id))
+		              sessions.ids.filter((id) => sessions.byId[id]?.origin !== "subagent").map((id) => /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("option", { value: id, children: sessions.byId[id].displayTitle }, id))
 		            ]
 		          }
 		        )
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { children: [
 		        "\u6267\u884C\u8981\u6C42",
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "textarea",
 		          {
 		            "aria-label": "\u6267\u884C\u8981\u6C42",
@@ -1621,17 +1737,17 @@ window.__ModuleLoader__.load({
 		          }
 		        )
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { children: [
 		        "\u89E6\u53D1\u65B9\u5F0F",
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("select", { "aria-label": "\u89E6\u53D1\u65B9\u5F0F", value: kind, onChange: (e) => setKind(e.target.value), children: [
-		          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "once", children: "\u6307\u5B9A\u65F6\u95F4\u6267\u884C\u4E00\u6B21" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "interval", children: "\u56FA\u5B9A\u95F4\u9694" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("option", { value: "daily", children: "\u6BCF\u5929" })
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("select", { "aria-label": "\u89E6\u53D1\u65B9\u5F0F", value: kind, onChange: (e) => setKind(e.target.value), children: [
+		          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("option", { value: "once", children: "\u6307\u5B9A\u65F6\u95F4\u6267\u884C\u4E00\u6B21" }),
+		          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("option", { value: "interval", children: "\u56FA\u5B9A\u95F4\u9694" }),
+		          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("option", { value: "daily", children: "\u6BCF\u5929" })
 		        ] })
 		      ] }),
-		      kind === "once" ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+		      kind === "once" ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { children: [
 		        "\u672C\u673A\u65F6\u95F4",
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "input",
 		          {
 		            "aria-label": "\u672C\u673A\u65F6\u95F4",
@@ -1641,9 +1757,9 @@ window.__ModuleLoader__.load({
 		            onChange: (e) => setAt(e.target.value)
 		          }
 		        )
-		      ] }) : kind === "interval" ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+		      ] }) : kind === "interval" ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { children: [
 		        "\u95F4\u9694\uFF08\u5206\u949F\uFF09",
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "input",
 		          {
 		            "aria-label": "\u95F4\u9694\u5206\u949F",
@@ -1655,9 +1771,9 @@ window.__ModuleLoader__.load({
 		            onChange: (e) => setMinutes(e.target.value)
 		          }
 		        )
-		      ] }) : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
+		      ] }) : /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { children: [
 		        "\u6BCF\u65E5\u65F6\u95F4",
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "input",
 		          {
 		            "aria-label": "\u6BCF\u65E5\u65F6\u95F4",
@@ -1668,12 +1784,12 @@ window.__ModuleLoader__.load({
 		          }
 		        )
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { className: "px-check", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("input", { type: "checkbox", checked: enabled, onChange: (e) => setEnabled(e.target.checked) }),
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { className: "px-check", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("input", { type: "checkbox", checked: enabled, onChange: (e) => setEnabled(e.target.checked) }),
 		        "\u542F\u7528\u6B64\u4EFB\u52A1"
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "button",
 		          {
 		            className: "px-primary",
@@ -1693,8 +1809,8 @@ window.__ModuleLoader__.load({
 		            children: "\u4FDD\u5B58\u5B9A\u65F6\u4EFB\u52A1"
 		          }
 		        ),
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => setForm(false), children: "\u6536\u8D77\u7F16\u8F91\u5668\uFF08\u4FDD\u7559\u8349\u7A3F\uFF09" }),
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { disabled: busy, onClick: () => setForm(false), children: "\u6536\u8D77\u7F16\u8F91\u5668\uFF08\u4FDD\u7559\u8349\u7A3F\uFF09" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          ConfirmDelete,
 		          {
 		            label: "\u653E\u5F03\u8349\u7A3F",
@@ -1707,31 +1823,31 @@ window.__ModuleLoader__.load({
 		        )
 		      ] })
 		    ] }) }) : null,
-		    data?.schedules.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { children: "\u5C1A\u672A\u914D\u7F6E\u5B9A\u65F6\u4EFB\u52A1\u3002" }) : null,
-		    data?.schedules.map((s) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("article", { className: "px-card", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("h4", { children: [
+		    data?.schedules.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { children: "\u5C1A\u672A\u914D\u7F6E\u5B9A\u65F6\u4EFB\u52A1\u3002" }) : null,
+		    data?.schedules.map((s) => /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("article", { className: "px-card", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("h4", { children: [
 		        s.title,
 		        " \xB7 ",
 		        s.enabled ? "\u5DF2\u542F\u7528" : "\u5DF2\u6682\u505C"
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { children: s.prompt }),
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("p", { className: "px-muted", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { children: s.prompt }),
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("p", { className: "px-muted", children: [
 		        "\u4F1A\u8BDD\uFF1A",
 		        sessions.byId[s.sessionId]?.displayTitle ?? s.sessionId,
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("br", {}),
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("br", {}),
 		        timingText(s.timing),
 		        " \xB7 ",
 		        s.timeZone,
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("br", {}),
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("br", {}),
 		        "\u4E0B\u6B21\uFF1A",
 		        stamp(s.nextAt)
 		      ] }),
-		      s.history[0]?.status === "uncertain" ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("p", { role: "alert", children: [
+		      s.history[0]?.status === "uncertain" ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("p", { role: "alert", children: [
 		        s.history[0].detail,
 		        " \u68C0\u67E5\u4F1A\u8BDD\u540E\u518D\u624B\u52A8\u6295\u9012\u6216\u542F\u7528\u3002"
 		      ] }) : null,
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "button",
 		          {
 		            disabled: !sessions.byId[s.sessionId],
@@ -1739,8 +1855,8 @@ window.__ModuleLoader__.load({
 		            children: "\u6253\u5F00\u4F1A\u8BDD"
 		          }
 		        ),
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => begin(s), children: "\u7F16\u8F91\u4EFB\u52A1" }),
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { disabled: busy, onClick: () => begin(s), children: "\u7F16\u8F91\u4EFB\u52A1" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "button",
 		          {
 		            disabled: busy,
@@ -1751,7 +1867,7 @@ window.__ModuleLoader__.load({
 		            children: s.enabled ? "\u6682\u505C\u4EFB\u52A1" : "\u542F\u7528\u4EFB\u52A1"
 		          }
 		        ),
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "button",
 		          {
 		            disabled: busy,
@@ -1763,7 +1879,7 @@ window.__ModuleLoader__.load({
 		            children: "\u7ACB\u5373\u6295\u9012\u4E00\u6B21"
 		          }
 		        ),
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          ConfirmDelete,
 		          {
 		            label: "\u5220\u9664\u4EFB\u52A1",
@@ -1775,14 +1891,14 @@ window.__ModuleLoader__.load({
 		          }
 		        )
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("details", { children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("summary", { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("details", { children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("summary", { children: [
 		          "\u6700\u8FD1\u89E6\u53D1 \xB7 ",
 		          s.history.length,
 		          " \u6B21"
 		        ] }),
-		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { className: "px-muted", children: "\u5DF2\u5165\u961F\u8868\u793A\u4F1A\u8BDD\u5DF2\u63A5\u6536\uFF1B\u8F6E\u6B21\u7ED3\u675F\u4E0D\u4EE3\u8868\u4EFB\u52A1\u5185\u5BB9\u9A8C\u8BC1\u901A\u8FC7\u3002\u8BF7\u6253\u5F00\u76EE\u6807\u4F1A\u8BDD\u6838\u5BF9\u8F93\u51FA\u3002" }),
-		        s.history.map((h) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("p", { children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "px-muted", children: "\u5DF2\u5165\u961F\u8868\u793A\u4F1A\u8BDD\u5DF2\u63A5\u6536\uFF1B\u8F6E\u6B21\u7ED3\u675F\u4E0D\u4EE3\u8868\u4EFB\u52A1\u5185\u5BB9\u9A8C\u8BC1\u901A\u8FC7\u3002\u8BF7\u6253\u5F00\u76EE\u6807\u4F1A\u8BDD\u6838\u5BF9\u8F93\u51FA\u3002" }),
+		        s.history.map((h) => /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("p", { children: [
 		          stamp(h.time),
 		          " \xB7",
 		          " ",
@@ -1798,8 +1914,8 @@ window.__ModuleLoader__.load({
 		          }[h.status],
 		          h.turn !== void 0 ? ` \xB7 \u7B2C ${h.turn} \u8F6E` : "",
 		          h.finishedAt ? ` \xB7 \u7ED3\u675F\u4E8E ${stamp(h.finishedAt)}` : "",
-		          h.detail ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("small", { children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("br", {}),
+		          h.detail ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("small", { children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("br", {}),
 		            h.detail
 		          ] }) : null
 		        ] }, h.requestId))
@@ -1828,7 +1944,7 @@ window.__ModuleLoader__.load({
 		}
 
 		// packages/dsh-px-workspace/src/client.tsx
-		var import_jsx_runtime7 = require("react/jsx-runtime");
+		var import_jsx_runtime8 = require("react/jsx-runtime");
 		var inject = ["slots", "sessions", "uiWorkspace", "conversation"];
 		function apply(raw) {
 		  const capabilities = createCapabilities({});
@@ -1852,7 +1968,7 @@ window.__ModuleLoader__.load({
 		    "shell.overlay",
 		    () => ctx.slots.register(
 		      { name: "shell.overlay", id: "dsh-px-workspace", order: 0, registrant: "dsh-px-workspace" },
-		      () => /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(SessionBar, { ctx })
+		      () => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(SessionBar, { ctx })
 		    )
 		  );
 		  ctx.inject(["sidebarRight"], (host) => {
@@ -1863,6 +1979,16 @@ window.__ModuleLoader__.load({
 		        if (capabilities.getSnapshot().terminal === terminal) capabilities.set({ terminal: void 0 });
 		      },
 		      "workspace: terminal capability"
+		    );
+		  });
+		  ctx.inject(["sidebarRightTabs"], (host) => {
+		    const nativeTabs = host.sidebarRightTabs;
+		    capabilities.set({ nativeTabs });
+		    host.effect(
+		      () => () => {
+		        if (capabilities.getSnapshot().nativeTabs === nativeTabs) capabilities.set({ nativeTabs: void 0 });
+		      },
+		      "workspace: native panel registry"
 		    );
 		  });
 		  ctx.inject(["betterSidebar"], (host) => {
@@ -1876,37 +2002,17 @@ window.__ModuleLoader__.load({
 		    );
 		    host.slots.inject(
 		      "conversation.chat.assistant-actions",
-		      () => host.slots.register(
-		        {
-		          name: "conversation.chat.assistant-actions",
-		          id: "dsh-px-quote",
-		          order: 95,
-		          registrant: "dsh-px-workspace"
-		        },
-		        (p) => /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("span", { className: "px-ui", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
-		          "button",
+		      () => host.effect(
+		        () => host.slots.register(
 		          {
-		            className: "px-quote-action",
-		            title: "\u5F15\u7528\u6216\u6279\u6CE8\u8FD9\u6761\u6D88\u606F",
-		            onClick: () => {
-		              try {
-		                requestQuote(p.sessionId, p.messageId);
-		                sidebar.openTab(
-		                  { type: "px-notes", meta: { messageId: p.messageId } },
-		                  { sessionId: p.sessionId }
-		                );
-		              } catch (err) {
-		                const scope = ctx.sessions.scope(p.sessionId);
-		                if (scope)
-		                  ctx.conversation.input.for(scope).notify("error", err instanceof Error ? err.message : String(err));
-		              }
-		            },
-		            children: [
-		              /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Icon, { name: "note" }),
-		              "\u5F15\u7528 / \u6279\u6CE8"
-		            ]
-		          }
-		        ) })
+		            name: "conversation.chat.assistant-actions",
+		            id: "dsh-px-quote",
+		            order: 95,
+		            registrant: "dsh-px-workspace"
+		          },
+		          (p) => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(QuoteAction, { ...p, ctx })
+		        ),
+		        "workspace: quote action"
 		      )
 		    );
 		    for (const [id, title, component, icon] of [
@@ -1920,10 +2026,10 @@ window.__ModuleLoader__.load({
 		          title,
 		          order: 16,
 		          single: true,
-		          icon: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Icon, { name: icon }),
+		          icon: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(Icon, { name: icon }),
 		          component: (p) => {
 		            const Component = component;
-		            return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(Component, { ...p, ctx }, p.scope.sessionId);
+		            return /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(Component, { ...p, ctx }, p.scope.sessionId);
 		          }
 		        }),
 		        `workspace: ${id}`

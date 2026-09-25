@@ -1,6 +1,6 @@
 import type { Client, Panel } from './client/contracts'
 import { css } from './client/styles'
-import { requestQuote } from './client/data'
+import { QuoteAction } from './client/quote-action'
 import { SessionBar } from './client/session-bar'
 import { ArtifactsPanel } from './client/artifacts'
 import { NotesPanel } from './client/notes'
@@ -42,6 +42,16 @@ export function apply(raw: Omit<Client, 'capabilities'>): void {
       'workspace: terminal capability'
     )
   })
+  ctx.inject(['sidebarRightTabs'], (host) => {
+    const nativeTabs = host.sidebarRightTabs
+    capabilities.set({ nativeTabs })
+    host.effect(
+      () => () => {
+        if (capabilities.getSnapshot().nativeTabs === nativeTabs) capabilities.set({ nativeTabs: undefined })
+      },
+      'workspace: native panel registry'
+    )
+  })
   ctx.inject(['betterSidebar'], (host) => {
     const sidebar = host.betterSidebar
     capabilities.set({ sidebar })
@@ -51,40 +61,22 @@ export function apply(raw: Omit<Client, 'capabilities'>): void {
       },
       'workspace: sidebar capability'
     )
+    // A slot contribution must be owned by an effect: when this provider unloads, the
+    // returned disposer has to run with the rest of the injection scope, otherwise the
+    // footer action stays registered against a sidebar service that is already gone.
     host.slots.inject('conversation.chat.assistant-actions', () =>
-      host.slots.register(
-        {
-          name: 'conversation.chat.assistant-actions',
-          id: 'dsh-px-quote',
-          order: 95,
-          registrant: 'dsh-px-workspace'
-        },
-        (p: { sessionId: string; messageId: string }) => (
-          <span className="px-ui">
-            <button
-              className="px-quote-action"
-              title="引用或批注这条消息"
-              onClick={() => {
-                try {
-                  requestQuote(p.sessionId, p.messageId)
-                  sidebar.openTab(
-                    { type: 'px-notes', meta: { messageId: p.messageId } },
-                    { sessionId: p.sessionId }
-                  )
-                } catch (err) {
-                  const scope = ctx.sessions.scope(p.sessionId)
-                  if (scope)
-                    ctx.conversation.input
-                      .for(scope)
-                      .notify('error', err instanceof Error ? err.message : String(err))
-                }
-              }}
-            >
-              <Icon name="note" />
-              引用 / 批注
-            </button>
-          </span>
-        )
+      host.effect(
+        () =>
+          host.slots.register(
+            {
+              name: 'conversation.chat.assistant-actions',
+              id: 'dsh-px-quote',
+              order: 95,
+              registrant: 'dsh-px-workspace'
+            },
+            (p: { sessionId: string; messageId: string }) => <QuoteAction {...p} ctx={ctx} />
+          ),
+        'workspace: quote action'
       )
     )
     for (const [id, title, component, icon] of [

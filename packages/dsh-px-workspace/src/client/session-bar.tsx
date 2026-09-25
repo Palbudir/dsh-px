@@ -5,6 +5,7 @@ import { closeTabState, visibleTabs } from './tab-state'
 import { Icon } from '../../../shared/ui'
 import { useSessionLayout } from './layout'
 import { attachToolbarLayout, isTypingTarget } from './host-layout'
+import { panelAvailability, usePanelCapabilities } from './panel-availability'
 
 const panels = [
   ['editor', '文件', 'file'],
@@ -18,12 +19,7 @@ const panels = [
 ] as const
 export function SessionBar({ ctx }: { ctx: Client }): unknown {
   const sessions = useSnapshot(ctx.sessions.list)
-  const capabilities = useSnapshot(ctx.capabilities)
-  const [, refreshSidebar] = useState(0)
-  useEffect(
-    () => capabilities.sidebar?.subscribeState(() => refreshSidebar((n) => n + 1)),
-    [capabilities.sidebar]
-  )
+  const capabilities = usePanelCapabilities(ctx)
   const layout = useSessionLayout()
   const { tabs, setTabs, ready } = layout
   const [error, setError] = useState('')
@@ -137,21 +133,26 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
   const panel = (type: string): void => {
     if (!current) return
     try {
-      if (!enabled(type)) {
-        setError('此面板尚未启用。可在“运行与帮助”检查实际服务，并在“侧边卡片”设置中启用。')
+      const live = ctx.capabilities.getSnapshot()
+      const availability = panelAvailability(live, type)
+      if (!availability.enabled) {
+        setError(availability.reason)
         return
       }
-      if (type === 'terminal') capabilities.terminal!.openTabIn(current, 'terminal', { revealIfOpened: true })
-      else capabilities.sidebar!.openTab({ type }, { sessionId: current, cwd: row?.cwd })
+      if (type === 'terminal') live.terminal!.openTabIn(current, 'terminal', { revealIfOpened: true })
+      else live.sidebar!.openTab({ type }, { sessionId: current, cwd: row?.cwd })
       setError('')
     } catch (e) {
       setError(errorText(e))
     }
   }
-  const enabled = (type: string): boolean =>
-    type === 'terminal'
-      ? Boolean(capabilities.terminal && (!capabilities.sidebar || capabilities.sidebar.isTabEnabled(type)))
-      : Boolean(capabilities.sidebar?.isTabEnabled(type))
+  const panelStates = panels.map(([type, text, icon]) => ({
+    type,
+    text,
+    icon,
+    ...panelAvailability(capabilities, type)
+  }))
+  const missingPanels = panelStates.filter((panel) => panel.state === 'missing' || panel.state === 'unknown')
   return (
     <div ref={bar} className="px-ui px-bar" aria-label="DSH-PX 会话工作区">
       <div className="px-tabs">
@@ -243,11 +244,11 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
         </button>
       </div>
       <div className="px-tools">
-        {panels.map(([type, text, icon]) => (
+        {panelStates.map(({ type, text, icon, enabled, reason }) => (
           <button
             key={type}
-            disabled={!current || !enabled(type)}
-            title={enabled(type) ? text : `${text}不可用：检查侧边卡片设置与运行诊断`}
+            disabled={!current || !enabled}
+            title={!current ? '请先选择或新建会话' : enabled ? text : `${text}不可用：${reason}`}
             onClick={() => panel(type)}
           >
             <Icon name={icon} />
@@ -264,10 +265,10 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
             : '选择或新建会话开始'}
         </span>
       </div>
-      {!capabilities.sidebar || !capabilities.terminal ? (
+      {missingPanels.length ? (
         <div role="status" className="px-dependency-warning">
-          {!capabilities.sidebar ? '侧边卡片服务未启用，文件、产物、批注与定时面板暂不可用。' : ''}
-          {!capabilities.terminal ? '终端服务未启用。' : ''} 可到设置 → 运行与帮助检查依赖；会话仍可使用。
+          暂不可用的面板：{missingPanels.map((panel) => panel.text).join('、')}
+          。可在“插件”设置中检查是否启用，或到“运行与帮助”查看依赖；会话仍可使用。
         </div>
       ) : null}
       {layout.warning ? (

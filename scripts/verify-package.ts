@@ -81,7 +81,7 @@ function checkPaths(paths: string[], label: string): void {
     throw new Error(
       `${label} 载荷不合格：${JSON.stringify({ missing, forbidden: forbidden.slice(0, 20), unpruned: extra.slice(0, 10) })}`
     )
-  log(`${label} 必需载荷完整，无敏感、运行或测试数据（${paths.length} 条）`)
+  log(`${label} 必需载荷完整，敏感及运行数据的禁止路径检查通过（${paths.length} 条）`)
 }
 
 function extract(seven: string, archive: string, destination: string, entries: string[]): void {

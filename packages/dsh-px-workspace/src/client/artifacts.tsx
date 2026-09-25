@@ -1,8 +1,11 @@
 import type { Panel, Client } from './contracts'
 import type { Content } from './panel-types'
-import { base, stamp, useData } from './data'
+import { base, stamp, useData, errorText } from './data'
 import { useState } from 'react'
+import { panelAvailability, usePanelCapabilities } from './panel-availability'
 export function ArtifactsPanel({ ctx, scope, visible }: Panel & { ctx: Client }): unknown {
+  const filePanel = panelAvailability(usePanelCapabilities(ctx), 'editor')
+  const [openError, setOpenError] = useState('')
   const [pages, setPages] = useState<Array<string | undefined>>([undefined])
   const before = pages[pages.length - 1]
   const { data, error, refresh, loading } = useData<Content>(
@@ -28,6 +31,8 @@ export function ArtifactsPanel({ ctx, scope, visible }: Panel & { ctx: Client })
         {loading ? '正在读取产物…' : ''}
       </span>
       {error ? <p role="alert">{error}</p> : null}
+      {!filePanel.enabled ? <p role="status">文件预览暂不可用：{filePanel.reason}</p> : null}
+      {openError ? <p role="alert">{openError}</p> : null}
       {!data && !error ? <p>正在读取…</p> : null}
       {data?.artifacts.length === 0 ? (
         <p className="px-empty">此会话还没有交付文件。可以让 Agent 完成任务后展示产物。</p>
@@ -41,7 +46,21 @@ export function ArtifactsPanel({ ctx, scope, visible }: Panel & { ctx: Client })
             <br />
             {stamp(a.time)}
           </p>
-          <button onClick={() => ctx.capabilities.getSnapshot().sidebar?.openFile(scope, a.path)}>
+          <button
+            disabled={!filePanel.enabled}
+            title={filePanel.enabled ? '打开产物' : filePanel.reason}
+            onClick={() => {
+              try {
+                const live = ctx.capabilities.getSnapshot()
+                const current = panelAvailability(live, 'editor')
+                if (!current.enabled) throw new Error(current.reason)
+                live.sidebar!.openFile(scope, a.path)
+                setOpenError('')
+              } catch (err) {
+                setOpenError(errorText(err))
+              }
+            }}
+          >
             打开产物
           </button>
         </article>
