@@ -47,6 +47,10 @@ test('managed client entries activate without the optional sidebar and register 
       cleanups: Array<() => void> = []
     const pending: Array<{ services: string[]; callback: (host: any) => void }> = []
     const core: any = {
+      // Boundary: this stand-in calls the inject callback inline and drops its return value. The
+      // pinned slot service wraps the callback in `ctx.effect(callback)`, and `SlotRegistry.register`
+      // runs `this.ctx.effect(…)` on the CALLER's fiber. Do not reason about contribution ownership
+      // or release from this mock — assert only which entries get registered.
       slots: {
         inject: (_: string, callback: () => void) => callback(),
         register: (entry: any) => {
