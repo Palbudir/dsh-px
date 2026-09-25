@@ -13,9 +13,11 @@ const root = repoRoot(),
   expected = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).version
 const packaged = process.env.DSH_PX_SHOT_EXECUTABLE
 const executable = packaged ? resolve(packaged) : join(root, 'node_modules/electron/dist/electron.exe')
+// asar resolves entries with the platform separator, so a multi-segment literal `out/main/…` only
+// works on POSIX; a single segment happens to work on Windows too.
 const readOutput = (file: string): Buffer =>
   packaged
-    ? extractFile(join(dirname(executable), 'resources/app.asar'), `out/${file}`)
+    ? extractFile(join(dirname(executable), 'resources/app.asar'), join('out', ...file.split('/')))
     : readFileSync(join(root, 'out', file))
 const info = JSON.parse(readOutput('build-info.json').toString('utf8'))
 if (info.version !== expected || info.sourceFingerprint !== sourceFingerprint(root))
