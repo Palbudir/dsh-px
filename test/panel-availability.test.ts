@@ -528,6 +528,10 @@ test('client entry binds native registry availability to its provider lifetime',
     rootEffects: Array<() => void> = []
   const raw = {
     ...f.ctx,
+    // Boundary: this stand-in calls the inject callback inline and drops its return value, so it
+    // proves only that the injection registers an entry. The pinned slot service instead wraps the
+    // callback in `ctx.effect(callback)` and `SlotRegistry.register` runs `this.ctx.effect(…)` on
+    // the CALLER's fiber. Do not use this mock to reason about contribution ownership or release.
     slots: {
       inject: (_name: string, fn: () => void) => fn(),
       register: (entry: any, component: any) => {
@@ -561,4 +565,52 @@ test('client entry binds native registry availability to its provider lifetime',
   secondOff.forEach((fn) => fn())
   assert.equal(capabilities.getSnapshot().nativeTabs, undefined)
   rootEffects.reverse().forEach((fn) => fn())
+})
+
+test('sidebar activation registers the quote footer slot without disturbing the workspace overlay', () => {
+  const f = fixture('Entry'),
+    injections: Array<{ names: string[]; callback: (host: any) => void }> = [],
+    slots: any[] = []
+  const raw = {
+    ...f.ctx,
+    // Boundary: same stand-in as above — it proves only that the injection registers an entry.
+    // It does not model the pinned service's effect lifetime, so it cannot support any claim about
+    // when a contribution is released.
+    slots: {
+      inject: (_name: string, fn: () => void) => fn(),
+      register: (entry: any, component: any) => {
+        slots.push({ entry, component })
+        return () => {}
+      }
+    },
+    effect: () => () => {},
+    inject: (names: string[], callback: (host: any) => void) => {
+      injections.push({ names, callback })
+    }
+  }
+  f.module.exports.apply(raw)
+  assert.equal(
+    slots.some((slot) => slot.entry.name === 'shell.overlay' && slot.entry.id === 'dsh-px-workspace'),
+    true
+  )
+  assert.equal(
+    slots.some((slot) => slot.entry.id === 'dsh-px-quote'),
+    false,
+    'the footer comes from the sidebar injection, not from the workspace entry alone'
+  )
+  injections
+    .find((entry) => entry.names.includes('betterSidebar'))!
+    .callback({
+      betterSidebar: f.sidebar.service,
+      slots: raw.slots,
+      effect: () => () => {}
+    })
+  assert.equal(
+    slots.some(
+      (slot) => slot.entry.name === 'conversation.chat.assistant-actions' && slot.entry.id === 'dsh-px-quote'
+    ),
+    true,
+    'the sidebar injection must contribute the quote footer action'
+  )
+  assert.equal(slots.filter((slot) => slot.entry.name === 'shell.overlay').length, 1)
 })
