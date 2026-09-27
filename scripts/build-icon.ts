@@ -3,7 +3,7 @@
  *
  * 素材**不入库**（避免把第三方美术资源直接放进本仓库），改为在构建时下载并校验
  * SHA-256，然后缩放成 electron-builder 需要的尺寸。这样：
- *   - 仓库里只有脚本和校验和，没有图片；
+ *   - 原始素材保存在本机缓存，元数据记录来源和生成输出；
  *   - 上游更换素材会被校验和挡住，不会悄悄改变我们的产物。
  *
  * 素材来源与授权见 NOTICE.md。要点：仓库 MIT，但美术素材的来源需要署名，
@@ -31,7 +31,8 @@ const SOURCE = {
   name: 'GarfieldZhung/DeepSeek-Whale-Girl → assets/whale/whale-maid.png',
   url: 'https://raw.githubusercontent.com/GarfieldZhung/DeepSeek-Whale-Girl/main/assets/whale/whale-maid.png',
   /** 首次确认时的摘要；上游改动会被挡住并报错，而不是静默换图。 */
-  sha256: process.env.DSH_PX_ICON_SHA256 ?? '',
+  sha256:
+    process.env.DSH_PX_ICON_SHA256 ?? '20b8c0d6b580e23c88de1f01f68a1326c568edc7951f5f45ae98da3cae3c8ee6',
   license: 'MIT（仓库）；美术素材来源与署名见 NOTICE.md'
 }
 
@@ -79,8 +80,8 @@ async function main() {
   const digest = createHash('sha256').update(buf).digest('hex')
   log(`素材 sha256 = ${digest}`)
 
-  // 若锁定了摘要就校验；不一致直接失败，避免产物悄悄变化。
-  if (SOURCE.sha256 && digest !== SOURCE.sha256) {
+  // 默认或显式覆盖的摘要都必须匹配；空值不能跳过校验。
+  if (digest !== SOURCE.sha256) {
     throw new Error(
       `素材摘要不匹配。\n  期望 ${SOURCE.sha256}\n  实际 ${digest}\n` +
         '上游可能已更新素材。确认后把新摘要写入 SOURCE.sha256 或环境变量 DSH_PX_ICON_SHA256。'
@@ -122,7 +123,6 @@ async function main() {
 
   // 记录本次素材摘要，便于追溯。
   const meta = {
-    generatedAt: new Date().toISOString(),
     sourceUrl: SOURCE.url,
     sha256: digest,
     license: SOURCE.license,
