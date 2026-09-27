@@ -11,6 +11,9 @@ import {
 } from './review-core.mjs'
 import { findTrustedQuality, trustedRun } from './review-trusted-ci.mjs'
 
+export const PUBLIC_REVIEW_FAILURE =
+  'Trusted verification could not be completed. Details are available in the private worker log.'
+
 function requireDedicatedApp(policy) {
   if (!Number.isSafeInteger(policy.reviewAppId) || policy.reviewAppId <= 0 || policy.reviewAppId === 15368)
     throw new Error('A configured dedicated review App is required; GitHub Actions is not its identity')
@@ -25,7 +28,8 @@ async function publishCheck(api, policy, body) {
   if (
     latest?.external_id === body.external_id &&
     latest.status === body.status &&
-    (latest.conclusion ?? undefined) === body.conclusion
+    (latest.conclusion ?? undefined) === body.conclusion &&
+    latest.output?.summary === body.output?.summary
   )
     return latest
   return await api(`repos/${policy.repository}/check-runs`, { method: 'POST', body })
@@ -71,11 +75,39 @@ export async function publishReview(report, policy, api) {
     external_id: sha256(canonical(report)),
     output: {
       title: conclusion === 'success' ? 'Independent review passed' : 'Independent review requires attention',
-      summary: `${problem || 'All source batches passed with no unresolved P0/P1/P2 or coverage blockers.'}\n\n${REPORT_MARKER}${encodeReport(report)}`
+      summary:
+        conclusion === 'success'
+          ? `All source batches passed with no unresolved P0/P1/P2 or coverage blockers.\n\n${REPORT_MARKER}${encodeReport(report)}`
+          : PUBLIC_REVIEW_FAILURE
     }
   })
   return { conclusion, id: result.id, problem, retryable: conclusion !== 'success' && proofValid }
 }
+
+function qualityFailureSummary(failure) {
+  // Only fixed GitHub run status fields are public; exception text stays with the local caller.
+  if (
+    failure &&
+    typeof failure === 'object' &&
+    Number.isSafeInteger(failure.runId) &&
+    failure.runId > 0 &&
+    Number.isSafeInteger(failure.runAttempt) &&
+    failure.runAttempt > 0 &&
+    [
+      'failure',
+      'cancelled',
+      'timed_out',
+      'action_required',
+      'neutral',
+      'skipped',
+      'stale',
+      'startup_failure'
+    ].includes(failure.conclusion)
+  )
+    return `Trusted quality run ${failure.runId}, attempt ${failure.runAttempt}: ${failure.conclusion}`
+  return PUBLIC_REVIEW_FAILURE
+}
+
 export async function publishQuality(policy, api, head, evidence, failure) {
   requireDedicatedApp(policy)
   sha(head)
@@ -97,11 +129,11 @@ export async function publishQuality(policy, api, head, evidence, failure) {
         : failure
           ? 'Quality gates failed'
           : 'Waiting for trusted quality gates',
-      summary:
-        failure ||
-        (verified
+      summary: failure
+        ? qualityFailureSummary(failure)
+        : verified
           ? QUALITY_MARKER + Buffer.from(JSON.stringify(verified)).toString('base64')
-          : 'Only the configured default-branch workflow can satisfy this gate.')
+          : 'Only the configured default-branch workflow can satisfy this gate.'
     }
   })
   return { id: result.id, completed, passed: Boolean(verified && !failure) }
@@ -112,13 +144,11 @@ export async function settleQuality(policy, api, head, dispatch) {
   try {
     const quality = await findTrustedQuality(api, policy, head)
     if (quality?.failed) {
-      await publishQuality(
-        policy,
-        api,
-        head,
-        null,
-        `Trusted quality run ${quality.runId}, attempt ${quality.runAttempt}: ${quality.conclusion}`
-      )
+      await publishQuality(policy, api, head, null, {
+        runId: quality.runId,
+        runAttempt: quality.runAttempt,
+        conclusion: quality.conclusion
+      })
       return { finished: true, monitorQuality: quality }
     }
     if (quality && !quality.pending) {

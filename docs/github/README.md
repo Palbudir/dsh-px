@@ -20,9 +20,9 @@ App 没有代码、tag 或 Release 的写权限。RSA 私钥只存本机可信�
 必需检查为 `dsh-px/independent-review` 和 `dsh-px/quality`，都必须来自专用 App ID。同仓分支创建的同名 GitHub Actions job 无法满足这个身份条件。不要填通用 GitHub Actions App ID `15368`。
 
 1. `review-request.yml` 在所有分支 push 和 PR 变更时只记录元数据，不检出 PR 代码。请求按 run ID/attempt 定位。
-2. 本机可信 worker 读取精确 Git 对象，保留文件名原始空白和 UTF-8 内容。大文本分批完整审阅；二进制、缺少上下文、未完成批次均阻断。每批使用独立 Codex 会话，关闭工具、插件、hooks、记忆及项目指令加载。
+2. 本机可信 worker 从精确 head、base 与 merge-base 的 Git 对象收集变更、必要本地依赖、更新消费者和策略显式引用的源码，保留文件名原始空白和 UTF-8 内容。越界、必要依赖缺失或超预算会阻断；大文本分批完整审阅，不截断后放行。每批使用独立 Codex 会话，关闭工具、插件、hooks、记忆及项目指令加载。
 3. worker 沿用用户配置的模型和连接方式，只导入必要字段。已有 Codex 登录由 CLI 使用；GitHub 凭据不传给模型子进程。本次 CLI 最终响应必须与本次随机唯一输出文件一致，旧文件不能冒充新结果。
-4. 本地 Ed25519 证明绑定 repository、head、base、tree、批次、源码摘要、CLI/配置身份、worker 摘要和时间。全部批次通过且无 P0/P1/P2 或阻塞项，才能通过。
+4. 本地 Ed25519 证明绑定 repository、head、base、tree、批次、源码与上下文摘要、CLI/配置身份、worker 摘要和时间。全部批次通过且无 P0/P1/P2 或源码审查阻塞项，才能通过。这里的通过只指静态源码审查，CI 和目标环境实际运行验收仍是独立必需门禁；一般未附运行结果不自动构成源码缺陷，但具体缺陷、必要源码缺失或无法确认的关键假设仍须阻断并说明原因。
 5. App 核对证明后发布独立审查 check。维护者已有 gh 登录触发默认分支的只读 `trusted-quality.yml`。
 6. App 核对质量运行的 `workflow_id`、路径、事件、controller SHA、源码白名单摘要，以及 run-name 绑定的目标 SHA。通过后才发布 `dsh-px/quality`。
 
@@ -41,14 +41,14 @@ $reviewWorker = Join-Path $env:LOCALAPPDATA 'DSH-PX-review-worker'
 node scripts/review-install.mjs "--directory=$reviewWorker"
 ```
 
-安装器复制已审查的 `review-*.mjs`、`release-*.mjs`，记录摘要并生成本地签名密钥。目录必须在仓库外，`..name` 前缀的仓库子目录也会被拒绝。重新安装保留既有身份配置；程序、CLI 或模型配置变化需要重新验证。
+安装器复制已审查的 `review-*.mjs`、`release-*.mjs`，以及经过锁定来源和摘要校验的独立解析器、许可证与来源记录，再记录完整摘要并生成本地签名密钥。解析器只在使用时校验后加载，不从候选检出加载依赖。目录必须在仓库外，`..name` 前缀的仓库子目录也会被拒绝。重新安装保留既有身份配置；程序、CLI 或模型配置变化需要重新验证。
 
 用户授权并创建私有 App 后：
 
 1. 仅选择 dsh-px 安装，将 GitHub PEM 安全保存到可信目录，勿显示密钥内容。
 2. 读取 App ID、installation ID、repository ID；默认分支两个可信 workflow 注册后读取 workflow ID。
 3. 再执行安装器，填写 `--app-id=... --installation-id=... --repository-id=... --quality-workflow-id=... --build-workflow-id=...`。`--app-private-key=绝对路径` 可导入 PEM；`--seven-zip=绝对路径` 可指定本机 7-Zip。
-4. 检查生成的 `public-policy.json`，经审查提交公共配置到 `review-policy.json`。将 `protection.json` 中两个 `app_id: 0` 替换为该 App ID，通过在线验收后再应用。
+4. 检查生成的 `public-policy.json`，经审查提交公共配置到 `review-policy.json`，并同步 `protection.json` 中两个必需检查的 `app_id`。通过在线验收后再应用保护规则。
 
 ```powershell
 node scripts/review-smoke.mjs
@@ -56,11 +56,29 @@ npm test
 node (Join-Path $reviewWorker 'review-worker.mjs') --publish
 ```
 
-`review-smoke` 使用现有 Codex 登录执行正常/缺陷两个样例，不调用 GitHub 写接口。worker 默认不发布 check，`--publish` 才调用已授权 App。每次默认处理一个请求，`DSH_PX_REVIEW_MAX_JOBS` 可调整数量；`--rerun=运行ID --publish` 强制重审。常驻调度另行配置。
+`review-smoke` 使用现有 Codex 登录执行正常/缺陷两个样例，不调用 GitHub 写接口。worker 默认不发布 check，`--publish` 才调用已授权 App。每次默认处理一个请求，`DSH_PX_REVIEW_MAX_JOBS` 可调整数量；`--rerun=运行ID --publish` 重审仍然有效的请求。已删除、被替代或已合并的旧 push 请求以及已关闭 PR 的请求退出队列，保留历史但不生成新的审查结论。重新打开 PR 会产生新请求；未知状态或读取失败保持等待与重试。
+
+公开检查不包含本机异常详情或未经完整验证的证明。私有原因保存在可信目录的 `queue-state.json` 和 `jobs/<runId>-<attempt>/publication-status.json`，后者区分源码审查结论与检查发布阶段；恢复后清理当前错误状态，不改写已签名的源码结论。
+
+常驻运行使用同一可信目录中的循环入口，可通过当前用户的登录启动项以隐藏窗口启动：
+
+```powershell
+node (Join-Path $reviewWorker 'review-loop.mjs') --publish
+# 单轮在线验收
+node (Join-Path $reviewWorker 'review-loop.mjs') --publish --once
+# 在另一个终端请求停止，等待当前 worker 完成
+node (Join-Path $reviewWorker 'review-loop.mjs') --stop
+```
+
+循环顺序执行 worker，每轮结束后等待两分钟；独立锁防止重复启动。状态在 `review-loop-state.json`，本轮 worker 日志在 `worker-latest.log`。
+
+停止命令仅在收到匹配 `requestId` 和 `instanceId` 的持锁实例回执后返回 `requested: true`，这表示该实例已接收请求，当前 worker 仍会正常完成。启动间隙、实例更换、并发请求覆盖或超时可能返回“未确认”，应查看状态后重试；仅写入请求不算送达。确认回执对应实例已为 `stopped` 且没有新实例运行后，再重新安装或修改配置。脚本、配置或策略变化会在校验时停止循环，核对后重新启动；不会中止已经运行的 worker。电脑离线、睡眠或未登录时，未完成检查继续阻止合并。
 
 ## 只读构建与本机发布
 
 `release.yml` 仅响应明确的 workflow_dispatch，从受保护 master 加载可信控制器。它不响应 tag 自动公开，也不持有发布写权限。构建产物包含版本、候选 SHA、controller SHA 及四个资产的摘要。
+
+对外资产在 `dist/release-artifacts` 中准备，使用不含空格的规范名称；更新索引与清单引用同一安装包名。原始 `dist` 文件保持原样，已有准备目录不会被覆盖。版本中的 `+` 在资产名中编码为 `_`，更新索引内的版本值仍保持完整 SemVer。
 
 最终发布由仓库外的本机 `release-controller.mjs` 使用维护者原有 gh 身份执行。它核对当前受保护 master、专用 App check、签名、最新可信质量运行、指定可信构建、版本顺序，以及下载和上传摘要；不执行 tag 或候选提交中的发布脚本。
 

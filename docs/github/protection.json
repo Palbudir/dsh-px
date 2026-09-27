@@ -2,8 +2,8 @@
   "required_status_checks": {
     "strict": true,
     "checks": [
-      { "context": "dsh-px/independent-review", "app_id": 0 },
-      { "context": "dsh-px/quality", "app_id": 0 }
+      { "context": "dsh-px/independent-review", "app_id": 5097986 },
+      { "context": "dsh-px/quality", "app_id": 5097986 }
     ]
   },
   "enforce_admins": true,

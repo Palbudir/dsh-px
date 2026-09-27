@@ -12,6 +12,11 @@ import { fileURLToPath } from 'node:url'
 import { generateKeyPairSync, createPublicKey } from 'node:crypto'
 import { command } from './review-process.mjs'
 import { canonical, sha256, sourceDigest } from './review-core.mjs'
+import {
+  copyReviewParserPayload,
+  preflightReviewParserDestination,
+  readLockedParserSource
+} from './review-parser.mjs'
 
 /** Import only model/transport fields; never hooks, MCP servers, plugins, rules, or literal secrets. */
 export function codexConfigOverrides(source) {
@@ -92,6 +97,9 @@ async function main() {
   const root = resolve(args.directory)
   if (!outsideRepository(source, root))
     throw new Error('Trusted worker cannot be installed inside the repository')
+  // A bad dependency must leave an existing installation and its keys untouched.
+  const parserSource = readLockedParserSource(source)
+  preflightReviewParserDestination(root)
   mkdirSync(root, { recursive: true })
   if (!outsideRepository(realpathSync(source), realpathSync(root)))
     throw new Error('Trusted directory resolves inside the source repository')
@@ -153,6 +161,7 @@ async function main() {
     files[filename] = sha256(readFileSync(from))
     copyFileSync(from, join(root, filename))
   }
+  Object.assign(files, copyReviewParserPayload(parserSource, root))
   const workerDigest = installationDigest(files)
   const cliVersion = await command(codex, ['--version'])
   writeFileSync(join(root, 'installation.json'), JSON.stringify({ files, workerDigest }, null, 2))
