@@ -1,0 +1,22 @@
+name: check-source-identity-probe
+
+on:
+  push:
+    branches: ['test/review-check-identity']
+
+permissions:
+  contents: read
+
+jobs:
+  review-name:
+    name: dsh-px/independent-review
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report ordinary Actions identity
+        run: echo 'Identity probe only; this job performs no independent review.'
+  quality-name:
+    name: dsh-px/quality
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report ordinary Actions identity
+        run: echo 'Identity probe only; this job performs no quality validation.'
