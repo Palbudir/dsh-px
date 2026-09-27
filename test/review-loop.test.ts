@@ -22,6 +22,7 @@ import { pathToFileURL } from 'node:url'
 const load = (name: string): Promise<any> => import(pathToFileURL(resolve('scripts', name)).href)
 const { canonical, sha256 } = await load('review-core.mjs')
 const { acquireReviewLock } = await load('review-worker.mjs')
+const { installReviewParser } = await load('review-parser.mjs')
 const {
   verifyLoopInstallation,
   acquireLoopLock,
@@ -38,17 +39,18 @@ function fixture(t: TestContext) {
   const directory = join(root, 'trusted installation')
   const children: ChildProcess[] = []
   mkdirSync(directory)
-  for (const file of ['review-loop.mjs', 'review-core.mjs'])
+  for (const file of ['review-loop.mjs', 'review-core.mjs', 'review-parser.mjs'])
     copyFileSync(resolve('scripts', file), join(directory, file))
   writeFileSync(join(directory, 'review-worker.mjs'), fakeWorker)
+  const parserFiles = installReviewParser(resolve('.'), directory)
   function seal(extra: Record<string, string> = {}) {
     const files = Object.fromEntries(
-      ['review-loop.mjs', 'review-core.mjs', 'review-worker.mjs'].map((name) => [
+      ['review-loop.mjs', 'review-core.mjs', 'review-parser.mjs', 'review-worker.mjs'].map((name) => [
         name,
         sha256(readFileSync(join(directory, name)))
       ])
     )
-    Object.assign(files, extra)
+    Object.assign(files, parserFiles, extra)
     const workerDigest = sha256(canonical(files))
     writeFileSync(join(directory, 'installation.json'), JSON.stringify({ files, workerDigest }))
     writeFileSync(

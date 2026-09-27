@@ -2,6 +2,7 @@ import { createHash, createPrivateKey, createPublicKey, sign, verify } from 'nod
 import { inflateRawSync } from 'node:zlib'
 import { posix } from 'node:path'
 import { isBuiltin } from 'node:module'
+import { parseReviewSource } from './review-parser.mjs'
 
 export const CHECK_NAME = 'dsh-px/independent-review'
 export const QUALITY_CHECK_NAME = 'dsh-px/quality'
@@ -290,261 +291,112 @@ export function parseReviewTree(bytes) {
     })
 }
 
-/** A small lexer for literal JS/TS module references; comments and quoted fixture source are not imports. */
-function sourceTokens(source, jsx = false) {
-  const tokens = []
-  let i = 0
-  const quoted = () => {
-    const quote = source[i++]
-    while (i < source.length && source[i] !== quote) {
-      if (source[i] === '\\') i++
-      i++
-    }
-    if (i >= source.length) throw new Error('Unclosed JSX attribute')
-    i++
-  }
-  const jsxElement = () => {
-    const at = i++
-    while (i < source.length) {
-      if (source[i] === "'" || source[i] === '"') {
-        quoted()
-        continue
-      }
-      if (source[i] === '{') {
-        i++
-        tokens.push({ kind: 'symbol', value: '(', at: i })
-        scan(true)
-        continue
-      }
-      // TSX component type arguments, e.g. <Select<Item> value={...} />.
-      if (source[i] === '<') {
-        const begin = ++i
-        let depth = 1
-        while (i < source.length && depth) {
-          if (source[i] === "'" || source[i] === '"') {
-            quoted()
-            continue
-          }
-          if (source[i] === '<') depth++
-          if (source[i] === '>') depth--
-          if (depth) i++
-        }
-        if (depth) throw new Error('Unclosed TSX type arguments')
-        tokens.push(
-          ...sourceTokens(source.slice(begin, i)).map((token) => ({ ...token, at: token.at + begin }))
-        )
-        i++
-        continue
-      }
-      if (source.startsWith('/>', i)) {
-        i += 2
-        tokens.push({ kind: 'jsx', value: 'JSX', at })
-        return
-      }
-      if (source[i++] === '>') break
-    }
-    while (i < source.length) {
-      if (source.startsWith('</', i)) {
-        const end = source.indexOf('>', i + 2)
-        if (end < 0) throw new Error('Unclosed JSX closing tag')
-        i = end + 1
-        tokens.push({ kind: 'jsx', value: 'JSX', at })
-        return
-      }
-      if (source[i] === '<') {
-        jsxElement()
-        continue
-      }
-      if (source[i] === '{') {
-        i++
-        tokens.push({ kind: 'symbol', value: '(', at: i })
-        scan(true)
-        continue
-      }
-      i++ // JSX prose (apostrophes, quotes and import-like words) is not JavaScript source.
-    }
-    throw new Error('Unclosed JSX element')
-  }
-  const scan = (interpolation = false) => {
-    let depth = 0
-    while (i < source.length) {
-      const at = i,
-        c = source[i]
-      if (/\s/.test(c)) {
-        i++
-        continue
-      }
-      if (source.startsWith('//', i)) {
-        i = source.indexOf('\n', i)
-        if (i < 0) i = source.length
-        continue
-      }
-      if (source.startsWith('/*', i)) {
-        const end = source.indexOf('*/', i + 2)
-        if (end < 0) throw new Error('Unclosed source comment')
-        i = end + 2
-        continue
-      }
-      if (
-        jsx &&
-        c === '<' &&
-        /^<(?:[A-Za-z_$]|>)/.test(source.slice(i)) &&
-        !/^<[A-Za-z_$][\w$]*(?:\s+extends\b|\s*[,=])/.test(source.slice(i)) &&
-        (!tokens.length || /^(?:=|\(|\[|\{|:|,|;|!|\?|return|yield|=>|\|\||&&)$/.test(tokens.at(-1).value))
-      ) {
-        jsxElement()
-        continue
-      }
-      if (c === "'" || c === '"') {
-        i++
-        while (i < source.length && source[i] !== c) {
-          if (source[i] === '\\') i++
-          i++
-        }
-        if (i >= source.length) throw new Error('Unclosed source literal')
-        tokens.push({ kind: 'string', value: source.slice(at + 1, i), at })
-        i++
-        continue
-      }
-      if (c === '`') {
-        const token = { kind: 'string', value: '', at }
-        tokens.push(token)
-        i++
-        const body = i
-        while (i < source.length && source[i] !== '`') {
-          if (source[i] === '\\') {
-            i += 2
-            continue
-          }
-          if (source.startsWith('${', i)) {
-            token.kind = 'dynamic'
-            i += 2
-            tokens.push({ kind: 'symbol', value: '(', at: i })
-            scan(true)
-            continue
-          }
-          i++
-        }
-        if (i >= source.length) throw new Error('Unclosed template literal')
-        token.value = source.slice(body, i)
-        i++
-        continue
-      }
-      // Regex bodies are data, including text that resembles an import.
-      if (
-        c === '/' &&
-        (!tokens.length || /^(?:=|\(|\[|\{|:|,|;|!|\?|return|throw|=>|\|\||&&)$/.test(tokens.at(-1).value))
-      ) {
-        i++
-        let inClass = false
-        while (i < source.length) {
-          if (source[i] === '\\') {
-            i += 2
-            continue
-          }
-          if (source[i] === '[') inClass = true
-          if (source[i] === ']') inClass = false
-          if (source[i] === '/' && !inClass) {
-            i++
-            break
-          }
-          if (source[i] === '\n') break
-          i++
-        }
-        while (/[a-z]/i.test(source[i] ?? '')) i++
-        tokens.push({ kind: 'regex', value: '/', at })
-        continue
-      }
-      if (c === '}' && interpolation && depth === 0) {
-        i++
-        return
-      }
-      if (c === '{') depth++
-      if (c === '}') depth--
-      const identifier = /^[A-Za-z_$][\w$]*/.exec(source.slice(i))
-      if (identifier) {
-        tokens.push({ kind: 'word', value: identifier[0], at })
-        i += identifier[0].length
-      } else {
-        const value = /^(?:=>|&&|\|\|)/.exec(source.slice(i))?.[0] ?? c
-        tokens.push({ kind: 'symbol', value, at })
-        i += value.length
-      }
-    }
-    if (interpolation) throw new Error('Unclosed template interpolation')
-  }
-  scan()
-  return tokens
-}
-
+/** Read module contracts from a mature AST. Candidate text is parsed as data, never executed. */
 export function reviewModuleReferences(source, options = {}) {
-  const tokens = sourceTokens(source, options.jsx === true),
-    literals = [],
-    dynamic = []
-  const add = (token, owner, complete = true) => {
-    if (token?.kind === 'string' && complete) literals.push({ specifier: token.value, at: token.at })
-    else
-      dynamic.push({
-        at: owner.at,
-        kind: owner.value,
-        ...(token?.kind === 'string' ? { incompleteLiteralPrefix: token.value } : {})
-      })
+  const ast = parseReviewSource(source, options),
+    nodes = [],
+    stack = [ast]
+  while (stack.length) {
+    const node = stack.pop()
+    if (!node || typeof node !== 'object' || typeof node.type !== 'string') continue
+    nodes.push(node)
+    if (nodes.length > 500000) throw new Error('Review source AST exceeds node budget')
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        for (let i = value.length - 1; i >= 0; i--)
+          if (value[i] && typeof value[i].type === 'string') stack.push(value[i])
+      } else if (value && typeof value === 'object' && typeof value.type === 'string') stack.push(value)
+    }
   }
-  for (let i = 0; i < tokens.length; i++) {
-    const token = tokens[i],
-      next = tokens[i + 1]
-    if (token.kind !== 'word') continue
-    if (['import', 'require'].includes(token.value) && next?.value === '(') {
-      const end = tokens[i + 3]?.value
-      add(tokens[i + 2], token, end === ')' || (token.value === 'import' && end === ','))
-      continue
-    }
-    if (token.value === 'import' && next?.kind === 'string') {
-      add(next, token)
-      continue
-    }
+  const literal = (node) =>
+    node?.type === 'StringLiteral'
+      ? node.value
+      : node?.type === 'TemplateLiteral' && node.expressions.length === 0
+        ? node.quasis[0].value.cooked
+        : undefined
+  const member = (node, object, property) =>
+    node?.type === 'MemberExpression' &&
+    !node.computed &&
+    node.object?.type === 'Identifier' &&
+    node.object.name === object &&
+    node.property?.name === property
+  const call = (node, name) =>
+    node?.type === 'CallExpression' && node.callee?.type === 'Identifier' && node.callee.name === name
+  const helpers = new Set()
+  for (const node of nodes) {
     if (
-      (token.value === 'import' && next?.value !== '.') ||
-      (token.value === 'export' && ['{', '*', 'type'].includes(next?.value))
-    ) {
-      for (let j = i + 1; j < tokens.length; j++) {
-        if (tokens[j].value === 'from' && tokens[j + 1]?.kind === 'string') {
-          add(tokens[j + 1], token)
-          break
-        }
-        if (
-          tokens[j].value === ';' ||
-          (j > i + 1 && ['import', 'export', 'const', 'function', 'class', '='].includes(tokens[j].value))
-        )
-          break
-      }
+      node.type !== 'VariableDeclarator' ||
+      node.id?.type !== 'Identifier' ||
+      node.init?.type !== 'ArrowFunctionExpression' ||
+      node.init.params.length !== 1 ||
+      node.init.params[0].type !== 'Identifier'
+    )
+      continue
+    const body = node.init.body,
+      target = body?.type === 'ImportExpression' ? body.source : undefined
+    if (
+      target?.type !== 'MemberExpression' ||
+      target.computed ||
+      target.property?.name !== 'href' ||
+      !call(target.object, 'pathToFileURL') ||
+      target.object.arguments.length !== 1
+    )
+      continue
+    const resolved = target.object.arguments[0]
+    if (
+      call(resolved, 'resolve') &&
+      resolved.arguments.length === 2 &&
+      literal(resolved.arguments[0]) === 'scripts' &&
+      resolved.arguments[1]?.type === 'Identifier' &&
+      resolved.arguments[1].name === node.init.params[0].name
+    )
+      helpers.add(node.id.name)
+  }
+  const literals = [],
+    dynamic = []
+  const add = (target, node, kind, complete = true, repositoryRelative = false) => {
+    const value = literal(target)
+    if (typeof value === 'string' && complete) {
+      literals.push({
+        specifier: repositoryRelative ? 'scripts/' + value : value,
+        at: target.start,
+        ...(repositoryRelative ? { repositoryRelative: true } : {})
+      })
+      return
+    }
+    const prefix =
+      value ??
+      (target?.type === 'BinaryExpression' && target.operator === '+' ? literal(target.left) : undefined)
+    dynamic.push({
+      at: node.start,
+      kind,
+      ...(typeof prefix === 'string'
+        ? { incompleteLiteralPrefix: (repositoryRelative ? 'scripts/' : '') + prefix }
+        : {})
+    })
+  }
+  for (const node of nodes) {
+    if (
+      ['ImportDeclaration', 'ExportNamedDeclaration', 'ExportAllDeclaration'].includes(node.type) &&
+      node.source
+    )
+      add(node.source, node, node.type)
+    else if (node.type === 'ImportExpression') add(node.source, node, 'import')
+    else if (node.type === 'TSImportType') add(node.argument, node, 'import-type')
+    else if (
+      node.type === 'TSImportEqualsDeclaration' &&
+      node.moduleReference?.type === 'TSExternalModuleReference'
+    )
+      add(node.moduleReference.expression, node, 'import-equals')
+    else if (node.type === 'CallExpression') {
+      if (call(node, 'require') || member(node.callee, 'require', 'resolve'))
+        add(node.arguments[0], node, 'require', node.arguments.length === 1)
+      else if (node.callee?.type === 'Identifier' && helpers.has(node.callee.name))
+        add(node.arguments[0], node, 'load', node.arguments.length === 1, true)
     }
   }
-  // The repository's test loader imports literal script names through this specific helper.
-  if (/pathToFileURL\s*\(\s*resolve\s*\(\s*['"]scripts['"]/.test(source))
-    for (let i = 0; i < tokens.length - 2; i++)
-      if (
-        tokens[i].value === 'load' &&
-        tokens[i + 1].value === '(' &&
-        tokens[i + 2].kind === 'string' &&
-        /^[a-z][a-z0-9-]*\.mjs$/.test(tokens[i + 2].value)
-      ) {
-        if (tokens[i + 3]?.value === ')')
-          literals.push({
-            specifier: 'scripts/' + tokens[i + 2].value,
-            repositoryRelative: true,
-            at: tokens[i + 2].at
-          })
-        else
-          dynamic.push({
-            at: tokens[i].at,
-            kind: 'load',
-            incompleteLiteralPrefix: 'scripts/' + tokens[i + 2].value
-          })
-      }
-  return { literals, dynamic }
+  return { literals: literals.sort((a, b) => a.at - b.at), dynamic: dynamic.sort((a, b) => a.at - b.at) }
 }
-
 /** Collect only immutable Git blobs, including before/base contracts when they differ from head. */
 export async function collectReviewContext(request, reader, limits = {}) {
   const maxPaths = limits.maxPaths ?? 256,
@@ -651,6 +503,10 @@ export async function collectReviewContext(request, reader, limits = {}) {
     for (const path of support) add(ref, path, 'review policy and installation contract', false)
     for (const path of consumers) add(ref, path, 'release updater consumer contract', false)
   }
+  // Changed roots already provide merge-base/head text in their change records. A divergent
+  // requested base is a separate integration contract and must not remain a read-only hidden blob.
+  if (request.base !== request.mergeBase)
+    for (const path of request.names) add(request.base, path, 'requested-base changed-root contract', false)
   const resolveDependency = (ref, from, dependency) => {
     const specifier = dependency.specifier
     if (specifier.includes('\\'))
@@ -675,7 +531,7 @@ export async function collectReviewContext(request, reader, limits = {}) {
     const { ref, path } = queue[index],
       entry = await read(ref, path)
     if (/\.[cm]?[jt]sx?$/.test(path)) {
-      const references = reviewModuleReferences(entry.text, { jsx: /\.[jt]sx$/.test(path) })
+      const references = reviewModuleReferences(entry.text, { jsx: /\.[jt]sx$/.test(path), filename: path })
       for (const dependency of references.literals) {
         const specifier = dependency.specifier
         if (dependency.repositoryRelative || specifier.startsWith('.'))
@@ -710,7 +566,36 @@ export async function collectReviewContext(request, reader, limits = {}) {
     }
   }
   const context = [],
-    identities = []
+    identities = [],
+    projections = []
+  if (governance) {
+    for (const [role, ref] of roles) {
+      const lock = await read(ref, 'package-lock.json')
+      if (!lock) continue
+      let value
+      try {
+        value = JSON.parse(lock.text)
+      } catch {
+        throw new Error(`Invalid parser lockfile source at ${ref}`)
+      }
+      const projection = {
+        path: 'package-lock.json',
+        oid: lock.oid,
+        role,
+        ref,
+        sha256: sha256(lock.text),
+        purpose:
+          'Exact parser provenance JSON pointers, not a truncated source file. Full lockfile changes remain in the changed-file records.',
+        pointers: {
+          '/packages//devDependencies/@babel~1parser':
+            value.packages?.['']?.devDependencies?.['@babel/parser'] ?? null,
+          '/packages/node_modules~1@babel~1parser': value.packages?.['node_modules/@babel/parser'] ?? null
+        }
+      }
+      projections.push(projection)
+      context.push(`CONTEXT JSON PROJECTION ${JSON.stringify(projection)}`)
+    }
+  }
   for (const path of [...contextPaths].sort()) {
     const variants = new Map()
     for (const [role, ref] of roles) {
@@ -739,12 +624,22 @@ export async function collectReviewContext(request, reader, limits = {}) {
       after = await read(request.head, path)
     files.push({ path, before: before?.text ?? '', after: after?.text ?? '', binary: false })
   }
-  const header = `Repository: ${request.repository}\nBase: ${request.base}\nMerge base: ${request.mergeBase}\nHead: ${request.head}\nChanged paths: ${JSON.stringify(request.names)}\nContext contract: all selected local sources below are complete immutable Git blobs. Source roles are explicit; identical blobs are printed once. External packages and computed references are not silently treated as reviewed implementations.\nExternal module references (use package.json versions; external code is not in this Git snapshot): ${JSON.stringify([...external.keys()].sort())}\nComputed module references (assess whether their targets need additional context): ${JSON.stringify(dynamic)}\n`
+  const baseRoots =
+    request.base === request.mergeBase
+      ? []
+      : request.names.map((path) => ({
+          path,
+          role: 'base',
+          ref: request.base,
+          oid: trees.get(request.base).get(path)?.oid ?? null
+        }))
+  const header = `Repository: ${request.repository}\nBase: ${request.base}\nMerge base: ${request.mergeBase}\nHead: ${request.head}\nChanged paths: ${JSON.stringify(request.names)}\nRequested-base changed roots (null oid means absent): ${JSON.stringify(baseRoots)}\nContext contract: selected source sections are complete immutable Git blobs. Any JSON-pointer projection is explicitly labelled; full changed-file bytes are still supplied. Source roles are explicit; identical blobs are printed once. External packages and computed references are not silently treated as reviewed implementations.\nExternal module references (use package.json versions; external code is not in this Git snapshot): ${JSON.stringify([...external.keys()].sort())}\nComputed module references (assess whether their targets need additional context): ${JSON.stringify(dynamic)}\n`
   const text = header + context.join('\n\n')
   return {
     files,
     context: text,
     identities,
+    projections,
     metrics: {
       paths: paths.size,
       blobs: cached.size,

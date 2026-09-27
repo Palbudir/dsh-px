@@ -1,7 +1,10 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { resolve } from 'node:path'
+import { execFileSync } from 'node:child_process'
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const { collectReviewContext, reviewModuleReferences, parseReviewTree, splitBatches } = await import(
@@ -250,6 +253,160 @@ test('from can be a legal import/export alias and computed helper calls do not m
       (row: any) => row.kind === 'load' && row.incompleteLiteralPrefix === 'scripts/review-worker.mjs'
     )
   )
+})
+
+test('AST module inventory handles regex after control flow without confusing literals with comments', () => {
+  const controls = [
+    'if (enabled) /[//]/.test(value);',
+    'while (enabled) /[/*]/.test(value);',
+    'for (; enabled;) /[//]/.test(value);',
+    'if (enabled) {} /[//]/.test(value);',
+    "const value = /import 'ignored'/; const ratio = left / right;"
+  ]
+  for (const control of controls) {
+    const refs = reviewModuleReferences(`${control}\nimport './guard.js';`)
+    assert.deepEqual(
+      refs.literals.map((row: any) => row.specifier),
+      ['./guard.js'],
+      control
+    )
+    assert.deepEqual(refs.dynamic, [])
+  }
+})
+
+test('AST inventory includes TypeScript import contracts and explicitly records computed arguments', () => {
+  const refs = reviewModuleReferences(`
+    import implementation = require('./implementation');
+    type Contract = import('./contract').Contract;
+    export type { Result } from './result';
+    const a = import(\`./static\`);
+    const b = import(\`./dynamic/\${name}\`);
+    const c = require('./prefix' + mode);
+    const d = require.resolve('./resolved');
+  `)
+  assert.deepEqual(
+    refs.literals.map((row: any) => row.specifier),
+    ['./implementation', './contract', './result', './static', './resolved']
+  )
+  assert.equal(refs.dynamic.length, 2)
+  assert.ok(refs.dynamic.some((row: any) => row.incompleteLiteralPrefix === './prefix'))
+  assert.throws(
+    () => reviewModuleReferences("import './before'; const broken = ; import './after';"),
+    /Unexpected token/
+  )
+  assert.deepEqual(
+    reviewModuleReferences("if (skip) return; require('./cjs');", { filename: 'entry.cjs' }).literals.map(
+      (row: any) => row.specifier
+    ),
+    ['./cjs']
+  )
+})
+
+test('divergent requested base prints ordinary changed-root bytes from a real three-fork Git history', async (t) => {
+  const parent = realpathSync(tmpdir()),
+    directory = mkdtempSync(join(parent, 'dshpx-context-forks-'))
+  t.after(() => {
+    assert.ok(resolve(directory).startsWith(parent + sep))
+    rmSync(directory, { recursive: true, force: true })
+  })
+  mkdirSync(join(directory, 'hooks'))
+  mkdirSync(join(directory, 'src'))
+  const run = (args: string[]) =>
+    execFileSync(
+      'git',
+      [
+        '-c',
+        `core.hooksPath=${join(directory, 'hooks')}`,
+        '-c',
+        'commit.gpgsign=false',
+        '-c',
+        'user.name=Context Fixture',
+        '-c',
+        'user.email=context-fixture@example.invalid',
+        '-C',
+        directory,
+        ...args
+      ],
+      { windowsHide: true, env: { ...process.env, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '' } }
+    )
+  run(['init', '-q'])
+  const commit = (text: string) => {
+    writeFileSync(join(directory, 'src/entry.ts'), text)
+    run(['add', '--', 'src/entry.ts'])
+    run(['commit', '-qm', 'fixture'])
+    return run(['rev-parse', 'HEAD']).toString().trim()
+  }
+  const initial = commit('export const marker = "MERGE_ONLY"\n')
+  const requestedBase = commit('export const marker = "BASE_ONLY"\n')
+  run(['checkout', '-q', '--detach', initial])
+  const requestedHead = commit('export const marker = "HEAD_ONLY"\n')
+  writeFileSync(join(directory, 'src/entry.ts'), 'throw new Error("DIRTY_TREE_MUST_NOT_BE_PARSED")')
+  const git = async (args: string[], raw = false, binary = false) => {
+    const result = run(args)
+    return binary ? result : raw ? result.toString() : result.toString().trim()
+  }
+  const result = await prepareReviewSnapshot(
+    { repository: 'fixture/repo' },
+    { head: requestedHead, base: requestedBase },
+    git
+  )
+  assert.equal(result.mergeBase, initial)
+  assert.equal(result.files[0].before, 'export const marker = "MERGE_ONLY"\n')
+  assert.equal(result.files[0].after, 'export const marker = "HEAD_ONLY"\n')
+  for (const marker of ['BASE_ONLY', 'MERGE_ONLY', 'HEAD_ONLY'])
+    assert.ok(result.context.includes(marker), marker)
+  assert.ok(
+    result.identities.some(
+      (item: any) =>
+        item.path === 'src/entry.ts' &&
+        item.roles.some((role: any) => role.role === 'base' && role.ref === requestedBase)
+    )
+  )
+  assert.ok(result.batches.every((batch: any) => batch.text.includes('BASE_ONLY')))
+  assert.ok(!result.context.includes('DIRTY_TREE_MUST_NOT_BE_PARSED'))
+  assert.match(readFileSync(join(directory, 'src/entry.ts'), 'utf8'), /DIRTY_TREE_MUST_NOT_BE_PARSED/)
+})
+
+test('parser provenance projections bind exact JSON pointers to each Git ref without replacing changed lockfile bytes', async () => {
+  const parser = {
+    version: '7.29.9',
+    resolved: 'https://registry.npmjs.org/@babel/parser/-/parser-7.29.9.tgz',
+    integrity: 'sha512-fixture'
+  }
+  const oldLock = JSON.stringify({
+    packages: { '': { devDependencies: {} }, 'node_modules/@babel/parser': parser },
+    retained: 'OLD_COMPLETE_LOCK'
+  })
+  const newLock = JSON.stringify({
+    packages: {
+      '': { devDependencies: { '@babel/parser': '7.29.9' } },
+      'node_modules/@babel/parser': parser
+    },
+    retained: 'NEW_COMPLETE_LOCK'
+  })
+  const tree = { 'scripts/review-entry.mjs': 'export const active = true' }
+  const f = memory({
+    [base]: { ...tree, 'package-lock.json': oldLock },
+    [head]: { ...tree, 'package-lock.json': newLock }
+  })
+  const result = await collectReviewContext(
+    request(['scripts/review-entry.mjs', 'package-lock.json']),
+    f.reader
+  )
+  const current = result.projections.find((item: any) => item.role === 'head')
+  assert.equal(current.ref, head)
+  assert.equal(current.sha256, createHash('sha256').update(newLock).digest('hex'))
+  assert.equal(current.pointers['/packages//devDependencies/@babel~1parser'], '7.29.9')
+  assert.deepEqual(current.pointers['/packages/node_modules~1@babel~1parser'], parser)
+  assert.equal(
+    result.projections.find((item: any) => item.role === 'base').pointers[
+      '/packages//devDependencies/@babel~1parser'
+    ],
+    null
+  )
+  assert.equal(result.files.find((item: any) => item.path === 'package-lock.json').before, oldLock)
+  assert.equal(result.files.find((item: any) => item.path === 'package-lock.json').after, newLock)
+  assert.match(result.context, /CONTEXT JSON PROJECTION/)
 })
 
 test('Git tree parsing preserves whitespace names and rejects malformed identity', () => {

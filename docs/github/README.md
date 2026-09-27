@@ -41,7 +41,7 @@ $reviewWorker = Join-Path $env:LOCALAPPDATA 'DSH-PX-review-worker'
 node scripts/review-install.mjs "--directory=$reviewWorker"
 ```
 
-安装器复制已审查的 `review-*.mjs`、`release-*.mjs`，记录摘要并生成本地签名密钥。目录必须在仓库外，`..name` 前缀的仓库子目录也会被拒绝。重新安装保留既有身份配置；程序、CLI 或模型配置变化需要重新验证。
+安装器复制已审查的 `review-*.mjs`、`release-*.mjs`，以及经过锁定来源和摘要校验的独立解析器、许可证与来源记录，再记录完整摘要并生成本地签名密钥。解析器只在使用时校验后加载，不从候选检出加载依赖。目录必须在仓库外，`..name` 前缀的仓库子目录也会被拒绝。重新安装保留既有身份配置；程序、CLI 或模型配置变化需要重新验证。
 
 用户授权并创建私有 App 后：
 

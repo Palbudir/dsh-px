@@ -19,7 +19,7 @@ import {
 } from './review-core.mjs'
 import { command, runReviewBatch } from './review-process.mjs'
 import { createAppClient } from './review-app.mjs'
-import { publishReview, publishQuality, settleQuality } from './review-verify.mjs'
+import { PUBLIC_REVIEW_FAILURE, publishReview, publishQuality, settleQuality } from './review-verify.mjs'
 import { findTrustedQuality, qualityChanged } from './review-trusted-ci.mjs'
 
 /** An OS-backed SQLite lock is released even if the worker process crashes. */
@@ -224,11 +224,8 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
     request.head,
     request.base
   ])
-  const { files, batches, tree, mergeBase, context, identities, metrics } = await prepareReviewSnapshot(
-    config,
-    request,
-    git
-  )
+  const { files, batches, tree, mergeBase, context, identities, projections, metrics } =
+    await prepareReviewSnapshot(config, request, git)
   writeFileSync(
     join(directory, 'source-context.json'),
     JSON.stringify(
@@ -239,6 +236,7 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
         metrics,
         contextDigest: sha256(context),
         sources: identities,
+        projections,
         batches: batches.map((batch) => ({ id: batch.id, chars: batch.text.length }))
       },
       null,
@@ -480,14 +478,14 @@ async function main() {
         process.exitCode = 1
         if (!request && appApi && state[keyOf(run)].head) {
           try {
-            await publishQuality(policy, appApi, state[keyOf(run)].head, null, String(error).slice(0, 1000))
+            await publishQuality(policy, appApi, state[keyOf(run)].head, null, PUBLIC_REVIEW_FAILURE)
           } catch {
             /* The existing check cannot be changed while GitHub is unreachable; retry the monitor. */
           }
         }
         if (request && appApi) {
           try {
-            const problem = String(error).slice(0, 500)
+            const problem = PUBLIC_REVIEW_FAILURE
             const report = attest(
               {
                 version: 1,

@@ -16,6 +16,7 @@ import {
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { canonical, sha256 } from './review-core.mjs'
+import { REVIEW_PARSER_FILES, verifyReviewParserPayload } from './review-parser.mjs'
 
 const self = fileURLToPath(import.meta.url)
 const selfDigest = sha256(readFileSync(self))
@@ -101,13 +102,17 @@ export function verifyLoopInstallation(directory) {
   )
     throw new Error('Install the independently reviewed loop and worker before starting')
   for (const [name, digest] of Object.entries(files)) {
-    if (!/^(?:review|release)-[\w-]+\.mjs$/.test(name) || !/^[a-f0-9]{64}$/.test(digest))
+    if (
+      (!/^(?:review|release)-[\w-]+\.mjs$/.test(name) && !Object.hasOwn(REVIEW_PARSER_FILES, name)) ||
+      !/^[a-f0-9]{64}$/.test(digest)
+    )
       throw new Error('Invalid trusted script manifest')
     const file = join(root, name)
     regularFile(file)
     if (sha256(readFileSync(file)) !== digest)
       throw new Error('Trusted scripts changed; review and reinstall before starting')
   }
+  verifyReviewParserPayload(root, files)
   const digest = sha256(canonical(files))
   if (
     digest !== installation.workerDigest ||
