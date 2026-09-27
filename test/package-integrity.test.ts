@@ -1,13 +1,35 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
+import { execFile } from 'node:child_process'
 import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join, resolve, sep } from 'node:path'
 import { tmpdir } from 'node:os'
-import { createPackage } from '@electron/asar'
+import { pathToFileURL } from 'node:url'
+import { promisify } from 'node:util'
 import { sourceFingerprint } from '../src/shared/build-identity'
 import { MANAGED_PLUGIN_NAMES } from '../src/shared/plugin-catalog'
 import { verifyBuiltApplication, verifyManagedPackageSources } from '../scripts/package-integrity'
+
+const runNode = promisify(execFile)
+const asarModule = pathToFileURL(createRequire(import.meta.url).resolve('@electron/asar')).href
+async function createArchive(source: string, destination: string): Promise<void> {
+  // asar 3.4.1 resolves after out.end(), before the destination's finish event.
+  // Natural child exit drains pending filesystem writes before the parent reads.
+  await runNode(
+    process.execPath,
+    [
+      '--input-type=module',
+      '--eval',
+      'const { createPackage } = await import(process.argv[1]); await createPackage(process.argv[2], process.argv[3]);',
+      asarModule,
+      source,
+      destination
+    ],
+    { windowsHide: true, timeout: 30000, maxBuffer: 512000 }
+  )
+}
 
 function write(path: string, contents: string): void {
   mkdirSync(join(path, '..'), { recursive: true })
@@ -48,7 +70,7 @@ test('same-version package must match current source fingerprint and actual loca
     const packed = join(f.root, 'packed')
     cpSync(f.repository, packed, { recursive: true })
     const archive = join(f.root, 'app.asar')
-    await createPackage(packed, archive)
+    await createArchive(packed, archive)
     assert.doesNotThrow(() => verifyBuiltApplication(archive, f.repository, '1.0.0'))
     write(join(f.repository, 'out/renderer/assets/recovery.js'), 'NEW RECOVERY RESOURCE')
     assert.throws(() => verifyBuiltApplication(archive, f.repository, '1.0.0'), /应用资源/)
@@ -61,11 +83,11 @@ test('same-version package must match current source fingerprint and actual loca
     write(join(f.repository, 'out/main/index.js'), 'BUILT main/index.js')
     write(join(packed, 'out/preload/index.cjs'), 'TAMPERED PACKED BUILD')
     const changed = join(f.root, 'changed.asar')
-    await createPackage(packed, changed)
+    await createArchive(packed, changed)
     assert.throws(() => verifyBuiltApplication(changed, f.repository, '1.0.0'), /应用入口/)
     write(join(packed, 'out/build-info.json'), JSON.stringify({ ...f.identity, outputs: {} }))
     const missing = join(f.root, 'missing.asar')
-    await createPackage(packed, missing)
+    await createArchive(packed, missing)
     assert.throws(() => verifyBuiltApplication(missing, f.repository, '1.0.0'), /摘要不完整/)
   } finally {
     f.cleanup()
