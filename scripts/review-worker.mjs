@@ -3,6 +3,7 @@ import {
   readFileSync,
   writeFileSync,
   existsSync,
+  lstatSync,
   realpathSync,
   renameSync,
   unlinkSync
@@ -229,6 +230,115 @@ export async function admitPullRequest(api, config, run, request, state, { now =
   return true
 }
 
+const requestWorkflow = '.github/workflows/review-request.yml'
+function requestRunIdentity(config, run) {
+  if (
+    !Number.isSafeInteger(run.id) ||
+    run.id < 1 ||
+    !Number.isSafeInteger(run.run_attempt) ||
+    run.run_attempt < 1 ||
+    run.path !== requestWorkflow ||
+    run.conclusion !== 'success' ||
+    !['push', 'pull_request_target'].includes(run.event) ||
+    typeof run.head_branch !== 'string' ||
+    !run.head_branch ||
+    (run.repository?.full_name && run.repository.full_name !== config.repository)
+  )
+    throw new Error('Invalid review request workflow identity')
+  return {
+    id: run.id,
+    attempt: run.run_attempt,
+    path: run.path,
+    event: run.event,
+    head: sha(run.head_sha),
+    branch: run.head_branch
+  }
+}
+function trustedRequest(value, config, run, previous) {
+  validateRequest(value, config.repository)
+  if (
+    value.runId !== run.id ||
+    value.runAttempt !== run.run_attempt ||
+    value.kind !== (run.event === 'push' ? 'push' : 'pull_request') ||
+    (value.kind === 'pull_request'
+      ? !Number.isSafeInteger(value.pullRequest) || value.pullRequest < 1
+      : value.pullRequest !== null || value.head !== run.head_sha) ||
+    (previous?.head && value.head !== previous.head)
+  )
+    throw new Error('Stored or captured review request identity does not match this run')
+  const request = {
+    version: 1,
+    repository: value.repository,
+    headRepository: value.headRepository,
+    kind: value.kind,
+    pullRequest: value.pullRequest,
+    head: value.head,
+    base: value.base,
+    runId: value.runId,
+    runAttempt: value.runAttempt
+  }
+  if (canonical(value) !== canonical(request)) throw new Error('Unexpected review request identity fields')
+  return request
+}
+
+/** Keep verified request metadata after artifact expiry; it never replaces live PR/branch admission. */
+export async function loadReviewRequestIdentity(api, config, run, directory, previous) {
+  const identity = requestRunIdentity(config, run)
+  const expectedDirectory = join(realpathSync(config.directory), 'jobs', reviewRunKey(run))
+  const equalPath = (a, b) => (process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b)
+  if (
+    !equalPath(resolve(directory), expectedDirectory) ||
+    !equalPath(realpathSync(directory), expectedDirectory)
+  )
+    throw new Error('Review request identity must stay in its private job directory')
+  const path = join(directory, 'request-identity.json')
+  let stored
+  try {
+    const stat = lstatSync(path)
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > 32000)
+      throw new Error('Review request identity must be a bounded private regular file')
+    stored = JSON.parse(readFileSync(path, 'utf8'))
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+  }
+  if (stored !== undefined) {
+    if (
+      stored?.schemaVersion !== 1 ||
+      !Number.isSafeInteger(stored.artifactId) ||
+      stored.artifactId < 1 ||
+      !Number.isSafeInteger(stored.capturedAt) ||
+      stored.capturedAt < 1 ||
+      canonical(stored.run) !== canonical(identity)
+    )
+      throw new Error('Stored review request provenance does not match this run')
+    return trustedRequest(stored.request, config, run, previous)
+  }
+  const artifacts = await api(`repos/${config.repository}/actions/runs/${run.id}/artifacts`)
+  const artifact = artifacts.artifacts.find(
+    (item) => item.name === `review-request-${run.run_attempt}` && item.expired === false
+  )
+  if (!artifact || !Number.isSafeInteger(artifact.id) || artifact.id < 1)
+    throw new Error(
+      'No trusted request identity is saved and the review request artifact is missing or expired'
+    )
+  const request = trustedRequest(
+    requestFromZip(
+      await api(`repos/${config.repository}/actions/artifacts/${artifact.id}/zip`, { binary: true })
+    ),
+    config,
+    run,
+    previous
+  )
+  savePrivateJson(directory, 'request-identity.json', {
+    schemaVersion: 1,
+    artifactId: artifact.id,
+    capturedAt: Date.now(),
+    run: identity,
+    request
+  })
+  return { ...request }
+}
+
 /** Prepare exact Git source and complete bounded context without invoking the model. */
 export async function prepareReviewSnapshot(config, request, git) {
   sha(await git(['rev-parse', request.head + '^{commit}']))
@@ -319,8 +429,8 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
   }
 }
 
-function savePublicationStatus(directory, status) {
-  const target = join(directory, 'publication-status.json'),
+function savePrivateJson(directory, name, status) {
+  const target = join(directory, name),
     temporary = target + '.' + randomUUID() + '.tmp'
   try {
     writeFileSync(temporary, JSON.stringify(status, null, 2), { flag: 'wx', flush: true, mode: 0o600 })
@@ -345,11 +455,11 @@ export async function publishReviewRequest({ report, policy, api, dispatch, dire
   }
   const recordError = (reason) => {
     errors.push({ phase, reason: String(reason).slice(0, 4000), at: Date.now() })
-    savePublicationStatus(directory, { ...identity, phase, status: 'failed', errors })
+    savePrivateJson(directory, 'publication-status.json', { ...identity, phase, status: 'failed', errors })
   }
   const finish = (result) => {
     if (!errors.length)
-      savePublicationStatus(directory, {
+      savePrivateJson(directory, 'publication-status.json', {
         ...identity,
         phase,
         status: result.finished ? 'settled' : 'pending',
@@ -467,26 +577,20 @@ async function main() {
       let request
       try {
         const previous = state[keyOf(run)]
-        const artifacts = await gh(`repos/${config.repository}/actions/runs/${run.id}/artifacts`)
-        const artifact = artifacts.artifacts.find(
-          (a) => a.name === `review-request-${run.run_attempt ?? 1}` && !a.expired
-        )
-        if (!artifact) throw new Error('Review request artifact is missing or expired')
-        request = validateRequest(
-          requestFromZip(
-            await gh(`repos/${config.repository}/actions/artifacts/${artifact.id}/zip`, { binary: true })
-          ),
-          config.repository
-        )
-        if (request.runId !== run.id || request.runAttempt !== (run.run_attempt ?? 1))
-          throw new Error('Review request run mismatch')
+        request = await loadReviewRequestIdentity(gh, config, run, directory, previous)
         if (request.kind === 'pull_request') {
           if (!(await admitPullRequest(gh, config, run, request, state))) {
             saveState()
             continue
           }
         } else request.base = pushReviewBase(request, run, branchHeads, config.branch)
-        if (!rerun && previous?.monitorQuality && previous.workerDigest === config.workerDigest) {
+        if (
+          !rerun &&
+          previous?.monitorQuality &&
+          previous.workerDigest === config.workerDigest &&
+          previous.head === request.head &&
+          previous.base === request.base
+        ) {
           const latest = await findTrustedQuality(gh, policy, previous.head)
           if (!latest) throw new Error('The monitored trusted quality run is no longer available')
           const current = {

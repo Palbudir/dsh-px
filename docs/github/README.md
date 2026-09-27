@@ -60,6 +60,8 @@ node (Join-Path $reviewWorker 'review-worker.mjs') --publish
 
 公开检查不包含本机异常详情或未经完整验证的证明。私有原因保存在可信目录的 `queue-state.json` 和 `jobs/<runId>-<attempt>/publication-status.json`，后者区分源码审查结论与检查发布阶段；恢复后清理当前错误状态，不改写已签名的源码结论。
 
+通过验证的原始请求另存于同一任务目录的 `request-identity.json`，已有监控不依赖 Actions 附件的保留期。读取时仍校验仓库、运行及 attempt 等身份，并重新检查当前 PR 或分支；动态 base 不覆盖原始请求。旧监控没有这份记录时，可从尚未过期的原附件补建；缺少有效身份会记录本机诊断，并通过验证失败或检查缺失保持门禁阻断。恢复需要有效的新请求或可验证的原附件，不能把缺失或损坏的身份当作通过。
+
 常驻运行使用同一可信目录中的循环入口，可通过当前用户的登录启动项以隐藏窗口启动：
 
 ```powershell
