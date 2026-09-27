@@ -3,11 +3,31 @@
   "repository": "Palbudir/dsh-px",
   "branch": "master",
   "publisher": "Palbudir",
-  "workerDigest": "UNCONFIGURED",
-  "reviewAppId": 0,
+  "workerDigest": "ab9f5f700e93c98f2cdbbd99715d4f2d208b9f9f4f37be0dbc360de72779f932",
+  "reviewAppId": 5097986,
   "maxAgeHours": 168,
   "requiredChecks": ["dsh-px/independent-review", "dsh-px/quality"],
-  "trustedQuality": { "workflowId": 0, "path": ".github/workflows/trusted-quality.yml", "files": {} },
-  "trustedBuild": { "workflowId": 0, "path": ".github/workflows/release.yml", "files": {} },
-  "keys": {}
+  "trustedQuality": {
+    "workflowId": 368449529,
+    "path": ".github/workflows/trusted-quality.yml",
+    "files": {
+      ".github/workflows/trusted-quality.yml": "d9788e2753551dc7a495334725aabc1554cb2f6a307cd97bfc502c45bb29655e",
+      "scripts/release-quality.mjs": "c7b942a84841daf77d84dda0fd71ca6acd826e277dd8a0e132e492445680f668",
+      "scripts/release-catalog.mjs": "a3187d9c3dd0fb64e9007946218c42dc536ede16b66a85962c29bf938deb518c"
+    }
+  },
+  "trustedBuild": {
+    "workflowId": 361620914,
+    "path": ".github/workflows/release.yml",
+    "files": {
+      ".github/workflows/release.yml": "b4c5e607aeb1fcaa1f9e35a8fc391be7a055099c435319d84379b73b4d0ef65d",
+      "scripts/release-package.mjs": "600f4a0bf98e222398f557bca8f693fbd7226114139a726a2eeca97479c242e4",
+      "scripts/release-version.mjs": "eee8fd09ad1ca7a410e454be0db0304cd33fbbe22d35fa3754934fb1c6607259",
+      "scripts/release-quality.mjs": "c7b942a84841daf77d84dda0fd71ca6acd826e277dd8a0e132e492445680f668",
+      "scripts/release-catalog.mjs": "a3187d9c3dd0fb64e9007946218c42dc536ede16b66a85962c29bf938deb518c"
+    }
+  },
+  "keys": {
+    "662bc5f41324216b938aea78": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAegSNhpHHGqiLHGudHwyFIF1sFCO8Cz3DD3G1fhesFoQ=\n-----END PUBLIC KEY-----\n"
+  }
 }

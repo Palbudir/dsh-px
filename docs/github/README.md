@@ -48,7 +48,7 @@ node scripts/review-install.mjs "--directory=$reviewWorker"
 1. 仅选择 dsh-px 安装，将 GitHub PEM 安全保存到可信目录，勿显示密钥内容。
 2. 读取 App ID、installation ID、repository ID；默认分支两个可信 workflow 注册后读取 workflow ID。
 3. 再执行安装器，填写 `--app-id=... --installation-id=... --repository-id=... --quality-workflow-id=... --build-workflow-id=...`。`--app-private-key=绝对路径` 可导入 PEM；`--seven-zip=绝对路径` 可指定本机 7-Zip。
-4. 检查生成的 `public-policy.json`，经审查提交公共配置到 `review-policy.json`。将 `protection.json` 中两个 `app_id: 0` 替换为该 App ID，通过在线验收后再应用。
+4. 检查生成的 `public-policy.json`，经审查提交公共配置到 `review-policy.json`，并同步 `protection.json` 中两个必需检查的 `app_id`。通过在线验收后再应用保护规则。
 
 ```powershell
 node scripts/review-smoke.mjs
@@ -56,11 +56,25 @@ npm test
 node (Join-Path $reviewWorker 'review-worker.mjs') --publish
 ```
 
-`review-smoke` 使用现有 Codex 登录执行正常/缺陷两个样例，不调用 GitHub 写接口。worker 默认不发布 check，`--publish` 才调用已授权 App。每次默认处理一个请求，`DSH_PX_REVIEW_MAX_JOBS` 可调整数量；`--rerun=运行ID --publish` 强制重审。常驻调度另行配置。
+`review-smoke` 使用现有 Codex 登录执行正常/缺陷两个样例，不调用 GitHub 写接口。worker 默认不发布 check，`--publish` 才调用已授权 App。每次默认处理一个请求，`DSH_PX_REVIEW_MAX_JOBS` 可调整数量；`--rerun=运行ID --publish` 重审仍然有效的请求。已删除、被替代或已合并的旧 push 请求退出队列，不生成新的审查结论。
+
+常驻运行使用同一可信目录中的循环入口，可通过当前用户的登录启动项以隐藏窗口启动：
+
+```powershell
+node (Join-Path $reviewWorker 'review-loop.mjs') --publish
+# 单轮在线验收
+node (Join-Path $reviewWorker 'review-loop.mjs') --publish --once
+# 在另一个终端请求停止，等待当前 worker 完成
+node (Join-Path $reviewWorker 'review-loop.mjs') --stop
+```
+
+循环顺序执行 worker，每轮结束后等待两分钟；独立锁防止重复启动。状态在 `review-loop-state.json`，本轮 worker 日志在 `worker-latest.log`。停止命令返回表示请求已记录，确认状态为 `stopped` 后再重新安装或修改配置。脚本、配置或策略变化会在校验时停止循环，核对后重新启动；不会中止已经运行的 worker。电脑离线、睡眠或未登录时，未完成检查继续阻止合并。
 
 ## 只读构建与本机发布
 
 `release.yml` 仅响应明确的 workflow_dispatch，从受保护 master 加载可信控制器。它不响应 tag 自动公开，也不持有发布写权限。构建产物包含版本、候选 SHA、controller SHA 及四个资产的摘要。
+
+对外资产在 `dist/release-artifacts` 中准备，使用不含空格的规范名称；更新索引与清单引用同一安装包名。原始 `dist` 文件保持原样，已有准备目录不会被覆盖。版本中的 `+` 在资产名中编码为 `_`，更新索引内的版本值仍保持完整 SemVer。
 
 最终发布由仓库外的本机 `release-controller.mjs` 使用维护者原有 gh 身份执行。它核对当前受保护 master、专用 App check、签名、最新可信质量运行、指定可信构建、版本顺序，以及下载和上传摘要；不执行 tag 或候选提交中的发布脚本。
 

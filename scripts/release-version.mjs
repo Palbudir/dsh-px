@@ -25,3 +25,19 @@ export function compareVersions(left, right) {
   }
   return 0
 }
+
+/** GitHub-safe names, preserving build metadata without colliding with another valid SemVer. */
+export function releaseAssetNames(version) {
+  if (typeof version !== 'string') throw new Error('Invalid semantic version')
+  versionParts(version)
+  // Underscores are not valid SemVer characters, so this escape of '+' is unambiguous.
+  const safeVersion = version.replace('+', '_')
+  if (/[^0-9A-Za-z._-]/.test(safeVersion)) throw new Error('Invalid release asset version')
+  const installer = `DSH-PX-Setup-${safeVersion}.exe`
+  return {
+    installer,
+    blockmap: installer + '.blockmap',
+    zip: `DSH-PX-${safeVersion}-win.zip`,
+    metadata: 'latest.yml'
+  }
+}

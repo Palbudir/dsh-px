@@ -14,7 +14,7 @@ import { canonical, sha, sha256 } from './review-core.mjs'
 import { command, downloadCommand } from './review-process.mjs'
 import { acquireReviewLock } from './review-worker.mjs'
 import { releaseGate } from './release-gate.mjs'
-import { versionParts } from './release-version.mjs'
+import { versionParts, releaseAssetNames } from './release-version.mjs'
 
 export function archiveMemberNames(output, archive) {
   if (/^(?:Symbolic Link|Hard Link) = /m.test(output))
@@ -41,16 +41,11 @@ export function verifyReleaseFiles(directory, manifest, expected) {
   )
     throw new Error('Build artifact identity mismatch')
   const names = manifest.files.map((file) => file.name)
-  if (
-    new Set(names).size !== 4 ||
-    !names.includes('latest.yml') ||
-    !names.includes(`DSH-PX-${expected.version}-win.zip`)
-  )
+  const assets = releaseAssetNames(expected.version),
+    expectedNames = new Set(Object.values(assets))
+  if (new Set(names).size !== 4 || names.some((name) => !expectedNames.has(name)))
     throw new Error('Incomplete release file inventory')
-  const exe = names.find(
-    (name) => /^DSH-PX.*Setup.*\.exe$/i.test(name) && name.endsWith(expected.version + '.exe')
-  )
-  if (!exe || !names.includes(exe + '.blockmap')) throw new Error('Installer or blockmap missing')
+  const exe = assets.installer
   for (const file of manifest.files) {
     if (
       typeof file.name !== 'string' ||
