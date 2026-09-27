@@ -16,6 +16,55 @@ import { acquireReviewLock } from './review-worker.mjs'
 import { releaseGate } from './release-gate.mjs'
 import { versionParts, releaseAssetNames } from './release-version.mjs'
 
+export const RELEASE_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000
+
+function archiveFileStat(path) {
+  for (let at = dirname(resolve(path)); ; at = dirname(at)) {
+    const stat = lstatSync(at)
+    if (stat.isSymbolicLink() || !stat.isDirectory())
+      throw new Error('Release archive directory must not contain filesystem links')
+    if (dirname(at) === at) break
+  }
+  try {
+    const stat = lstatSync(path)
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1)
+      throw new Error('Release archive must be a private regular file without links')
+    return stat
+  } catch (error) {
+    if (error.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+/** Only the current GitHub artifact identity can authorize reuse; partial downloads remain diagnostic data. */
+export async function ensureReleaseArchive(
+  { gh, repository, artifact, archive },
+  download = downloadCommand
+) {
+  if (
+    !Number.isSafeInteger(artifact?.id) ||
+    artifact.id < 1 ||
+    !Number.isSafeInteger(artifact.size_in_bytes) ||
+    artifact.size_in_bytes < 1 ||
+    artifact.size_in_bytes > 2_000_000_000 ||
+    !/^sha256:[a-f0-9]{64}$/.test(artifact.digest ?? '')
+  )
+    throw new Error('GitHub release artifact must have a bounded size and SHA-256 digest')
+  const matches = () => {
+    const stat = archiveFileStat(archive)
+    return (
+      stat?.size === artifact.size_in_bytes && 'sha256:' + sha256(readFileSync(archive)) === artifact.digest
+    )
+  }
+  if (matches()) return { reused: true, size: artifact.size_in_bytes }
+  await download(gh, ['api', `repos/${repository}/actions/artifacts/${artifact.id}/zip`], archive, {
+    timeout: RELEASE_DOWNLOAD_TIMEOUT_MS,
+    maxBytes: artifact.size_in_bytes
+  })
+  if (!matches()) throw new Error('Downloaded artifact size or digest differs from GitHub')
+  return { reused: false, size: artifact.size_in_bytes }
+}
+
 export function archiveMemberNames(output, archive) {
   if (/^(?:Symbolic Link|Hard Link) = /m.test(output))
     throw new Error('Release artifacts cannot contain filesystem links')
@@ -131,13 +180,12 @@ async function main() {
     )
     if (matches.length !== 1 || !/^sha256:[a-f0-9]{64}$/.test(matches[0].digest ?? ''))
       throw new Error('Expected exactly one immutable build artifact with a GitHub digest')
-    await downloadCommand(
-      config.gh,
-      ['api', `repos/${policy.repository}/actions/artifacts/${matches[0].id}/zip`],
+    await ensureReleaseArchive({
+      gh: config.gh,
+      repository: policy.repository,
+      artifact: matches[0],
       archive
-    )
-    if ('sha256:' + sha256(readFileSync(archive)) !== matches[0].digest)
-      throw new Error('Downloaded artifact differs from its GitHub digest')
+    })
     const seven = config.sevenZip
     if (!seven || !existsSync(seven))
       throw new Error('A trusted 7-Zip executable is required for artifact inspection')
