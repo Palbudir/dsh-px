@@ -20,9 +20,9 @@ App 没有代码、tag 或 Release 的写权限。RSA 私钥只存本机可信�
 必需检查为 `dsh-px/independent-review` 和 `dsh-px/quality`，都必须来自专用 App ID。同仓分支创建的同名 GitHub Actions job 无法满足这个身份条件。不要填通用 GitHub Actions App ID `15368`。
 
 1. `review-request.yml` 在所有分支 push 和 PR 变更时只记录元数据，不检出 PR 代码。请求按 run ID/attempt 定位。
-2. 本机可信 worker 读取精确 Git 对象，保留文件名原始空白和 UTF-8 内容。大文本分批完整审阅；二进制、缺少上下文、未完成批次均阻断。每批使用独立 Codex 会话，关闭工具、插件、hooks、记忆及项目指令加载。
+2. 本机可信 worker 从精确 head、base 与 merge-base 的 Git 对象收集变更、必要本地依赖、更新消费者和策略显式引用的源码，保留文件名原始空白和 UTF-8 内容。越界、必要依赖缺失或超预算会阻断；大文本分批完整审阅，不截断后放行。每批使用独立 Codex 会话，关闭工具、插件、hooks、记忆及项目指令加载。
 3. worker 沿用用户配置的模型和连接方式，只导入必要字段。已有 Codex 登录由 CLI 使用；GitHub 凭据不传给模型子进程。本次 CLI 最终响应必须与本次随机唯一输出文件一致，旧文件不能冒充新结果。
-4. 本地 Ed25519 证明绑定 repository、head、base、tree、批次、源码摘要、CLI/配置身份、worker 摘要和时间。全部批次通过且无 P0/P1/P2 或阻塞项，才能通过。
+4. 本地 Ed25519 证明绑定 repository、head、base、tree、批次、源码与上下文摘要、CLI/配置身份、worker 摘要和时间。全部批次通过且无 P0/P1/P2 或源码审查阻塞项，才能通过。这里的通过只指静态源码审查，CI 和目标环境实际运行验收仍是独立必需门禁；一般未附运行结果不自动构成源码缺陷，但具体缺陷、必要源码缺失或无法确认的关键假设仍须阻断并说明原因。
 5. App 核对证明后发布独立审查 check。维护者已有 gh 登录触发默认分支的只读 `trusted-quality.yml`。
 6. App 核对质量运行的 `workflow_id`、路径、事件、controller SHA、源码白名单摘要，以及 run-name 绑定的目标 SHA。通过后才发布 `dsh-px/quality`。
 
@@ -68,7 +68,9 @@ node (Join-Path $reviewWorker 'review-loop.mjs') --publish --once
 node (Join-Path $reviewWorker 'review-loop.mjs') --stop
 ```
 
-循环顺序执行 worker，每轮结束后等待两分钟；独立锁防止重复启动。状态在 `review-loop-state.json`，本轮 worker 日志在 `worker-latest.log`。停止命令返回表示请求已记录，确认状态为 `stopped` 后再重新安装或修改配置。脚本、配置或策略变化会在校验时停止循环，核对后重新启动；不会中止已经运行的 worker。电脑离线、睡眠或未登录时，未完成检查继续阻止合并。
+循环顺序执行 worker，每轮结束后等待两分钟；独立锁防止重复启动。状态在 `review-loop-state.json`，本轮 worker 日志在 `worker-latest.log`。
+
+停止命令仅在收到匹配 `requestId` 和 `instanceId` 的持锁实例回执后返回 `requested: true`，这表示该实例已接收请求，当前 worker 仍会正常完成。启动间隙、实例更换、并发请求覆盖或超时可能返回“未确认”，应查看状态后重试；仅写入请求不算送达。确认回执对应实例已为 `stopped` 且没有新实例运行后，再重新安装或修改配置。脚本、配置或策略变化会在校验时停止循环，核对后重新启动；不会中止已经运行的 worker。电脑离线、睡眠或未登录时，未完成检查继续阻止合并。
 
 ## 只读构建与本机发布
 

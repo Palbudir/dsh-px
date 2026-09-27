@@ -14,7 +14,8 @@ import {
   requestFromZip,
   validateRequest,
   verifyAttestation,
-  decodeSource
+  collectReviewContext,
+  parseReviewTree
 } from './review-core.mjs'
 import { command, runReviewBatch } from './review-process.mjs'
 import { createAppClient } from './review-app.mjs'
@@ -171,6 +172,27 @@ export function pushReviewBase(request, run, branchHeads, branch) {
   return sha(run.head_branch === branch ? request.base : branchHeads.get(branch))
 }
 
+/** Prepare exact Git source and complete bounded context without invoking the model. */
+export async function prepareReviewSnapshot(config, request, git) {
+  sha(await git(['rev-parse', request.head + '^{commit}']))
+  sha(await git(['rev-parse', request.base + '^{commit}']))
+  const mergeBase = sha(await git(['merge-base', request.base, request.head]))
+  const names = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+    .decode(await git(['diff', '--name-only', '--no-renames', '-z', mergeBase, request.head], true, true))
+    .split('\0')
+    .filter(Boolean)
+  const snapshot = await collectReviewContext(
+    { ...request, repository: config.repository, mergeBase, names },
+    {
+      list: async (ref) => parseReviewTree(await git(['ls-tree', '-r', '-l', '-z', ref], true, true)),
+      read: (ref, path) => git(['show', `${ref}:${path}`], true, true)
+    },
+    config.contextLimits
+  )
+  const batches = splitBatches(snapshot.files, snapshot.context, config.maxBatchChars ?? 500000)
+  return { ...snapshot, batches, mergeBase, tree: sha(await git(['rev-parse', request.head + '^{tree}'])) }
+}
+
 export async function reviewSnapshot(config, request, directory, invoke = runReviewBatch) {
   const mirror = join(config.directory, 'mirror.git')
   const git = (args, raw = false, binary = false) =>
@@ -202,32 +224,27 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
     request.head,
     request.base
   ])
-  sha(await git(['rev-parse', request.head + '^{commit}']))
-  const mergeBase = sha(await git(['merge-base', request.base, request.head]))
-  const names = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
-    .decode(await git(['diff', '--name-only', '--no-renames', '-z', mergeBase, request.head], true, true))
-    .split('\0')
-    .filter(Boolean)
-  const readBlob = async (ref, path) => {
-    if (!(await git(['ls-tree', ref, '--', path]))) return ''
-    return decodeSource(await git(['show', `${ref}:${path}`], true, true), path)
-  }
-  const files = []
-  for (const path of names) {
-    const before = await readBlob(mergeBase, path),
-      after = await readBlob(request.head, path)
-    files.push({ path, before, after, binary: before.includes('\0') || after.includes('\0') })
-  }
-  const tree = sha(await git(['rev-parse', request.head + '^{tree}']))
-  const contextFiles = ['README.md', 'package.json', 'config/plugins.json', 'docs/STATUS.md']
-  const context =
-    `Repository: ${config.repository}\nBase: ${request.base}\nMerge base: ${mergeBase}\nHead: ${request.head}\nChanged paths: ${JSON.stringify(names)}\n` +
-    (
-      await Promise.all(
-        contextFiles.map(async (path) => `CONTEXT ${path}\n${await readBlob(request.head, path)}`)
-      )
-    ).join('\n')
-  const batches = splitBatches(files, context, config.maxBatchChars ?? 120000)
+  const { files, batches, tree, mergeBase, context, identities, metrics } = await prepareReviewSnapshot(
+    config,
+    request,
+    git
+  )
+  writeFileSync(
+    join(directory, 'source-context.json'),
+    JSON.stringify(
+      {
+        head: request.head,
+        base: request.base,
+        mergeBase,
+        metrics,
+        contextDigest: sha256(context),
+        sources: identities,
+        batches: batches.map((batch) => ({ id: batch.id, chars: batch.text.length }))
+      },
+      null,
+      2
+    )
+  )
   const results = []
   for (const batch of batches) {
     results.push(await invoke(config, request, batch, directory))
@@ -240,6 +257,7 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
     ...aggregate(request, batches, results),
     tree,
     mergeBase,
+    contextDigest: sha256(context),
     filesDigest: sha256(
       canonical(files.map((f) => ({ path: f.path, before: sha256(f.before), after: sha256(f.after) })))
     )

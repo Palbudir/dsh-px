@@ -1,8 +1,9 @@
 import { test } from 'node:test'
 import type { TestContext } from 'node:test'
 import assert from 'node:assert/strict'
-import { EventEmitter } from 'node:events'
-import { spawnSync } from 'node:child_process'
+import { EventEmitter, once } from 'node:events'
+import { spawn, spawnSync } from 'node:child_process'
+import type { ChildProcess } from 'node:child_process'
 import {
   copyFileSync,
   existsSync,
@@ -35,6 +36,7 @@ function fixture(t: TestContext) {
   const parent = realpathSync(tmpdir()),
     root = realpathSync(mkdtempSync(join(parent, 'dshpx-loop-fixture-')))
   const directory = join(root, 'trusted installation')
+  const children: ChildProcess[] = []
   mkdirSync(directory)
   for (const file of ['review-loop.mjs', 'review-core.mjs'])
     copyFileSync(resolve('scripts', file), join(directory, file))
@@ -60,7 +62,13 @@ function fixture(t: TestContext) {
     return workerDigest
   }
   seal()
-  t.after(() => {
+  t.after(async () => {
+    for (const child of children) {
+      if (child.exitCode !== null || child.signalCode !== null) continue
+      const closed = once(child, 'close')
+      assert.equal(child.kill(), true, 'only this fixture-owned child may be terminated')
+      await closed
+    }
     assert.ok(root.startsWith(parent + sep))
     rmSync(root, { recursive: true, force: true })
   })
@@ -68,9 +76,199 @@ function fixture(t: TestContext) {
     root,
     directory,
     seal,
+    track: (child: ChildProcess) => {
+      children.push(child)
+      return child
+    },
     readState: () => JSON.parse(readFileSync(join(directory, 'review-loop-state.json'), 'utf8'))
   }
 }
+
+async function waitForFile(path: string) {
+  const deadline = Date.now() + 10000
+  while (!existsSync(path)) {
+    if (Date.now() > deadline) throw Error('fixture signal did not arrive: ' + path)
+    await new Promise((done) => setTimeout(done, 10))
+  }
+}
+
+test('a crashed loop and a new real lease in the initialization gap cannot falsely acknowledge a stop', async (t) => {
+  const f = fixture(t),
+    helper = join(f.root, 'fake-loop-owner.mjs')
+  writeFileSync(
+    helper,
+    `import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
+const [directory,prefix,gap]=process.argv.slice(2);
+const write=fs.writeFileSync;
+let held=false,finish;
+if(gap==='gap'){
+ fs.writeFileSync=(path,...args)=>{
+  if(!held&&String(path).includes('review-loop-state.json.')&&String(path).endsWith('.tmp')){
+   held=true;write(prefix+'.gap','held');
+   const deadline=Date.now()+10000, memory=new Int32Array(new SharedArrayBuffer(4));
+   while(!fs.existsSync(prefix+'.release')){if(Date.now()>deadline)throw Error('gap timed out');Atomics.wait(memory,0,0,20)}
+  }
+  return write(path,...args);
+ };
+ syncBuiltinESMExports();
+}
+process.on('message',message=>{if(message==='finish')finish?.({exitCode:0,signal:null})});
+const {runReviewLoop}=await import(pathToFileURL(join(directory,'review-loop.mjs')).href);
+await runReviewLoop({directory},{invoke:()=>new Promise(resolve=>{finish=resolve;write(prefix+'.running','running')})});
+write(prefix+'.stopped','stopped');process.disconnect();
+`
+  )
+  const start = (prefix: string, gap = '') =>
+    f.track(
+      spawn(process.execPath, [helper, f.directory, prefix, gap], {
+        cwd: f.directory,
+        windowsHide: true,
+        stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
+        env: { ...process.env, NODE_OPTIONS: '', NODE_PATH: '' }
+      })
+    )
+  const firstPrefix = join(f.root, 'old'),
+    first = start(firstPrefix)
+  await waitForFile(firstPrefix + '.running')
+  const previous = f.readState()
+  assert.equal(previous.phase, 'running')
+  const crashed = once(first, 'close')
+  assert.equal(first.kill(), true)
+  await crashed
+  assert.equal(f.readState().instanceId, previous.instanceId)
+  const secondPrefix = join(f.root, 'new'),
+    second = start(secondPrefix, 'gap')
+  await waitForFile(secondPrefix + '.gap')
+  assert.equal(acquireLoopLock(f.directory), null, 'the new process really holds the OS-backed lease')
+  const stale = f.readState()
+  stale.pid = second.pid // Simulated PID reuse must not become authority for an old instance.
+  writeFileSync(join(f.directory, 'review-loop-state.json'), JSON.stringify(stale))
+  await assert.rejects(
+    async () => await requestLoopStop(f.directory, { timeoutMs: 120, pollMs: 10 }),
+    /not acknowledged|not confirmed/
+  )
+  writeFileSync(secondPrefix + '.release', 'continue')
+  await waitForFile(secondPrefix + '.running')
+  assert.notEqual(f.readState().instanceId, previous.instanceId)
+  const stopped = once(second, 'close')
+  const stopCli = spawnSync(process.execPath, [join(f.directory, 'review-loop.mjs'), '--stop'], {
+    cwd: f.directory,
+    windowsHide: true,
+    encoding: 'utf8',
+    timeout: 10000,
+    env: { ...process.env, NODE_OPTIONS: '', NODE_PATH: '' }
+  })
+  assert.equal(stopCli.status, 0)
+  const receipt = JSON.parse(stopCli.stdout)
+  assert.equal(receipt.requested, true)
+  assert.equal(receipt.instanceId, f.readState().instanceId)
+  assert.ok(receipt.requestId)
+  assert.equal(second.exitCode, null, 'acknowledgement does not kill the active worker')
+  assert.equal(acquireLoopLock(f.directory), null)
+  second.send('finish')
+  await stopped
+  assert.equal(f.readState().phase, 'stopped')
+  assert.equal(f.readState().runs, 1)
+  acquireLoopLock(f.directory)()
+})
+
+test('concurrent stop callers succeed only for their matching owner receipt', async (t) => {
+  const f = fixture(t),
+    controller = new AbortController()
+  let finish!: (value: unknown) => void
+  const running = runReviewLoop(
+    { directory: f.directory, signal: controller.signal },
+    {
+      invoke: () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+    }
+  )
+  void running.catch(() => {})
+  const requests: Promise<any>[] = []
+  try {
+    const first = requestLoopStop(f.directory, { timeoutMs: 2000, pollMs: 10 })
+    requests.push(first)
+    void first.catch(() => {})
+    const firstId = JSON.parse(readFileSync(join(f.directory, 'review-loop-stop.json'), 'utf8')).requestId
+    const second = requestLoopStop(f.directory, { timeoutMs: 2000, pollMs: 10 })
+    requests.push(second)
+    void second.catch(() => {})
+    const secondId = JSON.parse(readFileSync(join(f.directory, 'review-loop-stop.json'), 'utf8')).requestId
+    assert.notEqual(firstId, secondId)
+    const results = await Promise.allSettled(requests)
+    assert.ok(results.some((result) => result.status === 'fulfilled'))
+    for (const [index, result] of results.entries()) {
+      if (result.status === 'fulfilled') {
+        assert.equal(result.value.requestId, [firstId, secondId][index])
+        assert.equal(result.value.instanceId, f.readState().instanceId)
+      } else assert.match(String(result.reason), /not confirmed|not acknowledged/)
+    }
+    assert.equal(
+      acquireLoopLock(f.directory),
+      null,
+      'acknowledgement keeps the worker lease alive until completion'
+    )
+    finish({ exitCode: 0, signal: null })
+    await running
+  } finally {
+    controller.abort()
+    finish?.({ exitCode: 0, signal: null })
+    await running.catch(() => {})
+    await Promise.allSettled(requests)
+  }
+})
+
+test('stale receipts and expired stop requests cannot stand in for owner acceptance', async (t) => {
+  const f = fixture(t),
+    controller = new AbortController()
+  let finish!: (value: unknown) => void
+  const running = runReviewLoop(
+    { directory: f.directory, signal: controller.signal },
+    {
+      invoke: () =>
+        new Promise((resolve) => {
+          finish = resolve
+        })
+    }
+  )
+  void running.catch(() => {})
+  const instanceId = f.readState().instanceId
+  const expired = {
+    instanceId,
+    requestId: '11111111-1111-4111-8111-111111111111',
+    requestedAt: new Date(Date.now() - 5000).toISOString(),
+    expiresAt: new Date(Date.now() - 1000).toISOString()
+  }
+  try {
+    writeFileSync(join(f.directory, 'review-loop-stop.json'), JSON.stringify(expired))
+    await new Promise((done) => setTimeout(done, 120))
+    assert.equal(f.readState().stopReceipt, undefined)
+    assert.equal(existsSync(join(f.directory, 'review-loop-stop-ack.json')), false)
+  } finally {
+    controller.abort()
+    finish?.({ exitCode: 0, signal: null })
+    await running.catch(() => {})
+  }
+  const unlock = acquireLoopLock(f.directory)
+  writeFileSync(
+    join(f.directory, 'review-loop-state.json'),
+    JSON.stringify({ instanceId, phase: 'running', pid: process.pid })
+  )
+  writeFileSync(
+    join(f.directory, 'review-loop-stop-ack.json'),
+    JSON.stringify({ instanceId, requestId: expired.requestId, acceptedAt: new Date().toISOString() })
+  )
+  try {
+    await assert.rejects(requestLoopStop(f.directory, { timeoutMs: 100, pollMs: 10 }), /not acknowledged/)
+  } finally {
+    unlock()
+  }
+})
 class FakeChild extends EventEmitter {
   stdout = new EventEmitter()
   stderr = new EventEmitter()
@@ -227,6 +425,7 @@ test('duplicate loop start does no work and sequential polling retries after a r
         active++
         peak = Math.max(peak, active)
         calls++
+        assert.ok(calls <= 2, 'the loop must stop after the requested two rounds')
         const duplicate = await runReviewLoop(
           { directory: f.directory, once: true },
           {
@@ -257,12 +456,13 @@ test('duplicate loop start does no work and sequential polling retries after a r
 })
 
 test('stop waits for the owned worker, prevents the next run and does not poison a future instance', async (t) => {
-  const f = fixture(t)
+  const f = fixture(t),
+    controller = new AbortController()
   let finish!: (value: unknown) => void,
     settled = false,
     calls = 0
   const pending = runReviewLoop(
-    { directory: f.directory },
+    { directory: f.directory, signal: controller.signal },
     {
       invoke: () => {
         calls++
@@ -275,16 +475,23 @@ test('stop waits for the owned worker, prevents the next run and does not poison
     settled = true
     return value
   })
-  const stop = requestLoopStop(f.directory)
-  assert.equal(stop.requested, true)
-  assert.equal(acquireLoopLock(f.directory), null)
-  await Promise.resolve()
-  assert.equal(settled, false)
-  finish({ exitCode: 0, signal: null })
-  await pending
+  void pending.catch(() => {})
+  try {
+    const stop = await requestLoopStop(f.directory)
+    assert.equal(stop.requested, true)
+    assert.equal(acquireLoopLock(f.directory), null)
+    await Promise.resolve()
+    assert.equal(settled, false)
+    finish({ exitCode: 0, signal: null })
+    await pending
+  } finally {
+    controller.abort()
+    finish?.({ exitCode: 0, signal: null })
+    await pending.catch(() => {})
+  }
   assert.equal(calls, 1)
   assert.equal(f.readState().phase, 'stopped')
-  assert.equal(requestLoopStop(f.directory).requested, false)
+  assert.equal((await requestLoopStop(f.directory)).requested, false)
   await runReviewLoop(
     { directory: f.directory, once: true },
     {
@@ -298,10 +505,11 @@ test('stop waits for the owned worker, prevents the next run and does not poison
 })
 
 test('stop during the wait exits without another worker and a changed installation is never launched', async (t) => {
-  const f = fixture(t)
+  const f = fixture(t),
+    controller = new AbortController()
   let calls = 0
   const pending = runReviewLoop(
-    { directory: f.directory, intervalMs: 30000 },
+    { directory: f.directory, intervalMs: 30000, signal: controller.signal },
     {
       invoke: async () => {
         calls++
@@ -309,9 +517,15 @@ test('stop during the wait exits without another worker and a changed installati
       }
     }
   )
-  await Promise.resolve()
-  requestLoopStop(f.directory)
-  await pending
+  void pending.catch(() => {})
+  try {
+    await Promise.resolve()
+    await requestLoopStop(f.directory)
+    await pending
+  } finally {
+    controller.abort()
+    await pending.catch(() => {})
+  }
   assert.equal(calls, 1)
   await assert.rejects(
     runReviewLoop(
@@ -319,6 +533,7 @@ test('stop during the wait exits without another worker and a changed installati
       {
         invoke: async () => {
           calls++
+          assert.equal(calls, 2, 'changed code must not launch another worker')
           return { exitCode: 0, signal: null }
         },
         wait: async () => {
@@ -346,6 +561,7 @@ for (const setting of ['codexOverrides', 'codex', 'authHome', 'policy'])
         {
           invoke: async () => {
             calls++
+            assert.equal(calls, 1, 'changed configuration must not launch another worker')
             return { exitCode: 0, signal: null }
           },
           wait: async () => {

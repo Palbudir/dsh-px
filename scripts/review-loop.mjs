@@ -21,7 +21,10 @@ const self = fileURLToPath(import.meta.url)
 const selfDigest = sha256(readFileSync(self))
 export const LOOP_INTERVAL_MS = 120000
 const stateName = 'review-loop-state.json',
-  stopName = 'review-loop-stop.json'
+  stopName = 'review-loop-stop.json',
+  stopAckName = 'review-loop-stop-ack.json'
+const uuid = (value) =>
+  typeof value === 'string' && /^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/.test(value)
 
 function regularFile(path, optional = false) {
   try {
@@ -34,10 +37,19 @@ function regularFile(path, optional = false) {
 }
 function json(path) {
   regularFile(path)
+  const source = readFileSync(path, 'utf8')
   try {
-    return JSON.parse(readFileSync(path, 'utf8'))
+    return JSON.parse(source)
   } catch {
     throw new Error('Cannot read trusted JSON: ' + basename(path))
+  }
+}
+function optionalJson(path) {
+  try {
+    return json(path)
+  } catch (error) {
+    if (error.code === 'ENOENT') return null
+    throw error
   }
 }
 function save(path, value) {
@@ -214,11 +226,6 @@ export function runInstalledWorker(installation, { spawnChild = spawn, maxLogByt
   })
 }
 
-function stopRequested(directory, instanceId, signal) {
-  if (signal?.aborted) return true
-  const file = join(directory, stopName)
-  return existsSync(file) && json(file).instanceId === instanceId
-}
 async function waitInterval(milliseconds, shouldStop) {
   const deadline = Date.now() + milliseconds
   while (!shouldStop() && Date.now() < deadline)
@@ -237,15 +244,20 @@ export async function runReviewLoop(
   const instanceId = randomUUID(),
     statePath = join(installation.directory, stateName)
   let runs = 0,
-    lastWorker = null
-  const shouldStop = () => stopRequested(installation.directory, instanceId, signal)
+    lastWorker = null,
+    phase = 'starting',
+    stopReceipt = null,
+    controlError,
+    controlTimer
+  const shouldStop = () => signal?.aborted || stopReceipt !== null || controlError !== undefined
   const verifyIdentity = () => {
     if (verifyLoopInstallation(installation.directory).identity !== installation.identity)
       throw new Error(
         'Installation identity changed; verify configuration and policy before restarting the loop'
       )
   }
-  const state = (phase, extra = {}) =>
+  const state = (nextPhase, extra = {}) => {
+    phase = nextPhase
     save(statePath, {
       instanceId,
       pid: process.pid,
@@ -254,11 +266,48 @@ export async function runReviewLoop(
       phase,
       runs,
       lastWorker,
+      ...(stopReceipt ? { stopReceipt } : {}),
       updatedAt: new Date().toISOString(),
       ...extra
     })
+  }
+  // Only the process holding this loop lease can acknowledge its current instance.
+  // Poll while a worker is active so delivery confirmation does not cancel that worker.
+  const receiveStop = () => {
+    try {
+      const request = optionalJson(join(installation.directory, stopName))
+      if (
+        !request ||
+        request.instanceId !== instanceId ||
+        !uuid(request.requestId) ||
+        request.requestId === stopReceipt?.requestId
+      )
+        return
+      const now = Date.now(),
+        issued = Date.parse(request.requestedAt),
+        expires = Date.parse(request.expiresAt)
+      if (
+        !Number.isFinite(issued) ||
+        !Number.isFinite(expires) ||
+        issued > now + 5000 ||
+        expires < now ||
+        expires <= issued ||
+        expires - issued > 60000
+      )
+        return
+      const receipt = { instanceId, requestId: request.requestId, acceptedAt: new Date().toISOString() }
+      save(join(installation.directory, stopAckName), receipt)
+      stopReceipt = receipt
+      state(phase)
+    } catch (error) {
+      controlError = error
+      clearInterval(controlTimer)
+    }
+  }
   try {
     state('starting')
+    controlTimer = setInterval(receiveStop, 50)
+    receiveStop()
     while (!shouldStop()) {
       verifyIdentity()
       state('running')
@@ -269,6 +318,7 @@ export async function runReviewLoop(
       state('waiting')
       await wait(intervalMs, shouldStop)
     }
+    if (controlError) throw controlError
     state('stopped')
     return { busy: false, runs, exitCode: once ? (lastWorker?.exitCode ?? 0) : 0, lastWorker }
   } catch (error) {
@@ -277,12 +327,21 @@ export async function runReviewLoop(
     } catch {}
     throw error
   } finally {
+    clearInterval(controlTimer)
     unlock()
   }
 }
 
 /** Request a graceful stop of this instance; the currently running worker is allowed to finish. */
-export function requestLoopStop(directory) {
+export async function requestLoopStop(directory, { timeoutMs = 3000, pollMs = 50 } = {}) {
+  if (
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < 1 ||
+    timeoutMs > 60000 ||
+    !Number.isSafeInteger(pollMs) ||
+    pollMs < 1
+  )
+    throw new Error('Invalid stop acknowledgement timeout')
   const installation = verifyLoopInstallation(directory)
   const unlock = acquireLoopLock(installation.directory)
   if (unlock) {
@@ -290,17 +349,43 @@ export function requestLoopStop(directory) {
     return { requested: false, reason: 'not-running' }
   }
   const state = json(join(installation.directory, stateName))
-  if (typeof state.instanceId !== 'string' || !['starting', 'running', 'waiting'].includes(state.phase))
+  if (!uuid(state.instanceId) || !['starting', 'running', 'waiting'].includes(state.phase))
     throw new Error('Loop is changing state; retry the stop request')
+  const requestId = randomUUID(),
+    now = Date.now(),
+    deadline = now + timeoutMs
   save(join(installation.directory, stopName), {
     instanceId: state.instanceId,
-    requestedAt: new Date().toISOString()
+    requestId,
+    requestedAt: new Date(now).toISOString(),
+    expiresAt: new Date(deadline).toISOString()
   })
-  return {
-    requested: true,
-    instanceId: state.instanceId,
-    message: 'The loop will exit after its current worker finishes.'
+  while (Date.now() <= deadline) {
+    const current = optionalJson(join(installation.directory, stateName))
+    if (current?.instanceId !== state.instanceId)
+      throw new Error('Loop instance changed; the stop request was not confirmed. Check state and retry.')
+    const receipt = optionalJson(join(installation.directory, stopAckName))
+    const acceptedAt = Date.parse(receipt?.acceptedAt)
+    if (
+      receipt?.instanceId === state.instanceId &&
+      receipt.requestId === requestId &&
+      Number.isFinite(acceptedAt) &&
+      acceptedAt >= now &&
+      acceptedAt <= deadline
+    )
+      return {
+        requested: true,
+        ...receipt,
+        message:
+          'The named loop instance acknowledged the request and will exit after its current worker finishes.'
+      }
+    const pending = optionalJson(join(installation.directory, stopName))
+    if (pending?.requestId !== requestId || pending.instanceId !== state.instanceId)
+      throw new Error('Stop request was superseded and not confirmed. Check state and retry.')
+    if (current.phase === 'stopped') break
+    await new Promise((done) => setTimeout(done, Math.min(pollMs, Math.max(1, deadline - Date.now()))))
   }
+  throw new Error('Stop request was not acknowledged by its loop owner. Check state before retrying.')
 }
 
 export async function main(args = process.argv.slice(2), directory = dirname(self)) {
@@ -309,7 +394,7 @@ export async function main(args = process.argv.slice(2), directory = dirname(sel
     return 0
   }
   if (args.length === 1 && args[0] === '--stop') {
-    console.log(JSON.stringify(requestLoopStop(directory)))
+    console.log(JSON.stringify(await requestLoopStop(directory)))
     return 0
   }
   if (
