@@ -1,4 +1,12 @@
-import { mkdirSync, readFileSync, writeFileSync, existsSync, realpathSync, renameSync } from 'node:fs'
+import {
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+  existsSync,
+  realpathSync,
+  renameSync,
+  unlinkSync
+} from 'node:fs'
 import { DatabaseSync } from 'node:sqlite'
 import { randomUUID } from 'node:crypto'
 import { dirname, join, resolve } from 'node:path'
@@ -172,6 +180,55 @@ export function pushReviewBase(request, run, branchHeads, branch) {
   return sha(run.head_branch === branch ? request.base : branchHeads.get(branch))
 }
 
+/** Check current PR metadata before cached reviews, quality monitoring or model/publication work. */
+export async function admitPullRequest(api, config, run, request, state, { now = Date.now() } = {}) {
+  if (
+    request.kind !== 'pull_request' ||
+    !Number.isSafeInteger(request.pullRequest) ||
+    request.pullRequest < 1 ||
+    request.runId !== run.id ||
+    request.runAttempt !== (run.run_attempt ?? 1)
+  )
+    throw new Error('Invalid pull request admission identity')
+  const pr = await api(`repos/${config.repository}/pulls/${request.pullRequest}`)
+  if (
+    pr?.number !== request.pullRequest ||
+    pr.base?.repo?.full_name !== config.repository ||
+    !['open', 'closed'].includes(pr.state)
+  )
+    throw new Error('Invalid or unknown current pull request metadata')
+  const observedHead = sha(pr.head?.sha),
+    currentBase = sha(pr.base.sha)
+  if (pr.state === 'open' && pr.head.repo?.full_name !== config.repository)
+    throw new Error('Fork PRs require explicit maintainer import into a local branch')
+  const reason =
+    pr.state === 'closed' ? 'pull-request-closed' : observedHead !== request.head ? 'head-superseded' : null
+  if (reason) {
+    const key = reviewRunKey(run),
+      previous = state[key]
+    if (
+      !previous?.obsolete ||
+      previous.obsoleteReason !== reason ||
+      previous.pullRequest !== request.pullRequest ||
+      previous.observedHead !== observedHead
+    )
+      state[key] = {
+        complete: true,
+        obsolete: true,
+        obsoleteReason: reason,
+        pullRequest: request.pullRequest,
+        head: request.head,
+        observedHead,
+        observedState: pr.state,
+        settledAt: now,
+        priorState: previous?.obsolete ? previous.priorState : previous
+      }
+    return false
+  }
+  request.base = currentBase
+  return true
+}
+
 /** Prepare exact Git source and complete bounded context without invoking the model. */
 export async function prepareReviewSnapshot(config, request, git) {
   sha(await git(['rev-parse', request.head + '^{commit}']))
@@ -261,6 +318,79 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
     )
   }
 }
+
+function savePublicationStatus(directory, status) {
+  const target = join(directory, 'publication-status.json'),
+    temporary = target + '.' + randomUUID() + '.tmp'
+  try {
+    writeFileSync(temporary, JSON.stringify(status, null, 2), { flag: 'wx', flush: true, mode: 0o600 })
+    renameSync(temporary, target)
+  } finally {
+    try {
+      unlinkSync(temporary)
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error
+    }
+  }
+}
+
+/** Publication failures are local operational evidence, separate from the signed source verdict. */
+export async function publishReviewRequest({ report, policy, api, dispatch, directory }) {
+  let phase = 'review-publication'
+  const errors = []
+  const identity = {
+    head: report.payload.head,
+    base: report.payload.base,
+    sourceVerdict: report.payload.verdict
+  }
+  const recordError = (reason) => {
+    errors.push({ phase, reason: String(reason).slice(0, 4000), at: Date.now() })
+    savePublicationStatus(directory, { ...identity, phase, status: 'failed', errors })
+  }
+  const finish = (result) => {
+    if (!errors.length)
+      savePublicationStatus(directory, {
+        ...identity,
+        phase,
+        status: result.finished ? 'settled' : 'pending',
+        monitorQuality: result.monitorQuality,
+        errors: [],
+        updatedAt: Date.now()
+      })
+    return {
+      ...result,
+      ...(errors.length ? { error: errors.at(-1).reason, errorPhase: errors.at(-1).phase } : {})
+    }
+  }
+  try {
+    const review = await publishReview(report, policy, api)
+    if (review.conclusion !== 'success') {
+      recordError(review.problem)
+      phase = 'quality-admission'
+      await publishQuality(
+        policy,
+        api,
+        report.payload.head,
+        null,
+        'Independent source review must pass before quality admission.'
+      )
+      return finish({ finished: !review.retryable })
+    }
+    phase = 'quality-publication'
+    const settled = await settleQuality(policy, api, report.payload.head, async () => {
+      phase = 'quality-dispatch'
+      const result = await dispatch()
+      phase = 'quality-publication'
+      return result
+    })
+    if (settled.error) recordError(settled.error)
+    return finish({ finished: settled.finished, monitorQuality: settled.monitorQuality })
+  } catch (error) {
+    recordError(error)
+    throw error
+  }
+}
+
 async function main() {
   const root = dirname(fileURLToPath(import.meta.url))
   if (!existsSync(join(root, 'installation.json')) || !existsSync(join(root, 'worker.json')))
@@ -337,6 +467,25 @@ async function main() {
       let request
       try {
         const previous = state[keyOf(run)]
+        const artifacts = await gh(`repos/${config.repository}/actions/runs/${run.id}/artifacts`)
+        const artifact = artifacts.artifacts.find(
+          (a) => a.name === `review-request-${run.run_attempt ?? 1}` && !a.expired
+        )
+        if (!artifact) throw new Error('Review request artifact is missing or expired')
+        request = validateRequest(
+          requestFromZip(
+            await gh(`repos/${config.repository}/actions/artifacts/${artifact.id}/zip`, { binary: true })
+          ),
+          config.repository
+        )
+        if (request.runId !== run.id || request.runAttempt !== (run.run_attempt ?? 1))
+          throw new Error('Review request run mismatch')
+        if (request.kind === 'pull_request') {
+          if (!(await admitPullRequest(gh, config, run, request, state))) {
+            saveState()
+            continue
+          }
+        } else request.base = pushReviewBase(request, run, branchHeads, config.branch)
         if (!rerun && previous?.monitorQuality && previous.workerDigest === config.workerDigest) {
           const latest = await findTrustedQuality(gh, policy, previous.head)
           if (!latest) throw new Error('The monitored trusted quality run is no longer available')
@@ -352,30 +501,6 @@ async function main() {
             continue
           }
         }
-        const artifacts = await gh(`repos/${config.repository}/actions/runs/${run.id}/artifacts`)
-        const artifact = artifacts.artifacts.find(
-          (a) => a.name === `review-request-${run.run_attempt ?? 1}` && !a.expired
-        )
-        if (!artifact) throw new Error('Review request artifact is missing or expired')
-        request = validateRequest(
-          requestFromZip(
-            await gh(`repos/${config.repository}/actions/artifacts/${artifact.id}/zip`, { binary: true })
-          ),
-          config.repository
-        )
-        if (request.runId !== run.id || request.runAttempt !== (run.run_attempt ?? 1))
-          throw new Error('Review request run mismatch')
-        if (request.kind === 'pull_request') {
-          const pr = await gh(`repos/${config.repository}/pulls/${request.pullRequest}`)
-          if (pr.head.repo?.full_name !== config.repository)
-            throw new Error('Fork PRs require explicit maintainer import into a local branch')
-          if (pr.head.sha !== request.head) {
-            state[keyOf(run)] = { complete: true, obsolete: true }
-            saveState()
-            continue
-          }
-          request.base = sha(pr.base.sha)
-        } else request.base = pushReviewBase(request, run, branchHeads, config.branch)
         // No new shell, repository script, package lifecycle, or model credential exists in the source snapshot.
         const cachePath = join(
           root,
@@ -423,39 +548,31 @@ async function main() {
         if (payload.verdict === 'pass') writeFileSync(cachePath, JSON.stringify(report), { mode: 0o600 })
         writeFileSync(join(directory, 'attestation.json'), JSON.stringify(report, null, 2))
         const encoded = encodeReport(report)
-        let finished = false,
-          monitorQuality
-        if (appApi) {
-          const review = await publishReview(report, policy, appApi)
-          if (review.conclusion !== 'success') {
-            await publishQuality(
+        const publication = appApi
+          ? await publishReviewRequest({
+              report,
               policy,
-              appApi,
-              request.head,
-              null,
-              'Independent source review must pass before quality admission.'
-            )
-            finished = !review.retryable
-          } else {
-            const settled = await settleQuality(policy, appApi, request.head, () =>
-              gh(
-                `repos/${config.repository}/actions/workflows/${policy.trustedQuality.workflowId}/dispatches`,
-                { method: 'POST', body: { ref: config.branch, inputs: { head: request.head } } }
-              )
-            )
-            finished = settled.finished
-            monitorQuality = settled.monitorQuality
-            if (settled.error) process.exitCode = 1
-          }
-        }
+              api: appApi,
+              directory,
+              dispatch: () =>
+                gh(
+                  `repos/${config.repository}/actions/workflows/${policy.trustedQuality.workflowId}/dispatches`,
+                  { method: 'POST', body: { ref: config.branch, inputs: { head: request.head } } }
+                )
+            })
+          : { finished: false }
+        if (publication.error) process.exitCode = 1
         state[keyOf(run)] = {
-          complete: finished,
+          complete: publication.finished,
           verdict: payload.verdict,
           head: request.head,
           base: request.base,
           retryAt: Date.now() + (appApi ? 60000 : 300000),
-          monitorQuality,
-          workerDigest: config.workerDigest
+          monitorQuality: publication.monitorQuality,
+          workerDigest: config.workerDigest,
+          ...(publication.error
+            ? { error: publication.error, errorPhase: publication.errorPhase, monitorError: true }
+            : {})
         }
         console.log(
           JSON.stringify({
@@ -463,7 +580,7 @@ async function main() {
             head: request.head,
             verdict: payload.verdict,
             published: publishing,
-            complete: finished
+            complete: publication.finished
           })
         )
       } catch (error) {

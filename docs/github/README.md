@@ -56,7 +56,9 @@ npm test
 node (Join-Path $reviewWorker 'review-worker.mjs') --publish
 ```
 
-`review-smoke` 使用现有 Codex 登录执行正常/缺陷两个样例，不调用 GitHub 写接口。worker 默认不发布 check，`--publish` 才调用已授权 App。每次默认处理一个请求，`DSH_PX_REVIEW_MAX_JOBS` 可调整数量；`--rerun=运行ID --publish` 重审仍然有效的请求。已删除、被替代或已合并的旧 push 请求退出队列，不生成新的审查结论。
+`review-smoke` 使用现有 Codex 登录执行正常/缺陷两个样例，不调用 GitHub 写接口。worker 默认不发布 check，`--publish` 才调用已授权 App。每次默认处理一个请求，`DSH_PX_REVIEW_MAX_JOBS` 可调整数量；`--rerun=运行ID --publish` 重审仍然有效的请求。已删除、被替代或已合并的旧 push 请求以及已关闭 PR 的请求退出队列，保留历史但不生成新的审查结论。重新打开 PR 会产生新请求；未知状态或读取失败保持等待与重试。
+
+公开检查不包含本机异常详情或未经完整验证的证明。私有原因保存在可信目录的 `queue-state.json` 和 `jobs/<runId>-<attempt>/publication-status.json`，后者区分源码审查结论与检查发布阶段；恢复后清理当前错误状态，不改写已签名的源码结论。
 
 常驻运行使用同一可信目录中的循环入口，可通过当前用户的登录启动项以隐藏窗口启动：
 

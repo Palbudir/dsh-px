@@ -25,7 +25,60 @@ export const REVIEW_PARSER_SOURCE = Object.freeze({
     'package.json': 'fa70cca00587bdb335e8249fa40e9356ed7b7c9a4fc92b1e74245ab1b852cda1'
   })
 })
+/** Exact UTF-8 package.json from the pinned registry tarball, including its runtime dependency contract. */
+export const REVIEW_PARSER_PACKAGE_JSON = `{
+  "name": "@babel/parser",
+  "version": "7.29.9",
+  "description": "A JavaScript parser",
+  "author": "The Babel Team (https://babel.dev/team)",
+  "homepage": "https://babel.dev/docs/en/next/babel-parser",
+  "bugs": "https://github.com/babel/babel/issues?utf8=%E2%9C%93&q=is%3Aissue+label%3A%22pkg%3A+parser+%28babylon%29%22+is%3Aopen",
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "babel",
+    "javascript",
+    "parser",
+    "tc39",
+    "ecmascript",
+    "@babel/parser"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/babel/babel.git",
+    "directory": "packages/babel-parser"
+  },
+  "main": "./lib/index.js",
+  "types": "./typings/babel-parser.d.ts",
+  "files": [
+    "bin",
+    "lib",
+    "typings/babel-parser.d.ts",
+    "index.cjs"
+  ],
+  "engines": {
+    "node": ">=6.0.0"
+  },
+  "# dependencies": "This package doesn't actually have runtime dependencies. @babel/types is only needed for type definitions.",
+  "dependencies": {
+    "@babel/types": "^7.29.8"
+  },
+  "devDependencies": {
+    "@babel/code-frame": "^7.29.7",
+    "@babel/helper-check-duplicate-nodes": "^7.29.7",
+    "@babel/helper-fixtures": "^7.29.7",
+    "@babel/helper-string-parser": "^7.29.7",
+    "@babel/helper-validator-identifier": "^7.29.7",
+    "charcodes": "^0.2.0"
+  },
+  "bin": "./bin/babel-parser.js",
+  "type": "commonjs"
+}`
 const hash = (bytes) => createHash('sha256').update(bytes).digest('hex')
+if (hash(Buffer.from(REVIEW_PARSER_PACKAGE_JSON, 'utf8')) !== REVIEW_PARSER_SOURCE.files['package.json'])
+  throw new Error('Embedded parser package metadata digest mismatch')
 const provenance = Buffer.from(JSON.stringify({ schemaVersion: 1, ...REVIEW_PARSER_SOURCE }, null, 2) + '\n')
 export const REVIEW_PARSER_FILES = Object.freeze({
   'review-parser.cjs': REVIEW_PARSER_SOURCE.files['lib/index.js'],

@@ -22,6 +22,7 @@ import { pathToFileURL } from 'node:url'
 const parserModule = resolve('scripts/review-parser.mjs')
 const {
   REVIEW_PARSER_FILES,
+  REVIEW_PARSER_PACKAGE_JSON,
   REVIEW_PARSER_SOURCE,
   installReviewParser,
   loadReviewParser,
@@ -54,6 +55,39 @@ function fixture(t: TestContext) {
   }
   return { root, installed, source, install }
 }
+
+test('embedded official package metadata is byte-identical to the pinned source and supplies its standalone contract', () => {
+  const metadataBytes = Buffer.from(REVIEW_PARSER_PACKAGE_JSON, 'utf8')
+  assert.equal(metadataBytes.length, 1382)
+  assert.equal(hash(metadataBytes), 'fa70cca00587bdb335e8249fa40e9356ed7b7c9a4fc92b1e74245ab1b852cda1')
+  assert.deepEqual(metadataBytes, readLockedParserSource(resolve('.'))['package.json'])
+  const metadata = JSON.parse(REVIEW_PARSER_PACKAGE_JSON)
+  assert.equal(metadata.name, '@babel/parser')
+  assert.equal(metadata.version, REVIEW_PARSER_SOURCE.version)
+  assert.equal(metadata.main, './lib/index.js')
+  assert.equal(metadata.type, 'commonjs')
+  assert.deepEqual(metadata.dependencies, { '@babel/types': '^7.29.8' })
+  assert.equal(
+    metadata['# dependencies'],
+    "This package doesn't actually have runtime dependencies. @babel/types is only needed for type definitions."
+  )
+})
+
+test('altered embedded metadata is rejected before any installed parser can be loaded', async (t) => {
+  const f = fixture(t),
+    modified = join(f.root, 'review-parser.mjs')
+  const original = readFileSync(parserModule, 'utf8')
+  const changed = original.replace(
+    "This package doesn't actually have runtime dependencies.",
+    'Unverified metadata statement.'
+  )
+  assert.notEqual(changed, original)
+  writeFileSync(modified, changed)
+  await assert.rejects(
+    import(pathToFileURL(modified).href),
+    /Embedded parser package metadata digest mismatch/
+  )
+})
 
 function installerCli(t: TestContext) {
   const f = fixture(t),

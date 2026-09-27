@@ -685,7 +685,7 @@ export function splitBatches(files, context, maxChars = 90000) {
   const batches = []
   let text = context
   for (const chunk of chunks) {
-    if (text.length + chunk.length > maxChars && text !== context) {
+    if (text.length + 2 + chunk.length > maxChars && text !== context) {
       batches.push(text)
       text = context
     }

@@ -440,6 +440,32 @@ test('complete batch lengths include headers and repeated context, and changed b
   assert.throws(() => splitBatches([{ path: 'x', before: '', after: 'x' }], context, 4000), /budget/)
 })
 
+test('packing accounts for separators at the exact limit and either side of it', () => {
+  const context = 'review contract',
+    limit = 4000,
+    first = { path: 'first.ts', before: 'a'.repeat(900), after: 'b'.repeat(900) }
+  const firstText = splitBatches([first], context, 10000)[0].text
+  for (const excess of [-1, 0, 1, 2]) {
+    let fixture: { file: { path: string; before: string; after: string }; text: string } | undefined
+    for (let length = 600; length < 1600; length++) {
+      const file = { path: 'second.ts', before: 'c'.repeat(800), after: 'd'.repeat(length) }
+      const text = splitBatches([file], context, 10000)[0].text.slice(context.length + 2)
+      if (firstText.length + 2 + text.length === limit + excess) {
+        fixture = { file, text }
+        break
+      }
+    }
+    assert.ok(fixture, `fixture reaches budget ${limit + excess}`)
+    const batches = splitBatches([first, fixture.file], context, limit)
+    assert.ok(batches.every((batch: any) => batch.text.length <= limit))
+    assert.deepEqual(
+      batches.map((batch: any) => batch.text),
+      excess <= 0 ? [firstText + '\n\n' + fixture.text] : [firstText, context + '\n\n' + fixture.text],
+      'boundary rollover must preserve both complete chunks and repeated context'
+    )
+  }
+})
+
 test('worker default admits complete associated context and an explicitly smaller budget fails closed', async () => {
   const f = memory({
     [base]: { 'README.md': 'project context '.repeat(24000), 'src/entry.ts': 'export const value = 1' },
