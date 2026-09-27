@@ -1,36 +1,48 @@
-# 插件清单与工程合约
+# 插件目录与扩展合约
 
-唯一选型清单是 [config/plugins.json](../config/plugins.json)。构建、运行时装配、迁移与安装包检查从它生成列表；新增自制插件须同时通过 `npm run check:plugins`。
+[config/plugins.json](../config/plugins.json) 是运行时与插件选型的唯一清单。自制插件随应用版本同步，社区插件按清单固定版本；构建、装配、迁移和载荷检查共享该清单。
 
-| 插件 | 版本规则 | 负责什么 | 依赖 / 约束 |
-|---|---|---|---|
-| dsh-px-updater | 随整合包同步 | 查询版本、展示更新器状态 | 下载和安装由 Electron 负责；开发环境只有版本查询 |
-| dsh-px-workbench | 随整合包同步 | 工作区入口、环境与网络诊断 | 复用 workspaceController 与 web.fetch |
-| dsh-px-taskflow | 随整合包同步 | 工作记录、执行证据、任务侧栏 | 复用会话日志；read/view 中出现的历史错误不算工具失败 |
-| dsh-px-workspace | 随整合包同步 | 标签、批注、产物、会话调度 | 复用 sessions、conversation、sidebarRight、Session Controller |
-| dshmarket | 1.48.0 | 插件发现与管理 | MIT；包清单声明仓库为 [dsh-market](https://github.com/dsh-market/dsh-market) |
-| dsh-better-sidebar | 0.19.1 | 文件、终端、Git、侧栏及后台任务 | MIT；[上游仓库](https://github.com/omdsh-dev/DSH-better-sidebar) |
-| dsh-mermaid-render | 0.1.11 | Mermaid 展示 | MIT；当前包未声明 repository 字段，来源以锁定 npm 包为准 |
-| dsh-find-plugin | 0.3.7 | DSH 插件检索 | MIT；[上游仓库](https://github.com/awesome-dsh-plugin/dsh-find-plugin) |
+## 能力所有者
 
-社区信息来自本机已装配包的 `package.json`。本版不修改社区插件的安装副本。升级第三方包时，应单独核对公开合约、原生模块、来源和 UI 回归。
+| 插件               | 功能                                         | 必需或可降级的依赖                                                   |
+| ------------------ | -------------------------------------------- | -------------------------------------------------------------------- |
+| dsh-px-updater     | 版本查询、桌面更新状态与操作回执             | HTTP 服务；安装和系统目录操作还需当前桌面实例在线                    |
+| dsh-px-workbench   | 运行诊断、工作区入口、布局存储、生命周期协调 | 活动判断依赖 Agent、任务、终端和加载器合约；其它操作依赖对应原生服务 |
+| dsh-px-taskflow    | 执行记录、按需证据、可选工作摘要             | 原生会话日志；侧栏展示依赖 betterSidebar，Agent 工具不依赖侧栏       |
+| dsh-px-workspace   | 会话标签、产物、批注、定时任务               | 会话与输入服务；面板依赖 betterSidebar，终端依赖 sidebarRight        |
+| dshmarket          | 插件发现与管理                               | 安装额外插件可能需要包管理器和网络                                   |
+| dsh-better-sidebar | 文件、编辑器、终端、文件变动与任务视图       | 原生终端及对应工具依赖                                               |
+| dsh-mermaid-render | Mermaid 图表展示                             | 客户端渲染扩展                                                       |
+| dsh-find-plugin    | DSH 插件检索                                 | 对应检索与网络能力                                                   |
 
-## 源码布局
+“已安装”“已加入组合包”和“实际服务已激活”是不同状态。在“运行与帮助”检查实际依赖。禁用 betterSidebar 会同时影响多个面板；会话标签仍可使用。若桌面协调插件被禁用或加载失败，正常停机可能不可用，应使用桌面恢复入口，不把未知任务状态当成空闲。
 
-- `packages/<插件>/src/index.ts`：宿主入口与 API 注册；只保留必要的合约边界类型。
-- `packages/<插件>/src/client.tsx`：客户端注册入口；工作区页面拆分在 `src/client/`。
-- `packages/shared/`：构建时内联的共享 HTTP、主题、草稿、请求来源检查与诊断代码，不是第五个运行时插件。
-- `scripts/plugins/`：统一构建器；旧 updater 构建路径保留兼容转发。
-- `packages/<插件>/lib/`：随包交付的预构建产物，必须入库，不能手改。
+## 代码结构
+
+- `packages/<name>/src/index.ts`：宿主入口与 API。
+- `packages/<name>/src/client.tsx`：客户端注册入口；复杂页面放入 `src/client/`。
+- `packages/shared/`：构建时内联的主题、请求、状态和合约工具，不是额外运行时插件。
+- `packages/<name>/lib/`：随包交付的预构建产物，由构建器生成并入库。
+- `scripts/plugins/`：统一插件构建工具。
 
 ## 集成约束
 
-1. React 由宿主静态模块表提供；不打包第二份 React，不在客户端引入 Node 模块。
-2. Host 产物只保留 `node:` 内置导入；共享代码在构建时内联。
-3. UI 使用公开插槽和服务；标签关闭只关闭视图。原生子 Agent 留在会话层级中管理。
-4. Cordis 输入事件必须显式传入会话上下文，不能依靠方法接收者隐式过滤。
-5. 原生 API 以当前锁定版本的类型及实测为准；例如 `sessionController.prompt` 必须提供取消信号。
-6. 本机接口执行 Host / Origin / Fetch Metadata 校验；写操作保持额外请求标记与字段验证。这是本机来源边界，不是跨用户身份认证系统。
-7. 会话日志归 DSH 管理；插件只保存自身业务状态。投递记录先持久化，未确认时暂停核对。
-8. 样式限制在 PX 自有区域，使用 DSH 主题变量；交互动画遵守减少动态效果设置。
-9. 日志只记录必要的事件编号与状态。原始用户对话、凭据和整份设置不能提交到仓库或公开报告。
+1. React 由 DSH 宿主提供；客户端不引入 Node 模块或另一份 React。
+2. 宿主产物只保留 Node 内置导入；共享实现构建时内联。
+3. 服务通过 Cordis 注入获取，并随生命周期释放。可选依赖缺失时显示降级说明，不能让整组能力静默消失。
+4. UI 优先使用公开插槽与服务。宿主 DOM 兼容代码集中于适配层，变更核心版本时必须单独回归。
+5. 输入事件显式携带目标会话上下文。请求取消、任务所有者和结果来源不可省略。
+6. 本机 API 验证 Host、Origin、Fetch Metadata 和写操作标记；这不是跨用户认证系统。
+7. 会话正文仍由 DSH 管理。插件仅保存自身业务状态，恢复不自动重复执行有副作用的工作。
+8. 自制 UI 使用共享主题、焦点、错误与禁用状态，遵守减少动态效果设置。
+9. 日志仅保存必要诊断；不提交凭据、用户对话、整份设置或本机运行数据。
+
+修改第三方依赖时核对来源、许可、公开合约及原生模块兼容性。不要手改安装目录中的副本作为正式修复。组合包成员变化后需重启服务；用户自定义声明与明确禁用项在升级时保留。
+
+## 侧栏终端兼容适配
+
+随附的 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 0.19.1 使用其 MIT 许可。DSH-PX 对该版本的已核验宿主文件应用一个固定补丁：公开仅含终端资源数量的宿主服务，并等待其 PTY 进程实际退出。终端命令、输入和输出不进入这个活动接口。
+
+来源包、原始 SHA-256、补丁标识与结果 SHA-256 定义于 [sidebar-compatibility.ts](../src/shared/sidebar-compatibility.ts)，同时进入运行时完整性清单。装配和受锁保护的 profile 迁移只替换匹配来源摘要的文件，使用原子替换避免修改硬链接的其它副本。未知版本、修改过的文件及外部链接安装保持原样；活动合约缺失时不报告服务空闲。
+
+打开的终端按资源计数，即使停在提示符也需要先关闭，或在桌面明确确认中止。该计数不猜测前台命令是否忙碌。侧栏版本或原生 PTY 依赖升级后，必须重新验证活动与退出合约。

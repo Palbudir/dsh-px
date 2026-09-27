@@ -21,18 +21,35 @@ class FakeUpdater extends EventEmitter {
   }
   downloadResult: () => Promise<string[]> = async () => []
   installResult: () => void = () => {}
-  async checkForUpdates (): Promise<unknown> { this.checks++; return this.checkResult() }
-  async downloadUpdate (): Promise<string[]> { this.downloads++; return this.downloadResult() }
-  quitAndInstall (...args: boolean[]): void { this.installs.push(args); this.installResult() }
+  async checkForUpdates(): Promise<unknown> {
+    this.checks++
+    return this.checkResult()
+  }
+  async downloadUpdate(): Promise<string[]> {
+    this.downloads++
+    return this.downloadResult()
+  }
+  quitAndInstall(...args: boolean[]): void {
+    this.installs.push(args)
+    this.installResult()
+  }
 }
 
-function setup (t: TestContext) {
+function setup(t: TestContext) {
   const updater = new FakeUpdater()
   let notices = 0
-  const controller = new UpdateController(updater as unknown as ConstructorParameters<typeof UpdateController>[0], {
-    publish: () => {}, ready: () => { notices++ }, now: () => '2026-09-22T00:00:00.000Z',
-    installDelayMs: 10, installTimeoutMs: 100
-  })
+  const controller = new UpdateController(
+    updater as unknown as ConstructorParameters<typeof UpdateController>[0],
+    {
+      publish: () => {},
+      ready: () => {
+        notices++
+      },
+      now: () => '2026-09-22T00:00:00.000Z',
+      installDelayMs: 10,
+      installTimeoutMs: 100
+    }
+  )
   t.after(() => controller.dispose())
   return { updater, controller, notices: () => notices }
 }
@@ -42,14 +59,25 @@ for (const mode of ['success', 'failure'] as const) {
     t.mock.timers.enable({ apis: ['setTimeout', 'setInterval', 'Date'], now: 10000 })
     const dir = mkdtempSync(join(tmpdir(), 'dshpx-update-heartbeat-'))
     const service = createServiceState(dir)
-    t.after(() => { service.dispose(); rmSync(dir, { recursive: true, force: true }) })
+    t.after(() => {
+      service.dispose()
+      rmSync(dir, { recursive: true, force: true })
+    })
     const read = () => JSON.parse(readFileSync(join(dir, 'service-state.json'), 'utf8'))
     service.set('running', '服务正在运行', 123)
     const before = read()
     const { updater, controller } = setup(t)
-    if (mode === 'failure') updater.checkResult = async () => { throw new Error('offline') }
-    const startup = setTimeout(() => { void controller.check() }, 8000)
-    const check = createManualUpdateCheck(() => controller, () => clearTimeout(startup))
+    if (mode === 'failure')
+      updater.checkResult = async () => {
+        throw new Error('offline')
+      }
+    const startup = setTimeout(() => {
+      void controller.check()
+    }, 8000)
+    const check = createManualUpdateCheck(
+      () => controller,
+      () => clearTimeout(startup)
+    )
     await check()
     assert.equal(updater.checks, 1)
     assert.equal(controller.getState().phase, mode === 'success' ? 'idle' : 'error')
@@ -71,12 +99,19 @@ for (const mode of ['success', 'failure'] as const) {
 
 test('首次检查先 emit error 再 reject：可见失败时间，随后可重试', async (t) => {
   const { updater, controller } = setup(t)
-  updater.checkResult = async () => { const e = new Error('offline'); updater.emit('error', e); throw e }
+  updater.checkResult = async () => {
+    const e = new Error('offline')
+    updater.emit('error', e)
+    throw e
+  }
   await controller.check()
   assert.equal(controller.getState().phase, 'error')
   assert.equal(controller.getState().error, 'offline')
   assert.equal(controller.getState().lastCheckedAt, '2026-09-22T00:00:00.000Z')
-  updater.checkResult = async () => { updater.emit('update-not-available', { version: '1.0.0' }); return {} }
+  updater.checkResult = async () => {
+    updater.emit('update-not-available', { version: '1.0.0' })
+    return {}
+  }
   await controller.check()
   assert.equal(controller.getState().phase, 'idle')
   assert.equal(controller.getState().error, null)
@@ -85,7 +120,10 @@ test('首次检查先 emit error 再 reject：可见失败时间，随后可重�
 test('启动与手动检查并发：只发一次请求；空结果不能卡在检查中', async (t) => {
   const { updater, controller } = setup(t)
   let finish!: () => void
-  updater.checkResult = () => new Promise((resolve) => { finish = () => resolve(null) })
+  updater.checkResult = () =>
+    new Promise((resolve) => {
+      finish = () => resolve(null)
+    })
   const first = controller.check()
   await controller.check()
   assert.equal(updater.checks, 1)
@@ -96,8 +134,13 @@ test('启动与手动检查并发：只发一次请求；空结果不能卡在�
 
 test('下载失败后重试不积累监听；ready 不被后续检查覆盖', async (t) => {
   const { updater, controller, notices } = setup(t)
-  updater.checkResult = async () => { updater.emit('update-available', { version: '1.0.1' }); return {} }
-  updater.downloadResult = async () => { throw new Error('download failed') }
+  updater.checkResult = async () => {
+    updater.emit('update-available', { version: '1.0.1' })
+    return {}
+  }
+  updater.downloadResult = async () => {
+    throw new Error('download failed')
+  }
   await controller.check()
   assert.equal(controller.getState().phase, 'error')
   updater.downloadResult = async () => {
@@ -112,7 +155,8 @@ test('下载失败后重试不积累监听；ready 不被后续检查覆盖', as
   assert.equal(updater.downloads, 2)
   assert.equal(notices(), 1)
   assert.equal(controller.getState().phase, 'ready')
-  for (const event of ['error', 'download-progress', 'update-downloaded']) assert.equal(updater.listenerCount(event), 1)
+  for (const event of ['error', 'download-progress', 'update-downloaded'])
+    assert.equal(updater.listenerCount(event), 1)
 })
 
 test('未下载不能安装；重复点击只调用一次静默安装；void 返回值不是失败', (t) => {
@@ -143,6 +187,10 @@ for (const mode of ['throw', 'event', 'timeout']) {
     assert.equal(controller.getState().phase, 'error')
     assert.equal(updater.autoInstallOnAppQuit, false)
     assert.match(controller.getState().error ?? '', mode === 'timeout' ? /未能退出/ : /missing installer/)
+    if (mode === 'timeout') {
+      assert.match(controller.getState().error ?? '', /Agent 服务已停止/)
+      assert.doesNotMatch(controller.getState().error ?? '', /当前会话仍可使用/)
+    }
   })
 }
 

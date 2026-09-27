@@ -143,9 +143,38 @@ window.__ModuleLoader__.load({
 		  }
 		}
 
+		// packages/shared/client-input.ts
+		function appendToDraft(ctx, sessionId, text, notice) {
+		  const scope = ctx.sessions.scope(sessionId);
+		  if (!scope) throw new Error("\u8BF7\u5148\u6253\u5F00\u76EE\u6807\u4F1A\u8BDD");
+		  const input = ctx.conversation.input.for(scope), state = input.state.getSnapshot();
+		  if (state.phase !== "plain") throw new Error("\u8F93\u5165\u6846\u6B63\u5728\u63D0\u4EA4\u6216\u5904\u4E8E\u547D\u4EE4\u6A21\u5F0F\uFF0C\u8BF7\u7A0D\u540E\u51C6\u5907\u8BF7\u6C42");
+		  const accepted = scope.bail(scope, "slash/input-insert-text", {
+		    text: (state.draft ? "\n\n" : "") + text,
+		    span: { start: state.draft.length, end: state.draft.length, draftRev: state.draftRev }
+		  });
+		  if (accepted !== true) throw new Error("\u8F93\u5165\u6846\u5C1A\u672A\u5C31\u7EEA\u6216\u8349\u7A3F\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u8BD5");
+		  input.notify("info", notice);
+		}
+
+		// packages/dsh-px-taskflow/src/command-retry-draft.ts
+		function commandRetryDraft(request) {
+		  const parameters = JSON.stringify(
+		    {
+		      ...request,
+		      description: "\u6309\u539F\u547D\u4EE4\u6838\u5BF9\u672C\u6B21\u6267\u884C\u7ED3\u679C",
+		      sandbox_permissions: "danger-full-access",
+		      justification: "\u539F\u547D\u4EE4\u8FD4\u56DE spawn EPERM\uFF0C\u53EF\u80FD\u6D89\u53CA Windows \u53D7\u9650\u73AF\u5883\u7684\u5B50\u8FDB\u7A0B\u8F93\u51FA\u9650\u5236\uFF1B\u7533\u8BF7\u4EC5\u672C\u6B21\u547D\u4EE4\u7684\u4E00\u6B21\u6027\u6279\u51C6\uFF0C\u4E0D\u6539\u53D8\u4F1A\u8BDD\u9ED8\u8BA4\u6743\u9650\u3002"
+		    },
+		    null,
+		    2
+		  ).replace(/`/g, "\\u0060");
+		  return "\u6211\u5E0C\u671B\u7533\u8BF7\u4EE5\u4E0B\u539F\u547D\u4EE4\u7684\u4E00\u6B21\u6027\u6388\u6743\u91CD\u8BD5\u3002\u5148\u5C55\u793A\u5E76\u7B49\u5F85 DSH \u539F\u751F\u5BA1\u6279\uFF0C\u53EA\u6709\u6211\u9009\u62E9\u5141\u8BB8\u4E00\u6B21\u540E\u624D\u80FD\u6267\u884C\uFF1B\u62D2\u7EDD\u3001\u53D6\u6D88\u6216\u5BA1\u6279\u4E0D\u53EF\u7528\u5C31\u505C\u6B62\u3002\u4FDD\u6301\u9ED8\u8BA4\u6743\u9650\uFF0C\u4E0D\u6539\u547D\u4EE4\u3001\u5DE5\u4F5C\u76EE\u5F55\u6216\u6D4B\u8BD5\u53C2\u6570\uFF0C\u4E0D\u6539\u7528\u5176\u4ED6\u547D\u4EE4\u7ED5\u8FC7\u9650\u5236\u3002\u5B8C\u6210\u540E\u6838\u5BF9\u5B9E\u9645\u8F93\u51FA\uFF0C\u4E0D\u628A\u51C6\u5907\u8BF7\u6C42\u6216\u6536\u5230\u6279\u51C6\u5F53\u4F5C\u547D\u4EE4\u5DF2\u7ECF\u6210\u529F\u3002\n\n```json\n" + parameters + "\n```";
+		}
+
 		// packages/dsh-px-taskflow/src/client.tsx
 		var import_jsx_runtime2 = require("react/jsx-runtime");
-		var inject = ["betterSidebar"];
+		var inject = [];
 		var card = { ...cardStyle, marginBottom: 12 };
 		var button = controlStyle;
 		var labels = {
@@ -157,13 +186,18 @@ window.__ModuleLoader__.load({
 		};
 		var states = { working: "\u8FDB\u884C\u4E2D", blocked: "\u9047\u5230\u963B\u788D", ready_for_review: "\u5F85\u68C0\u67E5\u4EA4\u4ED8" };
 		var message = (err) => err instanceof Error ? err.message : String(err);
-		function ExecutionCard({ call, sessionId }) {
+		function ExecutionCard({
+		  call,
+		  sessionId,
+		  inputContext
+		}) {
 		  const [open, setOpen] = (0, import_react2.useState)(false);
 		  const [detail, setDetail] = (0, import_react2.useState)(null);
 		  const [output, setOutput] = (0, import_react2.useState)("");
 		  const [error, setError] = (0, import_react2.useState)("");
 		  const [busy, setBusy] = (0, import_react2.useState)(false);
 		  const [retry, setRetry] = (0, import_react2.useState)(0);
+		  const [prepared, setPrepared] = (0, import_react2.useState)(false);
 		  const url = `/dsh-px-taskflow/evidence?sessionId=${encodeURIComponent(sessionId)}&callId=${encodeURIComponent(call.id)}`;
 		  (0, import_react2.useEffect)(() => {
 		    if (!open) return;
@@ -200,6 +234,27 @@ window.__ModuleLoader__.load({
 		      setBusy(false);
 		    }
 		  }
+		  async function prepareApproval() {
+		    setBusy(true);
+		    setError("");
+		    try {
+		      const latest = await requestJson(url);
+		      const guidance = latest.commandGuidance;
+		      setDetail(latest);
+		      if (!guidance?.request) throw new Error(guidance?.unavailableReason ?? "\u5F53\u524D\u8BB0\u5F55\u4E0D\u652F\u6301\u51C6\u5907\u6388\u6743\u91CD\u8BD5");
+		      appendToDraft(
+		        inputContext,
+		        sessionId,
+		        commandRetryDraft(guidance.request),
+		        "\u5DF2\u52A0\u5165\u6B64\u4F1A\u8BDD\u8349\u7A3F\uFF1B\u53D1\u9001\u540E\u4ECD\u9700\u539F\u751F\u5BA1\u6279\uFF0C\u5C1A\u672A\u6267\u884C\u547D\u4EE4\u3002"
+		      );
+		      setPrepared(true);
+		    } catch (err) {
+		      setError(message(err));
+		    } finally {
+		      setBusy(false);
+		    }
+		  }
 		  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
 		    "details",
 		    {
@@ -214,6 +269,22 @@ window.__ModuleLoader__.load({
 		        ] }),
 		        open ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
 		          detail?.input ?? call.input ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("pre", { style: { whiteSpace: "pre-wrap", fontSize: 12 }, children: detail?.input ?? call.input }) : null,
+		          detail?.commandGuidance ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: { ...card, marginTop: 10 }, "aria-label": "Windows \u547D\u4EE4\u9650\u5236\u8BF4\u660E", children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { children: "Windows \u5B50\u8FDB\u7A0B\u6743\u9650\u63D0\u793A" }),
+		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: detail.commandGuidance.message }),
+		            detail.commandGuidance.request ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+		              /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { children: [
+		                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { children: "\u67E5\u770B\u5B8C\u6574\u539F\u547D\u4EE4\u4E0E\u5DE5\u4F5C\u76EE\u5F55" }),
+		                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("pre", { style: { whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto" }, children: detail.commandGuidance.request.command }),
+		                /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
+		                  "\u5DE5\u4F5C\u76EE\u5F55\uFF1A",
+		                  /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { children: detail.commandGuidance.request.workdir })
+		                ] })
+		              ] }),
+		              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u4EC5\u51C6\u5907\u539F\u547D\u4EE4\u7684\u4E00\u6B21\u6027\u6279\u51C6\u8BF7\u6C42\uFF0C\u4E0D\u6267\u884C\u547D\u4EE4\u3001\u4E0D\u6539\u53D8\u9ED8\u8BA4\u6743\u9650\u3002\u68C0\u67E5\u5E76\u53D1\u9001\u8349\u7A3F\u540E\uFF0C\u4ECD\u987B\u5728\u539F\u751F\u5BA1\u6279\u4E2D\u9009\u62E9\u5141\u8BB8\u4E00\u6B21\uFF1B\u62D2\u7EDD\u6216\u53D6\u6D88\u5C31\u505C\u6B62\u3002" }),
+		              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { style: button, disabled: busy || prepared, onClick: () => void prepareApproval(), children: prepared ? "\u5DF2\u52A0\u5165\u8349\u7A3F\uFF0C\u7B49\u5F85\u4F60\u68C0\u67E5" : "\u51C6\u5907\u4E00\u6B21\u6027\u6388\u6743\u91CD\u8BD5" })
+		            ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: detail.commandGuidance.unavailableReason })
+		          ] }) : null,
 		          error ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { role: "alert", children: [
 		            error,
 		            " ",
@@ -247,7 +318,11 @@ window.__ModuleLoader__.load({
 		    }
 		  );
 		}
-		function SessionTaskPanel({ scope, visible }) {
+		function SessionTaskPanel({
+		  scope,
+		  visible,
+		  inputContext
+		}) {
 		  const [data, setData] = (0, import_react2.useState)(null);
 		  const [error, setError] = (0, import_react2.useState)("");
 		  const [retryable, setRetryable] = (0, import_react2.useState)(true);
@@ -301,7 +376,7 @@ window.__ModuleLoader__.load({
 		        lineHeight: 1.6
 		      },
 		      children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { style: { marginTop: 0 }, children: "\u4EFB\u52A1\u8FDB\u5C55\u4E0E\u4EA4\u4ED8" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { style: { marginTop: 0 }, children: "\u6267\u884C\u8BB0\u5F55" }),
 		        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { opacity: 0.65 }, children: "\u8BB0\u5F55\u968F\u4F1A\u8BDD\u4FDD\u5B58\u3002\u5217\u8868\u663E\u793A\u6458\u8981\uFF0C\u5C55\u5F00\u6267\u884C\u53EF\u6309\u9700\u8BFB\u53D6\u8F93\u51FA\u3002" }),
 		        error ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { role: "alert", children: [
 		          error,
@@ -316,7 +391,7 @@ window.__ModuleLoader__.load({
 		        ] }),
 		        !data && !error ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u4EFB\u52A1\u8BB0\u5F55\u2026" }) : null,
 		        data ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("section", { style: card, "aria-label": "\u4EFB\u52A1\u8BB0\u5F55", children: data.checkpoint ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+		          data.checkpoint ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("section", { style: card, "aria-label": "\u53EF\u9009\u5DE5\u4F5C\u6458\u8981", children: data.checkpoint ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
 		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { children: states[data.checkpoint.state] }),
 		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h4", { style: { margin: "8px 0" }, children: data.checkpoint.goal }),
 		            data.checkpoint.summary.length > 240 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { children: [
@@ -331,7 +406,7 @@ window.__ModuleLoader__.load({
 		              data.checkpoint.nextStep || "\u68C0\u67E5\u4FEE\u6539\u4E0E\u9A8C\u8BC1\u7ED3\u679C"
 		            ] }),
 		            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("small", { style: { opacity: 0.65 }, children: [
-		              "Agent \u5DE5\u4F5C\u8BB0\u5F55 \xB7 ",
+		              "Agent \u5DE5\u4F5C\u6458\u8981 \xB7 ",
 		              new Date(data.checkpoint.time).toLocaleString()
 		            ] }),
 		            data.checkpointStale ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { role: "status", children: "\u8BB0\u5F55\u4E4B\u540E\u8FD8\u6709\u53EF\u80FD\u5F71\u54CD\u7ED3\u8BBA\u7684\u6267\u884C\uFF0C\u8BF7\u6838\u5BF9\u6700\u65B0\u7ED3\u679C\u3002" }) : null,
@@ -339,7 +414,15 @@ window.__ModuleLoader__.load({
 		              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { children: "\u5F15\u7528\u7684\u6267\u884C\u8BC1\u636E" }),
 		              data.checkpoint.evidence.map((id) => {
 		                const call = data.referencedExecutions.find((c) => c.id === id);
-		                return call ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(ExecutionCard, { call, sessionId: scope.sessionId }, id) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { children: [
+		                return call ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		                  ExecutionCard,
+		                  {
+		                    call,
+		                    sessionId: scope.sessionId,
+		                    inputContext
+		                  },
+		                  id
+		                ) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { children: [
 		                  "\u6B64\u6761\u5F15\u7528\u672A\u627E\u5230\uFF1A",
 		                  /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { children: id })
 		                ] }, id);
@@ -348,15 +431,20 @@ window.__ModuleLoader__.load({
 		          ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
 		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { children: "\u5C1A\u65E0\u5DE5\u4F5C\u8BB0\u5F55" }),
 		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u591A\u6B65\u9AA4\u4EFB\u52A1\u5F00\u59CB\u540E\uFF0CAgent \u53EF\u4EE5\u8BB0\u5F55\u76EE\u6807\u548C\u4EA4\u63A5\u70B9\u3002\u6267\u884C\u8BB0\u5F55\u81EA\u52A8\u4EA7\u751F\u3002" })
-		          ] }) }),
+		          ] }) }) : null,
 		          data.changedFiles.length ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: card, children: [
 		            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("strong", { children: [
-		              "\u5DF2\u8BB0\u5F55\u7684\u6587\u4EF6\u5199\u5165 \xB7 ",
-		              data.changedFiles.length,
+		              "\u5DF2\u8BB0\u5F55\u7684\u6587\u4EF6\u5199\u5165 \xB7 \u5171 ",
+		              data.changedFilesTotal,
 		              " \u4E2A\u8DEF\u5F84"
 		            ] }),
+		            data.changedFilesTruncated ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { style: { opacity: 0.65 }, children: [
+		              "\u5F53\u524D\u4EC5\u663E\u793A\u6700\u8FD1 ",
+		              data.changedFiles.length,
+		              " \u4E2A\u8DEF\u5F84\u3002\u6700\u7EC8\u6587\u4EF6\u72B6\u6001\u8BF7\u5728\u201C\u6587\u4EF6\u53D8\u52A8\u201D\u7684 Git \u89C6\u56FE\u4E2D\u6838\u5BF9\u3002"
+		            ] }) : null,
 		            data.changedFiles.map((path) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { paddingTop: 6 }, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { children: path }) }, path)),
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { marginBottom: 0, opacity: 0.65 }, children: "\u6765\u81EA\u6210\u529F\u8FD4\u56DE\u7684\u6587\u4EF6\u5199\u5DE5\u5177\uFF0C\u4E0D\u5305\u542B\u53EA\u8BFB\u67E5\u770B\u3002\u547D\u4EE4\u884C\u6539\u52A8\u3001\u6700\u7EC8\u5DEE\u5F02\u4E0E\u4EBA\u5DE5\u5DF2\u6709\u4FEE\u6539\u8BF7\u5728\u6587\u4EF6\u53D8\u52A8\u9762\u677F\u6838\u5BF9\u3002" })
+		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { marginBottom: 0, opacity: 0.65 }, children: "\u6765\u81EA\u6210\u529F\u8FD4\u56DE\u7684\u6587\u4EF6\u5199\u5DE5\u5177\uFF0C\u4E0D\u5305\u542B\u53EA\u8BFB\u67E5\u770B\u3002\u547D\u4EE4\u884C\u6539\u52A8\u3001\u6700\u7EC8\u5DEE\u5F02\u4E0E\u4EBA\u5DE5\u5DF2\u6709\u4FEE\u6539\u8BF7\u5728\u201C\u6587\u4EF6\u53D8\u52A8\u201D\u7684 Git \u89C6\u56FE\u4E2D\u6838\u5BF9\u3002" })
 		          ] }) : null,
 		          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { "aria-label": "\u5B9E\u9645\u6267\u884C\u8BB0\u5F55", children: [
 		            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("h4", { children: [
@@ -371,7 +459,15 @@ window.__ModuleLoader__.load({
 		              " \u9875\uFF09\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u8DF3\u56DE\u6700\u65B0\u8BB0\u5F55\u3002"
 		            ] }) : null,
 		            data.executions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u5F53\u524D\u9875\u6CA1\u6709\u5DE5\u5177\u6267\u884C\u8BB0\u5F55\u3002" }) : null,
-		            [...data.executions].reverse().map((call) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(ExecutionCard, { call, sessionId: scope.sessionId }, call.id)),
+		            [...data.executions].reverse().map((call) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		              ExecutionCard,
+		              {
+		                call,
+		                sessionId: scope.sessionId,
+		                inputContext
+		              },
+		              call.id
+		            )),
 		            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 }, children: [
 		              pages.length > 1 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { style: button, onClick: () => setPages((old) => old.slice(0, -1)), children: "\u8F83\u65B0\u4E00\u9875" }) : null,
 		              data.nextBeforeSeq !== null ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { style: button, onClick: () => setPages((old) => [...old, data.nextBeforeSeq]), children: "\u66F4\u65E9\u8BB0\u5F55" }) : null
@@ -387,17 +483,20 @@ window.__ModuleLoader__.load({
 		}
 		function apply(ctx) {
 		  installUiStyles(ctx);
-		  ctx.effect(
-		    () => ctx.betterSidebar.registerTab({
-		      id: "dsh-px-taskflow",
-		      title: "\u4EFB\u52A1\u8FDB\u5C55",
-		      description: "\u76EE\u6807\u3001\u4EA4\u63A5\u70B9\u4E0E\u5B9E\u9645\u6267\u884C\u8BC1\u636E",
-		      order: 15,
-		      single: true,
-		      icon: "\u2713",
-		      component: TaskPanel
-		    }),
-		    "taskflow: task panel"
+		  ctx.inject(
+		    ["betterSidebar", "sessions", "conversation"],
+		    (host) => host.effect(
+		      () => host.betterSidebar.registerTab({
+		        id: "dsh-px-taskflow",
+		        title: "\u6267\u884C\u8BB0\u5F55",
+		        description: "\u5DE5\u5177\u6267\u884C\u8BB0\u5F55\u4E0E\u6309\u9700\u8BFB\u53D6\u7684\u8F93\u51FA",
+		        order: 15,
+		        single: true,
+		        icon: "\u2713",
+		        component: (props) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(TaskPanel, { ...props, inputContext: host })
+		      }),
+		      "taskflow: task panel"
+		    )
 		  );
 		}
 

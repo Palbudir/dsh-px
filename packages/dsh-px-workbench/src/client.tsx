@@ -4,6 +4,7 @@ import type { ClientContext } from '@deepseek-ai/cordis'
 import type { LocalStatus } from './status'
 import type { NetworkCheck } from './network'
 import { requestJson } from '../../shared/client-http'
+import { createCapabilities, pageCarrier } from '../../shared/client-capabilities'
 
 export const inject = ['slots', 'locale']
 const prefix = '/dsh-px-workbench'
@@ -24,7 +25,18 @@ const prompts = [
   }
 ]
 
-function Workbench(): unknown {
+const dependencyLabels: Record<string, string> = {
+  sessions: '会话状态',
+  uiWorkspace: '会话与工作区操作',
+  conversation: '会话输入与引用',
+  betterSidebar: '侧边卡片（文件、产物、批注、定时任务、执行记录）',
+  sidebarRight: '原生终端容器'
+}
+type CapabilityStore = ReturnType<typeof createCapabilities<Record<string, boolean>>>
+function Workbench({ capabilities }: { capabilities: CapabilityStore }): unknown {
+  const [activated, setActivated] = useState(capabilities.getSnapshot)
+  useEffect(() => capabilities.subscribe(() => setActivated(capabilities.getSnapshot())), [capabilities])
+  const carrier = pageCarrier((window as unknown as { dshPxShell?: unknown }).dshPxShell)
   const [data, setData] = useState<LocalStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -114,57 +126,111 @@ function Workbench(): unknown {
     >
       <div>
         <h2 style={{ margin: '0 0 8px' }}>运行与帮助</h2>
-        <p style={{ margin: 0, opacity: 0.7, lineHeight: 1.7 }}>
-          从工作区开始，让 Agent 读取文件、执行工具并交付可检查的结果。
-        </p>
+        <p style={{ margin: 0, opacity: 0.7, lineHeight: 1.7 }}>查看当前连接、恢复服务或配置工作区。</p>
       </div>
-      <section style={card} aria-label="开始任务">
-        <h3 style={{ marginTop: 0 }}>开始一个任务</h3>
-        <ol style={{ paddingLeft: 22, lineHeight: 1.9 }}>
-          <li>在设置的模型提供商中配置模型和密钥。</li>
-          <li>关闭设置，在侧栏添加本机项目文件夹，再新建会话。</li>
-          <li>选择标准模式与模型，描述需求；按提示审阅工具权限和修改结果。</li>
-        </ol>
-        <label htmlFor="dsh-px-workspace" style={{ fontSize: 13 }}>
-          本机项目文件夹
-        </label>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '8px 0 16px' }}>
-          <input
-            id="dsh-px-workspace"
-            value={path}
-            placeholder="C:\Projects\demo"
-            onChange={(e: { target: { value: string } }) => setPath(e.target.value)}
-            style={{ ...button, minWidth: 0, flex: '1 1 240px', cursor: 'text' }}
-          />
-          <button style={button} disabled={adding || !path.trim()} onClick={() => void addWorkspace()}>
-            {adding ? '添加中…' : '添加工作区'}
-          </button>
-        </div>
-        {workspaceMessage ? (
-          <p role="status" style={{ fontSize: 13 }}>
-            {workspaceMessage}
+      <section style={card} aria-label="当前连接">
+        <h3 style={{ marginTop: 0 }}>当前连接</h3>
+        <p>
+          {carrier === 'desktop' ? '桌面窗口' : '浏览器页面'} ·{' '}
+          {data
+            ? {
+                packaged: '桌面正式服务',
+                development: '隔离开发服务',
+                standalone: '独立 DSH 服务',
+                disconnected: '桌面连接待恢复'
+              }[data.runtime.mode]
+            : '正在识别服务…'}
+        </p>
+        <p style={{ fontSize: 13, opacity: 0.75 }}>
+          {data?.runtime.owner === 'desktop'
+            ? '此服务由 DSH-PX 桌面应用持有。重启、退出或安装更新会影响连接它的所有桌面窗口与浏览器页面；活动任务将由桌面应用统一处理。'
+            : '浏览器页面连接独立运行的 Agent 服务；关闭页面不会关闭该服务。桌面更新与重启能力以当前服务诊断为准。'}
+        </p>
+        <p style={{ fontSize: 12, opacity: 0.65 }}>
+          会话标签随当前服务保存；未保存的批注和定时草稿只保留在当前窗口，关闭前请保存。
+        </p>
+        {data?.activity.known ? (
+          <p>
+            活动：{data.activity.runningAgents} 个 Agent · {data.activity.runningJobs} 个后台任务 ·{' '}
+            {data.activity.queuedInputs} 条排队输入 · {data.activity.openTerminals} 项打开的终端资源
           </p>
-        ) : null}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {prompts.map((p) => (
+        ) : (
+          <p>任务或终端状态尚未确认；请检查运行诊断及侧栏兼容性，不能据此判断服务空闲。</p>
+        )}
+        {data?.pendingOperation ? (
+          <div role="status">
+            <p>{data.pendingOperation.message}</p>
             <button
-              key={p.title}
               style={button}
+              disabled={!data.pendingOperation.canCancel || restarting}
               onClick={() => {
-                void navigator.clipboard
-                  .writeText(p.text)
-                  .then(() => setMessage(`已复制“${p.title}”，粘贴到新会话即可。`))
-                  .catch(() => setMessage(`复制失败，请手动复制：${p.text}`))
+                setRestarting(true)
+                void requestJson<{ message: string }>(`${prefix}/cancel-pending`, { method: 'POST' })
+                  .then((result) => {
+                    setMessage(result.message)
+                    void refresh()
+                  })
+                  .catch((err) => setError(err instanceof Error ? err.message : String(err)))
+                  .finally(() => setRestarting(false))
               }}
             >
-              复制：{p.title}
+              {data.pendingOperation.canCancel ? '取消等待，继续使用' : '正在停止服务，请等待'}
             </button>
-          ))}
-        </div>
-        <p style={{ fontSize: 12, opacity: 0.65, marginBottom: 0 }}>
-          首次验证建议使用空文件夹。模型能否连接以真实任务结果为准。
-        </p>
+          </div>
+        ) : null}
+        {data?.lastAction && ['failed', 'rejected'].includes(data.lastAction.status) ? (
+          <p role="alert">上次桌面操作未完成：{data.lastAction.message}</p>
+        ) : null}
       </section>
+      <details style={card} open={data ? !data.credentialsFile : false}>
+        <summary style={{ cursor: 'pointer' }}>首次配置与添加工作区</summary>
+        <section aria-label="开始任务">
+          <ol style={{ paddingLeft: 22, lineHeight: 1.9 }}>
+            <li>在设置的模型提供商中配置模型和密钥。</li>
+            <li>关闭设置，在侧栏添加本机项目文件夹，再新建会话。</li>
+            <li>选择标准模式与模型，描述需求；按提示审阅工具权限和修改结果。</li>
+          </ol>
+          <label htmlFor="dsh-px-workspace" style={{ fontSize: 13 }}>
+            本机项目文件夹
+          </label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '8px 0 16px' }}>
+            <input
+              id="dsh-px-workspace"
+              value={path}
+              placeholder="C:\Projects\demo"
+              onChange={(e: { target: { value: string } }) => setPath(e.target.value)}
+              style={{ ...button, minWidth: 0, flex: '1 1 240px', cursor: 'text' }}
+            />
+            <button style={button} disabled={adding || !path.trim()} onClick={() => void addWorkspace()}>
+              {adding ? '添加中…' : '添加工作区'}
+            </button>
+          </div>
+          {workspaceMessage ? (
+            <p role="status" style={{ fontSize: 13 }}>
+              {workspaceMessage}
+            </p>
+          ) : null}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {prompts.map((p) => (
+              <button
+                key={p.title}
+                style={button}
+                onClick={() => {
+                  void navigator.clipboard
+                    .writeText(p.text)
+                    .then(() => setMessage(`已复制“${p.title}”，粘贴到新会话即可。`))
+                    .catch(() => setMessage(`复制失败，请手动复制：${p.text}`))
+                }}
+              >
+                复制：{p.title}
+              </button>
+            ))}
+          </div>
+          <p style={{ fontSize: 12, opacity: 0.65, marginBottom: 0 }}>
+            首次验证建议使用空文件夹。模型能否连接以真实任务结果为准。
+          </p>
+        </section>
+      </details>
       <details style={card}>
         <summary style={{ cursor: 'pointer' }}>本机运行诊断与服务恢复</summary>
         <section aria-label="本机运行检查">
@@ -188,6 +254,8 @@ function Workbench(): unknown {
                   lineHeight: 1.6
                 }}
               >
+                <dt>服务标识</dt>
+                <dd style={{ margin: 0 }}>{data.serviceId ?? '未提供'}</dd>
                 <dt>Agent 服务</dt>
                 <dd style={{ margin: 0 }}>
                   {error ? '连接中断，以下为上次检查结果' : '已连接'} · 启动于{' '}
@@ -195,7 +263,10 @@ function Workbench(): unknown {
                 </dd>
                 <dt>桌面外壳</dt>
                 <dd style={{ margin: 0 }}>
-                  {data.service?.message ?? '未连接（可继续使用浏览器中的 Agent）'}
+                  {data.service?.message ??
+                    (data.runtime.owner === 'desktop'
+                      ? '未连接，管理操作暂不可用；请在桌面应用检查服务。'
+                      : '此服务由独立 DSH 启动')}
                 </dd>
                 <dt>Node</dt>
                 <dd style={{ margin: 0 }}>
@@ -278,7 +349,9 @@ function Workbench(): unknown {
               </div>
               {confirm ? (
                 <div role="alert" style={{ marginTop: 12 }}>
-                  <p>重启会中断正在执行的任务。请先等待任务结束；已有会话与配置会保留。</p>
+                  <p>
+                    将请求桌面应用重启此共享服务，所有连接页面都会短暂断开。存在活动任务时，桌面窗口会要求等待或明确中止；已有会话与配置会保留。
+                  </p>
                   <button style={button} disabled={restarting} onClick={() => void restart()}>
                     确认重启
                   </button>{' '}
@@ -298,6 +371,17 @@ function Workbench(): unknown {
         <summary style={{ cursor: 'pointer' }}>高级：插件诊断清单</summary>
         <section aria-label="插件清单">
           <h3 style={{ marginTop: 0 }}>当前 Profile 的插件</h3>
+          <h4>当前页面实际可用服务</h4>
+          {Object.entries(dependencyLabels).map(([id, label]) => (
+            <p key={id}>
+              {activated[id] ? '可用' : '未启用'} · {label}
+            </p>
+          ))}
+          {Object.keys(dependencyLabels).some((id) => !activated[id]) ? (
+            <p role="status">
+              未启用的服务会使对应功能不可用。请在插件设置检查是否启用相关插件，恢复后重启服务；原生会话功能可继续使用。禁用侧边卡片会同时停用依赖它的多个面板。
+            </p>
+          ) : null}
           <p style={{ fontSize: 12, opacity: 0.7 }}>
             沿用 DSH
             插件市场管理插件。安装或更改组合包后重启服务生效；这里显示安装与清单状态，不代表每个插件运行正常。
@@ -323,12 +407,20 @@ function Workbench(): unknown {
   )
 }
 
-export function apply(ctx: ClientContext): void {
+export function apply(
+  ctx: ClientContext & { inject: (services: string[], callback: (host: any) => void) => unknown }
+): void {
   installUiStyles(ctx)
+  const capabilities = createCapabilities<Record<string, boolean>>({})
+  for (const name of Object.keys(dependencyLabels))
+    ctx.inject([name], (host) => {
+      capabilities.set({ [name]: true })
+      host.effect(() => () => capabilities.set({ [name]: false }), `workbench: ${name} activation`)
+    })
   ctx.slots.inject('settings.section', () =>
     ctx.slots.register(
       { name: 'settings.section', id: 'dsh-px-workbench', order: 110, label: '运行与帮助' },
-      Workbench
+      () => <Workbench capabilities={capabilities} />
     )
   )
 }

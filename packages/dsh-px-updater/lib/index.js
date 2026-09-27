@@ -599,6 +599,91 @@ function rejectUntrustedRequest(req, res) {
   return true;
 }
 
+// packages/shared/shell-protocol.ts
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { randomUUID } from "node:crypto";
+var shellActions = [
+  "check",
+  "install",
+  "restart",
+  "open-data",
+  "open-log",
+  "cancel-pending"
+];
+var ShellUnavailable = class extends Error {
+  constructor(message, status = 503) {
+    super(message);
+    this.status = status;
+  }
+};
+function freshHeartbeat(dir, now = Date.now()) {
+  if (!dir) return null;
+  try {
+    const value = JSON.parse(readFileSync(join(dir, "service-state.json"), "utf8"));
+    const age = now - Date.parse(value.updatedAt);
+    if (typeof value.instanceId !== "string" || !/^[\w-]{16,80}$/.test(value.instanceId) || !["starting", "running", "restarting", "draining", "error"].includes(value.phase) || !Number.isFinite(age) || age < -5e3 || age > 15e3)
+      return null;
+    return value;
+  } catch {
+    return null;
+  }
+}
+function writeShellJson(file, value) {
+  const tmp = `${file}.${randomUUID()}.tmp`;
+  try {
+    writeFileSync(tmp, JSON.stringify(value), { mode: 384 });
+    renameSync(tmp, file);
+  } finally {
+    try {
+      unlinkSync(tmp);
+    } catch (e) {
+      if (e?.code !== "ENOENT") throw e;
+    }
+  }
+}
+function readShellReceipt(dir, id, instanceId) {
+  if (!/^[a-f0-9-]{36}$/.test(id)) return null;
+  try {
+    const row = JSON.parse(readFileSync(join(dir, "update-bridge", "receipts", `${id}.json`), "utf8"));
+    return row.id === id && row.instanceId === instanceId ? row : null;
+  } catch {
+    return null;
+  }
+}
+async function requestShellAction(dir, action, options = {}) {
+  const heartbeat = freshHeartbeat(dir);
+  if (!heartbeat || !dir) throw new ShellUnavailable("\u684C\u9762\u670D\u52A1\u672A\u8FDE\u63A5\uFF1B\u8BF7\u5148\u6253\u5F00 DSH-PX \u5BA2\u6237\u7AEF\u3002");
+  if (!shellActions.includes(action)) throw new ShellUnavailable("\u672A\u77E5\u684C\u9762\u64CD\u4F5C\u3002", 400);
+  const requests = join(dir, "update-bridge", "requests");
+  mkdirSync(requests, { recursive: true });
+  const request = {
+    id: randomUUID(),
+    instanceId: heartbeat.instanceId,
+    action,
+    createdAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  const file = join(requests, `${request.id}.json`);
+  writeShellJson(file, request);
+  const deadline = Date.now() + (options.timeoutMs ?? 6e3);
+  while (Date.now() < deadline) {
+    const receipt = readShellReceipt(dir, request.id, heartbeat.instanceId);
+    if (receipt) {
+      if (receipt.status === "rejected" || receipt.status === "failed")
+        throw new ShellUnavailable(receipt.message, 409);
+      return receipt;
+    }
+    if (freshHeartbeat(dir)?.instanceId !== heartbeat.instanceId) break;
+    await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? 50));
+  }
+  if (existsSync(file))
+    try {
+      unlinkSync(file);
+    } catch {
+    }
+  throw new ShellUnavailable("\u684C\u9762\u672A\u786E\u8BA4\u63A5\u6536\uFF1B\u8BF7\u6838\u5BF9\u5F53\u524D\u72B6\u6001\u540E\u91CD\u8BD5\uFF0C\u907F\u514D\u91CD\u590D\u64CD\u4F5C\u3002");
+}
+
 // packages/dsh-px-updater/src/metadata.ts
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 var LIMIT = 2 * 1024 * 1024;
@@ -662,8 +747,8 @@ async function fetchMetadata(url, timeoutMs) {
 }
 
 // packages/dsh-px-updater/src/index.ts
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
+import { dirname, join as join2 } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // packages/dsh-px-updater/src/version.ts
@@ -697,7 +782,7 @@ function readAppInfo() {
   const candidates = [];
   if (process.env.DSH_PX_RUNTIME_ROOT) candidates.push(process.env.DSH_PX_RUNTIME_ROOT);
   const res = resourcesPath();
-  if (res !== null) candidates.push(join(res, "runtime"));
+  if (res !== null) candidates.push(join2(res, "runtime"));
   let here = dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 10; i += 1) {
     candidates.push(here);
@@ -706,10 +791,10 @@ function readAppInfo() {
     here = parent;
   }
   for (const root of candidates) {
-    const manifestPath = join(root, "runtime-manifest.json");
-    if (!existsSync(manifestPath)) continue;
+    const manifestPath = join2(root, "runtime-manifest.json");
+    if (!existsSync2(manifestPath)) continue;
     try {
-      const m = JSON.parse(readFileSync(manifestPath, "utf8"));
+      const m = JSON.parse(readFileSync2(manifestPath, "utf8"));
       return {
         // 应用版本来自装配时写入的 manifest —— 这是唯一可靠的来源。
         // 不用 `app.getVersion()`（那是外壳的事，且开发态会返回 Electron 版本）。
@@ -731,26 +816,19 @@ function readShellState() {
   const dir = shellUserData();
   if (dir === null) return null;
   try {
-    const raw = readFileSync(join(dir, "update-bridge", "state.json"), "utf8");
+    const heartbeat = freshHeartbeat(dir);
+    if (!heartbeat) return null;
+    const raw = readFileSync2(join2(dir, "update-bridge", "state.json"), "utf8");
     const parsed = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null) return null;
+    if (typeof parsed !== "object" || parsed === null || parsed.instanceId !== heartbeat.instanceId)
+      return null;
     return { ...parsed, available: true };
   } catch {
     return null;
   }
 }
-function requestShellAction(action) {
-  const dir = shellUserData();
-  if (dir === null) return false;
-  try {
-    const bridgeDir = join(dir, "update-bridge");
-    mkdirSync(bridgeDir, { recursive: true });
-    writeFileSync(join(bridgeDir, `${action}.req`), `${(/* @__PURE__ */ new Date()).toISOString()}
-`);
-    return true;
-  } catch {
-    return false;
-  }
+async function requestShellAction2(action) {
+  return requestShellAction(shellUserData() ?? void 0, action);
 }
 async function checkUpdates(config) {
   const info = readAppInfo();
@@ -845,18 +923,22 @@ function apply(ctx, rawConfig) {
     const disposeShellCheck = webServer.register({
       kind: "exact",
       path: `${config.routePrefix}/check-shell`,
-      handler: (req, res) => {
+      handler: async (req, res) => {
         if (rejectUntrustedRequest(req, res)) return;
         if (req.method !== "POST") {
           sendJson(res, 405, { ok: false, error: "\u53EA\u63A5\u53D7 POST" });
           return;
         }
-        const ok = requestShellAction("check");
-        sendJson(
-          res,
-          ok ? 202 : 503,
-          ok ? { ok: true, message: "\u5DF2\u8BF7\u6C42\u684C\u9762\u5BA2\u6237\u7AEF\u68C0\u67E5\u66F4\u65B0" } : { ok: false, error: "\u684C\u9762\u5BA2\u6237\u7AEF\u672A\u8FDE\u63A5\uFF0C\u53EA\u80FD\u67E5\u8BE2\u7248\u672C\u4FE1\u606F" }
-        );
+        if (req.headers?.["x-dsh-px-request"] !== "1")
+          return sendJson(res, 403, { ok: false, error: "\u8BF7\u4ECE DSH-PX \u754C\u9762\u63D0\u4EA4\u64CD\u4F5C\u3002" });
+        try {
+          sendJson(res, 202, { ok: true, ...await requestShellAction2("check") });
+        } catch (error) {
+          sendJson(res, error instanceof ShellUnavailable ? error.status : 503, {
+            ok: false,
+            error: errText(error)
+          });
+        }
       }
     });
     const disposeShellState = webServer.register({
@@ -882,46 +964,54 @@ function apply(ctx, rawConfig) {
     const disposeInstall = webServer.register({
       kind: "exact",
       path: `${config.routePrefix}/install`,
-      handler: (req, res) => {
+      handler: async (req, res) => {
         if (rejectUntrustedRequest(req, res)) return;
         if (req.method !== "POST") {
           sendJson(res, 405, { ok: false, error: "\u53EA\u63A5\u53D7 POST" });
           return;
         }
+        if (req.headers?.["x-dsh-px-request"] !== "1")
+          return sendJson(res, 403, { ok: false, error: "\u8BF7\u4ECE DSH-PX \u754C\u9762\u63D0\u4EA4\u64CD\u4F5C\u3002" });
         const state = readShellState();
         if (state?.phase !== "ready") {
           sendJson(res, 409, { ok: false, error: "\u66F4\u65B0\u5C1A\u672A\u4E0B\u8F7D\u5B8C\u6210\uFF0C\u6216\u5B89\u88C5\u5DF2\u5728\u8FDB\u884C\u4E2D" });
           return;
         }
-        const ok = requestShellAction("install");
-        sendJson(
-          res,
-          ok ? 202 : 503,
-          ok ? { ok: true, message: "\u5DF2\u8BF7\u6C42\u5916\u58F3\u91CD\u542F\u5E76\u5B89\u88C5" } : { ok: false, error: "\u627E\u4E0D\u5230\u5916\u58F3\u6570\u636E\u76EE\u5F55\uFF0C\u65E0\u6CD5\u8BF7\u6C42\u5B89\u88C5" }
-        );
+        try {
+          sendJson(res, 202, { ok: true, ...await requestShellAction2("install") });
+        } catch (error) {
+          sendJson(res, error instanceof ShellUnavailable ? error.status : 503, {
+            ok: false,
+            error: errText(error)
+          });
+        }
       }
     });
     const disposeOpen = webServer.register({
       kind: "exact",
       path: `${config.routePrefix}/open`,
-      handler: (req, res) => {
+      handler: async (req, res) => {
         if (rejectUntrustedRequest(req, res)) return;
         if (req.method !== "POST") {
           sendJson(res, 405, { ok: false, error: "\u53EA\u63A5\u53D7 POST" });
           return;
         }
+        if (req.headers?.["x-dsh-px-request"] !== "1")
+          return sendJson(res, 403, { ok: false, error: "\u8BF7\u4ECE DSH-PX \u754C\u9762\u63D0\u4EA4\u64CD\u4F5C\u3002" });
         const params = new URL(req.url ?? "/", "http://127.0.0.1").searchParams;
         const raw = params.getAll("what").length === 1 ? params.get("what") : null;
-        if (raw !== "open-data" && raw !== "open-log") {
+        if (raw !== "open-data" && raw !== "open-log" && raw !== "cancel-pending") {
           sendJson(res, 400, { ok: false, error: "what \u5FC5\u987B\u662F open-data \u6216 open-log" });
           return;
         }
-        const ok = requestShellAction(raw);
-        sendJson(
-          res,
-          ok ? 202 : 503,
-          ok ? { ok: true, message: `\u5DF2\u8BF7\u6C42\u5916\u58F3\u6253\u5F00${raw === "open-data" ? "\u6570\u636E\u76EE\u5F55" : "\u65E5\u5FD7"}` } : { ok: false, error: "\u627E\u4E0D\u5230\u5916\u58F3\u6570\u636E\u76EE\u5F55" }
-        );
+        try {
+          sendJson(res, 202, { ok: true, ...await requestShellAction2(raw) });
+        } catch (error) {
+          sendJson(res, error instanceof ShellUnavailable ? error.status : 503, {
+            ok: false,
+            error: errText(error)
+          });
+        }
       }
     });
     say(`\u5DF2\u6CE8\u518C HTTP \u7AEF\u70B9 ${config.routePrefix}/{status,check,check-shell,shell-state,install,open}`);

@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react'
 import { RequestError, requestJson } from '../../../shared/client-http'
 import type { Snapshot } from './contracts'
-import { createOperation } from '../../../shared/operation'
-const operations = new Map<string, ReturnType<typeof createOperation>>()
+import { createOperation, createOperationRegistry } from '../../../shared/operation'
+import { createQuoteRequests } from '../../../shared/quote-requests'
+const operations = createOperationRegistry()
+export const isOperationPending = operations.pending
 export function useOperation(key: string): [boolean, ReturnType<typeof createOperation>['run']] {
   const [operation] = useState(() => {
-    if (!operations.has(key)) operations.set(key, createOperation())
-    return operations.get(key)!
+    return operations.get(key)
   })
   return [useSnapshot(operation), operation.run]
 }
@@ -22,26 +23,8 @@ export const post = <T>(route: string, value: unknown): Promise<T> =>
   })
 // Native single tabs focus an existing view without replacing its params. A small
 // plugin-owned observable routes repeated quote selections into that same view.
-const quoteEpoch = Date.now().toString(36) + Math.random().toString(36).slice(2)
-let quoteSelections: Record<string, { messageId: string; token: string }> = {}
-let quoteRevision = 0
-const quoteListeners = new Set<() => void>()
-export const quoteRequests: Snapshot<typeof quoteSelections> = {
-  getSnapshot: () => quoteSelections,
-  subscribe: (cb) => {
-    quoteListeners.add(cb)
-    return () => {
-      quoteListeners.delete(cb)
-    }
-  }
-}
-export function requestQuote(sessionId: string, messageId: string): void {
-  quoteSelections = {
-    ...quoteSelections,
-    [sessionId]: { messageId, token: `${quoteEpoch}:${++quoteRevision}` }
-  }
-  for (const cb of quoteListeners) cb()
-}
+export const quoteRequests = createQuoteRequests()
+export const requestQuote = quoteRequests.request
 export function useSnapshot<T>(store: Snapshot<T>): T {
   const [value, set] = useState(store.getSnapshot)
   useEffect(() => {

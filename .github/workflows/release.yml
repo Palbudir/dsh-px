@@ -1,128 +1,73 @@
-name: release
-
-# 打 tag（v*）时构建 Windows 安装包并发布到 GitHub Releases。
-#
-# 为什么单独一个 workflow 而不是塞进 verify：
-#   verify 是"能不能用"的门禁，跑在每次 push 上，需要快；
-#   release 是"发出去"的动作，只在 tag 上跑，需要产出安装包。
-#   两者需要的 runner 与耗时差一个量级，混在一起会让门禁变慢。
-#
-# electron-updater 需要三样东西同时出现在 Release 里，缺一不可：
-#   1. 安装包本身（`dsh-px Setup <版本>.exe`）
-#   2. `latest.yml` —— 版本清单，updater 靠它判断"有没有新版"
-#   3. `*.blockmap` —— 差分块索引，有了它才能只下载变化的块而不是整个安装包
-# electron-builder 会自动生成 2 和 3，前提是**不能**用 --publish never
-# 把它们丢掉 —— 所以这里显式用 --publish always，由 CI 的 GITHUB_TOKEN 授权。
+name: release-build
+run-name: dsh-px-build:${{ inputs.head }}:${{ inputs.version }}
 
 on:
-  push:
-    tags:
-      - 'v*'
   workflow_dispatch:
+    inputs:
+      head:
+        description: Exact candidate commit SHA
+        required: true
+        type: string
+      version:
+        description: Candidate package version
+        required: true
+        type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  release:
+  build:
+    if: github.ref == 'refs/heads/master'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - name: Validate candidate identity
+        shell: pwsh
+        env:
+          BUILD_HEAD: ${{ inputs.head }}
+        run: if ($env:BUILD_HEAD -notmatch '^[a-f0-9]{40}$') { throw 'Exact SHA required' }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.head }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: '24'
-
-      - name: 核对 tag 与版本号
-        shell: pwsh
-        run: |
-          $version = (Get-Content package.json | ConvertFrom-Json).version
-          if ($env:GITHUB_REF -ne "refs/tags/v$version") { throw '必须从与 package.json 一致的版本 tag 发布' }
-
-      - uses: pnpm/action-setup@v4
+          package-manager-cache: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 10
-
-      - name: 安装开发依赖
-        run: npm install
-
-      # 校验安装包内容需要 7-Zip。托管 runner 上不预装，而运行时自动下载
-      # 曾静默失败（导致校验把"工具不可用"误报成"文件缺失"）。
-      # 显式安装最省事也最确定。
-      - name: 安装 7-Zip（校验安装包用）
+      - name: Install package inspection tools
         run: choco install 7zip -y --no-progress
-
-      # 先跑门禁：beta 的发布前提是能力平价成立。
-      #
-      # typecheck + test 放在最前面：它们是秒级的，而装配是分钟级的。
-      # test 会重建并校验客户端半边（lib/client.js）—— 那个产物入库，
-      # 若与源码漂移会在界面上静默缺失，必须在发版前卡住。
-      - name: 类型检查
-        run: npm run typecheck
-
-      - name: 单元测试
-        run: npm run test
-
-      - name: 装配运行时
-        run: npm run stage -- --with-plugins
-
-      - name: 验证能力平价
-        run: npm run verify -- --boot
-
-      # verify 会真的启动 harness，从而在种子树里生成 dsh 的运行时产物
-      # （实测让 dsh-home 从 308 MB 涨到 924 MB）。打包前必须再清一次，
-      # 否则这些纯冗余会被 extraResources 原样打进安装包 —— beta.0 就是这样胖了约 830 MB。
-      - name: 清理种子树（打包前必做）
-        run: npm run prune
-
-      - name: 生成图标
-        run: npm run icon
-
-      # **必须构建，不能直接打包。**
-      #
-      # 这是 beta-re.0.1 发布时踩到的真实事故：本 workflow 曾经直接调
-      # `npx electron-builder`，而 electron-builder 只打包、不构建。
-      # 从前能碰巧成功，是因为入口是**入库**的 `app/main.mjs`；
-      # 主进程迁到 TypeScript 后入口变成 `out/main/index.js` —— 那是构建产物，
-      # 在 .gitignore 里。于是打包时 app.asar 里根本没有入口文件，报：
-      #   Application entry file "out\main\index.js" ... was not found in this archive
-      #
-      # 这个坑特别隐蔽，有三层原因：
-      #   1. 前面"装配 + 验证能力平价"全绿 —— 它们只验 harness，不碰 Electron 主进程；
-      #   2. 报错措辞是 "corrupted"，容易往"文件损坏"方向查，而真实原因只是没构建；
-      #   3. 本地 `npm run dist` 能成功（它的脚本里含 build），只有 CI 走的是
-      #      "直接调 electron-builder"这条路。
-      #
-      # `npm run build` = 客户端半边 + 主进程，两者都是交付物所必需的。
-      - name: 构建（客户端半边 + 主进程）
-        run: npm run build
-
-      # 打包前再显式断言一次，并用直白的话说清修法（见脚本头部说明）。
-      - name: 断言入口产物存在
-        run: node scripts/run.mjs check-entry-artifacts
-
-      # --publish always：让 electron-builder 生成并上传 latest.yml 与 blockmap。
-      # GITHUB_TOKEN 由 actions 环境自动提供，electron-builder 会认。
-      - name: 构建并发布
+      - name: Install locked candidate dependencies
+        working-directory: candidate
+        run: npm ci
+      - name: Build and inspect without publication credentials
+        working-directory: candidate
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EP_DRAFT: 'true'
-        run: npx electron-builder --win --publish always
-
-      # 关键收尾：校验**安装包内部**的内容。
-      #
-      # beta.0 的教训 —— 当时只验证了 dist/win-unpacked（一切正常），
-      # 没验证最终交付物，结果发出一个装不出来的版本。
-      # 这一步会在载荷缺少 node.exe 或混入 _dsh-install 等构建产物时直接失败，
-      # 从而在"发布"这一步就拦住问题，而不是等用户装完才发现。
-      - name: 校验安装包内容
-        run: npm run verify:package
-
-      - name: 公开通过校验的 Release
+          BUILD_HEAD: ${{ inputs.head }}
+          BUILD_VERSION: ${{ inputs.version }}
+        run: node ../controller/scripts/release-package.mjs
+      - name: Verify candidate remains unchanged
+        working-directory: candidate
         shell: pwsh
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BUILD_HEAD: ${{ inputs.head }}
         run: |
-          $version = (Get-Content package.json | ConvertFrom-Json).version
-          gh release edit "v$version" --draft=false --latest
-          if ($LASTEXITCODE -ne 0) { throw '公开 Release 失败' }
+          if ((git rev-parse HEAD) -ne $env:BUILD_HEAD) { throw 'Candidate checkout changed' }
+          git diff --exit-code
+          if ($LASTEXITCODE -ne 0) { throw 'Tracked candidate files changed' }
+      - name: Upload inspected release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ inputs.head }}-${{ github.run_attempt }}
+          path: candidate/dist/release-artifacts/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

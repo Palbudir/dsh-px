@@ -5,24 +5,17 @@
     "moduleResolution": "bundler",
     "lib": ["ES2023", "DOM"],
     "types": ["node", "electron-vite/node"],
-
     "strict": true,
     "noFallthroughCasesInSwitch": true,
     "noImplicitOverride": true,
     "exactOptionalPropertyTypes": false,
-
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true,
-
     "noEmit": true
   },
-  "include": [
-    "src/**/*.ts",
-    "test/**/*.ts",
-    "electron.vite.config.ts"
-  ]
+  "include": ["src/**/*.ts", "test/**/*.ts", "electron.vite.config.ts"]
 }

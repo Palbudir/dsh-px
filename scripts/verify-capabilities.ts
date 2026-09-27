@@ -1,32 +1,21 @@
-/**
- * 验证装配出的 dsh-px 运行时至少达到了官方 dsh 的能力。
- *
- * beta 的验收问题是："打包后的应用是否提供了普通 `dsh --profile web` 安装所提供的东西？"
- * 我们机械地回答它，而不是凭感觉：
- *
- *   1. 结构     装配出的运行时存在，且它的 profile 声明了官方随附 profile 所声明的同一批组合包层。
- *   2. 能力平价 用 `--dump-config` 分别组合出装配版 profile 与官方 profile 的树，
- *               然后比较组合出的插件行集合（id + name）。
- *               官方有而装配版缺的任何东西都是能力缺口。
- *   3. 启动     （--boot）在临时端口上启动装配好的 harness，并证明它的 HTTP 面有应答。
- *
- * 用法：
- *   node scripts/verify-capabilities.mjs            # 结构 + 能力平价
- *   node scripts/verify-capabilities.mjs --boot     # 额外启动并探测
- *   node scripts/verify-capabilities.mjs --json     # 机器可读结果
+/** Verify runtime integrity, baseline plugin declarations, and optional authenticated startup.
+ * Declaration parity is not evidence that every Agent capability has been exercised.
+ * Run with npm run verify -- --boot; --json emits machine-readable results.
  */
 import { execFileSync, spawn } from 'node:child_process'
-import { existsSync, readFileSync, readdirSync } from 'node:fs'
+import { existsSync, readFileSync, readdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { repoRoot } from './paths'
 import type { Dirent } from 'node:fs'
+import { inspectDsh, verifyRuntimeIntegrity } from '../src/shared/runtime-integrity'
+import { RUNTIME_VERSIONS } from '../src/shared/plugin-catalog'
 
 /** 从 unknown 的 catch 变量里取出可读消息（strict 下 catch 变量是 unknown）。 */
-function errText (err: unknown): string {
+function errText(err: unknown): string {
   return err instanceof Error ? (err.stack ?? err.message) : String(err)
 }
-
 
 const REPO = repoRoot()
 const RUNTIME = join(REPO, 'runtime')
@@ -34,16 +23,16 @@ const PROFILE = process.env.DSH_PX_PROFILE ?? 'web'
 const BOOT = process.argv.includes('--boot')
 const AS_JSON = process.argv.includes('--json')
 
-const results: Array<{ name: string, ok: boolean, detail: string | undefined }> = []
+const results: Array<{ name: string; ok: boolean; detail: string | undefined }> = []
 const record = (name: string, ok: boolean, detail?: string): void => {
   results.push({ name, ok, detail })
   if (!AS_JSON) process.stdout.write(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` —— ${detail}` : ''}\n`)
 }
 
 /** 解析 `--dump-config` 那种类 YAML 输出，取出组合出的行。 */
-function parseRows (yaml) {
-  const rows: Array<{ id: string, name: string | null }> = []
-  let current: { id: string, name: string | null } | null = null
+function parseRows(yaml) {
+  const rows: Array<{ id: string; name: string | null }> = []
+  let current: { id: string; name: string | null } | null = null
   for (const raw of yaml.split('\n')) {
     const line = raw.replace(/\r$/, '')
     if (/^\s*#\s*==/.test(line)) continue
@@ -60,10 +49,13 @@ function parseRows (yaml) {
   return rows
 }
 
-function dump (nodeExe, dshEntry, home) {
+function dump(nodeExe, dshEntry, home) {
   const out = execFileSync(nodeExe, [dshEntry, '--profile', PROFILE, '--dump-config'], {
     encoding: 'utf8',
-    env: { ...process.env, DSH_HOME: home },
+    env: { ...process.env, DSH_HOME: home, NODE_OPTIONS: '', NODE_PATH: '' },
+    cwd: home,
+    windowsHide: true,
+    timeout: 20_000,
     maxBuffer: 32 * 1024 * 1024,
     stdio: ['ignore', 'pipe', 'pipe']
   })
@@ -85,64 +77,107 @@ function dump (nodeExe, dshEntry, home) {
  * 后来 _dsh-install 被清理又让基线消失。这两处都是真实踩过的坑。
  * @returns {{kind:'install', dir:string} | {kind:'manifest', file:string} | null}
  */
-function officialBaseline () {
+function officialBaseline() {
+  const currentVersion = JSON.parse(readFileSync(join(RUNTIME, 'dsh', 'package.json'), 'utf8')).version
+  const matching = (directory: string): boolean => {
+    try {
+      inspectDsh(directory, currentVersion)
+      return true
+    } catch {
+      return false
+    }
+  }
   // 强制走 manifest 分支：CI 上就是这条路径（无全局 dsh、_dsh-install 已清理），
   // 而开发机上因为装了全局 dsh 走不到它 —— 若不显式测，这条唯一在 CI 生效的
   // 分支就从未被验证过。
   if (process.argv.includes('--baseline=manifest')) {
     const forced = join(REPO, 'build', 'baseline', 'dsh-package.json')
-    return existsSync(forced) ? { kind: 'manifest', file: forced } : null
+    return existsSync(forced) && JSON.parse(readFileSync(forced, 'utf8')).version === currentVersion
+      ? { kind: 'manifest', file: forced }
+      : null
   }
 
   const fromNpmInstall = join(RUNTIME, '_dsh-install', 'node_modules', '@deepseek-ai', 'dsh')
-  if (existsSync(join(fromNpmInstall, 'lib', 'bin.js'))) return { kind: 'install', dir: fromNpmInstall }
+  if (matching(fromNpmInstall)) return { kind: 'install', dir: fromNpmInstall }
 
   try {
-    const root = execFileSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['root', '-g'], {
-      encoding: 'utf8',
-      shell: process.platform === 'win32'
-    }).trim()
+    const root = execFileSync(
+      process.platform === 'win32' ? 'cmd.exe' : 'npm',
+      process.platform === 'win32' ? ['/d', '/s', '/c', 'npm root -g'] : ['root', '-g'],
+      {
+        encoding: 'utf8',
+        windowsHide: true
+      }
+    ).trim()
     const dir = join(root, '@deepseek-ai', 'dsh')
-    if (existsSync(join(dir, 'lib', 'bin.js'))) return { kind: 'install', dir }
-  } catch { /* 没有全局 npm/dsh 也正常 */ }
+    if (matching(dir)) return { kind: 'install', dir }
+  } catch {
+    /* 没有全局 npm/dsh 也正常 */
+  }
 
   const manifest = join(REPO, 'build', 'baseline', 'dsh-package.json')
-  if (existsSync(manifest)) return { kind: 'manifest', file: manifest }
+  if (existsSync(manifest) && JSON.parse(readFileSync(manifest, 'utf8')).version === currentVersion)
+    return { kind: 'manifest', file: manifest }
 
   return null
 }
 
-async function bootProbe (nodeExe, dshEntry, home) {
+async function bootProbe(nodeExe, dshEntry, home, options: { timeoutMs?: number } = {}) {
   const port = 34000 + Math.floor(Math.random() * 1000)
-  const child = spawn(nodeExe, [dshEntry, '--profile', PROFILE, '--host', '127.0.0.1',
-    '--port', String(port), '--no-open'], {
-    env: { ...process.env, DSH_HOME: home },
-    stdio: ['ignore', 'pipe', 'pipe']
-  })
+  const child = spawn(
+    nodeExe,
+    [dshEntry, '--profile', PROFILE, '--host', '127.0.0.1', '--port', String(port), '--no-open'],
+    {
+      env: { ...process.env, DSH_HOME: home, NODE_OPTIONS: '', NODE_PATH: '' },
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
+    }
+  )
   let log = ''
-  child.stdout.on('data', (c) => { log += c })
-  child.stderr.on('data', (c) => { log += c })
+  let launchUrl: string | undefined
+  let cookie = ''
+  const consume = (chunk: Buffer): void => {
+    log = (log + chunk.toString()).slice(-128 * 1024)
+    launchUrl ??= log.match(new RegExp(`http://127\\.0\\.0\\.1:${port}/\\?token=[A-Za-z0-9_-]+`))?.[0]
+  }
+  child.stdout.on('data', consume)
+  child.stderr.on('data', consume)
+  const safeLog = (): string => log.replace(/([?&]token=)[A-Za-z0-9_-]+/g, '$1[redacted]')
   const url = `http://127.0.0.1:${port}/`
-  const deadline = Date.now() + 150_000
+  const timeoutMs = options.timeoutMs ?? 150_000
+  const deadline = Date.now() + timeoutMs
   try {
     while (Date.now() < deadline) {
-      if (child.exitCode !== null) throw new Error(`提前退出（${child.exitCode}）\n${log.slice(-2000)}`)
+      if (child.exitCode !== null) throw new Error(`提前退出（${child.exitCode}）\n${safeLog().slice(-2000)}`)
       try {
-        const res = await fetch(url, { redirect: 'manual' })
-        return { ok: true, status: res.status, url, log }
-      } catch { /* 还没开始监听 */ }
+        if (launchUrl && !cookie) {
+          const exchange = await fetch(launchUrl, { redirect: 'manual', signal: AbortSignal.timeout(2000) })
+          if (exchange.status === 303) cookie = exchange.headers.get('set-cookie')?.split(';')[0] ?? ''
+        }
+        if (!launchUrl || !cookie) throw new Error('等待本次子进程的启动令牌完成认证')
+        const res = await fetch(url, {
+          redirect: 'manual',
+          signal: AbortSignal.timeout(2000),
+          headers: cookie ? { Cookie: cookie } : {}
+        })
+        if (res.ok) {
+          const plugin = await fetch(`${url}dsh-px-workbench/status`, { signal: AbortSignal.timeout(2000) })
+          if (plugin.ok) return { ok: true, status: res.status, url, log: safeLog() }
+        }
+      } catch {
+        /* 还没开始监听 */
+      }
       await new Promise((r) => setTimeout(r, 400))
     }
-    throw new Error(`150 秒内未就绪\n${log.slice(-2000)}`)
+    throw new Error(`${timeoutMs} 毫秒内未通过本次子进程认证与就绪检查\n${safeLog().slice(-2000)}`)
   } finally {
     if (child.exitCode === null) child.kill()
   }
 }
 
-async function main () {
-  const nodeExe = process.platform === 'win32'
-    ? join(RUNTIME, 'node', 'node.exe')
-    : join(RUNTIME, 'node', 'bin', 'node')
+async function main() {
+  const nodeExe =
+    process.platform === 'win32' ? join(RUNTIME, 'node', 'node.exe') : join(RUNTIME, 'node', 'bin', 'node')
   const dshEntry = join(RUNTIME, 'dsh', 'lib', 'bin.js')
   const home = join(RUNTIME, 'dsh-home')
   const profileDir = join(home, 'profiles', PROFILE)
@@ -158,6 +193,20 @@ async function main () {
   if (existsSync(runtimeManifest)) {
     const m = JSON.parse(readFileSync(runtimeManifest, 'utf8'))
     record('运行时 manifest 存在', true, `dsh ${m.dsh?.version} / node ${m.node?.version}`)
+    try {
+      verifyRuntimeIntegrity(RUNTIME, {
+        node: process.env.DSH_PX_NODE_VERSION ?? RUNTIME_VERSIONS.node,
+        dsh: process.env.DSH_PX_DSH_VERSION ?? RUNTIME_VERSIONS.dsh,
+        app: JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).version
+      })
+      record('实际 Node/DSH/插件版本、平台与文件摘要匹配', true)
+    } catch (error) {
+      record('实际 Node/DSH/插件版本、平台与文件摘要匹配', false, errText(error))
+      return finish()
+    }
+  } else {
+    record('运行时 manifest 存在', false)
+    return finish()
   }
 
   if (!existsSync(join(profileDir, 'package.json'))) return finish()
@@ -170,7 +219,11 @@ async function main () {
   // ---- 2. 与官方安装做能力平价 --------------------------------------------
   const baseline = officialBaseline()
   if (!baseline) {
-    record('官方 dsh 基线可用', false, '既没有全局 dsh，也没有 build/baseline/dsh-package.json；未度量能力平价')
+    record(
+      '官方 dsh 基线可用',
+      false,
+      '既没有全局 dsh，也没有 build/baseline/dsh-package.json；未度量能力平价'
+    )
   } else {
     let stagedRows
     try {
@@ -182,23 +235,26 @@ async function main () {
     if (stagedRows) {
       record('装配版能组合出插件树', stagedRows.length > 100, `${stagedRows.length} 行`)
 
-      let missing: Array<{ id: string, name: string | null }> = []
-      let extra: Array<{ id: string, name: string | null }> = []
+      let missing: Array<{ id: string; name: string | null }> = []
+      let extra: Array<{ id: string; name: string | null }> = []
       let baselineLabel = ''
 
       if (baseline.kind === 'install') {
         // 完整基线：直接组合官方安装的树，逐行对比 —— 这是最有说服力的形式。
         baselineLabel = '官方安装（组合树逐行对比）'
-        const officialHome = process.env.DSH_HOME ?? join(process.env.USERPROFILE ?? process.env.HOME ?? '', '.dsh')
+        const officialHome = mkdtempSync(join(tmpdir(), 'dshpx-baseline-'))
         try {
           const officialRows = dump(nodeExe, join(baseline.dir ?? '', 'lib', 'bin.js'), officialHome)
-          const key = (r: { id: string, name: string | null }): string => `${r.id}|${r.name}`
+          const key = (r: { id: string; name: string | null }): string => `${r.id}|${r.name}`
           const stagedSet = new Set(stagedRows.map(key))
           const officialKeys = new Set(officialRows.map(key))
           missing = officialRows.filter((r) => !stagedSet.has(key(r)))
           extra = stagedRows.filter((r) => !officialKeys.has(key(r)))
         } catch (err) {
           record('官方版 --dump-config 成功', false, errText(err).slice(0, 400))
+        } finally {
+          // mkdtemp generated this exact path; no personal profile was consulted or changed.
+          rmSync(officialHome, { recursive: true, force: true })
         }
       } else {
         // manifest 基线：只有官方 dsh 的依赖清单。无法逐行组合对比，
@@ -206,22 +262,24 @@ async function main () {
         // 这是 CI（无全局 dsh、_dsh-install 已清理）唯一可做的事，
         // 也正是"自包含"这一步真正会失败的地方。
         baselineLabel = '官方 manifest（依赖完整性对比）'
-        const manifest = JSON.parse(readFileSync(baseline.file ?? '', 'utf8')) as { dependencies?: Record<string, string> }
+        const manifest = JSON.parse(readFileSync(baseline.file ?? '', 'utf8')) as {
+          dependencies?: Record<string, string>
+        }
         const deps = Object.keys(manifest.dependencies ?? {})
         const installed = new Set()
         const scanScope = (base, prefix) => {
           if (!existsSync(base)) return
           for (const entry of readdirSync(base, { withFileTypes: true })) {
             if (!entry.isDirectory()) continue
-            if (entry.name.startsWith('@')) { scanScope(join(base, entry.name), entry.name + '/'); continue }
+            if (entry.name.startsWith('@')) {
+              scanScope(join(base, entry.name), entry.name + '/')
+              continue
+            }
             installed.add(prefix + entry.name)
           }
         }
-        // 扫描装配树的依赖。注意基准目录必须是 `runtime/dsh/node_modules`：
-        // dshEntry 是**文件**（lib/bin.js），用 `join(dshEntry, '..', 'node_modules')`
-        // 会解析成 lib/node_modules 而漏掉全部依赖（第一次写就是这样，
-        // 结果误报'缺失 72 项'）。用 dirname 明确上溯两级才是对的。
-        const stagedDshDir = dirname(dirname(dshEntry))          // runtime/dsh
+        // The CLI entry is in lib; dependencies are relative to the package root.
+        const stagedDshDir = dirname(dirname(dshEntry)) // runtime/dsh
         const stagedModules = join(stagedDshDir, 'node_modules')
         scanScope(join(stagedModules, '@deepseek-ai'), '@deepseek-ai/')
         scanScope(stagedModules, '')
@@ -231,13 +289,24 @@ async function main () {
 
       if (missing) {
         record(
-          `能力平价：官方的东西一样都不缺（基线：${baselineLabel}）`,
+          `官方基线的插件或依赖条目完整（基线：${baselineLabel}）`,
           missing.length === 0,
-          missing.length ? `缺失 ${missing.length} 项：${missing.slice(0, 10).map((r) => r.id ?? r.name).join('、')}` : '完全一致或为其超集'
+          missing.length
+            ? `缺失 ${missing.length} 项：${missing
+                .slice(0, 10)
+                .map((r) => r.id ?? r.name)
+                .join('、')}`
+            : '完全一致或为其超集'
         )
         if (extra.length) {
-          record('装配版是超集（随附插件带来了额外行）', true,
-            `+${extra.length}：${extra.slice(0, 10).map((r) => r.id).join('、')}`)
+          record(
+            '装配版是超集（随附插件带来了额外行）',
+            true,
+            `+${extra.length}：${extra
+              .slice(0, 10)
+              .map((r) => r.id)
+              .join('、')}`
+          )
         }
       }
     }
@@ -256,7 +325,7 @@ async function main () {
   return finish()
 }
 
-function finish () {
+function finish() {
   const failed = results.filter((r) => !r.ok)
   if (AS_JSON) {
     process.stdout.write(JSON.stringify({ ok: failed.length === 0, results }, null, 2) + '\n')

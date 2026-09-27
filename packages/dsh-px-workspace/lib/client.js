@@ -30,12 +30,44 @@ window.__ModuleLoader__.load({
 		});
 		module.exports = __toCommonJS(client_exports);
 
+		// packages/dsh-px-workspace/src/client/host-layout.ts
+		var hostLayoutContract = {
+		  overlay: "[data-shell-overlay]",
+		  fullscreen: "data-rightbar-fullscreen",
+		  owner: "data-dsh-px-layout-owner"
+		};
+		var hostLayoutCss = `
+		[data-dsh-px-layout-owner]{padding-top:var(--dsh-px-toolbar-height,86px);box-sizing:border-box}
+		[data-dsh-px-layout-owner][data-rightbar-fullscreen]{padding-top:0}
+		[data-dsh-px-layout-owner][data-rightbar-fullscreen] .px-bar{display:none}
+		`;
+		function attachToolbarLayout(bar) {
+		  const owner = bar.closest(hostLayoutContract.overlay)?.parentElement;
+		  if (!owner) return () => {
+		  };
+		  const previous = owner.style.getPropertyValue("--dsh-px-toolbar-height");
+		  owner.setAttribute(hostLayoutContract.owner, "");
+		  const update = () => {
+		    const height = bar.getBoundingClientRect().height;
+		    if (height > 0) owner.style.setProperty("--dsh-px-toolbar-height", `${Math.ceil(height)}px`);
+		  };
+		  const observer = new ResizeObserver(update);
+		  observer.observe(bar);
+		  update();
+		  return () => {
+		    observer.disconnect();
+		    owner.removeAttribute(hostLayoutContract.owner);
+		    if (previous) owner.style.setProperty("--dsh-px-toolbar-height", previous);
+		    else owner.style.removeProperty("--dsh-px-toolbar-height");
+		  };
+		}
+		function isTypingTarget(target) {
+		  return target instanceof Element && Boolean(target.closest('input,textarea,select,[contenteditable="true"],[role="textbox"]'));
+		}
+
 		// packages/dsh-px-workspace/src/client/styles.ts
-		var css = `
-		body[data-dsh-px-workspace] div:has(> [data-shell-overlay]){padding-top:86px;box-sizing:border-box}
-		body[data-dsh-px-workspace] div[data-rightbar-fullscreen]:has(> [data-shell-overlay]){padding-top:0}
-		[data-rightbar-fullscreen] .px-bar{display:none}
-		.px-bar{position:absolute;inset:0 0 auto;height:86px;box-sizing:border-box;pointer-events:auto;background:var(--px-bg);border-bottom:1px solid var(--px-border);display:flex;flex-direction:column;padding:6px 12px;gap:6px;isolation:isolate}
+		var css = hostLayoutCss + `
+		.px-bar{position:absolute;inset:0 0 auto;min-height:86px;box-sizing:border-box;pointer-events:auto;background:var(--px-bg);border-bottom:1px solid var(--px-border);display:flex;flex-direction:column;padding:6px 12px;gap:6px;isolation:isolate}
 		.px-brand{flex:none;font-size:12px;letter-spacing:.04em;margin:0 7px 0 2px;color:var(--px-muted)}
 		.px-tabs,.px-tools{display:flex;align-items:center;gap:6px;min-width:0;height:34px;flex:none}
 		.px-tabstrip{display:flex;flex:1;overflow-x:auto;overflow-y:hidden;gap:5px;min-width:50px;scrollbar-width:thin;padding:2px}
@@ -49,7 +81,8 @@ window.__ModuleLoader__.load({
 		.px-tabs>button,.px-tabs>select{flex:none}.px-tabs>select{max-width:155px;height:32px;padding:3px 7px}.px-restore{width:32px;padding:0!important}
 		.px-tools{overflow-x:auto;scrollbar-width:thin}.px-tools>button{white-space:nowrap;flex:none;border-color:transparent;background:transparent;padding:4px 8px}
 		.px-status{margin-left:auto;white-space:nowrap;color:var(--px-muted);font-size:12px;padding:0 5px}
-		.px-bar-error{position:absolute;right:12px;top:88px;max-width:min(540px,calc(100vw - 24px));border:1px solid var(--px-error);background:var(--px-bg);padding:9px 12px;border-radius:9px;display:flex;gap:10px;align-items:center;box-shadow:0 4px 18px #0002}
+		.px-bar-error{position:absolute;right:12px;top:calc(100% + 2px);max-width:min(540px,calc(100vw - 24px));border:1px solid var(--px-error);background:var(--px-bg);padding:9px 12px;border-radius:9px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;box-shadow:0 4px 18px #0002;z-index:2}
+		.px-dependency-warning{font-size:12px;line-height:1.5;color:var(--px-muted)}
 		.px-panel{padding:16px;height:100%;overflow:auto;overflow-wrap:anywhere;box-sizing:border-box;animation:px-panel-in 130ms ease-out}
 		.px-panel h3{font-size:17px;line-height:1.45;margin:0 0 8px}.px-panel h4{font-size:14px;margin:4px 0}.px-panel p{margin:8px 0 12px}
 		.px-panel label{display:block;font-size:13px}.px-panel :is(textarea,input,select){display:block;width:100%;margin:5px 0 12px}.px-panel textarea{min-height:80px}
@@ -60,6 +93,7 @@ window.__ModuleLoader__.load({
 		.px-quote-action{font-size:12px!important;min-height:28px!important;padding:3px 8px!important}
 		@keyframes px-panel-in{from{opacity:.6}to{opacity:1}}
 		@media(max-width:1000px){.px-status{display:none}.px-brand{display:none}.px-tabs>select{max-width:116px}.px-bar{padding-left:6px;padding-right:6px}.px-tools>button{padding-inline:6px}}
+		@media(max-width:560px){.px-tabs{height:auto;flex-wrap:wrap}.px-tabstrip{flex-basis:100%;min-height:32px}.px-tabs>select{flex:1;max-width:none}.px-tools{min-height:34px}.px-tab{max-width:235px}}
 		`;
 
 		// packages/dsh-px-workspace/src/client/data.ts
@@ -127,19 +161,22 @@ window.__ModuleLoader__.load({
 		}
 
 		// packages/shared/operation.ts
-		function createOperation() {
+		function createOperation(onUnused) {
 		  let pending = false;
 		  const listeners = /* @__PURE__ */ new Set();
 		  const publish = (value) => {
 		    pending = value;
 		    for (const cb of listeners) cb();
+		    if (!pending && !listeners.size) onUnused?.();
 		  };
 		  return {
 		    getSnapshot: () => pending,
+		    subscribers: () => listeners.size,
 		    subscribe: (cb) => {
 		      listeners.add(cb);
 		      return () => {
 		        listeners.delete(cb);
+		        if (!pending && !listeners.size) onUnused?.();
 		      };
 		    },
 		    async run(fn) {
@@ -153,12 +190,65 @@ window.__ModuleLoader__.load({
 		    }
 		  };
 		}
+		function createOperationRegistry() {
+		  const operations2 = /* @__PURE__ */ new Map();
+		  return {
+		    get(key) {
+		      let operation = operations2.get(key);
+		      if (!operation) {
+		        operation = createOperation(() => {
+		          queueMicrotask(() => {
+		            if (operations2.get(key) === operation && !operation.getSnapshot() && !operation.subscribers())
+		              operations2.delete(key);
+		          });
+		        });
+		        operations2.set(key, operation);
+		      }
+		      return operation;
+		    },
+		    pending: (key) => operations2.get(key)?.getSnapshot() === true,
+		    size: () => operations2.size
+		  };
+		}
+
+		// packages/shared/quote-requests.ts
+		function createQuoteRequests(limit = 64) {
+		  let requests = {};
+		  let revision = 0;
+		  const epoch = Date.now().toString(36) + Math.random().toString(36).slice(2);
+		  const listeners = /* @__PURE__ */ new Set();
+		  const publish = () => {
+		    for (const listener of listeners) listener();
+		  };
+		  return {
+		    getSnapshot: () => requests,
+		    subscribe: (listener) => {
+		      listeners.add(listener);
+		      return () => {
+		        listeners.delete(listener);
+		      };
+		    },
+		    request(sessionId, messageId) {
+		      if (!requests[sessionId] && Object.keys(requests).length >= limit)
+		        throw new Error("\u5F85\u5904\u7406\u5F15\u7528\u8FC7\u591A\uFF0C\u8BF7\u5148\u5728\u5F15\u7528\u4E0E\u6279\u6CE8\u9762\u677F\u5904\u7406\u5DF2\u6709\u5F15\u7528\u3002");
+		      requests = { ...requests, [sessionId]: { messageId, token: `${epoch}:${++revision}` } };
+		      publish();
+		    },
+		    consume(sessionId, token) {
+		      if (!requests[sessionId] || token && requests[sessionId].token !== token) return;
+		      const next = { ...requests };
+		      delete next[sessionId];
+		      requests = next;
+		      publish();
+		    }
+		  };
+		}
 
 		// packages/dsh-px-workspace/src/client/data.ts
-		var operations = /* @__PURE__ */ new Map();
+		var operations = createOperationRegistry();
+		var isOperationPending = operations.pending;
 		function useOperation(key) {
 		  const [operation] = (0, import_react.useState)(() => {
-		    if (!operations.has(key)) operations.set(key, createOperation());
 		    return operations.get(key);
 		  });
 		  return [useSnapshot(operation), operation.run];
@@ -166,31 +256,13 @@ window.__ModuleLoader__.load({
 		var base = "/dsh-px-workspace";
 		var errorText = (e) => e instanceof Error ? e.message : String(e);
 		var stamp = (time) => time === null ? "\u5DF2\u6682\u505C" : new Date(time).toLocaleString();
-		var post = (route, value) => requestJson(`${base}/${route}`, {
+		var post = (route2, value) => requestJson(`${base}/${route2}`, {
 		  method: "POST",
 		  headers: { "Content-Type": "application/json" },
 		  body: JSON.stringify(value)
 		});
-		var quoteEpoch = Date.now().toString(36) + Math.random().toString(36).slice(2);
-		var quoteSelections = {};
-		var quoteRevision = 0;
-		var quoteListeners = /* @__PURE__ */ new Set();
-		var quoteRequests = {
-		  getSnapshot: () => quoteSelections,
-		  subscribe: (cb) => {
-		    quoteListeners.add(cb);
-		    return () => {
-		      quoteListeners.delete(cb);
-		    };
-		  }
-		};
-		function requestQuote(sessionId, messageId) {
-		  quoteSelections = {
-		    ...quoteSelections,
-		    [sessionId]: { messageId, token: `${quoteEpoch}:${++quoteRevision}` }
-		  };
-		  for (const cb of quoteListeners) cb();
-		}
+		var quoteRequests = createQuoteRequests();
+		var requestQuote = quoteRequests.request;
 		function useSnapshot(store) {
 		  const [value, set] = (0, import_react.useState)(store.getSnapshot);
 		  (0, import_react.useEffect)(() => {
@@ -252,50 +324,58 @@ window.__ModuleLoader__.load({
 		  return { data, error, loading, refresh: () => revise((n) => n + 1) };
 		}
 
-		// packages/dsh-px-workspace/src/client/session-bar.tsx
-		var import_react3 = require("react");
-
-		// packages/dsh-px-workspace/src/client/tab-state.ts
-		function visibleTabs(tabs) {
-		  return [
-		    ...tabs.ids.filter((id) => tabs.pins.includes(id)),
-		    ...tabs.ids.filter((id) => !tabs.pins.includes(id))
-		  ];
-		}
-		function closeTabState(tabs, id, available) {
-		  const ordered = visibleTabs(tabs), at = ordered.indexOf(id);
-		  const candidates = [...ordered.slice(at + 1), ...ordered.slice(0, at).reverse()];
-		  return {
-		    tabs: {
-		      ...tabs,
-		      ids: tabs.ids.filter((x) => x !== id),
-		      pins: tabs.pins.filter((x) => x !== id),
-		      closed: [id, ...tabs.closed.filter((x) => x !== id)].slice(0, 10)
-		    },
-		    next: candidates.find((x) => available.includes(x))
-		  };
-		}
-		function parseTabs(raw) {
+		// packages/dsh-px-workspace/src/client/panel-availability.ts
+		var import_react2 = require("react");
+		var unavailable = (state, reason) => ({ enabled: false, state, reason });
+		function panelAvailability(capabilities, type) {
+		  const { sidebar, terminal, nativeTabs } = capabilities;
 		  try {
-		    const p = JSON.parse(raw ?? "{}");
-		    const ids = (v) => Array.isArray(v) ? [...new Set(v.filter((x) => typeof x === "string" && /^[\w-]{1,200}$/.test(x)))] : [];
-		    const open = ids(p.ids), closed = ids(p.closed).slice(0, 10), titles = {};
-		    for (const id of [...open, ...closed])
-		      if (typeof p.titles?.[id] === "string")
-		        Object.defineProperty(titles, id, {
-		          value: p.titles[id].slice(0, 160),
-		          enumerable: true,
-		          writable: true,
-		          configurable: true
-		        });
-		    return { ids: open, pins: ids(p.pins).filter((id) => open.includes(id)), closed, titles };
+		    if (type === "terminal") {
+		      if (sidebar) {
+		        if (typeof sidebar.isTabEnabled !== "function")
+		          return unavailable("unknown", "\u65E0\u6CD5\u786E\u8BA4\u7EC8\u7AEF\u8BBE\u7F6E\uFF0C\u8BF7\u68C0\u67E5\u4FA7\u8FB9\u5361\u7247\u7248\u672C\u3002");
+		        const preference = sidebar.isTabEnabled(type);
+		        if (preference === false) return unavailable("disabled", "\u5DF2\u5728\u201C\u4FA7\u8FB9\u5361\u7247\u201D\u8BBE\u7F6E\u4E2D\u7981\u7528\u3002");
+		        if (preference !== true) return unavailable("unknown", "\u6682\u65F6\u65E0\u6CD5\u786E\u8BA4\u7EC8\u7AEF\u8BBE\u7F6E\u3002");
+		      }
+		      if (typeof terminal?.openTabIn !== "function") return unavailable("missing", "\u539F\u751F\u7EC8\u7AEF\u5165\u53E3\u5C1A\u672A\u52A0\u8F7D\u3002");
+		      if (typeof nativeTabs?.get !== "function" || typeof nativeTabs.subscribe !== "function")
+		        return unavailable("missing", "\u539F\u751F\u7EC8\u7AEF\u9762\u677F\u72B6\u6001\u5C1A\u672A\u5C31\u7EEA\u3002");
+		      if (!nativeTabs.get(type)) return unavailable("missing", "\u7EC8\u7AEF\u63D2\u4EF6\u5C1A\u672A\u52A0\u8F7D\u3002");
+		    } else {
+		      if (!sidebar) return unavailable("missing", "\u4FA7\u8FB9\u5361\u7247\u670D\u52A1\u5C1A\u672A\u52A0\u8F7D\u3002");
+		      if (typeof sidebar.getTab !== "function" || typeof sidebar.subscribe !== "function" || typeof sidebar.subscribeState !== "function" || typeof sidebar.isTabEnabled !== "function")
+		        return unavailable("unknown", "\u4FA7\u8FB9\u5361\u7247\u7248\u672C\u672A\u63D0\u4F9B\u5B8C\u6574\u9762\u677F\u72B6\u6001\uFF0C\u8BF7\u68C0\u67E5\u63D2\u4EF6\u7248\u672C\u3002");
+		      if (!sidebar.getTab(type)) return unavailable("missing", "\u63D0\u4F9B\u6B64\u9762\u677F\u7684\u63D2\u4EF6\u5C1A\u672A\u52A0\u8F7D\u3002");
+		      const preference = sidebar.isTabEnabled(type);
+		      if (preference === false) return unavailable("disabled", "\u5DF2\u5728\u201C\u4FA7\u8FB9\u5361\u7247\u201D\u8BBE\u7F6E\u4E2D\u7981\u7528\u3002");
+		      if (preference !== true) return unavailable("unknown", "\u6682\u65F6\u65E0\u6CD5\u786E\u8BA4\u9762\u677F\u8BBE\u7F6E\u3002");
+		    }
+		    return { enabled: true, state: "ready", reason: "" };
 		  } catch {
-		    return { ids: [], pins: [], closed: [], titles: {} };
+		    return unavailable("unknown", "\u9762\u677F\u72B6\u6001\u6682\u65F6\u65E0\u6CD5\u8BFB\u53D6\uFF0C\u8BF7\u5230\u201C\u8FD0\u884C\u4E0E\u5E2E\u52A9\u201D\u68C0\u67E5\u3002");
 		  }
+		}
+		function usePanelCapabilities(ctx) {
+		  const capabilities = useSnapshot(ctx.capabilities);
+		  const [, refresh] = (0, import_react2.useState)(0);
+		  (0, import_react2.useEffect)(() => {
+		    const changed = () => refresh((value) => value + 1);
+		    const offRegistry = typeof capabilities.sidebar?.subscribe === "function" ? capabilities.sidebar.subscribe(changed) : void 0;
+		    const offState = typeof capabilities.sidebar?.subscribeState === "function" ? capabilities.sidebar.subscribeState(changed) : void 0;
+		    const offNative = typeof capabilities.nativeTabs?.subscribe === "function" ? capabilities.nativeTabs.subscribe(changed) : void 0;
+		    changed();
+		    return () => {
+		      offRegistry?.();
+		      offState?.();
+		      offNative?.();
+		    };
+		  }, [capabilities.sidebar, capabilities.nativeTabs]);
+		  return capabilities;
 		}
 
 		// packages/shared/ui.tsx
-		var import_react2 = require("react");
+		var import_react3 = require("react");
 		var import_jsx_runtime = require("react/jsx-runtime");
 		var uiCss = `
 		.px-ui{--px-bg:var(--dsw-alias-bg-base,#fff);--px-layer:var(--dsw-alias-bg-layer-1,#f8f9fb);--px-fg:var(--dsw-alias-label-primary,#20242d);--px-muted:var(--dsw-alias-label-secondary,#657080);--px-border:var(--dsw-alias-border-l2,#d9dee7);--px-accent:var(--dsw-alias-state-business-primary,#466dea);--px-error:var(--dsw-alias-state-error-primary,#bc3946);color:var(--px-fg);font-size:13px;line-height:1.6}
@@ -368,7 +448,7 @@ window.__ModuleLoader__.load({
 		  disabled,
 		  onConfirm
 		}) {
-		  const [confirm, setConfirm] = (0, import_react2.useState)(false);
+		  const [confirm, setConfirm] = (0, import_react3.useState)(false);
 		  return confirm ? /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { className: "px-confirm-delete", children: [
 		    /* @__PURE__ */ (0, import_jsx_runtime.jsxs)("span", { children: [
 		      "\u786E\u8BA4",
@@ -393,34 +473,230 @@ window.__ModuleLoader__.load({
 		  ] }) : /* @__PURE__ */ (0, import_jsx_runtime.jsx)("button", { className: "px-danger", disabled, onClick: () => setConfirm(true), children: label });
 		}
 
-		// packages/dsh-px-workspace/src/client/session-bar.tsx
+		// packages/dsh-px-workspace/src/client/quote-action.tsx
 		var import_jsx_runtime2 = require("react/jsx-runtime");
-		var tabKey = "dsh-px.session-tabs.v1";
+		function QuoteAction({
+		  ctx,
+		  sessionId,
+		  messageId
+		}) {
+		  const availability = panelAvailability(usePanelCapabilities(ctx), "px-notes");
+		  return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "px-ui", children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+		    "button",
+		    {
+		      className: "px-quote-action",
+		      disabled: !availability.enabled,
+		      title: availability.enabled ? "\u5F15\u7528\u6216\u6279\u6CE8\u8FD9\u6761\u6D88\u606F" : `\u5F15\u7528\u4E0E\u6279\u6CE8\u4E0D\u53EF\u7528\uFF1A${availability.reason}`,
+		      onClick: () => {
+		        let requestToken;
+		        try {
+		          const live = ctx.capabilities.getSnapshot();
+		          const current = panelAvailability(live, "px-notes");
+		          if (!current.enabled) throw new Error(current.reason);
+		          requestQuote(sessionId, messageId);
+		          requestToken = quoteRequests.getSnapshot()[sessionId]?.token;
+		          live.sidebar.openTab({ type: "px-notes", meta: { messageId } }, { sessionId });
+		        } catch (err) {
+		          if (requestToken) quoteRequests.consume(sessionId, requestToken);
+		          const scope = ctx.sessions.scope(sessionId);
+		          if (scope)
+		            ctx.conversation.input.for(scope).notify("error", err instanceof Error ? err.message : String(err));
+		        }
+		      },
+		      children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Icon, { name: "note" }),
+		        "\u5F15\u7528 / \u6279\u6CE8"
+		      ]
+		    }
+		  ) });
+		}
+
+		// packages/dsh-px-workspace/src/client/session-bar.tsx
+		var import_react5 = require("react");
+
+		// packages/shared/session-layout.ts
+		function parseTabs(raw) {
+		  try {
+		    const p = JSON.parse(raw ?? "{}");
+		    const ids = (v) => Array.isArray(v) ? [...new Set(v.filter((x) => typeof x === "string" && /^[\w-]{1,200}$/.test(x)))] : [];
+		    const open = ids(p.ids), closed = ids(p.closed).slice(0, 10), titles = {};
+		    for (const id of [...open, ...closed])
+		      if (typeof p.titles?.[id] === "string")
+		        Object.defineProperty(titles, id, {
+		          value: p.titles[id].slice(0, 160),
+		          enumerable: true,
+		          writable: true,
+		          configurable: true
+		        });
+		    return { ids: open, pins: ids(p.pins).filter((id) => open.includes(id)), closed, titles };
+		  } catch {
+		    return { ids: [], pins: [], closed: [], titles: {} };
+		  }
+		}
+
+		// packages/dsh-px-workspace/src/client/tab-state.ts
+		function visibleTabs(tabs) {
+		  return [
+		    ...tabs.ids.filter((id) => tabs.pins.includes(id)),
+		    ...tabs.ids.filter((id) => !tabs.pins.includes(id))
+		  ];
+		}
+		function closeTabState(tabs, id, available) {
+		  const ordered = visibleTabs(tabs), at = ordered.indexOf(id);
+		  const candidates = [...ordered.slice(at + 1), ...ordered.slice(0, at).reverse()];
+		  const ids = tabs.ids.filter((x) => x !== id);
+		  const closed = [id, ...tabs.closed.filter((x) => x !== id)].slice(0, 10);
+		  return {
+		    tabs: {
+		      ...tabs,
+		      ids,
+		      pins: tabs.pins.filter((x) => x !== id),
+		      closed,
+		      titles: Object.fromEntries(
+		        [...ids, ...closed].filter((id2) => tabs.titles[id2]).map((id2) => [id2, tabs.titles[id2]])
+		      )
+		    },
+		    next: candidates.find((x) => available.includes(x))
+		  };
+		}
+
+		// packages/dsh-px-workspace/src/client/layout.ts
+		var import_react4 = require("react");
+		var route = "/dsh-px-workbench/layout";
+		var legacyKey = "dsh-px.session-tabs.v1";
+		function useSessionLayout() {
+		  const [tabs, setTabs] = (0, import_react4.useState)(() => parseTabs(null));
+		  const [ready, setReady] = (0, import_react4.useState)(false);
+		  const [warning, setWarning] = (0, import_react4.useState)("");
+		  const [conflict, setConflict] = (0, import_react4.useState)(false);
+		  const metadata = (0, import_react4.useRef)(null);
+		  const latest = (0, import_react4.useRef)(tabs);
+		  latest.current = tabs;
+		  const pending = (0, import_react4.useRef)(false), blocked = (0, import_react4.useRef)(false), active = (0, import_react4.useRef)(true);
+		  const saved = (0, import_react4.useRef)("");
+		  const backup = (value) => {
+		    try {
+		      localStorage.setItem(
+		        metadata.current ? `dsh-px.session-tabs.v2.${metadata.current.serviceId}` : legacyKey,
+		        JSON.stringify(value)
+		      );
+		    } catch {
+		    }
+		  };
+		  async function save() {
+		    if (!metadata.current || pending.current || blocked.current) return;
+		    pending.current = true;
+		    try {
+		      while (JSON.stringify(latest.current) !== saved.current && !blocked.current) {
+		        const layout = latest.current;
+		        const result = await requestJson(route, {
+		          method: "POST",
+		          headers: { "Content-Type": "application/json" },
+		          body: JSON.stringify({ ...metadata.current, layout })
+		        });
+		        metadata.current = result;
+		        saved.current = JSON.stringify(layout);
+		        if (active.current) {
+		          setWarning("");
+		          setConflict(false);
+		        }
+		      }
+		    } catch (err) {
+		      blocked.current = true;
+		      if (active.current) {
+		        setConflict(err instanceof RequestError && err.status === 409);
+		        setWarning(
+		          (err instanceof Error ? err.message : String(err)) + (err instanceof RequestError && err.status === 409 ? "" : " \u5F53\u524D\u7A97\u53E3\u6807\u7B7E\u4ECD\u7136\u4FDD\u7559\u3002")
+		        );
+		      }
+		    } finally {
+		      pending.current = false;
+		    }
+		  }
+		  async function reload(useCurrent = false) {
+		    try {
+		      const result = await requestJson(route);
+		      if (!active.current) return;
+		      metadata.current = result;
+		      saved.current = JSON.stringify(result.layout);
+		      blocked.current = false;
+		      setWarning("");
+		      setConflict(false);
+		      if (useCurrent) await save();
+		      else setTabs(result.layout);
+		    } catch (err) {
+		      if (active.current) setWarning(err instanceof Error ? err.message : String(err));
+		    }
+		  }
+		  (0, import_react4.useEffect)(() => {
+		    active.current = true;
+		    const controller = new AbortController();
+		    void requestJson(route, { signal: controller.signal }).then((result) => {
+		      if (!active.current) return;
+		      metadata.current = result;
+		      saved.current = JSON.stringify(result.layout);
+		      let restored = result.layout;
+		      if (result.revision === 0) {
+		        try {
+		          restored = parseTabs(localStorage.getItem(legacyKey));
+		        } catch {
+		        }
+		      }
+		      setTabs(restored);
+		      setReady(true);
+		    }).catch((err) => {
+		      if (!active.current || controller.signal.aborted) return;
+		      try {
+		        setTabs(parseTabs(localStorage.getItem(legacyKey)));
+		      } catch {
+		      }
+		      setWarning(
+		        `\u65E0\u6CD5\u8BFB\u53D6\u670D\u52A1\u5E03\u5C40\uFF1A${err instanceof Error ? err.message : String(err)}\u3002\u5F53\u524D\u6807\u7B7E\u4EC5\u4FDD\u7559\u5728\u6B64\u6D4F\u89C8\u5668\u5730\u5740\u3002`
+		      );
+		      setReady(true);
+		    });
+		    return () => {
+		      active.current = false;
+		      controller.abort();
+		    };
+		  }, []);
+		  (0, import_react4.useEffect)(() => {
+		    if (!ready) return;
+		    backup(tabs);
+		    void save();
+		  }, [tabs, ready]);
+		  return {
+		    tabs,
+		    setTabs,
+		    ready,
+		    warning,
+		    conflict,
+		    restore: () => reload(false),
+		    keepCurrent: () => reload(true)
+		  };
+		}
+
+		// packages/dsh-px-workspace/src/client/session-bar.tsx
+		var import_jsx_runtime3 = require("react/jsx-runtime");
 		var panels = [
 		  ["editor", "\u6587\u4EF6", "file"],
 		  ["terminal", "\u7EC8\u7AEF", "terminal"],
 		  ["px-artifacts", "\u4EA7\u7269", "artifact"],
-		  ["git", "\u53D8\u66F4", "git"],
+		  ["git", "\u6587\u4EF6\u53D8\u52A8", "git"],
+		  ["dsh-px-taskflow", "\u6267\u884C\u8BB0\u5F55", "jobs"],
 		  ["subagent", "\u540E\u53F0\u4EFB\u52A1", "jobs"],
 		  ["px-notes", "\u5F15\u7528\u4E0E\u6279\u6CE8", "note"],
 		  ["px-schedules", "\u5B9A\u65F6\u4EFB\u52A1", "schedule"]
 		];
 		function SessionBar({ ctx }) {
 		  const sessions = useSnapshot(ctx.sessions.list);
-		  const [sidebarStore] = (0, import_react3.useState)(() => ({
-		    getSnapshot: ctx.betterSidebar.getSnapshot,
-		    subscribe: ctx.betterSidebar.subscribeState
-		  }));
-		  useSnapshot(sidebarStore);
-		  const [tabs, setTabs] = (0, import_react3.useState)(() => {
-		    try {
-		      return parseTabs(localStorage.getItem(tabKey));
-		    } catch {
-		      return parseTabs(null);
-		    }
-		  });
-		  const [error, setError] = (0, import_react3.useState)("");
-		  const selected = (0, import_react3.useRef)(null);
+		  const capabilities = usePanelCapabilities(ctx);
+		  const layout = useSessionLayout();
+		  const { tabs, setTabs, ready } = layout;
+		  const [error, setError] = (0, import_react5.useState)("");
+		  const bar = (0, import_react5.useRef)(null);
+		  (0, import_react5.useEffect)(() => bar.current ? attachToolbarLayout(bar.current) : void 0, []);
+		  const selected = (0, import_react5.useRef)(null);
 		  const current = sessions.current, row = current ? sessions.byId[current] : void 0;
 		  const ordinaryCurrent = row?.origin === "subagent" ? row.parentId : current;
 		  const ids = visibleTabs(tabs);
@@ -428,8 +704,8 @@ window.__ModuleLoader__.load({
 		    const s = sessions.byId[id];
 		    return s?.blank ? `\u65B0\u4F1A\u8BDD${s.cwd ? " \xB7 " + s.cwd.split(/[\\/]/).filter(Boolean).pop() : ""}` : s?.title ?? tabs.titles[id] ?? s?.displayTitle ?? (sessions.phase === "pending" ? "\u52A0\u8F7D\u4F1A\u8BDD\u2026" : "\u4F1A\u8BDD\u4E0D\u53EF\u7528");
 		  };
-		  (0, import_react3.useEffect)(() => {
-		    if (!ordinaryCurrent || !sessions.byId[ordinaryCurrent] || sessions.byId[ordinaryCurrent].origin === "subagent")
+		  (0, import_react5.useEffect)(() => {
+		    if (!ready || !ordinaryCurrent || !sessions.byId[ordinaryCurrent] || sessions.byId[ordinaryCurrent].origin === "subagent")
 		      return;
 		    setTabs(
 		      (old) => old.ids.includes(ordinaryCurrent) ? old : {
@@ -438,8 +714,8 @@ window.__ModuleLoader__.load({
 		        closed: old.closed.filter((id) => id !== ordinaryCurrent)
 		      }
 		    );
-		  }, [ordinaryCurrent, sessions.phase]);
-		  (0, import_react3.useEffect)(() => {
+		  }, [ordinaryCurrent, sessions.phase, ready]);
+		  (0, import_react5.useEffect)(() => {
 		    setTabs((old) => {
 		      const titles = { ...old.titles };
 		      let changed = false;
@@ -455,14 +731,7 @@ window.__ModuleLoader__.load({
 		      return changed ? { ...old, titles } : old;
 		    });
 		  }, [sessions]);
-		  (0, import_react3.useEffect)(() => {
-		    try {
-		      localStorage.setItem(tabKey, JSON.stringify(tabs));
-		    } catch {
-		      setError("\u6807\u7B7E\u4ECD\u53EF\u4F7F\u7528\uFF0C\u4F46\u6D4F\u89C8\u5668\u672A\u80FD\u4FDD\u5B58\u5E03\u5C40\u3002");
-		    }
-		  }, [tabs]);
-		  (0, import_react3.useEffect)(() => {
+		  (0, import_react5.useEffect)(() => {
 		    selected.current?.scrollIntoView({ block: "nearest", inline: "nearest" });
 		  }, [ordinaryCurrent, tabs.ids.length]);
 		  const open = (id, focus = false) => {
@@ -475,6 +744,7 @@ window.__ModuleLoader__.load({
 		    }
 		  };
 		  const close = (id) => {
+		    quoteRequests.consume(id);
 		    const result = closeTabState(
 		      tabs,
 		      id,
@@ -494,9 +764,9 @@ window.__ModuleLoader__.load({
 		    const available = ids.filter((id) => sessions.byId[id] && sessions.byId[id].origin !== "subagent"), index = available.indexOf(ordinaryCurrent ?? "");
 		    if (available.length) open(available[(index + direction + available.length) % available.length], focus);
 		  };
-		  (0, import_react3.useEffect)(() => {
+		  (0, import_react5.useEffect)(() => {
 		    const keydown = (e) => {
-		      if (e.defaultPrevented || e.isComposing || !e.ctrlKey || !e.altKey || document.querySelector("[role=dialog],[role=alertdialog]"))
+		      if (e.defaultPrevented || isTypingTarget(e.target) || e.isComposing || !e.ctrlKey || !e.altKey || document.querySelector("[role=dialog],[role=alertdialog]"))
 		        return;
 		      if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
 		        e.preventDefault();
@@ -512,24 +782,33 @@ window.__ModuleLoader__.load({
 		  const panel = (type) => {
 		    if (!current) return;
 		    try {
-		      if (!ctx.betterSidebar.isTabEnabled(type)) {
-		        setError("\u6B64\u9762\u677F\u5DF2\u5173\u95ED\uFF0C\u53EF\u5728\u201C\u4FA7\u8FB9\u5361\u7247\u201D\u8BBE\u7F6E\u4E2D\u542F\u7528\u3002");
+		      const live = ctx.capabilities.getSnapshot();
+		      const availability = panelAvailability(live, type);
+		      if (!availability.enabled) {
+		        setError(availability.reason);
 		        return;
 		      }
-		      if (type === "terminal") ctx.sidebarRight.openTabIn(current, "terminal", { revealIfOpened: true });
-		      else ctx.betterSidebar.openTab({ type }, { sessionId: current, cwd: row?.cwd });
+		      if (type === "terminal") live.terminal.openTabIn(current, "terminal", { revealIfOpened: true });
+		      else live.sidebar.openTab({ type }, { sessionId: current, cwd: row?.cwd });
 		      setError("");
 		    } catch (e) {
 		      setError(errorText(e));
 		    }
 		  };
-		  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "px-ui px-bar", "aria-label": "DSH-PX \u4F1A\u8BDD\u5DE5\u4F5C\u533A", children: [
-		    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "px-tabs", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { className: "px-brand", children: "DSH-PX" }),
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { className: "px-tabstrip", role: "tablist", "aria-label": "\u5DF2\u6253\u5F00\u4F1A\u8BDD", children: ids.map((id) => {
+		  const panelStates = panels.map(([type, text, icon]) => ({
+		    type,
+		    text,
+		    icon,
+		    ...panelAvailability(capabilities, type)
+		  }));
+		  const missingPanels = panelStates.filter((panel2) => panel2.state === "missing" || panel2.state === "unknown");
+		  return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { ref: bar, className: "px-ui px-bar", "aria-label": "DSH-PX \u4F1A\u8BDD\u5DE5\u4F5C\u533A", children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-tabs", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("strong", { className: "px-brand", children: "DSH-PX" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "px-tabstrip", role: "tablist", "aria-label": "\u5DF2\u6253\u5F00\u4F1A\u8BDD", children: ids.map((id) => {
 		        const active = id === ordinaryCurrent;
-		        return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "px-tab", "data-active": active, children: [
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+		        return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-tab", "data-active": active, children: [
+		          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
 		            "button",
 		            {
 		              role: "tab",
@@ -546,58 +825,62 @@ window.__ModuleLoader__.load({
 		                  cycle(e.key === "ArrowRight" ? 1 : -1, true);
 		                } else if (e.key === "Home" || e.key === "End") {
 		                  e.preventDefault();
-		                  const available = ids.filter((id2) => sessions.byId[id2]);
+		                  const available = ids.filter(
+		                    (id2) => sessions.byId[id2] && sessions.byId[id2].origin !== "subagent"
+		                  );
 		                  const next = e.key === "Home" ? available[0] : available[available.length - 1];
 		                  if (next) open(next, true);
 		                }
 		              },
 		              children: [
-		                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
 		                  "span",
 		                  {
 		                    className: `px-session-dot${sessions.byId[id]?.running ? " is-running" : sessions.byId[id]?.completed ? " is-done" : ""}`,
 		                    "aria-hidden": "true"
 		                  }
 		                ),
-		                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "px-tab-title", children: label(id) })
+		                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-tab-title", children: label(id) })
 		              ]
 		            }
 		          ),
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
 		            "button",
 		            {
 		              className: "px-tab-action",
 		              title: tabs.pins.includes(id) ? "\u53D6\u6D88\u56FA\u5B9A" : "\u56FA\u5B9A\u6807\u7B7E",
 		              "aria-label": `${tabs.pins.includes(id) ? "\u53D6\u6D88\u56FA\u5B9A" : "\u56FA\u5B9A"} ${label(id)}`,
 		              "aria-pressed": tabs.pins.includes(id),
+		              disabled: !ready,
 		              onClick: () => setTabs((old) => ({
 		                ...old,
 		                pins: old.pins.includes(id) ? old.pins.filter((x) => x !== id) : [...old.pins, id]
 		              })),
-		              children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Icon, { name: "pin" })
+		              children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: "pin" })
 		            }
 		          ),
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
 		            "button",
 		            {
 		              className: "px-tab-action",
-		              title: "\u5173\u95ED\u6807\u7B7E\uFF08\u4EFB\u52A1\u7EE7\u7EED\u8FD0\u884C\uFF09",
+		              title: "\u5173\u95ED\u6807\u7B7E\uFF08\u4EFB\u52A1\u7EE7\u7EED\u8FD0\u884C\uFF0C\u672A\u4FDD\u5B58\u8349\u7A3F\u4FDD\u7559\u5728\u6B64\u7A97\u53E3\uFF09",
+		              disabled: !ready,
 		              "aria-label": `\u5173\u95ED\u6807\u7B7E ${label(id)}`,
 		              onClick: () => close(id),
-		              children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Icon, { name: "close" })
+		              children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: "close" })
 		            }
 		          )
 		        ] }, id);
 		      }) }),
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("button", { onClick: () => ctx.uiWorkspace.startSession(), title: "\u5728\u5F53\u524D\u5DE5\u4F5C\u533A\u65B0\u5EFA\u4F1A\u8BDD", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Icon, { name: "plus" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("button", { onClick: () => ctx.uiWorkspace.startSession(), title: "\u5728\u5F53\u524D\u5DE5\u4F5C\u533A\u65B0\u5EFA\u4F1A\u8BDD", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: "plus" }),
 		        "\u65B0\u4F1A\u8BDD"
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("select", { "aria-label": "\u6253\u5F00\u5DF2\u6709\u4F1A\u8BDD", value: "", onChange: (e) => open(e.target.value), children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: "", children: "\u6253\u5F00\u4F1A\u8BDD\u2026" }),
-		        sessions.ids.filter((id) => sessions.byId[id]?.origin !== "subagent").map((id) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("option", { value: id, children: label(id) }, id))
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("select", { "aria-label": "\u6253\u5F00\u5DF2\u6709\u4F1A\u8BDD", value: "", onChange: (e) => open(e.target.value), children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "", children: "\u6253\u5F00\u4F1A\u8BDD\u2026" }),
+		        sessions.ids.filter((id) => sessions.byId[id]?.origin !== "subagent").map((id) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: id, children: label(id) }, id))
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
 		        "button",
 		        {
 		          className: "px-restore",
@@ -605,63 +888,122 @@ window.__ModuleLoader__.load({
 		          disabled: !tabs.closed.some((id) => sessions.byId[id]),
 		          onClick: reopen,
 		          title: "\u6062\u590D\u6700\u8FD1\u5173\u95ED \xB7 Ctrl+Alt+T",
-		          children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Icon, { name: "restore" })
+		          children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: "restore" })
 		        }
 		      )
 		    ] }),
-		    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "px-tools", children: [
-		      panels.map(([type, text, icon]) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+		    /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-tools", children: [
+		      panelStates.map(({ type, text, icon, enabled, reason }) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
 		        "button",
 		        {
-		          disabled: !current || !ctx.betterSidebar.isTabEnabled(type),
-		          title: ctx.betterSidebar.isTabEnabled(type) ? text : `${text}\u5DF2\u5728\u4FA7\u8FB9\u5361\u7247\u8BBE\u7F6E\u4E2D\u5173\u95ED`,
+		          disabled: !current || !enabled,
+		          title: !current ? "\u8BF7\u5148\u9009\u62E9\u6216\u65B0\u5EFA\u4F1A\u8BDD" : enabled ? text : `${text}\u4E0D\u53EF\u7528\uFF1A${reason}`,
 		          onClick: () => panel(type),
 		          children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Icon, { name: icon }),
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: icon }),
 		            text
 		          ]
 		        },
 		        type
 		      )),
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { className: "px-status", children: current ? row?.origin === "subagent" ? "\u6B63\u5728\u67E5\u770B\u5B50 Agent \xB7 \u8FD4\u56DE\u4E0A\u7EA7\u53EF\u7EE7\u7EED\u4EFB\u52A1" : row?.running ? "Agent \u6267\u884C\u4E2D" : "\u5C31\u7EEA" : "\u9009\u62E9\u6216\u65B0\u5EFA\u4F1A\u8BDD\u5F00\u59CB" })
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-status", children: current ? row?.origin === "subagent" ? "\u6B63\u5728\u67E5\u770B\u5B50 Agent \xB7 \u8FD4\u56DE\u4E0A\u7EA7\u53EF\u7EE7\u7EED\u4EFB\u52A1" : row?.running ? "Agent \u6267\u884C\u4E2D" : "\u5C31\u7EEA" : "\u9009\u62E9\u6216\u65B0\u5EFA\u4F1A\u8BDD\u5F00\u59CB" })
 		    ] }),
-		    error ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "px-bar-error", role: "alert", children: [
+		    missingPanels.length ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { role: "status", className: "px-dependency-warning", children: [
+		      "\u6682\u4E0D\u53EF\u7528\u7684\u9762\u677F\uFF1A",
+		      missingPanels.map((panel2) => panel2.text).join("\u3001"),
+		      "\u3002\u53EF\u5728\u201C\u63D2\u4EF6\u201D\u8BBE\u7F6E\u4E2D\u68C0\u67E5\u662F\u5426\u542F\u7528\uFF0C\u6216\u5230\u201C\u8FD0\u884C\u4E0E\u5E2E\u52A9\u201D\u67E5\u770B\u4F9D\u8D56\uFF1B\u4F1A\u8BDD\u4ECD\u53EF\u4F7F\u7528\u3002"
+		    ] }) : null,
+		    layout.warning ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-bar-error", role: "alert", children: [
+		      layout.warning,
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: () => void layout.restore(), children: "\u6062\u590D\u670D\u52A1\u5E03\u5C40" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: () => void layout.keepCurrent(), children: layout.conflict ? "\u4FDD\u5B58\u6B64\u7A97\u53E3\u5E03\u5C40" : "\u91CD\u8BD5\u4FDD\u5B58\u5E03\u5C40" })
+		    ] }) : null,
+		    error ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-bar-error", role: "alert", children: [
 		      error,
-		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { "aria-label": "\u5173\u95ED\u63D0\u793A", onClick: () => setError(""), children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Icon, { name: "close" }) })
+		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { "aria-label": "\u5173\u95ED\u63D0\u793A", onClick: () => setError(""), children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: "close" }) })
 		    ] }) : null
 		  ] });
 		}
 
 		// packages/dsh-px-workspace/src/client/artifacts.tsx
-		var import_jsx_runtime3 = require("react/jsx-runtime");
+		var import_react6 = require("react");
+		var import_jsx_runtime4 = require("react/jsx-runtime");
 		function ArtifactsPanel({ ctx, scope, visible }) {
+		  const filePanel = panelAvailability(usePanelCapabilities(ctx), "editor");
+		  const [openError, setOpenError] = (0, import_react6.useState)("");
+		  const [pages, setPages] = (0, import_react6.useState)([void 0]);
+		  const before = pages[pages.length - 1];
 		  const { data, error, refresh, loading } = useData(
-		    `${base}/content?sessionId=${encodeURIComponent(scope.sessionId)}`,
+		    `${base}/content?sessionId=${encodeURIComponent(scope.sessionId)}${before ? "&artifactBefore=" + encodeURIComponent(before) : ""}`,
 		    visible
 		  );
-		  return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-ui px-panel", children: [
-		    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h3", { children: "\u4F1A\u8BDD\u4EA7\u7269" }),
-		    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-muted", children: "\u6C47\u603B Agent \u4F7F\u7528 present \u58F0\u660E\u7684\u4EA4\u4ED8\u3002\u6253\u5F00\u7684\u662F\u6587\u4EF6\u5F53\u524D\u5185\u5BB9\uFF1B\u539F\u6587\u4EF6\u79FB\u52A8\u6216\u5220\u9664\u540E\u9700\u8981\u91CD\u65B0\u5B9A\u4F4D\u3002" }),
-		    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { disabled: loading, onClick: refresh, children: "\u5237\u65B0\u4EA7\u7269" }),
-		    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-load-status", role: "status", children: loading ? "\u6B63\u5728\u8BFB\u53D6\u4EA7\u7269\u2026" : "" }),
-		    error ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { role: "alert", children: error }) : null,
-		    !data && !error ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u2026" }) : null,
-		    data?.artifacts.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-empty", children: "\u6B64\u4F1A\u8BDD\u8FD8\u6CA1\u6709\u4EA4\u4ED8\u6587\u4EF6\u3002\u53EF\u4EE5\u8BA9 Agent \u5B8C\u6210\u4EFB\u52A1\u540E\u5C55\u793A\u4EA7\u7269\u3002" }) : null,
-		    data?.artifacts.map((a) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("article", { className: "px-card", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("strong", { children: a.path.split(/[\\/]/).pop() }),
-		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: a.description || "\u672A\u586B\u5199\u8BF4\u660E" }),
-		      /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { className: "px-muted", children: [
+		  return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "px-ui px-panel", children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("h3", { children: "\u4F1A\u8BDD\u4EA7\u7269" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "px-muted", children: "\u6C47\u603B Agent \u4F7F\u7528 present \u58F0\u660E\u7684\u4EA4\u4ED8\u3002\u6253\u5F00\u7684\u662F\u6587\u4EF6\u5F53\u524D\u5185\u5BB9\uFF1B\u539F\u6587\u4EF6\u79FB\u52A8\u6216\u5220\u9664\u540E\u9700\u8981\u91CD\u65B0\u5B9A\u4F4D\u3002" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+		      "button",
+		      {
+		        disabled: loading,
+		        onClick: () => {
+		          setPages([void 0]);
+		          refresh();
+		        },
+		        children: "\u5237\u65B0\u4EA7\u7269"
+		      }
+		    ),
+		    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "px-load-status", role: "status", children: loading ? "\u6B63\u5728\u8BFB\u53D6\u4EA7\u7269\u2026" : "" }),
+		    error ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "alert", children: error }) : null,
+		    !filePanel.enabled ? /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("p", { role: "status", children: [
+		      "\u6587\u4EF6\u9884\u89C8\u6682\u4E0D\u53EF\u7528\uFF1A",
+		      filePanel.reason
+		    ] }) : null,
+		    openError ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "alert", children: openError }) : null,
+		    !data && !error ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u2026" }) : null,
+		    data?.artifacts.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "px-empty", children: "\u6B64\u4F1A\u8BDD\u8FD8\u6CA1\u6709\u4EA4\u4ED8\u6587\u4EF6\u3002\u53EF\u4EE5\u8BA9 Agent \u5B8C\u6210\u4EFB\u52A1\u540E\u5C55\u793A\u4EA7\u7269\u3002" }) : null,
+		    data?.artifacts.map((a) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("article", { className: "px-card", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("strong", { children: a.path.split(/[\\/]/).pop() }),
+		      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: a.description || "\u672A\u586B\u5199\u8BF4\u660E" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("p", { className: "px-muted", children: [
 		        a.path,
-		        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("br", {}),
+		        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("br", {}),
 		        stamp(a.time)
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { onClick: () => ctx.betterSidebar.openFile(scope, a.path), children: "\u6253\u5F00\u4EA7\u7269" })
-		    ] }, a.path))
+		      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+		        "button",
+		        {
+		          disabled: !filePanel.enabled,
+		          title: filePanel.enabled ? "\u6253\u5F00\u4EA7\u7269" : filePanel.reason,
+		          onClick: () => {
+		            try {
+		              const live = ctx.capabilities.getSnapshot();
+		              const current = panelAvailability(live, "editor");
+		              if (!current.enabled) throw new Error(current.reason);
+		              live.sidebar.openFile(scope, a.path);
+		              setOpenError("");
+		            } catch (err) {
+		              setOpenError(errorText(err));
+		            }
+		          },
+		          children: "\u6253\u5F00\u4EA7\u7269"
+		        }
+		      )
+		    ] }, a.path)),
+		    data ? /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "px-actions", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("small", { children: [
+		        "\u5171 ",
+		        data.artifactTotal,
+		        " \u9879 \xB7 \u7B2C ",
+		        pages.length,
+		        " \u9875"
+		      ] }),
+		      pages.length > 1 ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { onClick: () => setPages((old) => old.slice(0, -1)), children: "\u8F83\u65B0\u4E00\u9875" }) : null,
+		      data.nextArtifactBefore ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { onClick: () => setPages((old) => [...old, data.nextArtifactBefore]), children: "\u66F4\u65E9\u4EA7\u7269" }) : null
+		    ] }) : null
 		  ] });
 		}
 
 		// packages/dsh-px-workspace/src/client/notes.tsx
-		var import_react5 = require("react");
+		var import_react9 = require("react");
 
 		// packages/dsh-px-workspace/src/model.ts
 		function quoteDraft(a) {
@@ -686,12 +1028,14 @@ window.__ModuleLoader__.load({
 		}
 
 		// packages/dsh-px-workspace/src/client/drafts.ts
-		var import_react4 = require("react");
+		var import_react7 = require("react");
 
 		// packages/shared/draft-store.ts
-		function createDraftCell(key, initial, storage) {
+		function createDraftCell(key, initial, storage, validate = () => true) {
 		  let value = initial;
 		  let persisted = Boolean(storage);
+		  let unreadable = false;
+		  let memoryEdits = false;
 		  try {
 		    const raw = storage?.getItem(key);
 		    if (raw && raw.length <= 15e4) {
@@ -703,15 +1047,25 @@ window.__ModuleLoader__.load({
 		          if (typeof seed === "string" && typeof candidate === "string" || typeof seed === "boolean" && typeof candidate === "boolean" || typeof seed === "number" && typeof candidate === "number" && Number.isFinite(candidate) || seed === null && (candidate === null || candidate && typeof candidate === "object" && !Array.isArray(candidate)))
 		            restored[name] = candidate;
 		        }
+		        if (!validate(restored)) throw new Error("invalid draft record");
 		        value = restored;
+		      } else if (raw) {
+		        throw new Error("unsupported draft record");
 		      }
+		    } else if (raw) {
+		      throw new Error("draft record too large");
 		    }
 		  } catch {
+		    unreadable = true;
 		  }
 		  const listeners = /* @__PURE__ */ new Set();
 		  return {
 		    getSnapshot: () => value,
 		    isPersisted: () => persisted,
+		    isUnreadable: () => unreadable,
+		    canReleaseMemory: () => persisted || !memoryEdits,
+		    subscribers: () => listeners.size,
+		    isEmpty: () => JSON.stringify(value) === JSON.stringify(initial),
 		    subscribe: (cb) => {
 		      listeners.add(cb);
 		      return () => {
@@ -719,6 +1073,8 @@ window.__ModuleLoader__.load({
 		      };
 		    },
 		    set: (next) => {
+		      unreadable = false;
+		      memoryEdits = true;
 		      value = typeof next === "function" ? next(value) : next;
 		      persisted = Boolean(storage);
 		      try {
@@ -730,77 +1086,231 @@ window.__ModuleLoader__.load({
 		      }
 		      for (const cb of listeners) cb();
 		      return persisted;
+		    },
+		    clear: (cleanValue = initial) => {
+		      value = cleanValue && typeof cleanValue === "object" ? { ...cleanValue } : cleanValue;
+		      unreadable = false;
+		      memoryEdits = false;
+		      persisted = Boolean(storage);
+		      try {
+		        storage?.removeItem?.(key);
+		      } catch {
+		        persisted = false;
+		      }
+		      for (const cb of listeners) cb();
 		    }
+		  };
+		}
+		function createDraftRegistry(limit = 48, canEvict = () => true) {
+		  const cells2 = /* @__PURE__ */ new Map();
+		  const trim = (reserve = 0) => {
+		    for (const [key, cell] of cells2) {
+		      if (cells2.size + reserve <= limit) break;
+		      if (cell.subscribers() === 0 && canEvict(key) && (cell.canReleaseMemory() || cell.isEmpty()))
+		        cells2.delete(key);
+		    }
+		  };
+		  return {
+		    acquire(key, initial, storage, validate) {
+		      const existing = cells2.get(key);
+		      if (existing) {
+		        cells2.delete(key);
+		        cells2.set(key, existing);
+		        return existing;
+		      }
+		      trim(1);
+		      if (cells2.size >= limit) return null;
+		      const cell = createDraftCell(key, initial, storage, validate);
+		      cells2.set(key, cell);
+		      return cell;
+		    },
+		    size: () => cells2.size,
+		    release: () => trim()
 		  };
 		}
 
 		// packages/dsh-px-workspace/src/client/drafts.ts
-		var cells = /* @__PURE__ */ new Map();
-		function useDraft(key, initial) {
-		  const [cell] = (0, import_react4.useState)(() => {
-		    let cell2 = cells.get(key);
-		    if (!cell2) {
-		      let storage;
-		      try {
-		        storage = sessionStorage;
-		      } catch {
-		      }
-		      cell2 = createDraftCell("dsh-px.draft.v1." + key, initial(), storage);
-		      cells.set(key, cell2);
+		var prefix = "dsh-px.draft.v1.";
+		var cells = createDraftRegistry(48, (key) => !isOperationPending(key.slice(prefix.length)));
+		function useDraft(key, initial, validate) {
+		  const [{ cell, available }] = (0, import_react7.useState)(() => {
+		    let storage;
+		    try {
+		      storage = sessionStorage;
+		    } catch {
 		    }
-		    return cell2;
+		    const seed = initial();
+		    const acquired = cells.acquire(prefix + key, seed, storage, validate);
+		    return { cell: acquired ?? createDraftCell(key, seed), available: Boolean(acquired) };
 		  });
 		  const value = useSnapshot(cell);
 		  return [
 		    value,
 		    (next) => {
-		      cell.set(next);
+		      if (available) cell.set(next);
 		    },
-		    cell.isPersisted() ? "" : "\u6D4F\u89C8\u5668\u5B58\u50A8\u4E0D\u53EF\u7528\uFF0C\u672C\u6B21\u9875\u9762\u5185\u4ECD\u4FDD\u7559\u8349\u7A3F\uFF1B\u5237\u65B0\u524D\u8BF7\u4FDD\u5B58\u3002"
+		    cell.isUnreadable() ? "\u6B64\u7A97\u53E3\u8349\u7A3F\u683C\u5F0F\u65E0\u6CD5\u6062\u590D\uFF0C\u539F\u8BB0\u5F55\u5C1A\u672A\u8986\u76D6\u3002\u786E\u8BA4\u653E\u5F03\u540E\u53EF\u91CD\u65B0\u7F16\u8F91\u3002" : !available ? "\u672A\u4FDD\u5B58\u8349\u7A3F\u7F13\u5B58\u5DF2\u6EE1\uFF0C\u5DF2\u6682\u505C\u65B0\u5EFA\u7F16\u8F91\u3002\u8BF7\u5148\u4FDD\u5B58\u5DF2\u6709\u8349\u7A3F\uFF0C\u518D\u91CD\u65B0\u6253\u5F00\u6B64\u9762\u677F\u3002" : cell.isPersisted() ? "" : "\u7A97\u53E3\u5B58\u50A8\u4E0D\u53EF\u7528\uFF0C\u672C\u6B21\u9875\u9762\u5185\u4ECD\u4FDD\u7559\u8349\u7A3F\uFF1B\u5237\u65B0\u6216\u5173\u95ED\u524D\u8BF7\u4FDD\u5B58\u3002",
+		    available && !cell.isUnreadable(),
+		    (cleanValue) => cell.clear(cleanValue),
+		    cell.isUnreadable()
 		  ];
 		}
 
+		// packages/dsh-px-workspace/src/client/storage-notice.tsx
+		var import_react8 = require("react");
+		var import_jsx_runtime5 = require("react/jsx-runtime");
+		function StorageNotice({
+		  visible,
+		  onRestored
+		}) {
+		  const status = useData(`${base}/storage`, visible);
+		  const [selected, setSelected] = (0, import_react8.useState)(null);
+		  const [failure, setFailure] = (0, import_react8.useState)("");
+		  const [busy, run] = useOperation("storage:restore");
+		  if (!status.data || status.data.ready) return null;
+		  return /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("section", { className: "px-card", role: "alert", children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("h4", { children: "\u6279\u6CE8\u4E0E\u5B9A\u65F6\u5B58\u50A8\u9700\u8981\u6062\u590D" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("p", { children: [
+		      status.data.error,
+		      " \u4F1A\u8BDD\u6B63\u6587\u4E0E\u4EA7\u7269\u4ECD\u53EF\u67E5\u770B\u3002"
+		    ] }),
+		    failure ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { children: failure }) : null,
+		    status.data.snapshots.length ? /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)(import_jsx_runtime5.Fragment, { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { children: "\u6062\u590D\u4F1A\u4FDD\u7559\u5F53\u524D\u635F\u574F\u6587\u4EF6\uFF0C\u5E76\u6682\u505C\u5168\u90E8\u5B9A\u65F6\u4EFB\u52A1\uFF1B\u6838\u5BF9\u540E\u518D\u542F\u7528\u3002" }),
+		      status.data.snapshots.map((snapshot) => /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("span", { children: [
+		          new Date(snapshot.createdAt).toLocaleString(),
+		          " \xB7 ",
+		          snapshot.annotations,
+		          " \u6761\u6279\u6CE8 \xB7",
+		          " ",
+		          snapshot.schedules,
+		          " \u4E2A\u4EFB\u52A1"
+		        ] }),
+		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { disabled: busy, onClick: () => setSelected(snapshot.id), children: "\u9009\u62E9\u6B64\u5FEB\u7167" })
+		      ] }, snapshot.id)),
+		      selected ? /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		          "button",
+		          {
+		            disabled: busy,
+		            onClick: () => void run(async () => {
+		              setFailure("");
+		              try {
+		                await post("storage", {
+		                  action: "restore",
+		                  snapshotId: selected,
+		                  revision: status.data.revision
+		                });
+		                setSelected(null);
+		                status.refresh();
+		                onRestored();
+		              } catch (err) {
+		                setFailure(errorText(err));
+		              }
+		            }),
+		            children: busy ? "\u6062\u590D\u4E2D\u2026" : "\u786E\u8BA4\u6062\u590D\u6240\u9009\u5FEB\u7167"
+		          }
+		        ),
+		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { disabled: busy, onClick: () => setSelected(null), children: "\u53D6\u6D88" })
+		      ] }) : null
+		    ] }) : /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { children: "\u6CA1\u6709\u53EF\u6062\u590D\u5FEB\u7167\uFF0C\u8BF7\u4ECE\u6570\u636E\u76EE\u5F55\u5907\u4EFD\u6062\u590D\uFF1B\u4E0D\u4F1A\u4EE5\u7A7A\u6570\u636E\u8986\u76D6\u5F53\u524D\u6587\u4EF6\u3002" })
+		  ] });
+		}
+
+		// packages/dsh-px-workspace/src/client/draft-validation.ts
+		var record = (value) => Boolean(value && typeof value === "object" && !Array.isArray(value));
+		var finite = (value) => typeof value === "number" && Number.isFinite(value);
+		function validNoteDraft(value) {
+		  const source = value.source;
+		  if (source !== null && (!record(source) || typeof source.id !== "string" || typeof source.text !== "string" || !finite(source.seq) || !finite(source.length) || !finite(source.offset) || source.nextOffset !== null && !finite(source.nextOffset) || !["user", "assistant"].includes(String(source.role))))
+		    return false;
+		  const editing = value.editing;
+		  return editing === null || record(editing) && typeof editing.id === "string" && typeof editing.messageId === "string" && typeof editing.sessionId === "string" && typeof editing.quote === "string" && typeof editing.note === "string" && finite(editing.updatedAt);
+		}
+		function validScheduleDraft(value) {
+		  if (!["once", "interval", "daily"].includes(value.kind)) return false;
+		  const editing = value.editing;
+		  if (editing === null) return true;
+		  if (!record(editing) || typeof editing.id !== "string" || typeof editing.sessionId !== "string" || typeof editing.title !== "string" || typeof editing.prompt !== "string" || typeof editing.enabled !== "boolean" || !finite(editing.updatedAt) || !record(editing.timing))
+		    return false;
+		  const rule = editing.timing;
+		  return rule.kind === "once" ? finite(rule.at) : rule.kind === "interval" ? finite(rule.minutes) : rule.kind === "daily" && typeof rule.time === "string";
+		}
+
 		// packages/dsh-px-workspace/src/client/notes.tsx
-		var import_jsx_runtime4 = require("react/jsx-runtime");
+		var import_jsx_runtime6 = require("react/jsx-runtime");
 		function NotesPanel({ ctx, scope, visible, tab }) {
 		  const selection = useSnapshot(quoteRequests)[scope.sessionId];
-		  const [before, setBefore] = (0, import_react5.useState)(null);
+		  const [before, setBefore] = (0, import_react9.useState)(null);
 		  const { data, error, refresh } = useData(
 		    `${base}/content?sessionId=${encodeURIComponent(scope.sessionId)}${before === null ? "" : "&before=" + before}`,
 		    visible
 		  );
-		  const [noteBefore, setNoteBefore] = (0, import_react5.useState)(null);
+		  const [noteBefore, setNoteBefore] = (0, import_react9.useState)(null);
 		  const notes = useData(
 		    `${base}/annotations?sessionId=${encodeURIComponent(scope.sessionId)}${noteBefore ? "&before=" + encodeURIComponent(noteBefore) : ""}`,
 		    visible
 		  );
-		  const [editor, setEditor, draftWarning] = useDraft(`notes:${scope.sessionId}`, () => ({
+		  const [editor, setEditor, draftWarning, draftAvailable, clearDraft, unreadableDraft] = useDraft(
+		    `notes:${scope.sessionId}`,
+		    () => ({
+		      source: null,
+		      quote: "",
+		      note: "",
+		      editing: null,
+		      initialized: false,
+		      collapsed: false,
+		      dirty: false,
+		      requestToken: ""
+		    }),
+		    validNoteDraft
+		  );
+		  const { source, quote, note, editing } = editor;
+		  const resetEditor = () => clearDraft({
 		    source: null,
 		    quote: "",
 		    note: "",
 		    editing: null,
-		    initialized: false,
-		    collapsed: false
-		  }));
-		  const { source, quote, note, editing } = editor;
-		  const setQuote = (quote2) => setEditor((old) => ({ ...old, quote: quote2 }));
-		  const setNote = (note2) => setEditor((old) => ({ ...old, note: note2 }));
-		  const setEditing = (editing2) => setEditor((old) => ({ ...old, editing: editing2 }));
-		  const setSource = (source2) => setEditor((old) => ({ ...old, source: source2, initialized: true }));
-		  const [notice, setNotice] = (0, import_react5.useState)(""), [failure, setFailure] = (0, import_react5.useState)(""), [localBusy, setBusy] = (0, import_react5.useState)(false);
+		    initialized: true,
+		    collapsed: false,
+		    dirty: false,
+		    requestToken: ""
+		  });
+		  const setQuote = (quote2) => setEditor((old) => ({ ...old, quote: quote2, dirty: true }));
+		  const setNote = (note2) => setEditor((old) => ({ ...old, note: note2, dirty: true }));
+		  const [notice, setNotice] = (0, import_react9.useState)(""), [failure, setFailure] = (0, import_react9.useState)(""), [localBusy, setBusy] = (0, import_react9.useState)(false);
 		  const [operationBusy, runOperation] = useOperation(`notes:${scope.sessionId}`);
 		  const busy = localBusy || operationBusy;
-		  const revision = (0, import_react5.useRef)(0);
-		  const active = (0, import_react5.useRef)(true), sourceRequest = (0, import_react5.useRef)(null);
-		  (0, import_react5.useEffect)(() => {
+		  const [replacement, setReplacement] = (0, import_react9.useState)(null);
+		  const [sourceRetry, setSourceRetry] = (0, import_react9.useState)(null);
+		  const revision = (0, import_react9.useRef)(0);
+		  const active = (0, import_react9.useRef)(true), sourceRequest = (0, import_react9.useRef)(null);
+		  (0, import_react9.useEffect)(() => {
 		    active.current = true;
 		    return () => {
 		      active.current = false;
 		      sourceRequest.current?.abort();
 		    };
 		  }, []);
-		  async function choose(id, existing = null, offset = 0) {
-		    if (operationBusy) return;
+		  async function choose(id, existing = null, offset = 0, replace = false, request) {
+		    if (operationBusy || !draftAvailable) return;
+		    const pending = quoteRequests.getSnapshot()[scope.sessionId];
+		    const requestToken = typeof request === "object" ? request.token : void 0;
+		    if (requestToken && pending?.token !== requestToken) return;
+		    if (request === "initial" && pending) return;
+		    if (request === void 0) {
+		      setEditor((old) => ({ ...old, initialized: true, requestToken: pending?.token ?? old.requestToken }));
+		      if (pending) quoteRequests.consume(scope.sessionId, pending.token);
+		    }
+		    if ((editor.dirty || note !== (editing?.note ?? "") || Boolean(source && quote !== (editing?.quote ?? source.text.slice(0, 8e3)))) && !replace) {
+		      setEditor((old) => ({ ...old, initialized: true, requestToken: requestToken ?? old.requestToken }));
+		      if (requestToken) quoteRequests.consume(scope.sessionId, requestToken);
+		      setReplacement({ id, existing, offset });
+		      return;
+		    }
+		    setReplacement(null);
+		    setSourceRetry(null);
 		    const rev = ++revision.current;
 		    sourceRequest.current?.abort();
 		    const controller = new AbortController();
@@ -821,18 +1331,26 @@ window.__ModuleLoader__.load({
 		        note: existing?.note ?? "",
 		        initialized: true,
 		        collapsed: false,
-		        requestToken: selection?.token
+		        dirty: false,
+		        requestToken: requestToken ?? ""
 		      });
+		      if (requestToken) quoteRequests.consume(scope.sessionId, requestToken);
 		    } catch (e) {
-		      if (active.current && rev === revision.current && !controller.signal.aborted) setFailure(errorText(e));
+		      if (active.current && rev === revision.current && !controller.signal.aborted) {
+		        setFailure(errorText(e));
+		        setSourceRetry({ id, existing, offset });
+		      }
 		    } finally {
 		      if (active.current && rev === revision.current) setBusy(false);
 		    }
 		  }
-		  (0, import_react5.useEffect)(() => {
-		    if (selection && selection.token !== editor.requestToken) void choose(selection.messageId);
-		    else if (!editor.initialized && tab.meta?.messageId) void choose(tab.meta.messageId);
-		  }, [selection, tab.meta?.messageId, operationBusy]);
+		  (0, import_react9.useEffect)(() => {
+		    const pending = quoteRequests.getSnapshot()[scope.sessionId];
+		    if (pending && pending.token !== editor.requestToken)
+		      void choose(pending.messageId, null, 0, false, { token: pending.token });
+		    else if (!pending && !editor.initialized && tab.meta?.messageId)
+		      void choose(tab.meta.messageId, null, 0, false, "initial");
+		  }, [selection, tab.meta?.messageId, operationBusy, draftAvailable]);
 		  const draft = source ? { sessionId: scope.sessionId, messageId: source.id, seq: source.seq, quote, note } : null;
 		  const validQuote = !!quote && (!!source?.text.includes(quote) || editing?.quote === quote);
 		  async function action(fn, success) {
@@ -859,22 +1377,55 @@ window.__ModuleLoader__.load({
 		      setFailure(errorText(e));
 		    }
 		  }
-		  return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "px-ui px-panel", children: [
-		    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("h3", { children: "\u5F15\u7528\u4E0E\u6279\u6CE8" }),
-		    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "px-muted", children: "\u9009\u62E9\u539F\u6587\u5E76\u6DFB\u52A0\u6279\u6CE8\u3002\u5207\u6362\u9762\u677F\u4F1A\u4FDD\u7559\u8349\u7A3F\uFF1B\u70B9\u51FB\u5F15\u7528\u624D\u4F1A\u52A0\u5165\u4F1A\u8BDD\u8F93\u5165\u6846\u3002" }),
-		    draftWarning ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "alert", children: draftWarning }) : null,
-		    source && editor.collapsed ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { onClick: () => setEditor((old) => ({ ...old, collapsed: false })), children: "\u7EE7\u7EED\u7F16\u8F91\u8349\u7A3F" }) : null,
-		    failure || error || notes.error ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "alert", children: failure || error || notes.error }) : null,
-		    notice ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "status", className: "px-feedback", children: notice }) : null,
-		    source && !editor.collapsed ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("section", { className: "px-card", "aria-label": "\u6279\u6CE8\u7F16\u8F91\u5668", children: /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("fieldset", { disabled: busy, children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("h4", { children: [
+		  return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-ui px-panel", children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("h3", { children: "\u5F15\u7528\u4E0E\u6279\u6CE8" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { className: "px-muted", children: "\u9009\u62E9\u539F\u6587\u5E76\u6DFB\u52A0\u6279\u6CE8\u3002\u8349\u7A3F\u5C5E\u4E8E\u5F53\u524D\u7A97\u53E3\uFF0C\u5207\u6362\u9762\u677F\u6216\u5237\u65B0\u4F1A\u4FDD\u7559\uFF1B\u5173\u95ED\u7A97\u53E3\u524D\u8BF7\u4FDD\u5B58\u3002\u70B9\u51FB\u5F15\u7528\u624D\u4F1A\u52A0\u5165\u4F1A\u8BDD\u8F93\u5165\u6846\u3002" }),
+		    draftWarning ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "alert", children: draftWarning }) : null,
+		    unreadableDraft ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(ConfirmDelete, { label: "\u653E\u5F03\u65E0\u6CD5\u6062\u590D\u7684\u8349\u7A3F", onConfirm: async () => resetEditor() }) : null,
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		      StorageNotice,
+		      {
+		        visible,
+		        onRestored: () => {
+		          notes.refresh();
+		          refresh();
+		        }
+		      }
+		    ),
+		    replacement ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("section", { className: "px-card", role: "alert", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { children: "\u5F53\u524D\u6279\u6CE8\u6709\u672A\u4FDD\u5B58\u4FEE\u6539\u3002\u4FDD\u5B58\u6216\u4FDD\u7559\u5F53\u524D\u8349\u7A3F\u540E\uFF0C\u518D\u5207\u6362\u5F15\u7528\u3002" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { onClick: () => setReplacement(null), children: "\u4FDD\u7559\u5F53\u524D\u8349\u7A3F" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		          "button",
+		          {
+		            disabled: busy,
+		            onClick: () => void choose(replacement.id, replacement.existing, replacement.offset, true),
+		            children: "\u653E\u5F03\u4FEE\u6539\u5E76\u5207\u6362"
+		          }
+		        )
+		      ] })
+		    ] }) : null,
+		    source && editor.collapsed ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { onClick: () => setEditor((old) => ({ ...old, collapsed: false })), children: "\u7EE7\u7EED\u7F16\u8F91\u8349\u7A3F" }) : null,
+		    failure || error || notes.error ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "alert", children: failure || error || notes.error }) : null,
+		    sourceRetry ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		      "button",
+		      {
+		        disabled: busy || !draftAvailable,
+		        onClick: () => void choose(sourceRetry.id, sourceRetry.existing, sourceRetry.offset),
+		        children: "\u91CD\u8BD5\u8BFB\u53D6\u539F\u6587"
+		      }
+		    ) : null,
+		    notice ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "status", className: "px-feedback", children: notice }) : null,
+		    source && !editor.collapsed ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("section", { className: "px-card", "aria-label": "\u6279\u6CE8\u7F16\u8F91\u5668", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("fieldset", { disabled: busy || !draftAvailable, children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("h4", { children: [
 		        source.role === "user" ? "\u7528\u6237" : "\u52A9\u624B",
 		        " \xB7 \u8BB0\u5F55 ",
 		        source.seq
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
 		        "\u6D88\u606F\u539F\u6587\uFF08\u53EF\u9009\u4E2D\u4E00\u6BB5\u4F5C\u4E3A\u5F15\u7528\uFF09",
-		        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		          "textarea",
 		          {
 		            "aria-label": "\u6D88\u606F\u539F\u6587",
@@ -889,7 +1440,7 @@ window.__ModuleLoader__.load({
 		          }
 		        )
 		      ] }),
-		      source.length > source.text.length ? /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("p", { className: "px-muted", children: [
+		      source.length > source.text.length ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("p", { className: "px-muted", children: [
 		        "\u663E\u793A ",
 		        source.offset + 1,
 		        "\u2013",
@@ -897,14 +1448,14 @@ window.__ModuleLoader__.load({
 		        " / ",
 		        source.length,
 		        " \u5B57\u7B26\u3002",
-		        source.nextOffset !== null ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { disabled: busy, onClick: () => void choose(source.id, null, source.nextOffset), children: "\u540E\u7EED\u6B63\u6587" }) : null,
-		        source.offset > 0 ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { onClick: () => void choose(source.id), children: "\u8FD4\u56DE\u5F00\u5934" }) : null
+		        source.nextOffset !== null ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => void choose(source.id, null, source.nextOffset), children: "\u540E\u7EED\u6B63\u6587" }) : null,
+		        source.offset > 0 ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { onClick: () => void choose(source.id), children: "\u8FD4\u56DE\u5F00\u5934" }) : null
 		      ] }) : null,
-		      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
 		        "\u5F15\u7528\u7247\u6BB5 \xB7 ",
 		        quote.length,
 		        " \u5B57\u7B26\uFF08\u6700\u591A 8000\uFF09",
-		        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		          "textarea",
 		          {
 		            "aria-label": "\u5F15\u7528\u7247\u6BB5",
@@ -916,11 +1467,11 @@ window.__ModuleLoader__.load({
 		          }
 		        )
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "px-muted", children: "\u53EF\u9009\u4E2D\u4E0A\u65B9\u539F\u6587\uFF0C\u4E5F\u53EF\u5728\u8FD9\u91CC\u5220\u53BB\u4E0D\u9700\u8981\u7684\u90E8\u5206\uFF1B\u987B\u4FDD\u7559\u8FDE\u7EED\u7684\u539F\u6587\u3002" }),
-		      quote && !validQuote ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "alert", children: "\u6B64\u7247\u6BB5\u4E0D\u5728\u5F53\u524D\u539F\u6587\u4E2D\uFF0C\u8BF7\u6062\u590D\u539F\u6587\uFF1B\u8865\u5145\u610F\u89C1\u8BF7\u5199\u5728\u6279\u6CE8\u91CC\u3002" }) : null,
-		      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { className: "px-muted", children: "\u53EF\u9009\u4E2D\u4E0A\u65B9\u539F\u6587\uFF0C\u4E5F\u53EF\u5728\u8FD9\u91CC\u5220\u53BB\u4E0D\u9700\u8981\u7684\u90E8\u5206\uFF1B\u987B\u4FDD\u7559\u8FDE\u7EED\u7684\u539F\u6587\u3002" }),
+		      quote && !validQuote ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "alert", children: "\u6B64\u7247\u6BB5\u4E0D\u5728\u5F53\u524D\u539F\u6587\u4E2D\uFF0C\u8BF7\u6062\u590D\u539F\u6587\uFF1B\u8865\u5145\u610F\u89C1\u8BF7\u5199\u5728\u6279\u6CE8\u91CC\u3002" }) : null,
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("label", { children: [
 		        "\u6211\u7684\u6279\u6CE8",
-		        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		          "textarea",
 		          {
 		            "aria-label": "\u6211\u7684\u6279\u6CE8",
@@ -931,8 +1482,8 @@ window.__ModuleLoader__.load({
 		          }
 		        )
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "px-actions", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		          "button",
 		          {
 		            className: "px-primary",
@@ -943,37 +1494,48 @@ window.__ModuleLoader__.load({
 		                ...draft,
 		                ...editing ? { id: editing.id, updatedAt: editing.updatedAt } : {}
 		              });
-		              setEditing(saved);
+		              clearDraft({ ...editor, editing: saved, dirty: false });
 		            }, "\u6279\u6CE8\u5DF2\u4FDD\u5B58"),
 		            children: editing ? "\u66F4\u65B0\u6279\u6CE8" : "\u4FDD\u5B58\u6279\u6CE8"
 		          }
 		        ),
-		        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { disabled: busy || !validQuote, onClick: () => draft && insert(draft), children: "\u5F15\u7528\u5230\u8F93\u5165\u6846" }),
-		        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { disabled: busy, onClick: () => setEditor((old) => ({ ...old, collapsed: true })), children: "\u6536\u8D77\u7F16\u8F91\u5668" })
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy || !validQuote, onClick: () => draft && insert(draft), children: "\u5F15\u7528\u5230\u8F93\u5165\u6846" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => setEditor((old) => ({ ...old, collapsed: true })), children: "\u6536\u8D77\u7F16\u8F91\u5668" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+		          ConfirmDelete,
+		          {
+		            label: "\u653E\u5F03\u8349\u7A3F",
+		            disabled: busy,
+		            onConfirm: async () => {
+		              resetEditor();
+		              setReplacement(null);
+		            }
+		          }
+		        )
 		      ] })
 		    ] }) }) : null,
-		    /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("h4", { children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("h4", { children: [
 		      "\u5DF2\u4FDD\u5B58 \xB7 ",
 		      notes.data?.total ?? 0
 		    ] }),
-		    /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "px-actions", children: [
-		      noteBefore ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { onClick: () => setNoteBefore(null), children: "\u6700\u65B0\u6279\u6CE8" }) : null,
-		      notes.data?.nextBefore ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { onClick: () => setNoteBefore(notes.data.nextBefore), children: "\u66F4\u65E9\u6279\u6CE8" }) : null
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
+		      noteBefore ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { onClick: () => setNoteBefore(null), children: "\u6700\u65B0\u6279\u6CE8" }) : null,
+		      notes.data?.nextBefore ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { onClick: () => setNoteBefore(notes.data.nextBefore), children: "\u66F4\u65E9\u6279\u6CE8" }) : null
 		    ] }),
-		    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "px-load-status", role: "status", children: notes.loading ? "\u6B63\u5728\u8BFB\u53D6\u6279\u6CE8\u2026" : "" }),
-		    notes.data?.annotations.map((a) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("article", { className: "px-card", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("small", { className: "px-muted", children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "px-load-status", role: "status", children: notes.loading ? "\u6B63\u5728\u8BFB\u53D6\u6279\u6CE8\u2026" : "" }),
+		    notes.data?.annotations.map((a) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("article", { className: "px-card", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("small", { className: "px-muted", children: [
 		        "\u8BB0\u5F55 ",
 		        a.seq,
 		        " \xB7 ",
 		        stamp(a.updatedAt)
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("blockquote", { children: a.quote }),
-		      a.note ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: a.note }) : null,
-		      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "px-actions", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { disabled: busy, onClick: () => insert(a), children: "\u5F15\u7528\u5230\u8F93\u5165\u6846" }),
-		        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { disabled: busy, onClick: () => void choose(a.messageId, a), children: "\u67E5\u770B\u539F\u6587 / \u7F16\u8F91" }),
-		        /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("blockquote", { children: a.quote }),
+		      a.note ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { children: a.note }) : null,
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => insert(a), children: "\u5F15\u7528\u5230\u8F93\u5165\u6846" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => void choose(a.messageId, a), children: "\u67E5\u770B\u539F\u6587 / \u7F16\u8F91" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		          ConfirmDelete,
 		          {
 		            label: "\u5220\u9664\u6279\u6CE8",
@@ -981,17 +1543,16 @@ window.__ModuleLoader__.load({
 		            onConfirm: () => action(async () => {
 		              await post("annotations", { action: "delete", id: a.id, updatedAt: a.updatedAt });
 		              if (editing?.id === a.id) {
-		                setEditing(null);
-		                setSource(null);
+		                resetEditor();
 		              }
 		            }, "\u6279\u6CE8\u5DF2\u5220\u9664")
 		          }
 		        )
 		      ] })
 		    ] }, a.id)),
-		    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("h4", { children: "\u4F1A\u8BDD\u6B63\u6587" }),
-		    /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "px-actions", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("h4", { children: "\u4F1A\u8BDD\u6B63\u6587" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
 		        "button",
 		        {
 		          onClick: () => {
@@ -1001,24 +1562,24 @@ window.__ModuleLoader__.load({
 		          children: "\u6700\u65B0\u6B63\u6587"
 		        }
 		      ),
-		      data?.nextBefore !== null && data?.nextBefore !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { onClick: () => setBefore(data.nextBefore), children: "\u66F4\u65E9\u6B63\u6587" }) : null
+		      data?.nextBefore !== null && data?.nextBefore !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { onClick: () => setBefore(data.nextBefore), children: "\u66F4\u65E9\u6B63\u6587" }) : null
 		    ] }),
-		    data?.messages.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: "\u8FD8\u6CA1\u6709\u53EF\u5F15\u7528\u7684\u6B63\u6587\u3002" }) : null,
-		    data?.messages.map((m) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("article", { className: "px-card", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("small", { children: [
+		    data?.messages.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { children: "\u8FD8\u6CA1\u6709\u53EF\u5F15\u7528\u7684\u6B63\u6587\u3002" }) : null,
+		    data?.messages.map((m) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("article", { className: "px-card", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("small", { children: [
 		        m.role === "user" ? "\u7528\u6237" : "\u52A9\u624B",
 		        " \xB7 ",
 		        stamp(m.time)
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { children: m.text }),
-		      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("button", { disabled: busy, onClick: () => void choose(m.id), children: "\u5F15\u7528 / \u6279\u6CE8\u6B64\u6D88\u606F" })
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { children: m.text }),
+		      /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => void choose(m.id), children: "\u5F15\u7528 / \u6279\u6CE8\u6B64\u6D88\u606F" })
 		    ] }, m.id))
 		  ] });
 		}
 
 		// packages/dsh-px-workspace/src/client/schedules.tsx
-		var import_react6 = require("react");
-		var import_jsx_runtime5 = require("react/jsx-runtime");
+		var import_react10 = require("react");
+		var import_jsx_runtime7 = require("react/jsx-runtime");
 		function localTime(time) {
 		  const d = new Date(time);
 		  return new Date(d.getTime() - d.getTimezoneOffset() * 6e4).toISOString().slice(0, 16);
@@ -1028,31 +1589,43 @@ window.__ModuleLoader__.load({
 		    `${base}/schedules`,
 		    visible
 		  );
-		  const [draft, setDraft, draftWarning] = useDraft(`schedules:${scope.sessionId}`, () => ({
-		    editing: null,
-		    form: false,
-		    title: "",
-		    prompt: "",
-		    sessionId: scope.sessionId,
-		    kind: "once",
-		    at: localTime(Date.now() + 3e5),
-		    minutes: "60",
-		    daily: "09:00",
-		    enabled: true
-		  }));
+		  const [draft, setDraft, draftWarning, draftAvailable, clearDraft, unreadableDraft] = useDraft(
+		    `schedules:${scope.sessionId}`,
+		    () => ({
+		      editing: null,
+		      form: false,
+		      title: "",
+		      prompt: "",
+		      sessionId: scope.sessionId,
+		      kind: "once",
+		      at: localTime(Date.now() + 3e5),
+		      minutes: "60",
+		      daily: "09:00",
+		      enabled: true,
+		      dirty: false
+		    }),
+		    validScheduleDraft
+		  );
 		  const { editing, form, title, prompt, sessionId, kind, at, minutes, daily, enabled } = draft;
 		  const setEditing = (editing2) => setDraft((old) => ({ ...old, editing: editing2 }));
 		  const setForm = (form2) => setDraft((old) => ({ ...old, form: form2 }));
-		  const setTitle = (title2) => setDraft((old) => ({ ...old, title: title2 }));
-		  const setPrompt = (prompt2) => setDraft((old) => ({ ...old, prompt: prompt2 }));
-		  const setSessionId = (sessionId2) => setDraft((old) => ({ ...old, sessionId: sessionId2 }));
-		  const setKind = (kind2) => setDraft((old) => ({ ...old, kind: kind2 }));
-		  const setAt = (at2) => setDraft((old) => ({ ...old, at: at2 }));
-		  const setMinutes = (minutes2) => setDraft((old) => ({ ...old, minutes: minutes2 }));
-		  const setDaily = (daily2) => setDraft((old) => ({ ...old, daily: daily2 }));
-		  const setEnabled = (enabled2) => setDraft((old) => ({ ...old, enabled: enabled2 }));
-		  const [localBusy, setBusy] = (0, import_react6.useState)(false), [failure, setFailure] = (0, import_react6.useState)(""), [notice, setNotice] = (0, import_react6.useState)("");
-		  const begin = (s) => {
+		  const setTitle = (title2) => setDraft((old) => ({ ...old, title: title2, dirty: true }));
+		  const setPrompt = (prompt2) => setDraft((old) => ({ ...old, prompt: prompt2, dirty: true }));
+		  const setSessionId = (sessionId2) => setDraft((old) => ({ ...old, sessionId: sessionId2, dirty: true }));
+		  const setKind = (kind2) => setDraft((old) => ({ ...old, kind: kind2, dirty: true }));
+		  const setAt = (at2) => setDraft((old) => ({ ...old, at: at2, dirty: true }));
+		  const setMinutes = (minutes2) => setDraft((old) => ({ ...old, minutes: minutes2, dirty: true }));
+		  const setDaily = (daily2) => setDraft((old) => ({ ...old, daily: daily2, dirty: true }));
+		  const setEnabled = (enabled2) => setDraft((old) => ({ ...old, enabled: enabled2, dirty: true }));
+		  const [localBusy, setBusy] = (0, import_react10.useState)(false), [failure, setFailure] = (0, import_react10.useState)(""), [notice, setNotice] = (0, import_react10.useState)("");
+		  const [replacement, setReplacement] = (0, import_react10.useState)(null);
+		  const begin = (s, replace = false) => {
+		    if (!draftAvailable) return;
+		    if ((draft.dirty || title.trim() || prompt.trim()) && !replace) {
+		      setReplacement({ schedule: s });
+		      return;
+		    }
+		    setReplacement(null);
 		    setEditing(s);
 		    setTitle(s?.title ?? "");
 		    setPrompt(s?.prompt ?? "");
@@ -1063,6 +1636,7 @@ window.__ModuleLoader__.load({
 		    setMinutes(String(s?.timing.kind === "interval" ? s.timing.minutes : 60));
 		    setDaily(s?.timing.kind === "daily" ? s.timing.time : "09:00");
 		    setForm(true);
+		    setDraft((old) => ({ ...old, dirty: false }));
 		    setFailure("");
 		    setNotice("");
 		  };
@@ -1084,25 +1658,44 @@ window.__ModuleLoader__.load({
 		  }
 		  const rule = () => kind === "once" ? { kind, at: new Date(at).getTime() } : kind === "interval" ? { kind, minutes: Number(minutes) } : { kind, time: daily };
 		  const timingText = (t) => t.kind === "once" ? "\u4E00\u6B21 \xB7 " + stamp(t.at) : t.kind === "interval" ? `\u6BCF ${t.minutes} \u5206\u949F` : `\u6BCF\u5929 ${t.time}`;
-		  return /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "px-ui px-panel", children: [
-		    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("h3", { children: "\u5B9A\u65F6\u4EFB\u52A1" }),
-		    /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("p", { className: "px-muted", children: [
+		  return /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "px-ui px-panel", children: [
+		    /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("h3", { children: "\u5B9A\u65F6\u4EFB\u52A1" }),
+		    /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("p", { className: "px-muted", children: [
 		      "\u5E94\u7528\u8FD0\u884C\u65F6\u5411\u6307\u5B9A\u4F1A\u8BDD\u6295\u9012\uFF0C\u6CBF\u7528\u8BE5\u4F1A\u8BDD\u7684\u6A21\u578B\u4E0E\u6743\u9650\u3002\u5FD9\u788C\u65F6\u8FDB\u5165\u961F\u5217\uFF1B\u9000\u51FA\u671F\u95F4\u4E0D\u6267\u884C\uFF0C\u6062\u590D\u540E\u91CD\u590D\u4EFB\u52A1\u53EA\u8865\u6700\u65B0\u4E00\u6B21\u3002\u65F6\u533A\uFF1A",
 		      data?.timeZone ?? "\u8BFB\u53D6\u4E2D",
 		      "\u3002"
 		    ] }),
-		    /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "px-actions", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { className: "px-primary", disabled: busy, onClick: () => begin(null), children: "\u65B0\u5EFA\u5B9A\u65F6\u4EFB\u52A1" }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { onClick: refresh, children: "\u5237\u65B0\u4EFB\u52A1" })
+		    /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "px-actions", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { className: "px-primary", disabled: busy || !draftAvailable, onClick: () => begin(null), children: "\u65B0\u5EFA\u5B9A\u65F6\u4EFB\u52A1" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { onClick: refresh, children: "\u5237\u65B0\u4EFB\u52A1" })
 		    ] }),
-		    draftWarning ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { role: "alert", children: draftWarning }) : null,
-		    failure || error ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { role: "alert", children: failure || error }) : null,
-		    notice ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { role: "status", className: "px-feedback", children: notice }) : null,
-		    form ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("section", { className: "px-card", "aria-label": "\u5B9A\u65F6\u4EFB\u52A1\u7F16\u8F91\u5668", children: /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("fieldset", { disabled: busy, children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("h4", { children: editing ? "\u7F16\u8F91\u4EFB\u52A1" : "\u65B0\u5EFA\u4EFB\u52A1" }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("label", { children: [
+		    draftWarning ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { role: "alert", children: draftWarning }) : null,
+		    unreadableDraft ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(ConfirmDelete, { label: "\u653E\u5F03\u65E0\u6CD5\u6062\u590D\u7684\u8349\u7A3F", onConfirm: async () => clearDraft() }) : null,
+		    /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(StorageNotice, { visible, onRestored: refresh }),
+		    !form && (draft.dirty || title.trim() || prompt.trim()) ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { onClick: () => setForm(true), children: "\u7EE7\u7EED\u7F16\u8F91\u8349\u7A3F" }) : null,
+		    replacement ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("section", { className: "px-card", role: "alert", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { children: "\u5F53\u524D\u7A97\u53E3\u5DF2\u6709\u5B9A\u65F6\u4EFB\u52A1\u8349\u7A3F\u3002\u8BF7\u5148\u4FDD\u5B58\uFF0C\u6216\u660E\u786E\u653E\u5F03\u540E\u518D\u6253\u5F00\u53E6\u4E00\u9879\u3002" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+		          "button",
+		          {
+		            onClick: () => {
+		              setReplacement(null);
+		              setForm(true);
+		            },
+		            children: "\u4FDD\u7559\u5F53\u524D\u8349\u7A3F"
+		          }
+		        ),
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { onClick: () => begin(replacement.schedule, true), children: "\u653E\u5F03\u8349\u7A3F\u5E76\u6253\u5F00" })
+		      ] })
+		    ] }) : null,
+		    failure || error ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { role: "alert", children: failure || error }) : null,
+		    notice ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { role: "status", className: "px-feedback", children: notice }) : null,
+		    form ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("section", { className: "px-card", "aria-label": "\u5B9A\u65F6\u4EFB\u52A1\u7F16\u8F91\u5668", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("fieldset", { disabled: busy || !draftAvailable, children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("h4", { children: editing ? "\u7F16\u8F91\u4EFB\u52A1" : "\u65B0\u5EFA\u4EFB\u52A1" }),
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { children: [
 		        "\u4EFB\u52A1\u540D\u79F0",
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "input",
 		          {
 		            "aria-label": "\u4EFB\u52A1\u540D\u79F0",
@@ -1112,27 +1705,27 @@ window.__ModuleLoader__.load({
 		          }
 		        )
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("label", { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { children: [
 		        "\u76EE\u6807\u4F1A\u8BDD",
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(
 		          "select",
 		          {
 		            "aria-label": "\u76EE\u6807\u4F1A\u8BDD",
 		            value: sessionId,
 		            onChange: (e) => setSessionId(e.target.value),
 		            children: [
-		              !sessions.byId[sessionId] ? /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("option", { value: sessionId, children: [
+		              !sessions.byId[sessionId] ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("option", { value: sessionId, children: [
 		                sessionId,
 		                "\uFF08\u6682\u4E0D\u53EF\u7528\uFF09"
 		              ] }) : null,
-		              sessions.ids.filter((id) => sessions.byId[id]?.origin !== "subagent").map((id) => /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("option", { value: id, children: sessions.byId[id].displayTitle }, id))
+		              sessions.ids.filter((id) => sessions.byId[id]?.origin !== "subagent").map((id) => /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("option", { value: id, children: sessions.byId[id].displayTitle }, id))
 		            ]
 		          }
 		        )
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("label", { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { children: [
 		        "\u6267\u884C\u8981\u6C42",
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "textarea",
 		          {
 		            "aria-label": "\u6267\u884C\u8981\u6C42",
@@ -1144,17 +1737,17 @@ window.__ModuleLoader__.load({
 		          }
 		        )
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("label", { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { children: [
 		        "\u89E6\u53D1\u65B9\u5F0F",
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("select", { "aria-label": "\u89E6\u53D1\u65B9\u5F0F", value: kind, onChange: (e) => setKind(e.target.value), children: [
-		          /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("option", { value: "once", children: "\u6307\u5B9A\u65F6\u95F4\u6267\u884C\u4E00\u6B21" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("option", { value: "interval", children: "\u56FA\u5B9A\u95F4\u9694" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("option", { value: "daily", children: "\u6BCF\u5929" })
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("select", { "aria-label": "\u89E6\u53D1\u65B9\u5F0F", value: kind, onChange: (e) => setKind(e.target.value), children: [
+		          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("option", { value: "once", children: "\u6307\u5B9A\u65F6\u95F4\u6267\u884C\u4E00\u6B21" }),
+		          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("option", { value: "interval", children: "\u56FA\u5B9A\u95F4\u9694" }),
+		          /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("option", { value: "daily", children: "\u6BCF\u5929" })
 		        ] })
 		      ] }),
-		      kind === "once" ? /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("label", { children: [
+		      kind === "once" ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { children: [
 		        "\u672C\u673A\u65F6\u95F4",
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "input",
 		          {
 		            "aria-label": "\u672C\u673A\u65F6\u95F4",
@@ -1164,9 +1757,9 @@ window.__ModuleLoader__.load({
 		            onChange: (e) => setAt(e.target.value)
 		          }
 		        )
-		      ] }) : kind === "interval" ? /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("label", { children: [
+		      ] }) : kind === "interval" ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { children: [
 		        "\u95F4\u9694\uFF08\u5206\u949F\uFF09",
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "input",
 		          {
 		            "aria-label": "\u95F4\u9694\u5206\u949F",
@@ -1178,9 +1771,9 @@ window.__ModuleLoader__.load({
 		            onChange: (e) => setMinutes(e.target.value)
 		          }
 		        )
-		      ] }) : /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("label", { children: [
+		      ] }) : /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { children: [
 		        "\u6BCF\u65E5\u65F6\u95F4",
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "input",
 		          {
 		            "aria-label": "\u6BCF\u65E5\u65F6\u95F4",
@@ -1191,12 +1784,12 @@ window.__ModuleLoader__.load({
 		          }
 		        )
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("label", { className: "px-check", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("input", { type: "checkbox", checked: enabled, onChange: (e) => setEnabled(e.target.checked) }),
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { className: "px-check", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("input", { type: "checkbox", checked: enabled, onChange: (e) => setEnabled(e.target.checked) }),
 		        "\u542F\u7528\u6B64\u4EFB\u52A1"
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "px-actions", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "button",
 		          {
 		            className: "px-primary",
@@ -1211,41 +1804,59 @@ window.__ModuleLoader__.load({
 		                timing: rule(),
 		                enabled
 		              });
-		              setForm(false);
+		              clearDraft();
 		            }, "\u5B9A\u65F6\u4EFB\u52A1\u5DF2\u4FDD\u5B58"),
 		            children: "\u4FDD\u5B58\u5B9A\u65F6\u4EFB\u52A1"
 		          }
 		        ),
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { disabled: busy, onClick: () => setForm(false), children: "\u53D6\u6D88\u7F16\u8F91" })
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { disabled: busy, onClick: () => setForm(false), children: "\u6536\u8D77\u7F16\u8F91\u5668\uFF08\u4FDD\u7559\u8349\u7A3F\uFF09" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+		          ConfirmDelete,
+		          {
+		            label: "\u653E\u5F03\u8349\u7A3F",
+		            disabled: busy,
+		            onConfirm: async () => {
+		              clearDraft();
+		              setReplacement(null);
+		            }
+		          }
+		        )
 		      ] })
 		    ] }) }) : null,
-		    data?.schedules.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { children: "\u5C1A\u672A\u914D\u7F6E\u5B9A\u65F6\u4EFB\u52A1\u3002" }) : null,
-		    data?.schedules.map((s) => /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("article", { className: "px-card", children: [
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("h4", { children: [
+		    data?.schedules.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { children: "\u5C1A\u672A\u914D\u7F6E\u5B9A\u65F6\u4EFB\u52A1\u3002" }) : null,
+		    data?.schedules.map((s) => /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("article", { className: "px-card", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("h4", { children: [
 		        s.title,
 		        " \xB7 ",
 		        s.enabled ? "\u5DF2\u542F\u7528" : "\u5DF2\u6682\u505C"
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { children: s.prompt }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("p", { className: "px-muted", children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { children: s.prompt }),
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("p", { className: "px-muted", children: [
 		        "\u4F1A\u8BDD\uFF1A",
 		        sessions.byId[s.sessionId]?.displayTitle ?? s.sessionId,
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("br", {}),
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("br", {}),
 		        timingText(s.timing),
 		        " \xB7 ",
 		        s.timeZone,
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("br", {}),
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("br", {}),
 		        "\u4E0B\u6B21\uFF1A",
 		        stamp(s.nextAt)
 		      ] }),
-		      s.history[0]?.status === "uncertain" ? /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("p", { role: "alert", children: [
+		      s.history[0]?.status === "uncertain" ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("p", { role: "alert", children: [
 		        s.history[0].detail,
 		        " \u68C0\u67E5\u4F1A\u8BDD\u540E\u518D\u624B\u52A8\u6295\u9012\u6216\u542F\u7528\u3002"
 		      ] }) : null,
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("div", { className: "px-actions", children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { onClick: () => ctx.uiWorkspace.openSession(s.sessionId), children: "\u6253\u5F00\u4F1A\u8BDD" }),
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("button", { disabled: busy, onClick: () => begin(s), children: "\u7F16\u8F91\u4EFB\u52A1" }),
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "px-actions", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+		          "button",
+		          {
+		            disabled: !sessions.byId[s.sessionId],
+		            onClick: () => ctx.uiWorkspace.openSession(s.sessionId),
+		            children: "\u6253\u5F00\u4F1A\u8BDD"
+		          }
+		        ),
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { disabled: busy, onClick: () => begin(s), children: "\u7F16\u8F91\u4EFB\u52A1" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "button",
 		          {
 		            disabled: busy,
@@ -1256,19 +1867,19 @@ window.__ModuleLoader__.load({
 		            children: s.enabled ? "\u6682\u505C\u4EFB\u52A1" : "\u542F\u7528\u4EFB\u52A1"
 		          }
 		        ),
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          "button",
 		          {
 		            disabled: busy,
 		            onClick: () => void action(async () => {
 		              const result = await post("schedules", { action: "run", id: s.id });
-		              if (result.history[0]?.status !== "queued")
+		              if (!["queued", "running", "completed"].includes(result.history[0]?.status))
 		                throw new Error(result.history[0]?.detail ?? "\u6295\u9012\u5C1A\u672A\u786E\u8BA4");
 		            }, "\u5DF2\u6295\u9012\u5230\u76EE\u6807\u4F1A\u8BDD\uFF1B\u8FD9\u4E0D\u4EE3\u8868 Agent \u5DF2\u5B8C\u6210\u3002"),
 		            children: "\u7ACB\u5373\u6295\u9012\u4E00\u6B21"
 		          }
 		        ),
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
 		          ConfirmDelete,
 		          {
 		            label: "\u5220\u9664\u4EFB\u52A1",
@@ -1280,20 +1891,31 @@ window.__ModuleLoader__.load({
 		          }
 		        )
 		      ] }),
-		      /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("details", { children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("summary", { children: [
-		          "\u6700\u8FD1\u6295\u9012 \xB7 ",
+		      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("details", { children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("summary", { children: [
+		          "\u6700\u8FD1\u89E6\u53D1 \xB7 ",
 		          s.history.length,
 		          " \u6B21"
 		        ] }),
-		        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { className: "px-muted", children: "\u201C\u5DF2\u6295\u9012\u201D\u8868\u793A\u4F1A\u8BDD\u63A5\u6536\u3002\u6267\u884C\u8FDB\u5C55\u548C\u6700\u7EC8\u7ED3\u679C\u8BF7\u6253\u5F00\u76EE\u6807\u4F1A\u8BDD\u67E5\u770B\u3002" }),
-		        s.history.map((h) => /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("p", { children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "px-muted", children: "\u5DF2\u5165\u961F\u8868\u793A\u4F1A\u8BDD\u5DF2\u63A5\u6536\uFF1B\u8F6E\u6B21\u7ED3\u675F\u4E0D\u4EE3\u8868\u4EFB\u52A1\u5185\u5BB9\u9A8C\u8BC1\u901A\u8FC7\u3002\u8BF7\u6253\u5F00\u76EE\u6807\u4F1A\u8BDD\u6838\u5BF9\u8F93\u51FA\u3002" }),
+		        s.history.map((h) => /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("p", { children: [
 		          stamp(h.time),
 		          " \xB7",
 		          " ",
-		          h.status === "queued" ? "\u5DF2\u6295\u9012" : h.status === "dispatching" ? "\u6295\u9012\u4E2D" : "\u672A\u786E\u8BA4 / \u5DF2\u6682\u505C",
-		          h.detail ? /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("small", { children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("br", {}),
+		          {
+		            queued: "\u5DF2\u5165\u961F",
+		            dispatching: "\u6295\u9012\u4E2D",
+		            uncertain: "\u672A\u786E\u8BA4 / \u5DF2\u6682\u505C",
+		            running: "\u6267\u884C\u4E2D",
+		            completed: "\u8F6E\u6B21\u7ED3\u675F",
+		            failed: "\u6267\u884C\u5931\u8D25",
+		            cancelled: "\u5DF2\u53D6\u6D88",
+		            interrupted: "\u6267\u884C\u4E2D\u65AD"
+		          }[h.status],
+		          h.turn !== void 0 ? ` \xB7 \u7B2C ${h.turn} \u8F6E` : "",
+		          h.finishedAt ? ` \xB7 \u7ED3\u675F\u4E8E ${stamp(h.finishedAt)}` : "",
+		          h.detail ? /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("small", { children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("br", {}),
 		            h.detail
 		          ] }) : null
 		        ] }, h.requestId))
@@ -1302,76 +1924,114 @@ window.__ModuleLoader__.load({
 		  ] });
 		}
 
+		// packages/shared/client-capabilities.ts
+		function createCapabilities(initial) {
+		  let value = initial;
+		  const listeners = /* @__PURE__ */ new Set();
+		  return {
+		    getSnapshot: () => value,
+		    subscribe: (listener) => {
+		      listeners.add(listener);
+		      return () => {
+		        listeners.delete(listener);
+		      };
+		    },
+		    set(next) {
+		      value = { ...value, ...next };
+		      for (const listener of listeners) listener();
+		    }
+		  };
+		}
+
 		// packages/dsh-px-workspace/src/client.tsx
-		var import_jsx_runtime6 = require("react/jsx-runtime");
-		var inject = ["slots", "sessions", "uiWorkspace", "conversation", "betterSidebar", "sidebarRight"];
-		function apply(ctx) {
+		var import_jsx_runtime8 = require("react/jsx-runtime");
+		var inject = ["slots", "sessions", "uiWorkspace", "conversation"];
+		function apply(raw) {
+		  const capabilities = createCapabilities({});
+		  const ctx = {
+		    sessions: raw.sessions,
+		    uiWorkspace: raw.uiWorkspace,
+		    conversation: raw.conversation,
+		    slots: raw.slots,
+		    effect: raw.effect.bind(raw),
+		    inject: raw.inject.bind(raw),
+		    capabilities
+		  };
 		  installUiStyles(ctx);
 		  ctx.effect(() => {
 		    const style = document.createElement("style");
 		    style.textContent = css;
 		    document.head.appendChild(style);
-		    document.body.setAttribute("data-dsh-px-workspace", "");
-		    return () => {
-		      style.remove();
-		      document.body.removeAttribute("data-dsh-px-workspace");
-		    };
+		    return () => style.remove();
 		  }, "workspace: layout");
 		  ctx.slots.inject(
 		    "shell.overlay",
 		    () => ctx.slots.register(
 		      { name: "shell.overlay", id: "dsh-px-workspace", order: 0, registrant: "dsh-px-workspace" },
-		      () => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(SessionBar, { ctx })
+		      () => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(SessionBar, { ctx })
 		    )
 		  );
-		  ctx.slots.inject(
-		    "conversation.chat.assistant-actions",
-		    () => ctx.slots.register(
-		      {
-		        name: "conversation.chat.assistant-actions",
-		        id: "dsh-px-quote",
-		        order: 95,
-		        registrant: "dsh-px-workspace"
+		  ctx.inject(["sidebarRight"], (host) => {
+		    const terminal = host.sidebarRight;
+		    capabilities.set({ terminal });
+		    host.effect(
+		      () => () => {
+		        if (capabilities.getSnapshot().terminal === terminal) capabilities.set({ terminal: void 0 });
 		      },
-		      (p) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("span", { className: "px-ui", children: /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
-		        "button",
-		        {
-		          className: "px-quote-action",
-		          title: "\u5F15\u7528\u6216\u6279\u6CE8\u8FD9\u6761\u6D88\u606F",
-		          onClick: () => {
-		            requestQuote(p.sessionId, p.messageId);
-		            ctx.betterSidebar.openTab(
-		              { type: "px-notes", meta: { messageId: p.messageId } },
-		              { sessionId: p.sessionId }
-		            );
-		          },
-		          children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Icon, { name: "note" }),
-		            "\u5F15\u7528 / \u6279\u6CE8"
-		          ]
-		        }
-		      ) })
-		    )
-		  );
-		  for (const [id, title, component, icon] of [
-		    ["px-artifacts", "\u4EA7\u7269", ArtifactsPanel, "artifact"],
-		    ["px-notes", "\u5F15\u7528\u4E0E\u6279\u6CE8", NotesPanel, "note"],
-		    ["px-schedules", "\u5B9A\u65F6\u4EFB\u52A1", SchedulesPanel, "schedule"]
-		  ])
-		    ctx.effect(
-		      () => ctx.betterSidebar.registerTab({
-		        id,
-		        title,
-		        order: 16,
-		        single: true,
-		        icon: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Icon, { name: icon }),
-		        component: (p) => {
-		          const Component = component;
-		          return /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Component, { ...p, ctx }, p.scope.sessionId);
-		        }
-		      }),
-		      `workspace: ${id}`
+		      "workspace: terminal capability"
 		    );
+		  });
+		  ctx.inject(["sidebarRightTabs"], (host) => {
+		    const nativeTabs = host.sidebarRightTabs;
+		    capabilities.set({ nativeTabs });
+		    host.effect(
+		      () => () => {
+		        if (capabilities.getSnapshot().nativeTabs === nativeTabs) capabilities.set({ nativeTabs: void 0 });
+		      },
+		      "workspace: native panel registry"
+		    );
+		  });
+		  ctx.inject(["betterSidebar"], (host) => {
+		    const sidebar = host.betterSidebar;
+		    capabilities.set({ sidebar });
+		    host.effect(
+		      () => () => {
+		        if (capabilities.getSnapshot().sidebar === sidebar) capabilities.set({ sidebar: void 0 });
+		      },
+		      "workspace: sidebar capability"
+		    );
+		    host.slots.inject(
+		      "conversation.chat.assistant-actions",
+		      () => host.slots.register(
+		        {
+		          name: "conversation.chat.assistant-actions",
+		          id: "dsh-px-quote",
+		          order: 95,
+		          registrant: "dsh-px-workspace"
+		        },
+		        (p) => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(QuoteAction, { ...p, ctx })
+		      )
+		    );
+		    for (const [id, title, component, icon] of [
+		      ["px-artifacts", "\u4EA7\u7269", ArtifactsPanel, "artifact"],
+		      ["px-notes", "\u5F15\u7528\u4E0E\u6279\u6CE8", NotesPanel, "note"],
+		      ["px-schedules", "\u5B9A\u65F6\u4EFB\u52A1", SchedulesPanel, "schedule"]
+		    ])
+		      host.effect(
+		        () => sidebar.registerTab({
+		          id,
+		          title,
+		          order: 16,
+		          single: true,
+		          icon: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(Icon, { name: icon }),
+		          component: (p) => {
+		            const Component = component;
+		            return /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(Component, { ...p, ctx }, p.scope.sessionId);
+		          }
+		        }),
+		        `workspace: ${id}`
+		      );
+		  });
 		}
 
 		return module.exports;

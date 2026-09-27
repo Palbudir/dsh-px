@@ -12,7 +12,7 @@
  * 因此这里按 publish 配置显式生成，使 `npm run pack` 的产物也能自测更新。
  *
  * 用法：
- *   node scripts/write-app-update-yml.mjs [<目标 resources 目录>]
+ *   node scripts/run.mjs write-app-update-yml [<目标 resources 目录>]
  * 默认写入 dist/win-unpacked/resources（或按平台对应的目录）。
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'

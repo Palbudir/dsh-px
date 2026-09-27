@@ -29,6 +29,16 @@ export interface Panel {
   visible: boolean
   tab: { meta?: { messageId?: string } }
 }
+export interface PanelCapabilities {
+  sidebar?: Sidebar
+  terminal?: {
+    openTabIn: (sessionId: string, kind: string, options?: { revealIfOpened?: boolean }) => void
+  }
+  nativeTabs?: {
+    get: (kind: string) => unknown
+    subscribe: (cb: () => void) => () => void
+  }
+}
 export interface Client {
   sessions: { list: Snapshot<SessionList>; scope: (id: string) => any; clear: () => void }
   uiWorkspace: { openSession: (id: string) => void; startSession: () => void }
@@ -40,20 +50,21 @@ export interface Client {
       }
     }
   }
-  betterSidebar: {
-    registerTab: (tab: any) => () => void
-    openTab: (seed: any, scope?: Scope) => void
-    openFile: (scope: Scope, path: string, title?: string) => void
-    isTabEnabled: (type: string) => boolean
-    getSnapshot: () => unknown
-    subscribeState: (cb: () => void) => () => void
-  }
-  sidebarRight: {
-    openTabIn: (sessionId: string, kind: string, options?: { revealIfOpened?: boolean }) => void
-  }
+  capabilities: Snapshot<PanelCapabilities>
+  inject: (services: string[], callback: (ctx: any) => void) => unknown
   slots: {
     inject: (name: string, fn: () => unknown) => unknown
     register: (entry: any, component: any) => unknown
   }
   effect: (fn: () => () => void, name?: string) => void
+}
+export interface Sidebar {
+  registerTab: (tab: any) => () => void
+  openTab: (seed: any, scope?: Scope) => void
+  openFile: (scope: Scope, path: string, title?: string) => void
+  isTabEnabled: (type: string) => boolean
+  getTab: (type: string) => unknown
+  subscribe: (cb: () => void) => () => void
+  getSnapshot: () => unknown
+  subscribeState: (cb: () => void) => () => void
 }

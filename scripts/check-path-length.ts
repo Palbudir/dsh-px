@@ -27,9 +27,13 @@ let over = 0
 let scanned = 0
 
 /** 递归扫描，记录最长相对路径。 */
-function walk (dir, rel) {
+function walk(dir, rel) {
   let entries
-  try { entries = readdirSync(dir, { withFileTypes: true }) } catch { return }
+  try {
+    entries = readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return
+  }
   for (const e of entries) {
     const childRel = rel ? `${rel}\\${e.name}` : e.name
     scanned += 1
@@ -64,15 +68,17 @@ const budget = MAX_PATH - longest.len - wrap
 console.log('\n结论：')
 console.log(`  安装后路径 = <安装目录> + "\\resources\\runtime\\" + <相对路径>`)
 console.log(`  要让最长路径不超过 ${MAX_PATH}，安装目录本身不能超过 ${budget} 字符。`)
-console.log(`  例：C:\\Users\\Administrator\\AppData\\Local\\Programs\\dsh-px 长度约 ` +
-  `${'C:\\Users\\Administrator\\AppData\\Local\\Programs\\dsh-px'.length} 字符`)
+console.log(
+  `  例：C:\\Users\\Administrator\\AppData\\Local\\Programs\\dsh-px 长度约 ` +
+    `${'C:\\Users\\Administrator\\AppData\\Local\\Programs\\dsh-px'.length} 字符`
+)
 
 if (over > 0) {
   console.log(
     `\n警告：有 ${over} 个文件的相对路径本身已超过 ${MAX_PATH} 字符。\n` +
-    '  这意味着无论装到哪里，这些文件都无法在不启用长路径支持的情况下被正常处理。\n' +
-    '  应对：在打包时裁剪这类深层开发用文件（如 *.d.ts / *.js.map / tests），\n' +
-    '  或要求用户启用 Windows 长路径支持。'
+      '  这意味着无论装到哪里，这些文件都无法在不启用长路径支持的情况下被正常处理。\n' +
+      '  应对：在打包时裁剪这类深层开发用文件（如 *.d.ts / *.js.map / tests），\n' +
+      '  或要求用户启用 Windows 长路径支持。'
   )
 } else {
   console.log('\n未发现相对路径超限的文件；风险仅取决于用户选择的安装目录长度。')

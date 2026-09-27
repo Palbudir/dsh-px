@@ -1,8 +1,15 @@
 {
-  "required_status_checks": null,
-  "enforce_admins": false,
+  "required_status_checks": {
+    "strict": true,
+    "checks": [
+      { "context": "dsh-px/independent-review", "app_id": 0 },
+      { "context": "dsh-px/quality", "app_id": 0 }
+    ]
+  },
+  "enforce_admins": true,
   "required_pull_request_reviews": null,
   "restrictions": null,
   "allow_force_pushes": false,
-  "allow_deletions": false
+  "allow_deletions": false,
+  "required_conversation_resolution": true
 }

@@ -36,3 +36,19 @@ export function desktopCheckLabel(
   if (shell.phase === 'idle' && shell.version && shell.lastCheckedAt) return 'upToDate'
   return 'notChecked'
 }
+export function safeReleaseUrl(value: string, repository?: string): boolean {
+  if (!repository || !/^[\w.-]+\/[\w.-]+$/.test(repository)) return false
+  try {
+    const url = new URL(value)
+    return (
+      url.protocol === 'https:' &&
+      url.hostname === 'github.com' &&
+      !url.username &&
+      !url.password &&
+      !url.port &&
+      url.pathname.startsWith(`/${repository}/releases/`)
+    )
+  } catch {
+    return false
+  }
+}

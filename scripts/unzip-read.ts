@@ -16,7 +16,7 @@ import { inflateRawSync } from 'node:zlib'
  * @param {string} needle
  * @returns {{name: string, text: string} | null}
  */
-export function readZipEntry (zipPath, needle) {
+export function readZipEntry(zipPath, needle) {
   const buf = readFileSync(zipPath)
   const EOCD_SIG = 0x06054b50
   const CD_SIG = 0x02014b50
@@ -25,7 +25,10 @@ export function readZipEntry (zipPath, needle) {
   let eocd = -1
   for (let i = buf.length - 22; i >= buf.length - maxBack; i -= 1) {
     if (i < 0) break
-    if (buf.readUInt32LE(i) === EOCD_SIG) { eocd = i; break }
+    if (buf.readUInt32LE(i) === EOCD_SIG) {
+      eocd = i
+      break
+    }
   }
   if (eocd < 0) throw new Error('不是有效的 ZIP')
 
@@ -49,9 +52,7 @@ export function readZipEntry (zipPath, needle) {
       const lhExtraLen = buf.readUInt16LE(localOffset + 28)
       const dataStart = localOffset + 30 + lhNameLen + lhExtraLen
       const data = buf.subarray(dataStart, dataStart + compSize)
-      const text = method === 0
-        ? data.toString('utf8')
-        : inflateRawSync(data).toString('utf8')
+      const text = method === 0 ? data.toString('utf8') : inflateRawSync(data).toString('utf8')
       return { name, text }
     }
     p += 46 + nameLen + extraLen + commentLen
@@ -67,7 +68,10 @@ if (process.argv[1] && process.argv[1].endsWith('unzip-read.mjs')) {
     process.exit(1)
   }
   const r = readZipEntry(zip, needle)
-  if (!r) { console.error('未找到匹配条目'); process.exit(1) }
+  if (!r) {
+    console.error('未找到匹配条目')
+    process.exit(1)
+  }
   console.log(`=== ${r.name} (${r.text.length} 字节) ===`)
   console.log(r.text)
 }

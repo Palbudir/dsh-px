@@ -143,6 +143,30 @@ window.__ModuleLoader__.load({
 		  }
 		}
 
+		// packages/shared/client-capabilities.ts
+		function pageCarrier(value) {
+		  return Boolean(
+		    value && typeof value === "object" && value.app === "DSH-PX" && typeof value.electron === "string"
+		  ) ? "desktop" : "browser";
+		}
+		function createCapabilities(initial) {
+		  let value = initial;
+		  const listeners = /* @__PURE__ */ new Set();
+		  return {
+		    getSnapshot: () => value,
+		    subscribe: (listener) => {
+		      listeners.add(listener);
+		      return () => {
+		        listeners.delete(listener);
+		      };
+		    },
+		    set(next) {
+		      value = { ...value, ...next };
+		      for (const listener of listeners) listener();
+		    }
+		  };
+		}
+
 		// packages/dsh-px-workbench/src/client.tsx
 		var import_jsx_runtime2 = require("react/jsx-runtime");
 		var inject = ["slots", "locale"];
@@ -163,7 +187,17 @@ window.__ModuleLoader__.load({
 		    text: "\u5728\u5F53\u524D\u5DE5\u4F5C\u533A\u521B\u5EFA agent-smoke.txt\uFF0C\u5199\u5165 DSH-PX agent smoke OK\u3002\u5FC5\u987B\u5B9E\u9645\u8C03\u7528\u6587\u4EF6\u5DE5\u5177\u5199\u5165\uFF0C\u518D\u7528 Shell \u8BFB\u53D6\u9A8C\u8BC1\uFF0C\u62A5\u544A\u5B9E\u9645\u8DEF\u5F84\u4E0E\u8BFB\u53D6\u5185\u5BB9\u3002\u4E0D\u8981\u4FEE\u6539\u5176\u4ED6\u6587\u4EF6\u3002"
 		  }
 		];
-		function Workbench() {
+		var dependencyLabels = {
+		  sessions: "\u4F1A\u8BDD\u72B6\u6001",
+		  uiWorkspace: "\u4F1A\u8BDD\u4E0E\u5DE5\u4F5C\u533A\u64CD\u4F5C",
+		  conversation: "\u4F1A\u8BDD\u8F93\u5165\u4E0E\u5F15\u7528",
+		  betterSidebar: "\u4FA7\u8FB9\u5361\u7247\uFF08\u6587\u4EF6\u3001\u4EA7\u7269\u3001\u6279\u6CE8\u3001\u5B9A\u65F6\u4EFB\u52A1\u3001\u6267\u884C\u8BB0\u5F55\uFF09",
+		  sidebarRight: "\u539F\u751F\u7EC8\u7AEF\u5BB9\u5668"
+		};
+		function Workbench({ capabilities }) {
+		  const [activated, setActivated] = (0, import_react2.useState)(capabilities.getSnapshot);
+		  (0, import_react2.useEffect)(() => capabilities.subscribe(() => setActivated(capabilities.getSnapshot())), [capabilities]);
+		  const carrier = pageCarrier(window.dshPxShell);
 		  const [data, setData] = (0, import_react2.useState)(null);
 		  const [error, setError] = (0, import_react2.useState)(null);
 		  const [busy, setBusy] = (0, import_react2.useState)(false);
@@ -254,45 +288,97 @@ window.__ModuleLoader__.load({
 		      children: [
 		        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { children: [
 		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h2", { style: { margin: "0 0 8px" }, children: "\u8FD0\u884C\u4E0E\u5E2E\u52A9" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { margin: 0, opacity: 0.7, lineHeight: 1.7 }, children: "\u4ECE\u5DE5\u4F5C\u533A\u5F00\u59CB\uFF0C\u8BA9 Agent \u8BFB\u53D6\u6587\u4EF6\u3001\u6267\u884C\u5DE5\u5177\u5E76\u4EA4\u4ED8\u53EF\u68C0\u67E5\u7684\u7ED3\u679C\u3002" })
+		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { margin: 0, opacity: 0.7, lineHeight: 1.7 }, children: "\u67E5\u770B\u5F53\u524D\u8FDE\u63A5\u3001\u6062\u590D\u670D\u52A1\u6216\u914D\u7F6E\u5DE5\u4F5C\u533A\u3002" })
 		        ] }),
-		        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: card, "aria-label": "\u5F00\u59CB\u4EFB\u52A1", children: [
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { style: { marginTop: 0 }, children: "\u5F00\u59CB\u4E00\u4E2A\u4EFB\u52A1" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("ol", { style: { paddingLeft: 22, lineHeight: 1.9 }, children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("li", { children: "\u5728\u8BBE\u7F6E\u7684\u6A21\u578B\u63D0\u4F9B\u5546\u4E2D\u914D\u7F6E\u6A21\u578B\u548C\u5BC6\u94A5\u3002" }),
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("li", { children: "\u5173\u95ED\u8BBE\u7F6E\uFF0C\u5728\u4FA7\u680F\u6DFB\u52A0\u672C\u673A\u9879\u76EE\u6587\u4EF6\u5939\uFF0C\u518D\u65B0\u5EFA\u4F1A\u8BDD\u3002" }),
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("li", { children: "\u9009\u62E9\u6807\u51C6\u6A21\u5F0F\u4E0E\u6A21\u578B\uFF0C\u63CF\u8FF0\u9700\u6C42\uFF1B\u6309\u63D0\u793A\u5BA1\u9605\u5DE5\u5177\u6743\u9650\u548C\u4FEE\u6539\u7ED3\u679C\u3002" })
+		        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: card, "aria-label": "\u5F53\u524D\u8FDE\u63A5", children: [
+		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { style: { marginTop: 0 }, children: "\u5F53\u524D\u8FDE\u63A5" }),
+		          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
+		            carrier === "desktop" ? "\u684C\u9762\u7A97\u53E3" : "\u6D4F\u89C8\u5668\u9875\u9762",
+		            " \xB7",
+		            " ",
+		            data ? {
+		              packaged: "\u684C\u9762\u6B63\u5F0F\u670D\u52A1",
+		              development: "\u9694\u79BB\u5F00\u53D1\u670D\u52A1",
+		              standalone: "\u72EC\u7ACB DSH \u670D\u52A1",
+		              disconnected: "\u684C\u9762\u8FDE\u63A5\u5F85\u6062\u590D"
+		            }[data.runtime.mode] : "\u6B63\u5728\u8BC6\u522B\u670D\u52A1\u2026"
 		          ] }),
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("label", { htmlFor: "dsh-px-workspace", style: { fontSize: 13 }, children: "\u672C\u673A\u9879\u76EE\u6587\u4EF6\u5939" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, margin: "8px 0 16px" }, children: [
+		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { fontSize: 13, opacity: 0.75 }, children: data?.runtime.owner === "desktop" ? "\u6B64\u670D\u52A1\u7531 DSH-PX \u684C\u9762\u5E94\u7528\u6301\u6709\u3002\u91CD\u542F\u3001\u9000\u51FA\u6216\u5B89\u88C5\u66F4\u65B0\u4F1A\u5F71\u54CD\u8FDE\u63A5\u5B83\u7684\u6240\u6709\u684C\u9762\u7A97\u53E3\u4E0E\u6D4F\u89C8\u5668\u9875\u9762\uFF1B\u6D3B\u52A8\u4EFB\u52A1\u5C06\u7531\u684C\u9762\u5E94\u7528\u7EDF\u4E00\u5904\u7406\u3002" : "\u6D4F\u89C8\u5668\u9875\u9762\u8FDE\u63A5\u72EC\u7ACB\u8FD0\u884C\u7684 Agent \u670D\u52A1\uFF1B\u5173\u95ED\u9875\u9762\u4E0D\u4F1A\u5173\u95ED\u8BE5\u670D\u52A1\u3002\u684C\u9762\u66F4\u65B0\u4E0E\u91CD\u542F\u80FD\u529B\u4EE5\u5F53\u524D\u670D\u52A1\u8BCA\u65AD\u4E3A\u51C6\u3002" }),
+		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { fontSize: 12, opacity: 0.65 }, children: "\u4F1A\u8BDD\u6807\u7B7E\u968F\u5F53\u524D\u670D\u52A1\u4FDD\u5B58\uFF1B\u672A\u4FDD\u5B58\u7684\u6279\u6CE8\u548C\u5B9A\u65F6\u8349\u7A3F\u53EA\u4FDD\u7559\u5728\u5F53\u524D\u7A97\u53E3\uFF0C\u5173\u95ED\u524D\u8BF7\u4FDD\u5B58\u3002" }),
+		          data?.activity.known ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
+		            "\u6D3B\u52A8\uFF1A",
+		            data.activity.runningAgents,
+		            " \u4E2A Agent \xB7 ",
+		            data.activity.runningJobs,
+		            " \u4E2A\u540E\u53F0\u4EFB\u52A1 \xB7",
+		            " ",
+		            data.activity.queuedInputs,
+		            " \u6761\u6392\u961F\u8F93\u5165 \xB7 ",
+		            data.activity.openTerminals,
+		            " \u9879\u6253\u5F00\u7684\u7EC8\u7AEF\u8D44\u6E90"
+		          ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u4EFB\u52A1\u6216\u7EC8\u7AEF\u72B6\u6001\u5C1A\u672A\u786E\u8BA4\uFF1B\u8BF7\u68C0\u67E5\u8FD0\u884C\u8BCA\u65AD\u53CA\u4FA7\u680F\u517C\u5BB9\u6027\uFF0C\u4E0D\u80FD\u636E\u6B64\u5224\u65AD\u670D\u52A1\u7A7A\u95F2\u3002" }),
+		          data?.pendingOperation ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "status", children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: data.pendingOperation.message }),
 		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-		              "input",
+		              "button",
 		              {
-		                id: "dsh-px-workspace",
-		                value: path,
-		                placeholder: "C:\\Projects\\demo",
-		                onChange: (e) => setPath(e.target.value),
-		                style: { ...button, minWidth: 0, flex: "1 1 240px", cursor: "text" }
+		                style: button,
+		                disabled: !data.pendingOperation.canCancel || restarting,
+		                onClick: () => {
+		                  setRestarting(true);
+		                  void requestJson(`${prefix}/cancel-pending`, { method: "POST" }).then((result) => {
+		                    setMessage(result.message);
+		                    void refresh();
+		                  }).catch((err) => setError(err instanceof Error ? err.message : String(err))).finally(() => setRestarting(false));
+		                },
+		                children: data.pendingOperation.canCancel ? "\u53D6\u6D88\u7B49\u5F85\uFF0C\u7EE7\u7EED\u4F7F\u7528" : "\u6B63\u5728\u505C\u6B62\u670D\u52A1\uFF0C\u8BF7\u7B49\u5F85"
 		              }
-		            ),
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { style: button, disabled: adding || !path.trim(), onClick: () => void addWorkspace(), children: adding ? "\u6DFB\u52A0\u4E2D\u2026" : "\u6DFB\u52A0\u5DE5\u4F5C\u533A" })
-		          ] }),
-		          workspaceMessage ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { role: "status", style: { fontSize: 13 }, children: workspaceMessage }) : null,
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 }, children: prompts.map((p) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
-		            "button",
-		            {
-		              style: button,
-		              onClick: () => {
-		                void navigator.clipboard.writeText(p.text).then(() => setMessage(`\u5DF2\u590D\u5236\u201C${p.title}\u201D\uFF0C\u7C98\u8D34\u5230\u65B0\u4F1A\u8BDD\u5373\u53EF\u3002`)).catch(() => setMessage(`\u590D\u5236\u5931\u8D25\uFF0C\u8BF7\u624B\u52A8\u590D\u5236\uFF1A${p.text}`));
+		            )
+		          ] }) : null,
+		          data?.lastAction && ["failed", "rejected"].includes(data.lastAction.status) ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { role: "alert", children: [
+		            "\u4E0A\u6B21\u684C\u9762\u64CD\u4F5C\u672A\u5B8C\u6210\uFF1A",
+		            data.lastAction.message
+		          ] }) : null
+		        ] }),
+		        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { style: card, open: data ? !data.credentialsFile : false, children: [
+		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { style: { cursor: "pointer" }, children: "\u9996\u6B21\u914D\u7F6E\u4E0E\u6DFB\u52A0\u5DE5\u4F5C\u533A" }),
+		          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { "aria-label": "\u5F00\u59CB\u4EFB\u52A1", children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("ol", { style: { paddingLeft: 22, lineHeight: 1.9 }, children: [
+		              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("li", { children: "\u5728\u8BBE\u7F6E\u7684\u6A21\u578B\u63D0\u4F9B\u5546\u4E2D\u914D\u7F6E\u6A21\u578B\u548C\u5BC6\u94A5\u3002" }),
+		              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("li", { children: "\u5173\u95ED\u8BBE\u7F6E\uFF0C\u5728\u4FA7\u680F\u6DFB\u52A0\u672C\u673A\u9879\u76EE\u6587\u4EF6\u5939\uFF0C\u518D\u65B0\u5EFA\u4F1A\u8BDD\u3002" }),
+		              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("li", { children: "\u9009\u62E9\u6807\u51C6\u6A21\u5F0F\u4E0E\u6A21\u578B\uFF0C\u63CF\u8FF0\u9700\u6C42\uFF1B\u6309\u63D0\u793A\u5BA1\u9605\u5DE5\u5177\u6743\u9650\u548C\u4FEE\u6539\u7ED3\u679C\u3002" })
+		            ] }),
+		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("label", { htmlFor: "dsh-px-workspace", style: { fontSize: 13 }, children: "\u672C\u673A\u9879\u76EE\u6587\u4EF6\u5939" }),
+		            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, margin: "8px 0 16px" }, children: [
+		              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		                "input",
+		                {
+		                  id: "dsh-px-workspace",
+		                  value: path,
+		                  placeholder: "C:\\Projects\\demo",
+		                  onChange: (e) => setPath(e.target.value),
+		                  style: { ...button, minWidth: 0, flex: "1 1 240px", cursor: "text" }
+		                }
+		              ),
+		              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { style: button, disabled: adding || !path.trim(), onClick: () => void addWorkspace(), children: adding ? "\u6DFB\u52A0\u4E2D\u2026" : "\u6DFB\u52A0\u5DE5\u4F5C\u533A" })
+		            ] }),
+		            workspaceMessage ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { role: "status", style: { fontSize: 13 }, children: workspaceMessage }) : null,
+		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 }, children: prompts.map((p) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+		              "button",
+		              {
+		                style: button,
+		                onClick: () => {
+		                  void navigator.clipboard.writeText(p.text).then(() => setMessage(`\u5DF2\u590D\u5236\u201C${p.title}\u201D\uFF0C\u7C98\u8D34\u5230\u65B0\u4F1A\u8BDD\u5373\u53EF\u3002`)).catch(() => setMessage(`\u590D\u5236\u5931\u8D25\uFF0C\u8BF7\u624B\u52A8\u590D\u5236\uFF1A${p.text}`));
+		                },
+		                children: [
+		                  "\u590D\u5236\uFF1A",
+		                  p.title
+		                ]
 		              },
-		              children: [
-		                "\u590D\u5236\uFF1A",
-		                p.title
-		              ]
-		            },
-		            p.title
-		          )) }),
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { fontSize: 12, opacity: 0.65, marginBottom: 0 }, children: "\u9996\u6B21\u9A8C\u8BC1\u5EFA\u8BAE\u4F7F\u7528\u7A7A\u6587\u4EF6\u5939\u3002\u6A21\u578B\u80FD\u5426\u8FDE\u63A5\u4EE5\u771F\u5B9E\u4EFB\u52A1\u7ED3\u679C\u4E3A\u51C6\u3002" })
+		              p.title
+		            )) }),
+		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { fontSize: 12, opacity: 0.65, marginBottom: 0 }, children: "\u9996\u6B21\u9A8C\u8BC1\u5EFA\u8BAE\u4F7F\u7528\u7A7A\u6587\u4EF6\u5939\u3002\u6A21\u578B\u80FD\u5426\u8FDE\u63A5\u4EE5\u771F\u5B9E\u4EFB\u52A1\u7ED3\u679C\u4E3A\u51C6\u3002" })
+		          ] })
 		        ] }),
 		        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { style: card, children: [
 		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { style: { cursor: "pointer" }, children: "\u672C\u673A\u8FD0\u884C\u8BCA\u65AD\u4E0E\u670D\u52A1\u6062\u590D" }),
@@ -318,6 +404,8 @@ window.__ModuleLoader__.load({
 		                    lineHeight: 1.6
 		                  },
 		                  children: [
+		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: "\u670D\u52A1\u6807\u8BC6" }),
+		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { style: { margin: 0 }, children: data.serviceId ?? "\u672A\u63D0\u4F9B" }),
 		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: "Agent \u670D\u52A1" }),
 		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dd", { style: { margin: 0 }, children: [
 		                      error ? "\u8FDE\u63A5\u4E2D\u65AD\uFF0C\u4EE5\u4E0B\u4E3A\u4E0A\u6B21\u68C0\u67E5\u7ED3\u679C" : "\u5DF2\u8FDE\u63A5",
@@ -326,7 +414,7 @@ window.__ModuleLoader__.load({
 		                      new Date(data.startedAt).toLocaleTimeString()
 		                    ] }),
 		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: "\u684C\u9762\u5916\u58F3" }),
-		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { style: { margin: 0 }, children: data.service?.message ?? "\u672A\u8FDE\u63A5\uFF08\u53EF\u7EE7\u7EED\u4F7F\u7528\u6D4F\u89C8\u5668\u4E2D\u7684 Agent\uFF09" }),
+		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { style: { margin: 0 }, children: data.service?.message ?? (data.runtime.owner === "desktop" ? "\u672A\u8FDE\u63A5\uFF0C\u7BA1\u7406\u64CD\u4F5C\u6682\u4E0D\u53EF\u7528\uFF1B\u8BF7\u5728\u684C\u9762\u5E94\u7528\u68C0\u67E5\u670D\u52A1\u3002" : "\u6B64\u670D\u52A1\u7531\u72EC\u7ACB DSH \u542F\u52A8") }),
 		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: "Node" }),
 		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dd", { style: { margin: 0 }, children: [
 		                      data.node.version,
@@ -400,7 +488,7 @@ window.__ModuleLoader__.load({
 		                }
 		              ) }),
 		              confirm ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "alert", style: { marginTop: 12 }, children: [
-		                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u91CD\u542F\u4F1A\u4E2D\u65AD\u6B63\u5728\u6267\u884C\u7684\u4EFB\u52A1\u3002\u8BF7\u5148\u7B49\u5F85\u4EFB\u52A1\u7ED3\u675F\uFF1B\u5DF2\u6709\u4F1A\u8BDD\u4E0E\u914D\u7F6E\u4F1A\u4FDD\u7559\u3002" }),
+		                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u5C06\u8BF7\u6C42\u684C\u9762\u5E94\u7528\u91CD\u542F\u6B64\u5171\u4EAB\u670D\u52A1\uFF0C\u6240\u6709\u8FDE\u63A5\u9875\u9762\u90FD\u4F1A\u77ED\u6682\u65AD\u5F00\u3002\u5B58\u5728\u6D3B\u52A8\u4EFB\u52A1\u65F6\uFF0C\u684C\u9762\u7A97\u53E3\u4F1A\u8981\u6C42\u7B49\u5F85\u6216\u660E\u786E\u4E2D\u6B62\uFF1B\u5DF2\u6709\u4F1A\u8BDD\u4E0E\u914D\u7F6E\u4F1A\u4FDD\u7559\u3002" }),
 		                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { style: button, disabled: restarting, onClick: () => void restart(), children: "\u786E\u8BA4\u91CD\u542F" }),
 		                " ",
 		                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { style: button, onClick: () => setConfirm(false), children: "\u53D6\u6D88" })
@@ -417,6 +505,13 @@ window.__ModuleLoader__.load({
 		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { style: { cursor: "pointer" }, children: "\u9AD8\u7EA7\uFF1A\u63D2\u4EF6\u8BCA\u65AD\u6E05\u5355" }),
 		          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { "aria-label": "\u63D2\u4EF6\u6E05\u5355", children: [
 		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { style: { marginTop: 0 }, children: "\u5F53\u524D Profile \u7684\u63D2\u4EF6" }),
+		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h4", { children: "\u5F53\u524D\u9875\u9762\u5B9E\u9645\u53EF\u7528\u670D\u52A1" }),
+		            Object.entries(dependencyLabels).map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
+		              activated[id] ? "\u53EF\u7528" : "\u672A\u542F\u7528",
+		              " \xB7 ",
+		              label
+		            ] }, id)),
+		            Object.keys(dependencyLabels).some((id) => !activated[id]) ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { role: "status", children: "\u672A\u542F\u7528\u7684\u670D\u52A1\u4F1A\u4F7F\u5BF9\u5E94\u529F\u80FD\u4E0D\u53EF\u7528\u3002\u8BF7\u5728\u63D2\u4EF6\u8BBE\u7F6E\u68C0\u67E5\u662F\u5426\u542F\u7528\u76F8\u5173\u63D2\u4EF6\uFF0C\u6062\u590D\u540E\u91CD\u542F\u670D\u52A1\uFF1B\u539F\u751F\u4F1A\u8BDD\u529F\u80FD\u53EF\u7EE7\u7EED\u4F7F\u7528\u3002\u7981\u7528\u4FA7\u8FB9\u5361\u7247\u4F1A\u540C\u65F6\u505C\u7528\u4F9D\u8D56\u5B83\u7684\u591A\u4E2A\u9762\u677F\u3002" }) : null,
 		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { fontSize: 12, opacity: 0.7 }, children: "\u6CBF\u7528 DSH \u63D2\u4EF6\u5E02\u573A\u7BA1\u7406\u63D2\u4EF6\u3002\u5B89\u88C5\u6216\u66F4\u6539\u7EC4\u5408\u5305\u540E\u91CD\u542F\u670D\u52A1\u751F\u6548\uFF1B\u8FD9\u91CC\u663E\u793A\u5B89\u88C5\u4E0E\u6E05\u5355\u72B6\u6001\uFF0C\u4E0D\u4EE3\u8868\u6BCF\u4E2A\u63D2\u4EF6\u8FD0\u884C\u6B63\u5E38\u3002" }),
 		            data?.profileError ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { role: "alert", children: [
 		              "\u65E0\u6CD5\u8BFB\u53D6\u63D2\u4EF6\u6E05\u5355\uFF1A",
@@ -440,11 +535,17 @@ window.__ModuleLoader__.load({
 		}
 		function apply(ctx) {
 		  installUiStyles(ctx);
+		  const capabilities = createCapabilities({});
+		  for (const name of Object.keys(dependencyLabels))
+		    ctx.inject([name], (host) => {
+		      capabilities.set({ [name]: true });
+		      host.effect(() => () => capabilities.set({ [name]: false }), `workbench: ${name} activation`);
+		    });
 		  ctx.slots.inject(
 		    "settings.section",
 		    () => ctx.slots.register(
 		      { name: "settings.section", id: "dsh-px-workbench", order: 110, label: "\u8FD0\u884C\u4E0E\u5E2E\u52A9" },
-		      Workbench
+		      () => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Workbench, { capabilities })
 		    )
 		  );
 		}

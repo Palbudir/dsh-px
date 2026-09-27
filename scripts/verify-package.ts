@@ -1,236 +1,176 @@
-/**
- * 校验**安装包内部**的内容，而不是只看 `win-unpacked`。
- *
- * 为什么需要这个脚本（一次真实的教训）：
- *   beta.0 发布时我只验证了 `dist/win-unpacked/`，那里一切正常；
- *   但用户装完却起不来。事后才发现问题只在"安装后的目录"里才暴露。
- *   只验证中间产物、不验证最终交付物，等于没验证。
- *
- * 本脚本检查三件事：
- *   1. **必备文件确实在安装包载荷里** —— 尤其是 runtime/node/node.exe。
- *      少了它，应用装完根本起不来，而 win-unpacked 里却是好的。
- *   2. **不该有的东西没被打进去** —— 构建中间产物（runtime/_dsh-install）
- *      曾让安装包凭空胖了约 300 MB。
- *   3. 载荷规模在合理范围，异常时给出提示。
- *
- * 用 7-Zip 读取 NSIS 载荷；没装 7-Zip 时会自动下载 7zr.exe（约 600 KB）。
- *
- * 用法：
- *   node scripts/verify-package.mjs                 # 校验 dist 下最新的安装包
- *   node scripts/verify-package.mjs <安装包路径>
- */
-import { existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+/** Verify the actual NSIS payload, then compare the companion ZIP's critical files. */
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { basename, dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { basename, dirname, join, resolve, sep } from 'node:path'
+import { tmpdir } from 'node:os'
 import { listZipEntries } from './unzip-list'
 import { repoRoot } from './paths'
-import { managedArtifacts } from '../src/shared/plugin-catalog'
-
-/** 从 unknown 的 catch 变量里取出可读消息（strict 下 catch 变量是 unknown）。 */
-function errText (err: unknown): string {
-  return err instanceof Error ? (err.stack ?? err.message) : String(err)
-}
-
+import { verifyBuiltApplication, verifyManagedPackageSources } from './package-integrity'
+import { MANAGED_PLUGIN_NAMES, RUNTIME_VERSIONS } from '../src/shared/plugin-catalog'
+import { verifyRuntimeIntegrity, sha256File } from '../src/shared/runtime-integrity'
+import { forbiddenPayloadPaths } from '../src/shared/payload-policy'
 
 const REPO = repoRoot()
-const DIST = join(REPO, 'dist')
-const TOOLS = join(REPO, 'build', 'tools')
-const log = (m) => process.stdout.write(`[pkg] ${m}\n`)
-
-/** 交付物里**必须**存在的路径（相对安装根）。缺任何一个，装出来的应用就是坏的。 */
+const log = (message: string): void => {
+  process.stdout.write(`[pkg] ${message}\n`)
+}
 const REQUIRED = [
   'resources/app.asar',
   'resources/app-update.yml',
   'resources/runtime/runtime-manifest.json',
   'resources/runtime/node/node.exe',
+  'resources/runtime/dsh/package.json',
   'resources/runtime/dsh/lib/bin.js',
   'resources/runtime/dsh-home/profiles/web/package.json',
-  ...managedArtifacts('resources/runtime/dsh-home/profiles/web/node_modules')
+  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-better-sidebar/package.json',
+  'resources/runtime/dsh-home/profiles/web/node_modules/dsh-better-sidebar/lib/index.js',
+  ...MANAGED_PLUGIN_NAMES.flatMap((name) =>
+    ['package.json', 'lib/index.js', 'lib/client.js', 'cordis.patch.yml'].map(
+      (file) => `resources/runtime/dsh-home/profiles/web/node_modules/${name}/${file}`
+    )
+  )
 ]
 
-/** 绝不该出现在交付物里的构建中间产物。 */
-const FORBIDDEN = [
-  'resources/runtime/_dsh-install'
-]
-
-/** 获取可用的 7-Zip。优先用系统/CI 已安装的，最后才尝试下载。 */
-function ensure7z () {
-  // 1) 显式配置
+function sevenZip(): string {
   if (process.env.DSH_PX_7Z) {
-    if (existsSync(process.env.DSH_PX_7Z)) return process.env.DSH_PX_7Z
-    throw new Error(`DSH_PX_7Z 指向的文件不存在：${process.env.DSH_PX_7Z}`)
+    if (!existsSync(process.env.DSH_PX_7Z)) throw new Error('DSH_PX_7Z 指向不存在的 7-Zip 程序')
+    return process.env.DSH_PX_7Z
   }
-  // 2) 仓库内自带的（本地开发时下载一次即可）
-  const vendored = join(TOOLS, '7zr.exe')
-  if (existsSync(vendored)) return vendored
-  // 3) 系统安装
-  for (const p of ['C:\\Program Files\\7-Zip\\7z.exe', 'C:\\Program Files (x86)\\7-Zip\\7z.exe']) {
-    if (existsSync(p)) return p
+  for (const file of [
+    'C:/Program Files/7-Zip/7z.exe',
+    'C:/Program Files (x86)/7-Zip/7z.exe',
+    join(REPO, 'node_modules/electron-winstaller/vendor/7z-x64.exe'),
+    join(REPO, 'node_modules/electron-winstaller/vendor/7z.exe')
+  ]) {
+    if (existsSync(file)) return file
   }
-  // 4) PATH 上的 7z（CI 里用 choco 安装后就在 PATH 上，这是最省事的一条）
-  const probe = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['7z'], { encoding: 'utf8' })
-  if (probe.status === 0 && probe.stdout.trim()) return probe.stdout.trim().split(/\r?\n/)[0].trim()
+  const found = spawnSync(process.platform === 'win32' ? 'where' : 'which', ['7z'], {
+    encoding: 'utf8',
+    windowsHide: true
+  })
+  if (found.status === 0 && found.stdout.trim()) return found.stdout.trim().split(/\r?\n/)[0]
+  throw new Error(
+    '安装包校验需要支持 NSIS 的 7-Zip；请安装 7-Zip 或设置 DSH_PX_7Z，不能以 ZIP 代替安装包验证'
+  )
+}
 
-  if (process.platform !== 'win32') return '7z'
-
-  // 5) 最后才下载。**注意**：CI 上这一步曾静默失败，导致"解析到 10 条载荷"
-  //    从而误报全部缺失。因此这里不再静默 —— 失败就抛出可读原因，
-  //    并在 CI 里由工作流预装 7-Zip 来避免走到这一步。
-  mkdirSync(TOOLS, { recursive: true })
-  log('本地没有 7-Zip，尝试下载 7zr.exe（约 600 KB）')
-  try {
-    execFileSync('powershell', ['-NoProfile', '-Command',
-      `Invoke-WebRequest 'https://www.7-zip.org/a/7zr.exe' -OutFile '${vendored}' -UseBasicParsing`],
-    { stdio: 'inherit' })
-  } catch (err) {
-    throw new Error(
-      `无法获得 7-Zip，因此不能校验安装包内容。\n` +
-      `  自动下载失败：${errText(err)}\n` +
-      `  解决：安装 7-Zip（CI 上可 choco install 7zip -y），或设置 DSH_PX_7Z 指向 7z 可执行文件。`
+function archivePaths(seven: string, archive: string): string[] {
+  const output = execFileSync(seven, ['l', '-slt', archive], {
+    encoding: 'utf8',
+    windowsHide: true,
+    timeout: 120_000,
+    maxBuffer: 64 * 1024 * 1024
+  })
+  const entries = output
+    .split(/\r?\n/)
+    .flatMap((line) =>
+      line.startsWith('Path = ') ? [line.slice(7).replaceAll('\\', '/').replace(/\/+$/, '')] : []
     )
-  }
-  if (!existsSync(vendored)) throw new Error('7zr.exe 下载后仍不存在')
-  return vendored
+  return entries.filter((path) => path !== archive.replaceAll('\\', '/') && !/^[a-z]:\//i.test(path))
 }
 
-function pickInstaller (argPath) {
-  if (argPath) return resolve(argPath)
-  const candidates = readdirSync(DIST)
-    .filter((f) => /Setup.*\.exe$/i.test(f))
-    .map((f) => join(DIST, f))
-  if (candidates.length === 0) throw new Error(`dist 下没有找到安装包：${DIST}`)
-  // 取最新的一个
-  return candidates.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs)[0]
+function checkPaths(paths: string[], label: string): void {
+  if (paths.length < 1000) throw new Error(`${label} 只有 ${paths.length} 条载荷记录，无法确认已读取应用载荷`)
+  const normalized = new Set(paths.map((path) => path.toLowerCase()))
+  const missing = REQUIRED.filter((file) => !normalized.has(file.toLowerCase()))
+  const forbidden = forbiddenPayloadPaths(paths)
+  const extra = paths.filter(
+    (file) => file.startsWith('resources/runtime/') && /\.(?:[cm]?js|css|d\.ts)\.map$/.test(file)
+  )
+  if (missing.length || forbidden.length || extra.length)
+    throw new Error(
+      `${label} 载荷不合格：${JSON.stringify({ missing, forbidden: forbidden.slice(0, 20), unpruned: extra.slice(0, 10) })}`
+    )
+  log(`${label} 必需载荷完整，敏感及运行数据的禁止路径检查通过（${paths.length} 条）`)
 }
 
-function main () {
-  const installer = pickInstaller(process.argv[2])
-  log(`安装包：${installer}`)
-  log(`大小：${(statSync(installer).size / 1048576).toFixed(1)} MB`)
-
-  // 优先用纯 JS 读 **ZIP**，而不是用 7-Zip 读 NSIS 安装包。
-  //
-  // 原因（踩了三轮的坑）：同一份安装包，7-Zip 在本地能列出 14 万条，
-  // 在 CI 上只列出 2 行 —— 环境相关、排查成本高、方向不确定。
-  // 而 electron-builder 每次都会同时产出 `*-win.zip`，它与安装包
-  // 来自**同一个 win-unpacked 目录**，因此校验它同样能证明
-  // "交付物里有没有必备文件、有没有混入构建产物"。
-  // ZIP 的中央目录是自描述的，用 Node 内置 zlib 直接读即可：
-  // 零依赖、97 毫秒、跨平台、结果确定。
-  // 在同目录里找与安装包版本匹配的 ZIP。
-  //
-  // 命名不一定可推导（实测 electron-builder 产出的是
-  // `DSH-PX-0.1.0-beta.5-win.zip`，与 `DSH-PX Setup 0.1.0-beta.5.exe` 并不同名规则），
-  // 所以按"版本号 + -win.zip"去匹配，而不是对安装包名做字符串替换。
-  const dir = dirname(installer)
-  // 匹配完整版本，并用 .exe 结尾定界；不能误选同目录里的旧预发布版本。
-  const versionMatch = basename(installer).match(/(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)\.exe$/i)
-  const version = versionMatch ? versionMatch[1] : null
-  const zips = existsSync(dir)
-    ? readdirSync(dir).filter((f) => version && f.endsWith(`-${version}-win.zip`))
-    : []
-  const foundZip = zips.length ? join(dir, zips[0]) : null
-  if (foundZip) log(`同源 ZIP：${basename(foundZip)}`)
-  if (foundZip) {
-    log(`校验目标：${foundZip}（与安装包同源，纯 JS 解析）`)
-    const names = listZipEntries(foundZip)
-    log(`解析到载荷条目：${names.length}`)
-    if (names.length < 1000) {
-      throw new Error(`ZIP 只解析到 ${names.length} 个条目，远少于预期（约 4 万），文件可能损坏`)
+function extract(seven: string, archive: string, destination: string, entries: string[]): void {
+  mkdirSync(destination, { recursive: true })
+  execFileSync(
+    seven,
+    [
+      'x',
+      '-y',
+      '-bd',
+      '-bso0',
+      '-bsp0',
+      `-o${destination}`,
+      archive,
+      ...entries.map((entry) => entry.replaceAll('/', '\\'))
+    ],
+    {
+      windowsHide: true,
+      timeout: 180_000,
+      maxBuffer: 4 * 1024 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe']
     }
-    const normalized = new Set(names.map((p: string) => p.toLowerCase().replace(/\/+$/, '')))
-    return report(normalized, `${names.length} 条（来自 ZIP）`)
-  }
-
-  // 退路：没有 ZIP 时仍尝试用 7-Zip 读安装包。
-  log('未找到同源 ZIP，改用 7-Zip 读取安装包')
-  const seven = ensure7z()
-  const raw = execFileSync(seven, ['l', '-slt', installer], { encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
-  const paths: string[] = []
-  for (const rawLine of raw.split('\n')) {
-    const line = rawLine.replace(/\r$/, '')
-    const m = line.match(/^Path = (.+)$/)
-    if (!m) continue
-    const p = m[1].trim().replace(/\\/g, '/').replace(/\/+$/, '')
-    if (!p || !p.includes('/')) continue
-    paths.push(p)
-  }
-  log(`解析到载荷条目：${paths.length}`)
-  if (paths.length < 1000) {
-    const sample = raw.split('\n').slice(0, 12).map((l) => '    | ' + l.replace(/\r$/, '')).join('\n')
-    throw new Error(
-      `只解析到 ${paths.length} 个载荷条目，远少于预期（约 4 万）—— ` +
-      `这说明 7-Zip 没能按预期列出安装包内容，而不是文件缺失。\n` +
-      `  使用的 7-Zip：${seven}\n  输出开头：\n${sample}`
-    )
-  }
-  return report(new Set(paths.map((p) => p.toLowerCase())), `${paths.length} 条（来自 7-Zip）`)
+  )
 }
 
-/**
- * 按必备/禁止清单做断言并输出结果。
- * @param {Set<string>} normalized 已小写归一化的条目路径集合
- * @param {string} source 来源描述，仅用于日志
- */
-function report (normalized: Set<string>, source: string): void {
-  const failures: unknown[] = []
-
-  // 1) 必备文件
-  for (const req of REQUIRED) {
-    const hit = [...normalized].some((p) => p === req.toLowerCase() || p.startsWith(req.toLowerCase() + '/'))
-    if (hit) log(`PASS  含 ${req}`)
-    else { log(`FAIL  缺少 ${req}`); failures.push(`缺少 ${req}`) }
-  }
-
-  // 2) 禁止项
-  for (const bad of FORBIDDEN) {
-    const hit = [...normalized].some((p) => p === bad.toLowerCase() || p.startsWith(bad.toLowerCase() + '/'))
-    if (hit) { log(`FAIL  含不该打进去的构建产物 ${bad}`); failures.push(`含 ${bad}`) }
-    else log(`PASS  不含 ${bad}`)
-  }
-
-  // 3) 交付物瘦身：`*.map` 与 `tests/` 必须已经被 prune 裁掉。
-  //
-  // 为什么要在**打包门禁**里断言，而不是只靠 prune 跑对：这两类东西删掉完全不影响
-  // 功能，所以一旦漏裁，应用照常运行、只是安装包白白大 100+ MB —— 没有任何
-  // 现象会提醒你。把断言放在这里，才能让"忘了跑 prune"在发布这一步就失败。
-  //
-  // 只对 runtime 载荷断言（`resources/runtime/`），不碰 app.asar 内部：
-  // 那里是 Electron 打包自己的事，不在本次裁剪范围内。
-  const runtimePrefix = 'resources/runtime/'
-  const runtimeEntries = [...normalized].filter((p) => p.startsWith(runtimePrefix))
-  const leftoverMaps = runtimeEntries.filter((p) => p.endsWith('.map'))
-  const leftoverTests = runtimeEntries.filter((p) => /\/tests?\//.test(p))
-  if (leftoverMaps.length > 0) {
-    log(`FAIL  交付物里仍有 ${leftoverMaps.length} 个 *.map —— 打包前是否漏跑 npm run prune？`)
-    for (const s of leftoverMaps.slice(0, 3)) log(`       例如 ${s}`)
-    failures.push(`${leftoverMaps.length} 个 *.map 未裁剪`)
-  } else {
-    log('PASS  不含 *.map（已裁剪）')
-  }
-  if (leftoverTests.length > 0) {
-    log(`FAIL  交付物里仍有 ${leftoverTests.length} 个 tests/ 条目 —— 打包前是否漏跑 npm run prune？`)
-    for (const s of leftoverTests.slice(0, 3)) log(`       例如 ${s}`)
-    failures.push(`${leftoverTests.length} 个 tests/ 条目未裁剪`)
-  } else {
-    log('PASS  不含 tests/（已裁剪）')
-  }
-
-  // 4) 规模提示
-  log(`载荷规模：${source}`)
-
-  if (failures.length) {
-    process.stderr.write(`\n[pkg] 校验失败：\n  - ${failures.join('\n  - ')}\n`)
-    process.exitCode = 1
-  } else {
-    process.stdout.write('\n[pkg] 交付物内容校验通过\n')
+function main(): void {
+  if (process.platform !== 'win32')
+    throw new Error('Windows 安装包必须在 Windows 上运行其实际 Node 二进制进行校验')
+  const version = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')).version as string
+  const candidates = existsSync(join(REPO, 'dist'))
+    ? readdirSync(join(REPO, 'dist')).filter(
+        (file) => /Setup.*\.exe$/i.test(file) && file.endsWith(`${version}.exe`)
+      )
+    : []
+  const installer = process.argv[2]
+    ? resolve(process.argv[2])
+    : candidates.length === 1
+      ? join(REPO, 'dist', candidates[0])
+      : ''
+  if (!installer || !existsSync(installer))
+    throw new Error(`找不到当前版本 ${version} 的唯一安装包；请显式传入路径`)
+  if (!basename(installer).endsWith(`${version}.exe`))
+    throw new Error(`安装包文件名不属于当前版本 ${version}`)
+  const zip = join(dirname(installer), `DSH-PX-${version}-win.zip`)
+  if (!existsSync(zip)) throw new Error('缺少同版本 ZIP，无法核对两个交付物是否一致')
+  log(`实际安装包：${installer}（${(statSync(installer).size / 1048576).toFixed(1)} MB）`)
+  const seven = sevenZip()
+  const temporary = mkdtempSync(join(tmpdir(), 'dshpx-package-verify-'))
+  try {
+    const embedded = archivePaths(seven, installer).filter((path) =>
+      /(?:^|\/)app-(?:64|x64)\.7z$/i.test(path)
+    )
+    if (embedded.length !== 1 || embedded[0].split('/').includes('..'))
+      throw new Error('NSIS 中没有唯一的 x64 应用载荷')
+    extract(seven, installer, join(temporary, 'nsis'), embedded)
+    const payload = join(temporary, 'nsis', embedded[0])
+    const paths = archivePaths(seven, payload)
+    checkPaths(paths, 'NSIS 内嵌应用')
+    const zipPaths = listZipEntries(zip)
+    checkPaths(zipPaths, '同版本 ZIP')
+    const nsisRoot = join(temporary, 'payload'),
+      zipRoot = join(temporary, 'zip')
+    extract(seven, payload, nsisRoot, REQUIRED)
+    extract(seven, zip, zipRoot, REQUIRED)
+    for (const file of REQUIRED)
+      if (sha256File(join(nsisRoot, file)) !== sha256File(join(zipRoot, file)))
+        throw new Error(`NSIS 与 ZIP 的实际文件不一致：${file}`)
+    verifyRuntimeIntegrity(join(nsisRoot, 'resources/runtime'), {
+      node: process.env.DSH_PX_NODE_VERSION ?? RUNTIME_VERSIONS.node,
+      dsh: process.env.DSH_PX_DSH_VERSION ?? RUNTIME_VERSIONS.dsh,
+      app: version
+    })
+    verifyManagedPackageSources(join(nsisRoot, 'resources/runtime'), REPO, 'web', version)
+    verifyBuiltApplication(join(nsisRoot, 'resources/app.asar'), REPO, version)
+    log(`NSIS 与 ZIP 的应用、实际 Node/DSH、四插件版本与摘要一致：${version}`)
+    log('交付物校验通过')
+  } finally {
+    if (
+      !resolve(temporary).startsWith(resolve(tmpdir()) + sep) ||
+      !basename(temporary).startsWith('dshpx-package-verify-')
+    )
+      throw new Error('临时目录边界错误，未执行清理')
+    rmSync(temporary, { recursive: true, force: true, maxRetries: 3 })
   }
 }
 
 try {
   main()
-} catch (err) {
-  process.stderr.write(`[pkg] 出错：${errText(err)}\n`)
-  process.exit(1)
+} catch (error) {
+  process.stderr.write(`[pkg] 校验失败：${error instanceof Error ? error.message : String(error)}\n`)
+  process.exitCode = 1
 }

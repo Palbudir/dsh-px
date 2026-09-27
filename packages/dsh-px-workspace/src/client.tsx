@@ -1,23 +1,30 @@
 import type { Client, Panel } from './client/contracts'
 import { css } from './client/styles'
-import { requestQuote } from './client/data'
+import { QuoteAction } from './client/quote-action'
 import { SessionBar } from './client/session-bar'
 import { ArtifactsPanel } from './client/artifacts'
 import { NotesPanel } from './client/notes'
 import { SchedulesPanel } from './client/schedules'
 import { installUiStyles, Icon } from '../../shared/ui'
-export const inject = ['slots', 'sessions', 'uiWorkspace', 'conversation', 'betterSidebar', 'sidebarRight']
-export function apply(ctx: Client): void {
+import { createCapabilities } from '../../shared/client-capabilities'
+export const inject = ['slots', 'sessions', 'uiWorkspace', 'conversation']
+export function apply(raw: Omit<Client, 'capabilities'>): void {
+  const capabilities = createCapabilities<ReturnType<Client['capabilities']['getSnapshot']>>({})
+  const ctx: Client = {
+    sessions: raw.sessions,
+    uiWorkspace: raw.uiWorkspace,
+    conversation: raw.conversation,
+    slots: raw.slots,
+    effect: raw.effect.bind(raw),
+    inject: raw.inject.bind(raw),
+    capabilities
+  }
   installUiStyles(ctx)
   ctx.effect(() => {
     const style = document.createElement('style')
     style.textContent = css
     document.head.appendChild(style)
-    document.body.setAttribute('data-dsh-px-workspace', '')
-    return () => {
-      style.remove()
-      document.body.removeAttribute('data-dsh-px-workspace')
-    }
+    return () => style.remove()
   }, 'workspace: layout')
   ctx.slots.inject('shell.overlay', () =>
     ctx.slots.register(
@@ -25,52 +32,65 @@ export function apply(ctx: Client): void {
       () => <SessionBar ctx={ctx} />
     )
   )
-  ctx.slots.inject('conversation.chat.assistant-actions', () =>
-    ctx.slots.register(
-      {
-        name: 'conversation.chat.assistant-actions',
-        id: 'dsh-px-quote',
-        order: 95,
-        registrant: 'dsh-px-workspace'
+  ctx.inject(['sidebarRight'], (host) => {
+    const terminal = host.sidebarRight
+    capabilities.set({ terminal })
+    host.effect(
+      () => () => {
+        if (capabilities.getSnapshot().terminal === terminal) capabilities.set({ terminal: undefined })
       },
-      (p: { sessionId: string; messageId: string }) => (
-        <span className="px-ui">
-          <button
-            className="px-quote-action"
-            title="引用或批注这条消息"
-            onClick={() => {
-              requestQuote(p.sessionId, p.messageId)
-              ctx.betterSidebar.openTab(
-                { type: 'px-notes', meta: { messageId: p.messageId } },
-                { sessionId: p.sessionId }
-              )
-            }}
-          >
-            <Icon name="note" />
-            引用 / 批注
-          </button>
-        </span>
+      'workspace: terminal capability'
+    )
+  })
+  ctx.inject(['sidebarRightTabs'], (host) => {
+    const nativeTabs = host.sidebarRightTabs
+    capabilities.set({ nativeTabs })
+    host.effect(
+      () => () => {
+        if (capabilities.getSnapshot().nativeTabs === nativeTabs) capabilities.set({ nativeTabs: undefined })
+      },
+      'workspace: native panel registry'
+    )
+  })
+  ctx.inject(['betterSidebar'], (host) => {
+    const sidebar = host.betterSidebar
+    capabilities.set({ sidebar })
+    host.effect(
+      () => () => {
+        if (capabilities.getSnapshot().sidebar === sidebar) capabilities.set({ sidebar: undefined })
+      },
+      'workspace: sidebar capability'
+    )
+    host.slots.inject('conversation.chat.assistant-actions', () =>
+      host.slots.register(
+        {
+          name: 'conversation.chat.assistant-actions',
+          id: 'dsh-px-quote',
+          order: 95,
+          registrant: 'dsh-px-workspace'
+        },
+        (p: { sessionId: string; messageId: string }) => <QuoteAction {...p} ctx={ctx} />
       )
     )
-  )
-  for (const [id, title, component, icon] of [
-    ['px-artifacts', '产物', ArtifactsPanel, 'artifact'],
-    ['px-notes', '引用与批注', NotesPanel, 'note'],
-    ['px-schedules', '定时任务', SchedulesPanel, 'schedule']
-  ] as const)
-    ctx.effect(
-      () =>
-        ctx.betterSidebar.registerTab({
-          id,
-          title,
-          order: 16,
-          single: true,
-          icon: <Icon name={icon} />,
-          component: (p: Panel) => {
-            const Component = component
-            return <Component key={p.scope.sessionId} {...p} ctx={ctx} />
-          }
-        }),
-      `workspace: ${id}`
-    )
+    for (const [id, title, component, icon] of [
+      ['px-artifacts', '产物', ArtifactsPanel, 'artifact'],
+      ['px-notes', '引用与批注', NotesPanel, 'note'],
+      ['px-schedules', '定时任务', SchedulesPanel, 'schedule']
+    ] as const)
+      host.effect(
+        () =>
+          sidebar.registerTab({
+            id,
+            title,
+            order: 16,
+            single: true,
+            icon: <Icon name={icon} />,
+            component: (p: Panel) => {
+              const Component = component
+              return <Component key={p.scope.sessionId} {...p} ctx={ctx} />
+            }
+          }),
+        `workspace: ${id}`
+      )
+  })
 }

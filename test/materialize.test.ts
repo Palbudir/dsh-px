@@ -10,13 +10,29 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { lstatSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import {
+  lstatSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { isCrossDevice, isLinkUnsupported, materializeSeedHome, repairPnpmMetadata } from '../src/main/materialize'
+import {
+  isCrossDevice,
+  isLinkUnsupported,
+  materializeSeedHome,
+  repairPnpmMetadata
+} from '../src/main/materialize'
 
 /** 造一棵最小种子树：清单 + 插件依赖 + 两类链接。 */
-function makeSeed (root: string, dshDir: string): string {
+function makeSeed(root: string, dshDir: string): string {
   const seed = join(root, 'seed')
   const profile = join(seed, 'profiles', 'web')
 
@@ -28,18 +44,23 @@ function makeSeed (root: string, dshDir: string): string {
   // ① 指向 dsh 安装目录内部的链接 —— 必须**原样保留**
   mkdirSync(join(dshDir, 'node_modules', 'dsh-fallback'), { recursive: true })
   writeFileSync(join(dshDir, 'node_modules', 'dsh-fallback', 'index.js'), 'export default 2\n')
-  mkdirSync(join(profile, 'node_modules', '@deepseek-ai'), { recursive: true })   // 名字判据会跳过
-  symlinkSync(join(dshDir, 'node_modules', 'dsh-fallback'),
+  mkdirSync(join(profile, 'node_modules', '@deepseek-ai'), { recursive: true }) // 名字判据会跳过
+  symlinkSync(
+    join(dshDir, 'node_modules', 'dsh-fallback'),
     join(profile, 'node_modules', 'dsh-fallback'),
-    process.platform === 'win32' ? 'junction' : 'dir')
+    process.platform === 'win32' ? 'junction' : 'dir'
+  )
 
   // ② 指向仓库外部的链接（开发态插件）—— 必须**解引用成真实内容**
   const external = join(root, 'external-plugin')
   mkdirSync(external, { recursive: true })
   writeFileSync(join(external, 'package.json'), '{"name":"dsh-px-updater"}\n')
   writeFileSync(join(external, 'index.js'), 'export default 3\n')
-  symlinkSync(external, join(profile, 'node_modules', 'dsh-px-updater'),
-    process.platform === 'win32' ? 'junction' : 'dir')
+  symlinkSync(
+    external,
+    join(profile, 'node_modules', 'dsh-px-updater'),
+    process.platform === 'win32' ? 'junction' : 'dir'
+  )
 
   // ③ 上一级的 fallback 树（整棵必须跳过）
   mkdirSync(join(seed, 'profiles', 'node_modules', 'should-be-skipped'), { recursive: true })
@@ -73,8 +94,11 @@ test('物化：硬链接 node_modules，跳过 fallback 树，保留 dsh 内链�
     // ② 外部链接被解引用成真实内容（不是悬空链接）
     const plugin = join(profileDest, 'node_modules', 'dsh-px-updater')
     assert.ok(statSync(plugin).isDirectory(), '外部链接应成为真实目录')
-    assert.equal(readFileSync(join(plugin, 'package.json'), 'utf8').includes('dsh-px-updater'), true,
-      '插件内容应被真实物化')
+    assert.equal(
+      readFileSync(join(plugin, 'package.json'), 'utf8').includes('dsh-px-updater'),
+      true,
+      '插件内容应被真实物化'
+    )
     assert.equal(lstatSync(plugin).isSymbolicLink(), false, '外部链接不应残留为符号链接')
 
     // ③ 上一级的 fallback 树整棵跳过
@@ -82,7 +106,10 @@ test('物化：硬链接 node_modules，跳过 fallback 树，保留 dsh 内链�
     assert.equal(statSync(skipped, { throwIfNoEntry: false }), undefined, 'profiles/node_modules 不应被物化')
 
     // ④ `@deepseek-ai` 命名空间整棵跳过
-    assert.equal(statSync(join(profileDest, 'node_modules', '@deepseek-ai'), { throwIfNoEntry: false }), undefined)
+    assert.equal(
+      statSync(join(profileDest, 'node_modules', '@deepseek-ai'), { throwIfNoEntry: false }),
+      undefined
+    )
 
     // ⑤ 完成标记
     assert.ok(readFileSync(join(home, '.dsh-px-materialized'), 'utf8').includes('linked='))
@@ -116,14 +143,8 @@ test('物化：可重复执行（幂等），第二次全跳过', async () => {
   }
 })
 
-test('物化：refresh 会覆盖旧内容（升级场景），否则插件会停在旧版本', async () => {
-  // 这个用例钉住一次真实的线上事故：外壳升级带来**全新的种子树**，
-  // 但幂等快路径看到"标记存在 + profile 清单存在"就整棵跳过，
-  // 于是用户的插件树永远停在首次安装那一版。
-  //
-  // 实测后果：beta.re.0.2 装好后设置页里没有「DSH-PX」分区 —— 因为物化出来的
-  // 自研插件还是 re.0.1 时代的 package.json（缺少 exports["./client"] 与
-  // dsh.client 声明），客户端半边根本不会被加载。日志里只有 `跳过 12129` 说明问题。
+test('物化：已有 profile 拒绝原地 refresh，并保留旧文件供事务升级', async () => {
+  // Existing profiles must upgrade through the transaction, never an in-place seed refresh.
   const root = mkdtempSync(join(tmpdir(), 'dshpx-mat-upgrade-'))
   try {
     const dshDir = join(root, 'dsh')
@@ -135,7 +156,11 @@ test('物化：refresh 会覆盖旧内容（升级场景），否则插件会停
     const pkgInSeed = join(root, 'external-plugin', 'index.js')
     writeFileSync(pkgInSeed, 'OLD CONTENT\n')
     const first = await materializeSeedHome({
-      seedHome: seed, home, profileName: 'web', dshDir, seedIdentity: 'v1'
+      seedHome: seed,
+      home,
+      profileName: 'web',
+      dshDir,
+      seedIdentity: 'v1'
     })
     assert.ok(first.linked > 0, '首次应建立链接')
 
@@ -151,21 +176,25 @@ test('物化：refresh 会覆盖旧内容（升级场景），否则插件会停
 
     // ① 不带 refresh：仍然跳过（这是**旧**行为，用于说明问题确实存在）
     await materializeSeedHome({ seedHome: seed, home, profileName: 'web', dshDir, seedIdentity: 'v2' })
-    assert.equal(readFileSync(dest, 'utf8'), 'OLD CONTENT\n',
-      '不带 refresh 时确实会保留旧内容 —— 这正是那次事故的机制')
+    assert.equal(
+      readFileSync(dest, 'utf8'),
+      'OLD CONTENT\n',
+      '不带 refresh 时确实会保留旧内容 —— 这正是那次事故的机制'
+    )
 
-    // ② 带 refresh：必须覆盖为新内容
-    const refreshed = await materializeSeedHome({
-      seedHome: seed, home, profileName: 'web', dshDir, seedIdentity: 'v2', refresh: true
-    })
-    assert.ok(refreshed.skipped > 0, '刷新也必须保留用户清单')
-    assert.equal(readFileSync(dest, 'utf8'), 'NEW CONTENT\n',
-      'refresh 必须把旧版本的文件替换掉')
-
-    // ③ 刷新标记里应记下种子身份，供下次启动比对
-    const marker = readFileSync(join(home, '.dsh-px-materialized'), 'utf8')
-    assert.match(marker, /seedIdentity=v2/, '标记必须记录种子身份')
-    assert.match(marker, /refreshed=true/, '标记应说明这次是刷新')
+    // Existing profiles must go through the validated transaction, never an in-place overwrite.
+    await assert.rejects(
+      materializeSeedHome({
+        seedHome: seed,
+        home,
+        profileName: 'web',
+        dshDir,
+        seedIdentity: 'v2',
+        refresh: true
+      }),
+      /ensureManagedPlugins/
+    )
+    assert.equal(readFileSync(dest, 'utf8'), 'OLD CONTENT\n')
   } finally {
     rmSync(root, { recursive: true, force: true })
   }
@@ -237,11 +266,65 @@ test('跨卷判据：EXDEV 与不支持硬链接的错误码都被识别', () =>
   assert.equal(isCrossDevice(new Error('x')), false)
 
   for (const code of ['EPERM', 'ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EINVAL', 'UNKNOWN']) {
-    assert.equal(isLinkUnsupported(Object.assign(new Error('x'), { code })), true, `${code} 应视为不支持硬链接`)
+    assert.equal(
+      isLinkUnsupported(Object.assign(new Error('x'), { code })),
+      true,
+      `${code} 应视为不支持硬链接`
+    )
   }
   assert.equal(isLinkUnsupported(Object.assign(new Error('x'), { code: 'EXDEV' })), false)
 })
 
+test('首次准备在任何清单写入前拒绝外部 profile 和 node_modules 目录链接', async () => {
+  for (const linked of ['profile', 'modules']) {
+    const root = mkdtempSync(join(tmpdir(), 'dshpx-seed-owned-'))
+    try {
+      const dshDir = join(root, 'dsh'),
+        home = join(root, 'home'),
+        external = join(root, 'external')
+      mkdirSync(dshDir)
+      mkdirSync(external)
+      const seedHome = makeSeed(root, dshDir)
+      const parent = join(home, 'profiles', ...(linked === 'modules' ? ['web'] : []))
+      mkdirSync(parent, { recursive: true })
+      symlinkSync(
+        external,
+        join(parent, linked === 'profile' ? 'web' : 'node_modules'),
+        process.platform === 'win32' ? 'junction' : 'dir'
+      )
+      await assert.rejects(
+        materializeSeedHome({ home, seedHome, profileName: 'web', dshDir }),
+        /保留用户目录/
+      )
+      assert.equal(statSync(join(external, 'cordis.yml'), { throwIfNoEntry: false }), undefined)
+      assert.equal(statSync(join(home, '.dsh-px-materialized'), { throwIfNoEntry: false }), undefined)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  }
+})
+
+test('首启续传修复截断和等长损坏的包文件，保留用户清单且不发布临时文件', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'dshpx-seed-resume-'))
+  try {
+    const dshDir = join(root, 'dsh'),
+      home = join(root, 'home')
+    mkdirSync(dshDir)
+    const seedHome = makeSeed(root, dshDir)
+    const rel = 'profiles/web/node_modules/a-real-plugin/index.js'
+    mkdirSync(join(home, 'profiles/web/node_modules/a-real-plugin'), { recursive: true })
+    writeFileSync(join(home, '.dsh-px-seed-claimed'), 'incomplete first preparation')
+    writeFileSync(join(home, 'profiles/web/package.json'), '{"name":"user-preserved"}')
+    const original = readFileSync(join(seedHome, rel), 'utf8')
+    writeFileSync(join(home, rel), 'X'.repeat(original.length))
+    await materializeSeedHome({ home, seedHome, profileName: 'web', dshDir })
+    assert.equal(readFileSync(join(home, rel), 'utf8'), original)
+    assert.equal(readFileSync(join(home, 'profiles/web/package.json'), 'utf8'), '{"name":"user-preserved"}')
+    assert.match(readFileSync(join(home, '.dsh-px-materialized'), 'utf8'), /materialized/)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
 
 test('刷新保留模型配置、凭据、插件清单和第三方版本，不混入旧文件', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dshpx-preserve-'))
@@ -251,7 +334,14 @@ test('刷新保留模型配置、凭据、插件清单和第三方版本，不�
     const seed = makeSeed(root, dshDir)
     const home = join(root, 'home')
     await materializeSeedHome({ seedHome: seed, home, profileName: 'web', dshDir })
-    const files = ['settings.yaml', '.credentials.yaml', 'profiles/web/package.json', 'profiles/web/cordis.patch.yml', 'profiles/web/cordis.yml', 'profiles/web/pnpm-lock.yaml']
+    const files = [
+      'settings.yaml',
+      '.credentials.yaml',
+      'profiles/web/package.json',
+      'profiles/web/cordis.patch.yml',
+      'profiles/web/cordis.yml',
+      'profiles/web/pnpm-lock.yaml'
+    ]
     for (const file of files) {
       writeFileSync(join(seed, file), 'SEED')
       writeFileSync(join(home, file), 'USER CONFIG')
@@ -260,13 +350,20 @@ test('刷新保留模型配置、凭据、插件清单和第三方版本，不�
     rmSync(dep)
     writeFileSync(dep, 'USER VERSION')
     writeFileSync(join(seed, 'profiles/web/node_modules/a-real-plugin/old-extra.js'), 'STALE')
-    await materializeSeedHome({ seedHome: seed, home, profileName: 'web', dshDir, refresh: true })
+    await assert.rejects(
+      materializeSeedHome({ seedHome: seed, home, profileName: 'web', dshDir, refresh: true }),
+      /ensureManagedPlugins/
+    )
     for (const file of files) assert.equal(readFileSync(join(home, file), 'utf8'), 'USER CONFIG')
     assert.equal(readFileSync(dep, 'utf8'), 'USER VERSION')
-    assert.equal(statSync(join(home, 'profiles/web/node_modules/a-real-plugin/old-extra.js'), { throwIfNoEntry: false }), undefined)
-  } finally { rmSync(root, { recursive: true, force: true }) }
+    assert.equal(
+      statSync(join(home, 'profiles/web/node_modules/a-real-plugin/old-extra.js'), { throwIfNoEntry: false }),
+      undefined
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })
-
 
 test('pnpm 路径迁移使用独立写入，保留种子与用户自定义 store', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dshpx-pnpm-'))
@@ -276,7 +373,10 @@ test('pnpm 路径迁移使用独立写入，保留种子与用户自定义 store
     const seedHome = makeSeed(root, dshDir)
     const home = join(root, 'home')
     const rel = 'profiles/web/node_modules/.modules.yaml'
-    const original = JSON.stringify({ virtualStoreDir: join(seedHome, 'profiles/web/node_modules/.pnpm'), storeDir: 'KEEP' })
+    const original = JSON.stringify({
+      virtualStoreDir: join(seedHome, 'profiles/web/node_modules/.pnpm'),
+      storeDir: 'KEEP'
+    })
     writeFileSync(join(seedHome, rel), original)
     await materializeSeedHome({ seedHome, home, profileName: 'web', dshDir })
     const updated = JSON.parse(readFileSync(join(home, rel), 'utf8'))
@@ -285,11 +385,19 @@ test('pnpm 路径迁移使用独立写入，保留种子与用户自定义 store
     assert.equal(readFileSync(join(seedHome, rel), 'utf8'), original)
     const alias = join(root, 'home-alias')
     symlinkSync(home, alias, process.platform === 'win32' ? 'junction' : 'dir')
-    writeFileSync(join(home, rel), JSON.stringify({ virtualStoreDir: join(alias, 'profiles/web/node_modules/.pnpm') }))
+    writeFileSync(
+      join(home, rel),
+      JSON.stringify({ virtualStoreDir: join(alias, 'profiles/web/node_modules/.pnpm') })
+    )
     assert.equal(repairPnpmMetadata({ seedHome, home: alias, profileName: 'web' }), true)
-    assert.equal(JSON.parse(readFileSync(join(home, rel), 'utf8')).virtualStoreDir, join(realpathSync.native(home), 'profiles/web/node_modules/.pnpm'))
+    assert.equal(
+      JSON.parse(readFileSync(join(home, rel), 'utf8')).virtualStoreDir,
+      join(realpathSync.native(home), 'profiles/web/node_modules/.pnpm')
+    )
     writeFileSync(join(home, rel), 'virtualStoreDir: custom-store\n')
     assert.equal(repairPnpmMetadata({ seedHome, home, profileName: 'web' }), false)
     assert.equal(readFileSync(join(home, rel), 'utf8'), 'virtualStoreDir: custom-store\n')
-  } finally { rmSync(root, { recursive: true, force: true }) }
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
 })

@@ -96,6 +96,120 @@ function rejectUntrustedRequest(req, res) {
   return true;
 }
 
+// packages/dsh-px-taskflow/src/command-guidance.ts
+import { createHash } from "node:crypto";
+import { win32 } from "node:path";
+var validMode = (value) => typeof value === "string" && ["read-only", "workspace-write", "danger-full-access"].includes(value);
+function hasWindowsChildPipeFailure(text) {
+  const exit = /\[exit code: (-?\d+)\]\s*$/.exec(text);
+  return /\bspawn(?:Sync)? EPERM\b/.test(text) && /node:(?:internal\/)?child_process/.test(text) && Boolean(exit && Number.isSafeInteger(Number(exit[1])) && Number(exit[1]) !== 0);
+}
+function capture(args, seq, mode) {
+  const candidate = {
+    seq,
+    mode: validMode(args.sandbox_permissions) ? args.sandbox_permissions : mode,
+    chars: 0
+  };
+  if (typeof args.command === "string" && args.command.length <= 2e4)
+    candidate.commandKey = "command:" + createHash("sha256").update(args.command).digest("hex");
+  if (typeof args.command !== "string" || !args.command.trim() || args.command.length > 2e4 || typeof args.workdir !== "string" || args.workdir.length > 4096 || !/^(?:[a-z]:[\\/]|\\\\[^\\/]+[\\/])/i.test(args.workdir) || args.run_in_background === true)
+    return candidate;
+  if (args.timeoutMs !== void 0 && (typeof args.timeoutMs !== "number" || !Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0))
+    return candidate;
+  candidate.request = {
+    command: args.command,
+    workdir: args.workdir,
+    ...args.timeoutMs === void 0 ? {} : { timeoutMs: args.timeoutMs }
+  };
+  candidate.key = createHash("sha256").update(win32.normalize(args.workdir).toLowerCase() + "\0" + args.command).digest("hex");
+  candidate.chars = args.command.length + args.workdir.length;
+  return candidate;
+}
+var CommandGuidanceIndex = class {
+  pending = /* @__PURE__ */ new Map();
+  failures = /* @__PURE__ */ new Map();
+  approvals = /* @__PURE__ */ new Map();
+  blocked = /* @__PURE__ */ new Set();
+  returned = /* @__PURE__ */ new Map();
+  mode;
+  approval;
+  chars = 0;
+  get cacheCost() {
+    return this.chars * 2 + (this.pending.size + this.failures.size + this.approvals.size + this.blocked.size + this.returned.size) * 160;
+  }
+  observe(type, data) {
+    if (type === "sandbox/mode" && validMode(data.mode)) this.mode = data.mode;
+    if (type === "approval/policy" && ["ask", "never"].includes(data.policy)) this.approval = data.policy;
+    if (type === "approval/asked" && data.toolName === "pwsh" && typeof data.id === "string") {
+      const candidate = this.pending.get(data.callId) ?? this.failures.get(data.callId);
+      if (candidate?.key || candidate?.commandKey)
+        this.approvals.set(data.id, {
+          key: candidate.key ?? candidate.commandKey,
+          commandKey: candidate.commandKey
+        });
+    }
+    if (type === "approval/decided") {
+      const approval = this.approvals.get(data.id);
+      if (approval) {
+        if (["rejected", "cancelled", "unavailable"].includes(data.outcome)) this.blocked.add(approval.key);
+        else if (data.outcome === "allowed-once") {
+          this.blocked.delete(approval.key);
+          if (approval.commandKey) this.blocked.delete(approval.commandKey);
+        }
+        this.approvals.delete(data.id);
+      }
+    }
+    if (["turn/start", "turn/end", "session/end-seed"].includes(type)) {
+      for (const candidate of this.pending.values()) this.chars -= candidate.chars;
+      this.pending.clear();
+      this.approvals.clear();
+    }
+  }
+  start(id, tool, args, seq) {
+    for (const map of [this.pending, this.failures]) {
+      const old = map.get(id);
+      if (old) this.chars -= old.chars;
+      map.delete(id);
+    }
+    if (tool !== "pwsh" || !args || typeof args !== "object") return;
+    const candidate = capture(args, seq, this.mode);
+    this.pending.set(id, candidate);
+    this.chars += candidate.chars;
+  }
+  finish(id, outcome, text) {
+    const candidate = this.pending.get(id);
+    if (!candidate) return;
+    this.pending.delete(id);
+    if (outcome === "error" && hasWindowsChildPipeFailure(text)) this.failures.set(id, candidate);
+    else {
+      this.chars -= candidate.chars;
+      if (outcome === "returned" && candidate.key) this.returned.set(candidate.key, candidate.seq);
+    }
+  }
+  guidance(id, platform = process.platform) {
+    const candidate = this.failures.get(id);
+    if (!candidate || platform !== "win32") return void 0;
+    const guide = {
+      kind: "windows-child-pipe",
+      message: "\u8BB0\u5F55\u5305\u542B\u975E\u96F6\u9000\u51FA\u6807\u8BB0\u548C spawn EPERM\u3002Windows \u53D7\u9650\u73AF\u5883\u4E0D\u652F\u6301\u90E8\u5206\u5B50\u8FDB\u7A0B\u547D\u540D\u7BA1\u9053\u64CD\u4F5C\uFF0C\u9ED8\u8BA4 Node \u6D4B\u8BD5\u7B49\u547D\u4EE4\u53EF\u80FD\u5728\u8FD0\u884C\u65AD\u8A00\u524D\u505C\u6B62\u3002\u4E00\u6B21\u6027\u6279\u51C6\u8DEF\u5F84\u4ECD\u7531 DSH \u539F\u751F\u5BA1\u6279\u5904\u7406\u3002"
+    };
+    if (!candidate.request)
+      guide.unavailableReason = "\u8BB0\u5F55\u7F3A\u5C11\u5B8C\u6574\u539F\u547D\u4EE4\u6216\u660E\u786E\u5DE5\u4F5C\u76EE\u5F55\uFF0C\u4E0D\u80FD\u4ECE\u6458\u8981\u81EA\u52A8\u51C6\u5907\u91CD\u8BD5\u3002";
+    else if (candidate.key && this.blocked.has(candidate.key) || candidate.commandKey && this.blocked.has(candidate.commandKey))
+      guide.unavailableReason = "\u8BE5\u547D\u4EE4\u7684\u5BA1\u6279\u5DF2\u88AB\u62D2\u7EDD\u3001\u53D6\u6D88\u6216\u672A\u5B8C\u6210\uFF0C\u4FDD\u6301\u505C\u6B62\uFF1B\u4E0D\u4F1A\u7EE7\u7EED\u5EFA\u8BAE\u6388\u6743\u91CD\u8BD5\u3002";
+    else if (candidate.key && (this.returned.get(candidate.key) ?? -1) > candidate.seq)
+      guide.unavailableReason = "\u4E4B\u540E\u5DF2\u6709\u540C\u547D\u4EE4\u6B63\u5E38\u8FD4\u56DE\u7684\u8BB0\u5F55\uFF0C\u8BF7\u5148\u6838\u5BF9\u540E\u7EED\u7ED3\u679C\uFF0C\u907F\u514D\u91CD\u590D\u6267\u884C\u3002";
+    else if (!candidate.mode || !["read-only", "workspace-write"].includes(candidate.mode))
+      guide.unavailableReason = "\u65E0\u6CD5\u786E\u8BA4\u8BE5\u8C03\u7528\u5904\u4E8E\u53D7\u9650\u6A21\u5F0F\uFF1B\u6B64\u9519\u8BEF\u4E0D\u80FD\u76F4\u63A5\u4F5C\u4E3A\u6269\u5927\u6743\u9650\u7684\u4F9D\u636E\u3002";
+    else if (!this.mode || !["read-only", "workspace-write"].includes(this.mode))
+      guide.unavailableReason = "\u5F53\u524D\u4F1A\u8BDD\u4E0D\u5904\u4E8E\u53EF\u786E\u8BA4\u7684\u53D7\u9650\u6A21\u5F0F\uFF0C\u4E0D\u51C6\u5907\u91CD\u590D\u6269\u5927\u6743\u9650\u8BF7\u6C42\u3002";
+    else if (this.approval !== "ask")
+      guide.unavailableReason = "\u5F53\u524D\u4F1A\u8BDD\u672A\u542F\u7528\u53EF\u786E\u8BA4\u7684\u5BA1\u6279\u6A21\u5F0F\uFF0C\u4FDD\u6301\u547D\u4EE4\u505C\u6B62\u3002";
+    else guide.request = { ...candidate.request };
+    return guide;
+  }
+};
+
 // packages/dsh-px-taskflow/src/evidence.ts
 var reads = /* @__PURE__ */ new Set([
   "read",
@@ -166,72 +280,132 @@ function resultStatus(tool, text, isError) {
   }
   return { outcome: "returned", outcomeSource: "tool" };
 }
-function foldEvents(events, live) {
-  const calls = /* @__PURE__ */ new Map();
-  const pending = /* @__PURE__ */ new Set();
-  let checkpoint = null;
-  let activeTurn = false;
-  for (const event of events) {
-    const data = event.data ?? {};
-    if (["turn/start", "turn/end", "session/end-seed"].includes(event.type)) {
-      const cancelled = event.type === "turn/end" && data.reason?.kind === "aborted" && data.reason?.reason?.kind === "user";
-      for (const call of pending) {
-        call.outcome = cancelled ? "cancelled" : "interrupted";
-        call.outcomeSource = "turn";
+function emptyFold() {
+  return {
+    commands: new CommandGuidanceIndex(),
+    calls: /* @__PURE__ */ new Map(),
+    relevant: [],
+    checkpoint: null,
+    pending: /* @__PURE__ */ new Set(),
+    activeTurn: false,
+    changedFiles: /* @__PURE__ */ new Map(),
+    changedFileSet: /* @__PURE__ */ new Set(),
+    lastNonReadSeq: -1
+  };
+}
+var EvidenceIndex = class {
+  folded = emptyFold();
+  count = 0;
+  first;
+  last;
+  retainedChars = 0;
+  processedEvents = 0;
+  get cacheCost() {
+    return this.retainedChars * 2 + this.folded.calls.size * 256 + this.folded.commands.cacheCost;
+  }
+  update(events) {
+    if (events.length < this.count || this.count > 0 && (events[0] !== this.first || events[this.count - 1] !== this.last)) {
+      this.folded = emptyFold();
+      this.count = 0;
+      this.retainedChars = 0;
+    }
+    const { calls, pending, relevant } = this.folded;
+    for (let i = this.count; i < events.length; i++) {
+      const event = events[i];
+      this.processedEvents++;
+      const data = event.data ?? {};
+      this.folded.commands.observe(event.type, data);
+      if (["turn/start", "turn/end", "session/end-seed"].includes(event.type)) {
+        const cancelled = event.type === "turn/end" && data.reason?.kind === "aborted" && data.reason?.reason?.kind === "user";
+        for (const call of pending) {
+          call.outcome = cancelled ? "cancelled" : "interrupted";
+          call.outcomeSource = "turn";
+        }
+        pending.clear();
+        this.folded.activeTurn = event.type === "turn/start";
       }
-      pending.clear();
-      activeTurn = event.type === "turn/start";
-    }
-    if (event.type === "tool/call" || event.type === "tool/ptc-dispatch-start") {
-      const raw = typeof data.arguments === "string" ? parse(data.arguments) : data.arguments;
-      const args = raw && typeof raw === "object" ? raw : {};
-      const id = data.callId ?? data.subCallId;
-      if (typeof id !== "string" || typeof data.name !== "string") continue;
-      const effect = effectOf(data.name, args);
-      const previous = calls.get(id);
-      if (previous) pending.delete(previous);
-      const call = {
-        id,
-        seq: event.seq,
-        tool: data.name,
-        input: clip(args.command ?? args.description ?? args.path ?? args.file_path ?? "", 1200),
-        file: effect === "write" ? clip(args.path ?? args.file_path, 1e3) || null : null,
-        effect,
-        outcome: "running",
-        outcomeSource: "pending",
-        output: "",
-        outputLength: 0,
-        outputTruncated: false,
-        time: event.time,
-        durationMs: null
-      };
-      calls.set(id, call);
-      pending.add(call);
-    }
-    if (event.type === "tool/result" || event.type === "tool/ptc-dispatch") {
-      const blocks = event.type === "tool/result" ? (data.message?.content ?? []).filter((b) => b.type === "tool-result") : [data];
-      for (const block of blocks) {
-        const call = calls.get(block.toolCallId ?? data.subCallId);
-        if (!call) continue;
-        const text = (block.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
-        Object.assign(call, resultStatus(call.tool, text, block.isError === true));
-        pending.delete(call);
-        call.output = text;
-        call.outputLength = text.length;
-        call.durationMs = Math.max(0, event.time - call.time);
-        if (call.tool === "task_checkpoint" && call.outcome === "returned") {
-          const value = readCheckpoint(parse(text).checkpoint);
-          if (value) checkpoint = { ...value, seq: event.seq, time: event.time };
+      if (event.type === "tool/call" || event.type === "tool/ptc-dispatch-start") {
+        const raw = typeof data.arguments === "string" ? parse(data.arguments) : data.arguments;
+        const args = raw && typeof raw === "object" ? raw : {};
+        const id = data.callId ?? data.subCallId;
+        if (typeof id !== "string" || typeof data.name !== "string") continue;
+        const effect = effectOf(data.name, args);
+        this.folded.commands.start(id, data.name, args, event.seq);
+        const previous = calls.get(id);
+        if (previous) {
+          pending.delete(previous);
+          this.retainedChars -= previous.input.length + previous.outputLength;
+          const oldIndex = relevant.indexOf(previous);
+          if (oldIndex >= 0) relevant.splice(oldIndex, 1);
+        }
+        const call = {
+          id,
+          seq: event.seq,
+          tool: data.name,
+          input: clip(args.command ?? args.description ?? args.path ?? args.file_path ?? "", 1200),
+          file: effect === "write" ? clip(args.path ?? args.file_path, 1e3) || null : null,
+          effect,
+          outcome: "running",
+          outcomeSource: "pending",
+          output: "",
+          outputLength: 0,
+          outputTruncated: false,
+          time: event.time,
+          durationMs: null
+        };
+        calls.set(id, call);
+        if (!internal.has(call.tool)) {
+          relevant.push(call);
+          if (call.effect !== "read") this.folded.lastNonReadSeq = call.seq;
+        }
+        this.retainedChars += call.input.length;
+        pending.add(call);
+      }
+      if (event.type === "tool/result" || event.type === "tool/ptc-dispatch") {
+        const blocks = event.type === "tool/result" ? (data.message?.content ?? []).filter((b) => b.type === "tool-result") : [data];
+        for (const block of blocks) {
+          const call = calls.get(block.toolCallId ?? data.subCallId);
+          if (!call) continue;
+          const text = (block.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+          Object.assign(call, resultStatus(call.tool, text, block.isError === true));
+          this.folded.commands.finish(call.id, call.outcome, text);
+          pending.delete(call);
+          this.retainedChars += text.length - call.outputLength;
+          call.output = text;
+          call.outputLength = text.length;
+          call.durationMs = Math.max(0, event.time - call.time);
+          if (call.file && call.outcome === "returned") {
+            this.folded.changedFileSet.add(call.file);
+            this.folded.changedFiles.delete(call.file);
+            this.folded.changedFiles.set(call.file, call.seq);
+            if (this.folded.changedFiles.size > 200)
+              this.folded.changedFiles.delete(this.folded.changedFiles.keys().next().value);
+          }
+          if (call.tool === "task_checkpoint" && call.outcome === "returned") {
+            const value = readCheckpoint(parse(text).checkpoint);
+            if (value) this.folded.checkpoint = { ...value, seq: event.seq, time: event.time };
+          }
         }
       }
     }
+    this.count = events.length;
+    this.first = events[0];
+    this.last = events.at(-1);
+    return this;
   }
-  if (!activeTurn || !live)
-    for (const call of pending) {
-      call.outcome = "interrupted";
-      call.outcomeSource = "turn";
-    }
-  return { calls, relevant: [...calls.values()].filter((call) => !internal.has(call.tool)), checkpoint };
+  snapshot() {
+    return this.folded;
+  }
+};
+var indexes = /* @__PURE__ */ new WeakMap();
+function foldEvents(events) {
+  if (events instanceof EvidenceIndex) return events.snapshot();
+  let index = indexes.get(events);
+  if (!index) indexes.set(events, index = new EvidenceIndex());
+  return index.update(events).snapshot();
+}
+function visibleCall(call, fold, live) {
+  return (!fold.activeTurn || !live) && fold.pending.has(call) ? { ...call, outcome: "interrupted", outcomeSource: "turn" } : call;
 }
 function summary(call) {
   return {
@@ -244,45 +418,54 @@ function summary(call) {
 function reviewEvents(events, live = true, options = {}) {
   const limit = integerOption(options.limit, 20, 1, 50);
   const before = integerOption(options.beforeSeq, Number.MAX_SAFE_INTEGER, 0, Number.MAX_SAFE_INTEGER);
-  const { relevant, checkpoint } = foldEvents(events, live);
-  const eligible = relevant.filter((call) => call.seq < before);
-  const page = eligible.slice(-limit);
+  const folded = foldEvents(events);
+  const { relevant, checkpoint } = folded;
+  let lo = 0, hi = relevant.length;
+  while (lo < hi) {
+    const mid = lo + hi >>> 1;
+    if (relevant[mid].seq < before) lo = mid + 1;
+    else hi = mid;
+  }
+  const start = Math.max(0, lo - limit), page = relevant.slice(start, lo);
   return {
     checkpoint,
-    executions: page.map(summary),
-    referencedExecutions: checkpoint ? relevant.filter((call) => checkpoint.evidence.includes(call.id)).map(summary) : [],
+    executions: page.map((call) => summary(visibleCall(call, folded, live))),
+    referencedExecutions: checkpoint ? checkpoint.evidence.flatMap((id) => {
+      const call = folded.calls.get(id);
+      return call && !internal.has(call.tool) ? [summary(visibleCall(call, folded, live))] : [];
+    }) : [],
     total: relevant.length,
-    truncated: eligible.length > page.length,
-    nextBeforeSeq: eligible.length > page.length ? page[0].seq : null,
-    changedFiles: [
-      ...new Set(
-        relevant.filter((call) => call.file && call.outcome === "returned").map((call) => call.file)
-      )
-    ].slice(-200),
-    checkpointStale: Boolean(
-      checkpoint && relevant.some((call) => call.seq > checkpoint.seq && call.effect !== "read")
-    )
+    truncated: start > 0,
+    nextBeforeSeq: start > 0 ? page[0].seq : null,
+    changedFiles: [...folded.changedFiles.keys()],
+    changedFilesTotal: folded.changedFileSet.size,
+    changedFilesTruncated: folded.changedFileSet.size > folded.changedFiles.size,
+    checkpointStale: Boolean(checkpoint && folded.lastNonReadSeq > checkpoint.seq)
   };
 }
 function evidenceDetail(events, id, live = true, options = {}) {
   if (typeof id !== "string" || !id || id.length > 200) throw new Error("\u6267\u884C\u7F16\u53F7\u65E0\u6548");
   const offset = integerOption(options.offset, 0, 0, Number.MAX_SAFE_INTEGER);
   const size = integerOption(options.maxChars, 4e3, 1, 8e3);
-  const call = foldEvents(events, live).relevant.find((call2) => call2.id === id);
-  if (!call) return null;
+  const folded = foldEvents(events);
+  const source = folded.calls.get(id);
+  if (!source || internal.has(source.tool)) return null;
+  const call = visibleCall(source, folded, live);
   const next = offset + size < call.outputLength ? offset + size : null;
+  const commandGuidance = folded.commands.guidance(id);
   return {
     ...call,
     output: call.output.slice(offset, offset + size),
     outputOffset: offset,
     outputTruncated: offset > 0 || next !== null,
-    nextOutputOffset: next
+    nextOutputOffset: next,
+    ...commandGuidance ? { commandGuidance } : {}
   };
 }
 function validateCheckpoint(args, events) {
   const checkpoint = readCheckpoint(args);
   if (!checkpoint) throw new Error("\u4EFB\u52A1\u8BB0\u5F55\u683C\u5F0F\u65E0\u6548\uFF1B\u8FDB\u884C\u4E2D\u6216\u963B\u585E\u65F6\u5FC5\u987B\u586B\u5199\u4E0B\u4E00\u6B65\u3002");
-  const { calls } = foldEvents(events, true);
+  const { calls } = foldEvents(events);
   for (const id of checkpoint.evidence) {
     const call = calls.get(id);
     if (!call || internal.has(call.tool) || !["returned", "error"].includes(call.outcome))
@@ -297,8 +480,7 @@ function validateCheckpoint(args, events) {
 var name = "dsh-px-taskflow";
 var inject = [];
 var DEFAULTS = { routePrefix: "/dsh-px-taskflow" };
-var POLICY = `You are working inside DSH-PX, a local agent product. Respond in the user's language; for Chinese requests, write progress and final delivery in Chinese. For non-trivial implementation tasks, carry the work through inspection, implementation, relevant validation, and a reviewable delivery. Read repository instructions, inspect existing changes, and preserve unrelated work. Use the host's todo, file, shell, permission, and delivery tools; obey plan mode and user instructions. Do not invent a separate execution or approval mechanism.
-For a multi-step implementation task, record the goal and next action with task_checkpoint. On resuming or being asked for progress, call task_review to recover the latest checkpoint and compact execution summaries. Follow nextBeforeSeq to page older calls. Use task_evidence with a callId to read its recorded output in bounded pages; a summary may omit essential test output. Before final delivery, inspect the changes with the existing Git/file tools, run the relevant checks, then call task_review and record a ready_for_review checkpoint referencing actual call ids. Any settled non-internal call in this session may be cited, including older pages. Tool return success does not prove tests passed: read the output and state what was and was not verified. If blocked, record the concrete blocker and next action. Never retry a possibly mutating interrupted call blindly; reconcile its effect first. Skip checkpoints for simple questions or trivial edits. A checkpoint is a work note, not user approval or permission to continue autonomously in the background.`;
+var POLICY = `Execution evidence is recorded automatically by the host. When prior results are needed, task_review reads compact execution summaries and task_evidence reads a recorded call's output in bounded pages; neither tool re-executes work. Tool return success does not prove tests passed: inspect the output and state what was verified. Follow the host's native plan, permissions, and the user's instructions. task_checkpoint is an optional work note only when the user requests a saved handoff or a task preset calls for it; do not create or maintain a second todo system by default. A checkpoint is not approval or permission to continue in the background. Before retrying an interrupted mutation, reconcile its recorded effect.`;
 function queryInteger(params, key, fallback, min, max) {
   if (!params.has(key)) return fallback;
   const value = params.get(key);
@@ -306,6 +488,22 @@ function queryInteger(params, key, fallback, min, max) {
   return integerOption(Number(value), fallback, min, max);
 }
 function apply(ctx) {
+  const liveIndexes = /* @__PURE__ */ new Map();
+  ctx.effect(() => () => liveIndexes.clear(), "taskflow: evidence cache");
+  const liveEvidence = (session) => {
+    let index = liveIndexes.get(session);
+    if (!index) index = new EvidenceIndex();
+    index.update(session.snapshotEvents());
+    liveIndexes.delete(session);
+    liveIndexes.set(session, index);
+    let chars = [...liveIndexes.values()].reduce((sum, item) => sum + item.cacheCost, 0);
+    while (liveIndexes.size > 8 || chars > 16e6) {
+      const oldest = liveIndexes.keys().next().value;
+      chars -= liveIndexes.get(oldest).cacheCost;
+      liveIndexes.delete(oldest);
+    }
+    return index;
+  };
   ctx.inject(["systemPrompt"], (host) => {
     host.effect(
       () => host.systemPrompt.section({ name: "dsh-px-delivery-workflow", order: 9900, text: POLICY }),
@@ -334,7 +532,7 @@ function apply(ctx) {
         additionalProperties: false
       },
       output,
-      execute: async (args, exec) => JSON.stringify(reviewEvents(session(exec).snapshotEvents(), true, args))
+      execute: async (args, exec) => JSON.stringify(reviewEvents(liveEvidence(session(exec)), true, args))
     });
     host.tools.register({
       name: "task_evidence",
@@ -351,7 +549,7 @@ function apply(ctx) {
       },
       output,
       execute: async (args, exec) => {
-        const value = evidenceDetail(session(exec).snapshotEvents(), args.callId, true, args);
+        const value = evidenceDetail(liveEvidence(session(exec)), args.callId, true, args);
         if (!value) throw new Error("\u6B64\u4F1A\u8BDD\u6CA1\u6709\u8FD9\u6761\u6267\u884C\u8BB0\u5F55\uFF0C\u8BF7\u5148 task_review \u6838\u5BF9\u7F16\u53F7\u3002");
         return JSON.stringify(value);
       }
@@ -372,10 +570,12 @@ function apply(ctx) {
         }
       },
       output,
-      execute: async (args, exec) => JSON.stringify({ checkpoint: validateCheckpoint(args, session(exec).snapshotEvents()) })
+      execute: async (args, exec) => JSON.stringify({ checkpoint: validateCheckpoint(args, liveEvidence(session(exec))) })
     });
   });
   ctx.inject(["webServer", "sessions", "sessionPersistence"], (host) => {
+    const coldIndexes = /* @__PURE__ */ new Map();
+    host.effect(() => () => coldIndexes.clear(), "taskflow: stored evidence cache");
     for (const kind of ["review", "evidence"])
       host.effect(
         () => host.webServer.register({
@@ -438,7 +638,17 @@ function apply(ctx) {
             };
             try {
               const live = host.sessions.get(id);
-              if (live) return respond(live.snapshotEvents(), true);
+              if (live) {
+                coldIndexes.delete(id);
+                return respond(liveEvidence(live), true);
+              }
+              const revision = (await host.sessionPersistence.stat?.(id))?.revision;
+              const cached = coldIndexes.get(id);
+              if (revision && cached && cached.revision === revision) {
+                coldIndexes.delete(id);
+                coldIndexes.set(id, cached);
+                return respond(cached.index, false);
+              }
               const handle = await host.sessionPersistence.open(id, "read");
               let events;
               let readFailed = false;
@@ -455,7 +665,19 @@ function apply(ctx) {
                   if (!readFailed) throw closeError;
                 }
               }
-              respond(events, false);
+              const index = new EvidenceIndex().update(events);
+              const after = (await host.sessionPersistence.stat?.(id))?.revision;
+              coldIndexes.delete(id);
+              if (revision && revision === after && index.cacheCost <= 16e6) {
+                coldIndexes.set(id, { revision, index });
+                let chars = [...coldIndexes.values()].reduce((sum, entry) => sum + entry.index.cacheCost, 0);
+                while (coldIndexes.size > 8 || chars > 16e6) {
+                  const oldest = coldIndexes.keys().next().value;
+                  chars -= coldIndexes.get(oldest).index.cacheCost;
+                  coldIndexes.delete(oldest);
+                }
+              }
+              respond(index, false);
             } catch (error) {
               const failure = readFailure(error);
               send(failure.status, failure);
@@ -468,6 +690,7 @@ function apply(ctx) {
 }
 export {
   DEFAULTS,
+  POLICY,
   apply,
   inject,
   name,
