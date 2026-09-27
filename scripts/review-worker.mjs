@@ -36,6 +36,141 @@ export function acquireReviewLock(directory) {
   }
 }
 
+export const reviewRunKey = (run) => `${run.id}-${run.run_attempt ?? 1}`
+
+/** Only a complete branch inventory may prove that a push's branch was deleted. */
+export async function readBranchHeads(api, repository) {
+  const heads = new Map()
+  for (let page = 1; page <= 100; page++) {
+    const branches = await api(`repos/${repository}/branches?per_page=100&page=${page}`)
+    if (!Array.isArray(branches)) throw new Error('Invalid branch inventory')
+    for (const branch of branches) {
+      if (typeof branch.name !== 'string' || !branch.name) throw new Error('Invalid branch identity')
+      heads.set(branch.name, sha(branch.commit?.sha))
+    }
+    if (branches.length < 100) return heads
+  }
+  throw new Error('Active branch audit limit reached')
+}
+
+/** Branch identity matters: the same SHA on another branch does not keep an old push current. */
+function obsoletePush(run, branchHeads) {
+  if (run.event !== 'push') return null
+  if (typeof run.head_branch !== 'string' || !run.head_branch) throw new Error('Invalid push branch')
+  const head = sha(run.head_sha)
+  const currentHead = branchHeads.get(run.head_branch)
+  if (currentHead === undefined) return { head, currentHead: null, reason: 'branch-deleted' }
+  if (sha(currentHead) !== head) return { head, currentHead, reason: 'head-superseded' }
+  return null
+}
+
+function retireReviewRun(state, run, obsolete, now) {
+  const key = reviewRunKey(run),
+    previous = state[key]
+  if (
+    previous?.obsolete &&
+    previous.obsoleteReason === obsolete.reason &&
+    previous.observedHead === obsolete.currentHead &&
+    previous.integratedInto === obsolete.integratedInto
+  )
+    return
+  state[key] = {
+    complete: true,
+    obsolete: true,
+    obsoleteReason: obsolete.reason,
+    branch: run.head_branch,
+    head: obsolete.head,
+    observedHead: obsolete.currentHead,
+    ...(obsolete.integratedInto ? { integratedInto: obsolete.integratedInto } : {}),
+    settledAt: now,
+    priorState: previous?.obsolete ? previous.priorState : previous
+  }
+}
+
+/** Retire obsolete pushes before applying the job budget; retirement is not a review verdict. */
+export function selectReviewRuns(runs, state, branchHeads, { rerun, now = Date.now() } = {}) {
+  for (const run of runs) {
+    if (run.conclusion !== 'success' || (rerun && String(run.id) !== rerun)) continue
+    const key = reviewRunKey(run),
+      previous = state[key]
+    if (!rerun && previous?.complete && !previous.monitorQuality) continue
+    const obsolete = obsoletePush(run, branchHeads)
+    if (!obsolete) continue
+    retireReviewRun(state, run, obsolete, now)
+  }
+  return runs
+    .filter(
+      (run) =>
+        run.conclusion === 'success' &&
+        !obsoletePush(run, branchHeads) &&
+        (rerun
+          ? String(run.id) === rerun
+          : (!state[reviewRunKey(run)]?.complete || state[reviewRunKey(run)]?.monitorQuality) &&
+            (state[reviewRunKey(run)]?.retryAt ?? 0) <= now)
+    )
+    .sort(
+      (a, b) =>
+        Number(Boolean(state[reviewRunKey(a)]?.monitorQuality)) -
+          Number(Boolean(state[reviewRunKey(b)]?.monitorQuality)) ||
+        (state[reviewRunKey(a)]?.retryAt ?? 0) - (state[reviewRunKey(b)]?.retryAt ?? 0) ||
+        a.id - b.id
+    )
+}
+
+/** A retained branch may already be merged. Compare immutable SHAs before it consumes a job slot. */
+export async function selectCurrentReviewRuns(api, config, runs, state, branchHeads, options = {}) {
+  const now = options.now ?? Date.now()
+  const selected = selectReviewRuns(runs, state, branchHeads, { ...options, now })
+  const current = []
+  const comparisons = new Map()
+  for (const run of selected) {
+    if (run.event === 'push' && run.head_branch !== config.branch) {
+      const head = sha(run.head_sha),
+        master = sha(branchHeads.get(config.branch))
+      if (!comparisons.has(head)) {
+        const comparison = await api(`repos/${config.repository}/compare/${head}...${master}`)
+        const mergeBase = sha(comparison?.merge_base_commit?.sha)
+        if (
+          comparison?.base_commit?.sha !== head ||
+          !['ahead', 'behind', 'diverged', 'identical'].includes(comparison.status)
+        )
+          throw new Error('Invalid push ancestry comparison')
+        let integrated = false
+        if (comparison.status === 'ahead' || comparison.status === 'identical') {
+          if (
+            mergeBase !== head ||
+            comparison.behind_by !== 0 ||
+            (comparison.status === 'identical'
+              ? head !== master || comparison.ahead_by !== 0
+              : !Number.isSafeInteger(comparison.ahead_by) || comparison.ahead_by <= 0)
+          )
+            throw new Error('Inconsistent push ancestry comparison')
+          integrated = true
+        }
+        comparisons.set(head, integrated)
+      }
+      if (comparisons.get(head)) {
+        retireReviewRun(
+          state,
+          run,
+          { head, currentHead: head, reason: 'already-integrated', integratedInto: master },
+          now
+        )
+        continue
+      }
+    }
+    current.push(run)
+  }
+  return current
+}
+
+export function pushReviewBase(request, run, branchHeads, branch) {
+  if (run.event !== 'push' || request.head !== run.head_sha) throw new Error('Push request SHA mismatch')
+  if (obsoletePush(run, branchHeads)) throw new Error('Push request is no longer current')
+  // A current default-branch push reviews against its recorded parent, never against itself.
+  return sha(run.head_branch === branch ? request.base : branchHeads.get(branch))
+}
+
 export async function reviewSnapshot(config, request, directory, invoke = runReviewBatch) {
   const mirror = join(config.directory, 'mirror.git')
   const git = (args, raw = false, binary = false) =>
@@ -153,13 +288,8 @@ async function main() {
     writeFileSync(join(root, 'empty-attributes'), '')
     const statePath = join(root, 'queue-state.json')
     const state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : {}
-    const activeHeads = new Set()
-    for (let page = 1; page <= 100; page++) {
-      const branches = await gh(`repos/${config.repository}/branches?per_page=100&page=${page}`)
-      for (const branch of branches) activeHeads.add(branch.commit.sha)
-      if (branches.length < 100) break
-      if (page === 100) throw new Error('Active branch audit limit reached')
-    }
+    const branchHeads = await readBranchHeads(gh, config.repository)
+    const activeHeads = new Set(branchHeads.values())
     for (const record of Object.values(state))
       if (record.monitorQuality && !activeHeads.has(record.head)) delete record.monitorQuality
     const saveState = () => {
@@ -167,7 +297,7 @@ async function main() {
       writeFileSync(temporary, JSON.stringify(state, null, 2), { flush: true, mode: 0o600 })
       renameSync(temporary, statePath)
     }
-    const keyOf = (run) => `${run.id}-${run.run_attempt ?? 1}`
+    const keyOf = reviewRunKey
     const rerun = process.argv.find((arg) => arg.startsWith('--rerun='))?.slice('--rerun='.length)
     const runs = []
     for (let page = 1; page <= 100; page++) {
@@ -183,22 +313,8 @@ async function main() {
         break
       if (page === 100) throw new Error('Review backlog exceeds one scan; no requests were silently dropped')
     }
-    const selected = runs
-      .filter(
-        (r) =>
-          r.conclusion === 'success' &&
-          (rerun
-            ? String(r.id) === rerun
-            : (!state[keyOf(r)]?.complete || state[keyOf(r)]?.monitorQuality) &&
-              (state[keyOf(r)]?.retryAt ?? 0) <= Date.now())
-      )
-      .sort(
-        (a, b) =>
-          Number(Boolean(state[keyOf(a)]?.monitorQuality)) -
-            Number(Boolean(state[keyOf(b)]?.monitorQuality)) ||
-          (state[keyOf(a)]?.retryAt ?? 0) - (state[keyOf(b)]?.retryAt ?? 0) ||
-          a.id - b.id
-      )
+    const selected = await selectCurrentReviewRuns(gh, config, runs, state, branchHeads, { rerun })
+    saveState() // Obsolete-only batches must also settle durably, without publishing a check.
     for (const run of selected.slice(0, Number(process.env.DSH_PX_REVIEW_MAX_JOBS ?? 1))) {
       const directory = join(root, 'jobs', keyOf(run))
       mkdirSync(directory, { recursive: true })
@@ -243,10 +359,7 @@ async function main() {
             continue
           }
           request.base = sha(pr.base.sha)
-        } else if (request.head !== run.head_sha) throw new Error('Push request SHA mismatch')
-        else if (run.head_branch !== config.branch) {
-          request.base = sha((await gh(`repos/${config.repository}/branches/${config.branch}`)).commit.sha)
-        }
+        } else request.base = pushReviewBase(request, run, branchHeads, config.branch)
         // No new shell, repository script, package lifecycle, or model credential exists in the source snapshot.
         const cachePath = join(
           root,
