@@ -163,7 +163,7 @@ write(prefix+'.stopped','stopped');process.disconnect();
     timeout: 10000,
     env: { ...process.env, NODE_OPTIONS: '', NODE_PATH: '' }
   })
-  assert.equal(stopCli.status, 0)
+  assert.equal(stopCli.status, 0, `Stop CLI failed: ${stopCli.stderr}\n${stopCli.stdout}`)
   const receipt = JSON.parse(stopCli.stdout)
   assert.equal(receipt.requested, true)
   assert.equal(receipt.instanceId, f.readState().instanceId)
