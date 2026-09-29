@@ -403,7 +403,7 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
         contextDigest: sha256(context),
         sources: identities,
         projections,
-        batches: batches.map((batch) => ({ id: batch.id, chars: batch.text.length }))
+        batches: batches.map((batch) => ({ id: batch.id, chars: batch.text.length, scope: batch.scope }))
       },
       null,
       2

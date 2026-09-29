@@ -635,7 +635,7 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
           ref: request.base,
           oid: trees.get(request.base).get(path)?.oid ?? null
         }))
-  const header = `Repository: ${request.repository}\nBase: ${request.base}\nMerge base: ${request.mergeBase}\nHead: ${request.head}\nChanged paths: ${JSON.stringify(request.names)}\nRequested-base changed roots (null oid means absent): ${JSON.stringify(baseRoots)}\nContext contract: selected source sections are complete immutable Git blobs. Any JSON-pointer projection is explicitly labelled; full changed-file bytes are still supplied. Source roles are explicit; identical blobs are printed once. External packages and computed references are not silently treated as reviewed implementations.\nExternal module references (use package.json versions; external code is not in this Git snapshot): ${JSON.stringify([...external.keys()].sort())}\nComputed module references (assess whether their targets need additional context): ${JSON.stringify(dynamic)}\n`
+  const header = `Repository: ${request.repository}\nBase: ${request.base}\nMerge base: ${request.mergeBase}\nHead: ${request.head}\nGroup change inventory (not per-batch scope): ${JSON.stringify(request.names)}\nRequested-base changed roots (null oid means absent): ${JSON.stringify(baseRoots)}\nContext contract: selected source sections are complete immutable Git blobs. Any JSON-pointer projection is explicitly labelled; all batches together supply the complete changed files; this batch supplies only its explicit ranges. Source roles are explicit; identical blobs are printed once. External packages and computed references are not silently treated as reviewed implementations.\nExternal module references (use package.json versions; external code is not in this Git snapshot): ${JSON.stringify([...external.keys()].sort())}\nComputed module references (assess whether their targets need additional context): ${JSON.stringify(dynamic)}\n`
   const text = header + context.join('\n\n')
   return {
     files,
@@ -707,7 +707,7 @@ export async function collectGroupedReview(request, reader, limits = {}, maxChar
           : []
     const snapshot = await collectReviewContext({ ...request, names: [...names] }, reader, limits, contracts)
     const context =
-      `Review contract group: ${group}\nAll changed paths in this request: ${JSON.stringify(request.names)}\nOnly the changes assigned below are this group's approval scope. Do not assume another batch approved a missing dependency.\n` +
+      `Review contract group: ${group}\nAll changed paths in this request: ${JSON.stringify(request.names)}\nThis group inventory is for navigation, not per-batch approval scope. Do not assume another batch approved a missing dependency.\n` +
       snapshot.context
     for (const file of snapshot.files) {
       const previous = files.get(file.path)
@@ -743,7 +743,7 @@ export async function collectGroupedReview(request, reader, limits = {}, maxChar
     }
   }
 }
-/** Every byte of a text change is included; large files are split, never silently dropped. */
+/** Complete source ranges are retained; Unicode pairs are never broken between model inputs. */
 export function splitBatches(files, context, maxChars = 90000) {
   if (
     !Number.isSafeInteger(maxChars) ||
@@ -752,6 +752,23 @@ export function splitBatches(files, context, maxChars = 90000) {
     context.length >= maxChars
   )
     throw new Error('Review context exceeds batch budget')
+  const endAt = (text, start, size) => {
+    let end = Math.min(text.length, start + size)
+    if (
+      end < text.length &&
+      end > start &&
+      /[\uD800-\uDBFF]/.test(text[end - 1]) &&
+      /[\uDC00-\uDFFF]/.test(text[end])
+    )
+      end++
+    return end
+  }
+  const render = (chunks) =>
+    context +
+    '\n\n' +
+    chunks.map((chunk) => chunk.text).join('\n\n') +
+    '\n\nBATCH REVIEW SCOPE (UTF-16 offsets, end exclusive): ' +
+    JSON.stringify(chunks.map((chunk) => chunk.scope))
   const chunks = []
   for (const file of files) {
     if (file.binary) throw new Error(`Binary change requires a separate verified review: ${file.path}`)
@@ -759,33 +776,52 @@ export function splitBatches(files, context, maxChars = 90000) {
       after = file.after ?? ''
     if (before.includes('\0') || after.includes('\0'))
       throw new Error(`Binary change requires a separate verified review: ${file.path}`)
-    for (let at = 0; at < Math.max(1, before.length, after.length);) {
+    let b = 0,
+      a = 0,
+      first = true
+    while (first || b < before.length || a < after.length) {
+      first = false
       let size = Math.max(
         1,
-        Math.floor((maxChars - context.length - JSON.stringify(file.path).length - 128) / 2)
+        Math.floor((maxChars - context.length - JSON.stringify(file.path).length * 2 - 512) / 2)
       )
-      const chunk = () =>
-        `FILE ${JSON.stringify(file.path)}\nBEFORE chars ${Math.min(at, before.length)}-${Math.min(before.length, at + size)}/${before.length}\n${before.slice(at, at + size)}\nAFTER chars ${Math.min(at, after.length)}-${Math.min(after.length, at + size)}/${after.length}\n${after.slice(at, at + size)}`
-      while (context.length + 2 + chunk().length > maxChars && size > 1) size = Math.floor(size / 2)
-      const text = chunk()
-      if (context.length + 2 + text.length > maxChars)
+      const make = () => {
+        const be = endAt(before, b, size),
+          ae = endAt(after, a, size)
+        return {
+          scope: { path: file.path, before: [b, be, before.length], after: [a, ae, after.length] },
+          text: `FILE ${JSON.stringify(file.path)}\nBEFORE chars ${b}-${be}/${before.length}\n${before.slice(b, be)}\nAFTER chars ${a}-${ae}/${after.length}\n${after.slice(a, ae)}`
+        }
+      }
+      let chunk = make()
+      while (render([chunk]).length > maxChars && size > 1) {
+        size = Math.floor(size / 2)
+        chunk = make()
+      }
+      if (render([chunk]).length > maxChars)
         throw new Error('Review context leaves no complete change chunk within batch budget')
-      chunks.push(text)
-      at += size
+      chunks.push(chunk)
+      b = chunk.scope.before[1]
+      a = chunk.scope.after[1]
     }
   }
   if (!chunks.length) throw new Error('No reviewable changes')
   const batches = []
-  let text = context
-  for (const chunk of chunks) {
-    if (text.length + 2 + chunk.length > maxChars && text !== context) {
-      batches.push(text)
-      text = context
-    }
-    text += '\n\n' + chunk
+  let pending = []
+  const emit = () => {
+    const text = render(pending)
+    if (text.length > maxChars) throw new Error('Review batch exceeds its complete output budget')
+    batches.push({
+      id: `batch-${batches.length + 1}-${sha256(text).slice(0, 12)}`,
+      text,
+      scope: pending.map((chunk) => chunk.scope)
+    })
+    pending = []
   }
-  if (text !== context) batches.push(text)
-  if (batches.some((batch) => batch.length > maxChars))
-    throw new Error('Review batch exceeds its complete output budget')
-  return batches.map((text, i) => ({ id: `batch-${i + 1}-${sha256(text).slice(0, 12)}`, text }))
+  for (const chunk of chunks) {
+    if (pending.length && render([...pending, chunk]).length > maxChars) emit()
+    pending.push(chunk)
+  }
+  if (pending.length) emit()
+  return batches
 }

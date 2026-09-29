@@ -246,8 +246,9 @@ test('large sources are fully split; invalid UTF8, NUL and binary changes cannot
 })
 test('a stale prior pass cannot replace this invocation failure or missing output', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'review-fresh-output-'))
-  const passing = result('one'),
-    failing = result('one', {
+  const batch = core.splitBatches([{ path: 'fixture.ts', before: '', after: 'fixture' }], 'context')[0]
+  const passing = result(batch.id),
+    failing = result(batch.id, {
       verdict: 'fail',
       findings: [{ priority: 1, path: 'x', line: 1, title: 'Bug', detail: 'Broken' }]
     })
@@ -257,9 +258,22 @@ test('a stale prior pass cannot replace this invocation failure or missing outpu
     '\n' +
     JSON.stringify({ type: 'turn.completed' })
   const config = { codex: 'fixture-only', codexOverrides: [], codexEnvKeys: [] },
-    request = { head, base },
-    batch = { id: 'one', text: 'fixture' }
+    request = { head, base }
   try {
+    for (const invalid of [
+      { ...batch, scope: undefined },
+      { ...batch, scope: [] },
+      { ...batch, scope: [{ path: 'other.ts', before: [0, 0, 0], after: [0, 7, 7] }] },
+      { ...batch, text: batch.text + 'modified' },
+      { ...batch, id: 'wrong-digest' }
+    ]) {
+      await assert.rejects(
+        runReviewBatch(config, request, invalid, directory, async () => {
+          assert.fail('Malformed scope must be rejected before invoking reviewer')
+        }),
+        /Invalid or unbound review scope/
+      )
+    }
     await assert.rejects(
       runReviewBatch(config, request, batch, directory, async (_exe: string, args: string[]) => {
         const output = args[args.indexOf('--output-last-message') + 1]
