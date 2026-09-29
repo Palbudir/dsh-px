@@ -17,6 +17,7 @@ export interface ReleaseManifest {
   version: string
   packVersion: string
   protocolGeneration: number
+  upgradeFromGenerations: number[]
   hostVersion: string
   upstreamCommit: string
   sourceCommit: string
@@ -75,6 +76,7 @@ export function validateReleaseManifest(value: unknown): asserts value is Releas
     'version',
     'packVersion',
     'protocolGeneration',
+    'upgradeFromGenerations',
     'hostVersion',
     'upstreamCommit',
     'sourceCommit',
@@ -96,6 +98,21 @@ export function validateReleaseManifest(value: unknown): asserts value is Releas
   )
     throw new Error('更新版本与协议代际不一致')
   if (value.product === 'pack' && value.packVersion !== value.version) throw new Error('Pack 版本不一致')
+  if (
+    !Array.isArray(value.upgradeFromGenerations) ||
+    value.upgradeFromGenerations.length > 16 ||
+    value.upgradeFromGenerations.some(
+      (generation: unknown) =>
+        !Number.isSafeInteger(generation) ||
+        Number(generation) < 1 ||
+        Number(generation) > value.protocolGeneration
+    ) ||
+    new Set(value.upgradeFromGenerations).size !== value.upgradeFromGenerations.length ||
+    (value.product === 'pack'
+      ? value.upgradeFromGenerations.length !== 0
+      : !value.upgradeFromGenerations.includes(value.protocolGeneration))
+  )
+    throw new Error('更新代际迁移许可无效')
   if (value.channel === 'stable' && value.version.includes('-')) throw new Error('稳定通道不能发布预览版本')
   if (
     !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value.hostVersion) ||
@@ -187,9 +204,16 @@ export function verifySignedRelease(
   )
     throw new Error('更新签名校验失败')
   validateReleaseManifest(envelope.payload)
-  for (const field of ['product', 'channel', 'platform', 'protocolGeneration'] as const)
+  for (const field of ['product', 'channel', 'platform'] as const)
     if (envelope.payload[field] !== target[field]) throw new Error('更新清单不属于当前产品、通道或协议代际')
+  if (
+    envelope.payload.product === 'desktop'
+      ? !envelope.payload.upgradeFromGenerations.includes(target.protocolGeneration)
+      : envelope.payload.protocolGeneration !== target.protocolGeneration
+  )
+    throw new Error('更新清单未允许从当前协议代际升级')
   for (const file of envelope.payload.files) Object.freeze(file)
   Object.freeze(envelope.payload.files)
+  Object.freeze(envelope.payload.upgradeFromGenerations)
   return Object.freeze(envelope.payload)
 }

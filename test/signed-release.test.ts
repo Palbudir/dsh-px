@@ -2,7 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { generateKeyPairSync, createHash } from 'node:crypto'
 import { signRelease, verifySignedRelease, type ReleaseManifest } from '../src/shared/signed-release'
-import { SignedUpdateProvider } from '../src/main/signed-update-provider'
+import { SignedUpdateProvider, configureSignedUpdates } from '../src/main/signed-update-provider'
 const pair = generateKeyPairSync('ed25519')
 const privateKey = pair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
 const publicKey = pair.publicKey.export({ type: 'spki', format: 'pem' }).toString()
@@ -17,6 +17,7 @@ const target = {
 const manifest: ReleaseManifest = {
   schemaVersion: 1,
   ...target,
+  upgradeFromGenerations: [2],
   version: '0.2.0-beta.1',
   packVersion: '0.2.1-beta.1',
   hostVersion: '0.2.0-rc.1',
@@ -60,10 +61,43 @@ test('Electron custom provider resolves only the immutable installer from its ve
   assert.equal(provider.resolveFiles(info)[0].url.href, manifest.files[0].url)
   assert.equal(provider.resolveFiles(info)[0].info.sha512, manifest.files[0].sha512)
   assert.throws(() => provider.resolveFiles({ ...info }), /签名清单/)
-  info.version = '0.2.99'
+  Reflect.set(info, 'version', '0.2.99')
   assert.throws(() => provider.resolveFiles(info), /签名清单/)
   assert.throws(
     () => new SignedUpdateProvider({ ...configuration, url: 'https://other.example' }, {} as any, runtime)
+  )
+})
+
+test('signed updates require explicit full-installer download and never enable downgrade or web installers', () => {
+  let feed: any
+  const updater: any = {
+    setFeedURL: (options: unknown) => {
+      feed = options
+    }
+  }
+  configureSignedUpdates(updater, keys, 'preview', 2)
+  assert.equal(feed.provider, 'custom')
+  assert.equal(feed.updateProvider, SignedUpdateProvider)
+  assert.equal(updater.disableDifferentialDownload, true)
+  assert.equal(updater.disableWebInstaller, true)
+  assert.equal(updater.autoDownload, false)
+  assert.equal(updater.autoInstallOnAppQuit, false)
+  assert.equal(updater.allowDowngrade, false)
+})
+
+test('a complete Desktop upgrade can authorize an older generation without permitting mixed Pack generations', () => {
+  const future = structuredClone(manifest)
+  future.version = '0.3.0-beta.1'
+  future.packVersion = '0.3.1-beta.1'
+  future.protocolGeneration = 3
+  future.upgradeFromGenerations = [2, 3]
+  future.files[0].url = future.files[0].url.replace('desktop-v0.2.0-beta.1', 'desktop-v0.3.0-beta.1')
+  const source = JSON.stringify(signRelease(future, keyId, privateKey))
+  assert.equal(verifySignedRelease(source, keys, target).protocolGeneration, 3)
+  assert.throws(() => verifySignedRelease(source, keys, { ...target, protocolGeneration: 1 }))
+  future.upgradeFromGenerations = [3]
+  assert.throws(() =>
+    verifySignedRelease(JSON.stringify(signRelease(future, keyId, privateKey)), keys, target)
   )
 })
 test('signed metadata binds independent Pack version, exact product, channel and immutable file digests', () => {

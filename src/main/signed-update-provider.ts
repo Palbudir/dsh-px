@@ -87,4 +87,7 @@ export function configureSignedUpdates(
   updater.autoDownload = false
   updater.autoInstallOnAppQuit = false
   updater.allowDowngrade = false
+  // Only the full signed installer is selected in this protocol generation.
+  updater.disableDifferentialDownload = true
+  updater.disableWebInstaller = true
 }
