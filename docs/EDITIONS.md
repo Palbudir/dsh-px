@@ -33,3 +33,9 @@ DSH-PX 使用同一套插件提供 Agent 工作能力。Pack 是插件整合包�
 5. 完成安装、数据迁移、失败恢复及精确提交独立审查，再发布。
 
 现有发布器仍只负责 Desktop，Pack 不得经它发布或占用旧客户端读取的 Latest。独立 Pack 通道及新桌面安装策略完成前，不提升线上更新指针。历史标签与资产保持不变。
+
+## 原生 Pack 候选构建
+
+原生宿主的候选依赖固定在 [native-pack.json](../config/native-pack.json)。先运行 `npm run build:plugins`，再运行 `node scripts/run.mjs build-native-pack build-test/native-pack-candidate --candidate`；输出目录必须不存在。`--candidate` 只用于隔离验证，不表示已通过发布门禁。省略该参数时，构建器要求原生宿主版本与产品清单一致。
+
+构建器从固定来源获取侧栏插件，核对完整归档 SRI 后应用认证补丁；自制插件只复制声明的发行文件。可用 `--sidebar-archive=<文件路径>` 复用已下载归档，仍执行相同的完整性校验。生成的 tgz 可通过原生插件管理器安装。成员使用包内真实文件入口，保留各自的客户端元数据，避免首次动态启用依赖尚未刷新的嵌套包解析表。

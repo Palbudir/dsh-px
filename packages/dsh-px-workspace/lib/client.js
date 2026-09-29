@@ -95,9 +95,12 @@ window.__ModuleLoader__.load({
 		  owner: "data-dsh-px-layout-owner"
 		};
 		var hostLayoutCss = `
-		[data-dsh-px-layout-owner]{padding-top:var(--dsh-px-toolbar-height,86px);box-sizing:border-box}
+		[data-dsh-px-layout-owner]{padding-top:var(--dsh-px-toolbar-height,86px);box-sizing:border-box;grid-template-rows:minmax(0,1fr)}
 		[data-dsh-px-layout-owner][data-rightbar-fullscreen]{padding-top:0}
 		[data-dsh-px-layout-owner][data-rightbar-fullscreen] .px-bar{display:none}
+		[data-windows-titlebar] [data-dsh-px-layout-owner]{padding-top:calc(var(--dsh-windows-titlebar-height,0px) + var(--dsh-px-toolbar-height,86px))}
+		[data-windows-titlebar] [data-dsh-px-layout-owner] .px-bar{top:var(--dsh-windows-titlebar-height,0px)}
+		[data-windows-titlebar] [data-dsh-px-layout-owner][data-rightbar-fullscreen]{padding-top:var(--dsh-windows-titlebar-height,0px)}
 		`;
 		function attachToolbarLayout(bar) {
 		  const owner = bar.closest(hostLayoutContract.overlay)?.parentElement;
