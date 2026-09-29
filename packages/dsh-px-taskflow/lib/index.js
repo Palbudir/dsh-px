@@ -61,6 +61,23 @@ function readFailure(error) {
 }
 
 // packages/shared/request-trust.ts
+function rejectUnauthenticatedRequest(req, res, connection) {
+  const rejection = connection?.requestRejection({ headers: req.headers ?? {} });
+  if (!connection || rejection !== void 0) {
+    res.writeHead(connection ? rejection : 503, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store"
+    });
+    res.end(
+      JSON.stringify({
+        code: connection ? "HOST_AUTH_REQUIRED" : "HOST_AUTH_UNAVAILABLE",
+        error: "\u8BF7\u901A\u8FC7\u5BBF\u4E3B\u63D0\u4F9B\u7684\u767B\u5F55\u5165\u53E3\u8FDE\u63A5\u6B64\u670D\u52A1\u3002"
+      })
+    );
+    return true;
+  }
+  return rejectUntrustedRequest(req, res);
+}
 function trustedLocalRequest(req) {
   const headers = req.headers ?? {}, host = headers.host, origin = headers.origin;
   if (typeof host !== "string" || headers["sec-fetch-site"] === "cross-site") return false;
@@ -573,7 +590,7 @@ function apply(ctx) {
       execute: async (args, exec) => JSON.stringify({ checkpoint: validateCheckpoint(args, liveEvidence(session(exec))) })
     });
   });
-  ctx.inject(["webServer", "sessions", "sessionPersistence"], (host) => {
+  ctx.inject(["connection", "webServer", "sessions", "sessionPersistence"], (host) => {
     const coldIndexes = /* @__PURE__ */ new Map();
     host.effect(() => () => coldIndexes.clear(), "taskflow: stored evidence cache");
     for (const kind of ["review", "evidence"])
@@ -582,7 +599,7 @@ function apply(ctx) {
           kind: "exact",
           path: `${DEFAULTS.routePrefix}/${kind}`,
           handler: async (req, res) => {
-            if (rejectUntrustedRequest(req, res)) return;
+            if (rejectUnauthenticatedRequest(req, res, host.connection)) return;
             const send = (status, data) => {
               res.writeHead(status, {
                 "Content-Type": "application/json; charset=utf-8",

@@ -166,6 +166,11 @@ declare module '@deepseek-ai/cordis' {
       callback: (
         ctx: HostPluginContext & {
           webServer?: WebServer
+          connection?: {
+            requestRejection(request: {
+              headers: Record<string, string | string[] | undefined>
+            }): 401 | 403 | undefined
+          }
           tools?: ToolRegistry
         }
       ) => void

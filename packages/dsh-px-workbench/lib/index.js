@@ -18,6 +18,23 @@ IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
 
 // packages/shared/request-trust.ts
+function rejectUnauthenticatedRequest(req, res, connection) {
+  const rejection = connection?.requestRejection({ headers: req.headers ?? {} });
+  if (!connection || rejection !== void 0) {
+    res.writeHead(connection ? rejection : 503, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store"
+    });
+    res.end(
+      JSON.stringify({
+        code: connection ? "HOST_AUTH_REQUIRED" : "HOST_AUTH_UNAVAILABLE",
+        error: "\u8BF7\u901A\u8FC7\u5BBF\u4E3B\u63D0\u4F9B\u7684\u767B\u5F55\u5165\u53E3\u8FDE\u63A5\u6B64\u670D\u52A1\u3002"
+      })
+    );
+    return true;
+  }
+  return rejectUntrustedRequest(req, res);
+}
 function trustedLocalRequest(req) {
   const headers = req.headers ?? {}, host = headers.host, origin = headers.origin;
   if (typeof host !== "string" || headers["sec-fetch-site"] === "cross-site") return false;
@@ -549,7 +566,7 @@ function registerActivity(ctx) {
     );
   });
   const read = () => activitySnapshot(services);
-  ctx.inject(["webServer"], (host) => {
+  ctx.inject(["connection", "webServer"], (host) => {
     if (!host.webServer) return;
     const json2 = (res, code, value) => {
       res.writeHead(code, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
@@ -561,7 +578,7 @@ function registerActivity(ctx) {
           kind: "exact",
           path: "/dsh-px-workbench/activity",
           handler: (req, res) => {
-            if (rejectUntrustedRequest(req, res)) return;
+            if (rejectUnauthenticatedRequest(req, res, host.connection)) return;
             if (req.method !== "GET") return json2(res, 405, { error: "\u8BF7\u4F7F\u7528 GET" });
             json2(res, 200, { ...read(), instanceId: process.env.DSH_PX_INSTANCE_ID ?? null });
           }
@@ -570,7 +587,7 @@ function registerActivity(ctx) {
           kind: "exact",
           path: "/dsh-px-workbench/shutdown",
           handler: async (req, res) => {
-            if (rejectUntrustedRequest(req, res)) return;
+            if (rejectUnauthenticatedRequest(req, res, host.connection)) return;
             if (req.method !== "POST") return json2(res, 405, { error: "\u8BF7\u4F7F\u7528 POST" });
             if (req.headers["x-dsh-px-request"] !== "1")
               return json2(res, 403, { error: "\u8BF7\u4ECE\u672C\u673A\u5E94\u7528\u63D0\u4EA4\u8BF7\u6C42" });
@@ -661,7 +678,7 @@ function apply(ctx) {
       "workbench: workspace capability"
     );
   });
-  ctx.inject(["webServer", "web"], (host) => {
+  ctx.inject(["connection", "webServer", "web"], (host) => {
     const web = host.web;
     if (!host.webServer || !web) return;
     let pending = null;
@@ -670,7 +687,7 @@ function apply(ctx) {
         kind: "exact",
         path: `${DEFAULTS.routePrefix}/network-check`,
         handler: async (req, res) => {
-          if (rejectUntrustedRequest(req, res)) return;
+          if (rejectUnauthenticatedRequest(req, res, host.connection)) return;
           if (req.method !== "POST") return json(res, 405, { error: "\u8BF7\u4F7F\u7528 POST" });
           if (req.headers?.["x-dsh-px-request"] !== "1")
             return json(res, 403, { error: "\u8BF7\u4ECE\u672C\u673A\u5DE5\u4F5C\u53F0\u63D0\u4EA4\u8BF7\u6C42" });
@@ -685,14 +702,14 @@ function apply(ctx) {
       "dsh-px-workbench: network check"
     );
   });
-  ctx.inject(["webServer"], (ctx2) => {
+  ctx.inject(["connection", "webServer"], (ctx2) => {
     if (!ctx2.webServer) return;
     const dispose = [
       ctx2.webServer.register({
         kind: "exact",
         path: `${DEFAULTS.routePrefix}/status`,
         handler: (req, res) => {
-          if (rejectUntrustedRequest(req, res)) return;
+          if (rejectUnauthenticatedRequest(req, res, ctx2.connection)) return;
           if (req.method !== "GET") return json(res, 405, { error: "\u8BF7\u4F7F\u7528 GET" });
           json(res, 200, localStatus(activity()));
         }
@@ -701,7 +718,7 @@ function apply(ctx) {
         kind: "exact",
         path: `${DEFAULTS.routePrefix}/restart`,
         handler: async (req, res) => {
-          if (rejectUntrustedRequest(req, res)) return;
+          if (rejectUnauthenticatedRequest(req, res, ctx2.connection)) return;
           if (req.method !== "POST") return json(res, 405, { error: "\u8BF7\u4F7F\u7528 POST" });
           if (req.headers?.["x-dsh-px-request"] !== "1")
             return json(res, 403, { error: "\u8BF7\u4ECE\u672C\u673A\u5DE5\u4F5C\u53F0\u63D0\u4EA4\u8BF7\u6C42" });
@@ -725,7 +742,7 @@ function apply(ctx) {
         kind: "exact",
         path: `${DEFAULTS.routePrefix}/cancel-pending`,
         handler: async (req, res) => {
-          if (rejectUntrustedRequest(req, res)) return;
+          if (rejectUnauthenticatedRequest(req, res, ctx2.connection)) return;
           if (req.method !== "POST") return json(res, 405, { error: "\u8BF7\u4F7F\u7528 POST" });
           if (req.headers?.["x-dsh-px-request"] !== "1")
             return json(res, 403, { error: "\u8BF7\u4ECE\u672C\u673A\u5E94\u7528\u63D0\u4EA4\u8BF7\u6C42" });
@@ -745,7 +762,7 @@ function apply(ctx) {
         kind: "exact",
         path: `${DEFAULTS.routePrefix}/layout`,
         handler: async (req, res) => {
-          if (rejectUntrustedRequest(req, res)) return;
+          if (rejectUnauthenticatedRequest(req, res, ctx2.connection)) return;
           if (!process.env.DSH_HOME)
             return json(res, 503, { error: "\u670D\u52A1\u672A\u63D0\u4F9B\u6570\u636E\u76EE\u5F55\uFF0C\u6807\u7B7E\u4ECD\u53EF\u5728\u5F53\u524D\u7A97\u53E3\u4F7F\u7528\u3002" });
           const store = createLayoutStore(process.env.DSH_HOME);
@@ -766,7 +783,7 @@ function apply(ctx) {
         kind: "exact",
         path: `${DEFAULTS.routePrefix}/workspace`,
         handler: async (req, res) => {
-          if (rejectUntrustedRequest(req, res)) return;
+          if (rejectUnauthenticatedRequest(req, res, ctx2.connection)) return;
           if (req.method !== "POST") return json(res, 405, { error: "\u8BF7\u4F7F\u7528 POST" });
           if (req.headers?.["x-dsh-px-request"] !== "1")
             return json(res, 403, { error: "\u8BF7\u4ECE\u672C\u673A\u5DE5\u4F5C\u53F0\u63D0\u4EA4\u8BF7\u6C42" });

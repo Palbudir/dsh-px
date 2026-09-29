@@ -30,9 +30,63 @@ window.__ModuleLoader__.load({
 		});
 		module.exports = __toCommonJS(client_exports);
 
+		// packages/shared/native-navigation.ts
+		function nativeFileAddress(sessionId, path) {
+		  if (!sessionId || !path || /[\r\n\0]/.test(path)) throw new Error("\u6587\u4EF6\u5730\u5740\u65E0\u6548");
+		  const encode = (segment) => encodeURIComponent(segment).replace(/%3A/gi, ":");
+		  return `dsh-resource://file/session/${encode(sessionId)}/${path.replaceAll("\\", "/").replace(/^(?:\.\/)+/, "").split("/").map(encode).join("/")}`;
+		}
+
+		// packages/shared/native-sidebar.tsx
+		var import_jsx_runtime = require("react/jsx-runtime");
+		var nativeKind = (type) => type === "editor" ? "files" : type;
+		function createNativeSidebar(host) {
+		  const registry = host.sidebarRightTabs;
+		  return {
+		    registerTab(definition) {
+		      const off = registry.register({
+		        id: definition.id,
+		        kind: definition.id,
+		        title: () => definition.title,
+		        guide: [
+		          { id: definition.id + "-guide", order: definition.order ?? 50, title: () => definition.title }
+		        ]
+		      });
+		      host.slots.inject(
+		        "sidebar.right.pane.tab",
+		        () => host.slots.register({ name: "sidebar.right.pane.tab", key: definition.id }, (props) => {
+		          const info = props.useTabInfo();
+		          const Component = definition.component;
+		          return /* @__PURE__ */ (0, import_jsx_runtime.jsx)(
+		            Component,
+		            {
+		              scope: { sessionId: props.sessionId },
+		              visible: info.tab.visible,
+		              tab: { meta: info.tab.navigation.params }
+		            }
+		          );
+		        })
+		      );
+		      return off;
+		    },
+		    openTab(seed, scope) {
+		      if (!scope?.sessionId) throw new Error("\u8BF7\u5148\u9009\u62E9\u4F1A\u8BDD");
+		      host.sidebarRight.openTabIn(scope.sessionId, nativeKind(seed.type), { params: seed.meta });
+		    },
+		    openFile(scope, path) {
+		      host.sidebarRight.openResourceIn(scope.sessionId, nativeFileAddress(scope.sessionId, path));
+		    },
+		    isTabEnabled: (type) => !!registry.get(nativeKind(type)),
+		    getTab: (type) => registry.get(nativeKind(type)),
+		    subscribe: (listener) => registry.subscribe(listener),
+		    getSnapshot: () => registry.entries(),
+		    subscribeState: (listener) => registry.subscribe(listener)
+		  };
+		}
+
 		// packages/shared/ui.tsx
 		var import_react = require("react");
-		var import_jsx_runtime = require("react/jsx-runtime");
+		var import_jsx_runtime2 = require("react/jsx-runtime");
 		var uiCss = `
 		.px-ui{--px-bg:var(--dsw-alias-bg-base,#fff);--px-layer:var(--dsw-alias-bg-layer-1,#f8f9fb);--px-fg:var(--dsw-alias-label-primary,#20242d);--px-muted:var(--dsw-alias-label-secondary,#657080);--px-border:var(--dsw-alias-border-l2,#d9dee7);--px-accent:var(--dsw-alias-state-business-primary,#466dea);--px-error:var(--dsw-alias-state-error-primary,#bc3946);color:var(--px-fg);font-size:13px;line-height:1.6}
 		.px-ui button,.px-ui input,.px-ui select,.px-ui textarea{font:inherit;color:inherit}
@@ -173,7 +227,7 @@ window.__ModuleLoader__.load({
 		}
 
 		// packages/dsh-px-taskflow/src/client.tsx
-		var import_jsx_runtime2 = require("react/jsx-runtime");
+		var import_jsx_runtime3 = require("react/jsx-runtime");
 		var inject = [];
 		var card = { ...cardStyle, marginBottom: 12 };
 		var button = controlStyle;
@@ -255,40 +309,40 @@ window.__ModuleLoader__.load({
 		      setBusy(false);
 		    }
 		  }
-		  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+		  return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
 		    "details",
 		    {
 		      style: card,
 		      onToggle: (event) => setOpen(event.currentTarget.open),
 		      children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("summary", { style: { cursor: "pointer" }, children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("summary", { style: { cursor: "pointer" }, children: [
 		          labels[call.outcome],
 		          " \xB7 ",
 		          call.tool,
 		          call.durationMs !== null ? ` \xB7 ${(call.durationMs / 1e3).toFixed(1)} \u79D2` : ""
 		        ] }),
-		        open ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-		          detail?.input ?? call.input ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("pre", { style: { whiteSpace: "pre-wrap", fontSize: 12 }, children: detail?.input ?? call.input }) : null,
-		          detail?.commandGuidance ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: { ...card, marginTop: 10 }, "aria-label": "Windows \u547D\u4EE4\u9650\u5236\u8BF4\u660E", children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { children: "Windows \u5B50\u8FDB\u7A0B\u6743\u9650\u63D0\u793A" }),
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: detail.commandGuidance.message }),
-		            detail.commandGuidance.request ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-		              /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { children: [
-		                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { children: "\u67E5\u770B\u5B8C\u6574\u539F\u547D\u4EE4\u4E0E\u5DE5\u4F5C\u76EE\u5F55" }),
-		                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("pre", { style: { whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto" }, children: detail.commandGuidance.request.command }),
-		                /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
+		        open ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+		          detail?.input ?? call.input ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("pre", { style: { whiteSpace: "pre-wrap", fontSize: 12 }, children: detail?.input ?? call.input }) : null,
+		          detail?.commandGuidance ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("section", { style: { ...card, marginTop: 10 }, "aria-label": "Windows \u547D\u4EE4\u9650\u5236\u8BF4\u660E", children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("strong", { children: "Windows \u5B50\u8FDB\u7A0B\u6743\u9650\u63D0\u793A" }),
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: detail.commandGuidance.message }),
+		            detail.commandGuidance.request ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+		              /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { children: [
+		                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("summary", { children: "\u67E5\u770B\u5B8C\u6574\u539F\u547D\u4EE4\u4E0E\u5DE5\u4F5C\u76EE\u5F55" }),
+		                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("pre", { style: { whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto" }, children: detail.commandGuidance.request.command }),
+		                /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { children: [
 		                  "\u5DE5\u4F5C\u76EE\u5F55\uFF1A",
-		                  /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { children: detail.commandGuidance.request.workdir })
+		                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("code", { children: detail.commandGuidance.request.workdir })
 		                ] })
 		              ] }),
-		              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u4EC5\u51C6\u5907\u539F\u547D\u4EE4\u7684\u4E00\u6B21\u6027\u6279\u51C6\u8BF7\u6C42\uFF0C\u4E0D\u6267\u884C\u547D\u4EE4\u3001\u4E0D\u6539\u53D8\u9ED8\u8BA4\u6743\u9650\u3002\u68C0\u67E5\u5E76\u53D1\u9001\u8349\u7A3F\u540E\uFF0C\u4ECD\u987B\u5728\u539F\u751F\u5BA1\u6279\u4E2D\u9009\u62E9\u5141\u8BB8\u4E00\u6B21\uFF1B\u62D2\u7EDD\u6216\u53D6\u6D88\u5C31\u505C\u6B62\u3002" }),
-		              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { style: button, disabled: busy || prepared, onClick: () => void prepareApproval(), children: prepared ? "\u5DF2\u52A0\u5165\u8349\u7A3F\uFF0C\u7B49\u5F85\u4F60\u68C0\u67E5" : "\u51C6\u5907\u4E00\u6B21\u6027\u6388\u6743\u91CD\u8BD5" })
-		            ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: detail.commandGuidance.unavailableReason })
+		              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: "\u4EC5\u51C6\u5907\u539F\u547D\u4EE4\u7684\u4E00\u6B21\u6027\u6279\u51C6\u8BF7\u6C42\uFF0C\u4E0D\u6267\u884C\u547D\u4EE4\u3001\u4E0D\u6539\u53D8\u9ED8\u8BA4\u6743\u9650\u3002\u68C0\u67E5\u5E76\u53D1\u9001\u8349\u7A3F\u540E\uFF0C\u4ECD\u987B\u5728\u539F\u751F\u5BA1\u6279\u4E2D\u9009\u62E9\u5141\u8BB8\u4E00\u6B21\uFF1B\u62D2\u7EDD\u6216\u53D6\u6D88\u5C31\u505C\u6B62\u3002" }),
+		              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { style: button, disabled: busy || prepared, onClick: () => void prepareApproval(), children: prepared ? "\u5DF2\u52A0\u5165\u8349\u7A3F\uFF0C\u7B49\u5F85\u4F60\u68C0\u67E5" : "\u51C6\u5907\u4E00\u6B21\u6027\u6388\u6743\u91CD\u8BD5" })
+		            ] }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: detail.commandGuidance.unavailableReason })
 		          ] }) : null,
-		          error ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { role: "alert", children: [
+		          error ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { role: "alert", children: [
 		            error,
 		            " ",
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
 		              "button",
 		              {
 		                style: button,
@@ -298,8 +352,8 @@ window.__ModuleLoader__.load({
 		              }
 		            )
 		          ] }) : null,
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("pre", { style: { whiteSpace: "pre-wrap", fontSize: 12 }, children: output || (busy ? "\u6B63\u5728\u8BFB\u53D6\u5DF2\u4FDD\u5B58\u7684\u8F93\u51FA\u2026" : detail ? "\u5C1A\u65E0\u6587\u672C\u8F93\u51FA\u8BB0\u5F55" : call.output) }),
-		          detail ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { style: { fontSize: 12, opacity: 0.7 }, children: [
+		          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("pre", { style: { whiteSpace: "pre-wrap", fontSize: 12 }, children: output || (busy ? "\u6B63\u5728\u8BFB\u53D6\u5DF2\u4FDD\u5B58\u7684\u8F93\u51FA\u2026" : detail ? "\u5C1A\u65E0\u6587\u672C\u8F93\u51FA\u8BB0\u5F55" : call.output) }),
+		          detail ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { style: { fontSize: 12, opacity: 0.7 }, children: [
 		            "\u5DF2\u8BFB\u53D6 ",
 		            output.length,
 		            " / ",
@@ -307,12 +361,12 @@ window.__ModuleLoader__.load({
 		            " \u5B57\u7B26",
 		            call.outcomeSource === "command_marker" ? " \xB7 \u72B6\u6001\u4F9D\u636E\u547D\u4EE4\u8F93\u51FA\u672B\u5C3E\u6807\u8BB0" : ""
 		          ] }) : null,
-		          detail?.nextOutputOffset !== null && detail?.nextOutputOffset !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { style: button, disabled: busy, onClick: () => void more(), children: busy ? "\u8BFB\u53D6\u4E2D\u2026" : "\u8BFB\u53D6\u540E\u7EED\u8F93\u51FA" }) : null,
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("small", { children: [
+		          detail?.nextOutputOffset !== null && detail?.nextOutputOffset !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { style: button, disabled: busy, onClick: () => void more(), children: busy ? "\u8BFB\u53D6\u4E2D\u2026" : "\u8BFB\u53D6\u540E\u7EED\u8F93\u51FA" }) : null,
+		          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { children: /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("small", { children: [
 		            "\u8BC1\u636E\u7F16\u53F7\uFF1A",
 		            call.id
 		          ] }) }),
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("small", { style: { opacity: 0.65 }, children: "\u8BFB\u53D6\u7684\u662F\u4F1A\u8BDD\u5DF2\u4FDD\u5B58\u7684\u6587\u672C\uFF0C\u4E0D\u4F1A\u91CD\u65B0\u6267\u884C\u5DE5\u5177\uFF1B\u4E0A\u6E38\u5DE5\u5177\u672A\u4FDD\u5B58\u7684\u5185\u5BB9\u65E0\u6CD5\u4ECE\u8FD9\u91CC\u6062\u590D\u3002" })
+		          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("small", { style: { opacity: 0.65 }, children: "\u8BFB\u53D6\u7684\u662F\u4F1A\u8BDD\u5DF2\u4FDD\u5B58\u7684\u6587\u672C\uFF0C\u4E0D\u4F1A\u91CD\u65B0\u6267\u884C\u5DE5\u5177\uFF1B\u4E0A\u6E38\u5DE5\u5177\u672A\u4FDD\u5B58\u7684\u5185\u5BB9\u65E0\u6CD5\u4ECE\u8FD9\u91CC\u6062\u590D\u3002" })
 		        ] }) : null
 		      ]
 		    }
@@ -362,7 +416,7 @@ window.__ModuleLoader__.load({
 		      clearTimeout(timer);
 		    };
 		  }, [scope.sessionId, visible, beforeSeq, refresh]);
-		  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
+		  return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
 		    "div",
 		    {
 		      className: "px-ui",
@@ -376,45 +430,45 @@ window.__ModuleLoader__.load({
 		        lineHeight: 1.6
 		      },
 		      children: [
-		        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { style: { marginTop: 0 }, children: "\u6267\u884C\u8BB0\u5F55" }),
-		        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { opacity: 0.65 }, children: "\u8BB0\u5F55\u968F\u4F1A\u8BDD\u4FDD\u5B58\u3002\u5217\u8868\u663E\u793A\u6458\u8981\uFF0C\u5C55\u5F00\u6267\u884C\u53EF\u6309\u9700\u8BFB\u53D6\u8F93\u51FA\u3002" }),
-		        error ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { role: "alert", children: [
+		        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h3", { style: { marginTop: 0 }, children: "\u6267\u884C\u8BB0\u5F55" }),
+		        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { style: { opacity: 0.65 }, children: "\u8BB0\u5F55\u968F\u4F1A\u8BDD\u4FDD\u5B58\u3002\u5217\u8868\u663E\u793A\u6458\u8981\uFF0C\u5C55\u5F00\u6267\u884C\u53EF\u6309\u9700\u8BFB\u53D6\u8F93\u51FA\u3002" }),
+		        error ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { role: "alert", children: [
 		          error,
 		          " ",
 		          data ? "\u4E0B\u65B9\u662F\u4E0A\u6B21\u8BFB\u53D6\u7684\u8BB0\u5F55\u3002" : null,
 		          " ",
 		          retryable && beforeSeq === void 0 ? "\u6B63\u5728\u91CD\u8BD5\u3002" : "\u81EA\u52A8\u91CD\u8BD5\u5DF2\u505C\u6B62\u3002"
 		        ] }) : null,
-		        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }, children: [
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { style: button, onClick: () => setRefresh((v) => v + 1), children: "\u91CD\u65B0\u8BFB\u53D6" }),
-		          beforeSeq !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { style: button, onClick: () => setPages([void 0]), children: "\u8FD4\u56DE\u6700\u65B0\u8BB0\u5F55" }) : null
+		        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 12 }, children: [
+		          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { style: button, onClick: () => setRefresh((v) => v + 1), children: "\u91CD\u65B0\u8BFB\u53D6" }),
+		          beforeSeq !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { style: button, onClick: () => setPages([void 0]), children: "\u8FD4\u56DE\u6700\u65B0\u8BB0\u5F55" }) : null
 		        ] }),
-		        !data && !error ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u4EFB\u52A1\u8BB0\u5F55\u2026" }) : null,
-		        data ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-		          data.checkpoint ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("section", { style: card, "aria-label": "\u53EF\u9009\u5DE5\u4F5C\u6458\u8981", children: data.checkpoint ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { children: states[data.checkpoint.state] }),
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h4", { style: { margin: "8px 0" }, children: data.checkpoint.goal }),
-		            data.checkpoint.summary.length > 240 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { children: [
-		              /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("summary", { style: { cursor: "pointer" }, children: [
+		        !data && !error ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u4EFB\u52A1\u8BB0\u5F55\u2026" }) : null,
+		        data ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+		          data.checkpoint ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("section", { style: card, "aria-label": "\u53EF\u9009\u5DE5\u4F5C\u6458\u8981", children: data.checkpoint ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("strong", { children: states[data.checkpoint.state] }),
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h4", { style: { margin: "8px 0" }, children: data.checkpoint.goal }),
+		            data.checkpoint.summary.length > 240 ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { children: [
+		              /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("summary", { style: { cursor: "pointer" }, children: [
 		                data.checkpoint.summary.slice(0, 240),
 		                "\u2026"
 		              ] }),
-		              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: data.checkpoint.summary })
-		            ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: data.checkpoint.summary }),
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
+		              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: data.checkpoint.summary })
+		            ] }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: data.checkpoint.summary }),
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { children: [
 		              "\u4E0B\u4E00\u6B65\uFF1A",
 		              data.checkpoint.nextStep || "\u68C0\u67E5\u4FEE\u6539\u4E0E\u9A8C\u8BC1\u7ED3\u679C"
 		            ] }),
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("small", { style: { opacity: 0.65 }, children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("small", { style: { opacity: 0.65 }, children: [
 		              "Agent \u5DE5\u4F5C\u6458\u8981 \xB7 ",
 		              new Date(data.checkpoint.time).toLocaleString()
 		            ] }),
-		            data.checkpointStale ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { role: "status", children: "\u8BB0\u5F55\u4E4B\u540E\u8FD8\u6709\u53EF\u80FD\u5F71\u54CD\u7ED3\u8BBA\u7684\u6267\u884C\uFF0C\u8BF7\u6838\u5BF9\u6700\u65B0\u7ED3\u679C\u3002" }) : null,
-		            data.checkpoint.evidence.length ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { children: [
-		              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { children: "\u5F15\u7528\u7684\u6267\u884C\u8BC1\u636E" }),
+		            data.checkpointStale ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { role: "status", children: "\u8BB0\u5F55\u4E4B\u540E\u8FD8\u6709\u53EF\u80FD\u5F71\u54CD\u7ED3\u8BBA\u7684\u6267\u884C\uFF0C\u8BF7\u6838\u5BF9\u6700\u65B0\u7ED3\u679C\u3002" }) : null,
+		            data.checkpoint.evidence.length ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { children: [
+		              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("summary", { children: "\u5F15\u7528\u7684\u6267\u884C\u8BC1\u636E" }),
 		              data.checkpoint.evidence.map((id) => {
 		                const call = data.referencedExecutions.find((c) => c.id === id);
-		                return call ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		                return call ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
 		                  ExecutionCard,
 		                  {
 		                    call,
@@ -422,44 +476,44 @@ window.__ModuleLoader__.load({
 		                    inputContext
 		                  },
 		                  id
-		                ) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { children: [
+		                ) : /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { children: [
 		                  "\u6B64\u6761\u5F15\u7528\u672A\u627E\u5230\uFF1A",
-		                  /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { children: id })
+		                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("code", { children: id })
 		                ] }, id);
 		              })
 		            ] }) : null
-		          ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("strong", { children: "\u5C1A\u65E0\u5DE5\u4F5C\u8BB0\u5F55" }),
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u591A\u6B65\u9AA4\u4EFB\u52A1\u5F00\u59CB\u540E\uFF0CAgent \u53EF\u4EE5\u8BB0\u5F55\u76EE\u6807\u548C\u4EA4\u63A5\u70B9\u3002\u6267\u884C\u8BB0\u5F55\u81EA\u52A8\u4EA7\u751F\u3002" })
+		          ] }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("strong", { children: "\u5C1A\u65E0\u5DE5\u4F5C\u8BB0\u5F55" }),
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: "\u591A\u6B65\u9AA4\u4EFB\u52A1\u5F00\u59CB\u540E\uFF0CAgent \u53EF\u4EE5\u8BB0\u5F55\u76EE\u6807\u548C\u4EA4\u63A5\u70B9\u3002\u6267\u884C\u8BB0\u5F55\u81EA\u52A8\u4EA7\u751F\u3002" })
 		          ] }) }) : null,
-		          data.changedFiles.length ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: card, children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("strong", { children: [
+		          data.changedFiles.length ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("section", { style: card, children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("strong", { children: [
 		              "\u5DF2\u8BB0\u5F55\u7684\u6587\u4EF6\u5199\u5165 \xB7 \u5171 ",
 		              data.changedFilesTotal,
 		              " \u4E2A\u8DEF\u5F84"
 		            ] }),
-		            data.changedFilesTruncated ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { style: { opacity: 0.65 }, children: [
+		            data.changedFilesTruncated ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { style: { opacity: 0.65 }, children: [
 		              "\u5F53\u524D\u4EC5\u663E\u793A\u6700\u8FD1 ",
 		              data.changedFiles.length,
 		              " \u4E2A\u8DEF\u5F84\u3002\u6700\u7EC8\u6587\u4EF6\u72B6\u6001\u8BF7\u5728\u201C\u6587\u4EF6\u53D8\u52A8\u201D\u7684 Git \u89C6\u56FE\u4E2D\u6838\u5BF9\u3002"
 		            ] }) : null,
-		            data.changedFiles.map((path) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { paddingTop: 6 }, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("code", { children: path }) }, path)),
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { marginBottom: 0, opacity: 0.65 }, children: "\u6765\u81EA\u6210\u529F\u8FD4\u56DE\u7684\u6587\u4EF6\u5199\u5DE5\u5177\uFF0C\u4E0D\u5305\u542B\u53EA\u8BFB\u67E5\u770B\u3002\u547D\u4EE4\u884C\u6539\u52A8\u3001\u6700\u7EC8\u5DEE\u5F02\u4E0E\u4EBA\u5DE5\u5DF2\u6709\u4FEE\u6539\u8BF7\u5728\u201C\u6587\u4EF6\u53D8\u52A8\u201D\u7684 Git \u89C6\u56FE\u4E2D\u6838\u5BF9\u3002" })
+		            data.changedFiles.map((path) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { style: { paddingTop: 6 }, children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("code", { children: path }) }, path)),
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { style: { marginBottom: 0, opacity: 0.65 }, children: "\u6765\u81EA\u6210\u529F\u8FD4\u56DE\u7684\u6587\u4EF6\u5199\u5DE5\u5177\uFF0C\u4E0D\u5305\u542B\u53EA\u8BFB\u67E5\u770B\u3002\u547D\u4EE4\u884C\u6539\u52A8\u3001\u6700\u7EC8\u5DEE\u5F02\u4E0E\u4EBA\u5DE5\u5DF2\u6709\u4FEE\u6539\u8BF7\u5728\u201C\u6587\u4EF6\u53D8\u52A8\u201D\u7684 Git \u89C6\u56FE\u4E2D\u6838\u5BF9\u3002" })
 		          ] }) : null,
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { "aria-label": "\u5B9E\u9645\u6267\u884C\u8BB0\u5F55", children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("h4", { children: [
+		          /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("section", { "aria-label": "\u5B9E\u9645\u6267\u884C\u8BB0\u5F55", children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("h4", { children: [
 		              "\u5B9E\u9645\u6267\u884C\u8BB0\u5F55 \xB7 \u5171 ",
 		              data.total,
 		              " \u6761"
 		            ] }),
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { opacity: 0.65 }, children: "\u201C\u5DF2\u8FD4\u56DE\u201D\u53EA\u4EE3\u8868\u5DE5\u5177\u6B63\u5E38\u8FD4\u56DE\uFF0C\u6D4B\u8BD5\u7ED3\u679C\u4ECD\u9700\u6838\u5BF9\u8F93\u51FA\u3002" }),
-		            beforeSeq !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { style: { opacity: 0.65 }, children: "\u201C\u5DF2\u8FD4\u56DE\u201D\u53EA\u4EE3\u8868\u5DE5\u5177\u6B63\u5E38\u8FD4\u56DE\uFF0C\u6D4B\u8BD5\u7ED3\u679C\u4ECD\u9700\u6838\u5BF9\u8F93\u51FA\u3002" }),
+		            beforeSeq !== void 0 ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { children: [
 		              "\u6B63\u5728\u67E5\u770B\u5386\u53F2\u9875\uFF08\u7B2C ",
 		              pages.length,
 		              " \u9875\uFF09\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u8DF3\u56DE\u6700\u65B0\u8BB0\u5F55\u3002"
 		            ] }) : null,
-		            data.executions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u5F53\u524D\u9875\u6CA1\u6709\u5DE5\u5177\u6267\u884C\u8BB0\u5F55\u3002" }) : null,
-		            [...data.executions].reverse().map((call) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		            data.executions.length === 0 ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: "\u5F53\u524D\u9875\u6CA1\u6709\u5DE5\u5177\u6267\u884C\u8BB0\u5F55\u3002" }) : null,
+		            [...data.executions].reverse().map((call) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
 		              ExecutionCard,
 		              {
 		                call,
@@ -468,9 +522,9 @@ window.__ModuleLoader__.load({
 		              },
 		              call.id
 		            )),
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 }, children: [
-		              pages.length > 1 ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { style: button, onClick: () => setPages((old) => old.slice(0, -1)), children: "\u8F83\u65B0\u4E00\u9875" }) : null,
-		              data.nextBeforeSeq !== null ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { style: button, onClick: () => setPages((old) => [...old, data.nextBeforeSeq]), children: "\u66F4\u65E9\u8BB0\u5F55" }) : null
+		            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 }, children: [
+		              pages.length > 1 ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { style: button, onClick: () => setPages((old) => old.slice(0, -1)), children: "\u8F83\u65B0\u4E00\u9875" }) : null,
+		              data.nextBeforeSeq !== null ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { style: button, onClick: () => setPages((old) => [...old, data.nextBeforeSeq]), children: "\u66F4\u65E9\u8BB0\u5F55" }) : null
 		            ] })
 		          ] })
 		        ] }) : null
@@ -479,21 +533,18 @@ window.__ModuleLoader__.load({
 		  );
 		}
 		function TaskPanel(props) {
-		  return /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(SessionTaskPanel, { ...props }, props.scope.sessionId);
+		  return /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(SessionTaskPanel, { ...props }, props.scope.sessionId);
 		}
 		function apply(ctx) {
 		  installUiStyles(ctx);
 		  ctx.inject(
-		    ["betterSidebar", "sessions", "conversation"],
+		    ["sidebarRight", "sidebarRightTabs", "slots", "sessions", "conversation"],
 		    (host) => host.effect(
-		      () => host.betterSidebar.registerTab({
+		      () => createNativeSidebar(host).registerTab({
 		        id: "dsh-px-taskflow",
 		        title: "\u6267\u884C\u8BB0\u5F55",
-		        description: "\u5DE5\u5177\u6267\u884C\u8BB0\u5F55\u4E0E\u6309\u9700\u8BFB\u53D6\u7684\u8F93\u51FA",
 		        order: 15,
-		        single: true,
-		        icon: "\u2713",
-		        component: (props) => /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(TaskPanel, { ...props, inputContext: host })
+		        component: (props) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(TaskPanel, { ...props, inputContext: host })
 		      }),
 		      "taskflow: task panel"
 		    )

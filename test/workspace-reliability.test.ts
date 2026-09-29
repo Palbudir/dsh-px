@@ -527,6 +527,7 @@ test('corrupt business storage leaves content readable and recovery works throug
             },
             prompt: async () => ({ accepted: true })
           },
+          connection: { requestRejection: () => undefined },
           webServer: {
             register: (route) => {
               routes.set(route.path, localHandler(route.handler))
@@ -616,6 +617,7 @@ test('cold evidence pages reuse unchanged native revisions and invalidate when s
             }
           })
         },
+        connection: { requestRejection: () => undefined },
         webServer: {
           register: (route: any) => {
             routes.set(route.path, localHandler(route.handler))

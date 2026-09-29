@@ -120,6 +120,7 @@ test('任务插件使用当前会话与只读持久句柄；错误也关闭句�
         }
       }
     },
+    connection: { requestRejection: () => undefined },
     webServer: {
       register: (r: any) => {
         routes.set(r.path, localHandler(r.handler))
@@ -307,6 +308,7 @@ test('读取错误类型和 HTTP 查询参数明确，未知执行不误报会�
             throw Object.assign(new Error('missing'), { name: 'SessionPersistenceNotFoundError' })
           }
         },
+        connection: { requestRejection: () => undefined },
         webServer: {
           register: (r: any) => {
             routes.set(r.path, localHandler(r.handler))

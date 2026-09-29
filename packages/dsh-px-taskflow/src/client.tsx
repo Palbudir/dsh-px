@@ -1,3 +1,4 @@
+import { createNativeSidebar, type NativeSidebarHost } from '../../shared/native-sidebar'
 import { installUiStyles, controlStyle, cardStyle } from '../../shared/ui'
 import { useEffect, useState } from 'react'
 import { RequestError, requestJson } from '../../shared/client-http'
@@ -370,7 +371,9 @@ export function apply(ctx: {
     services: string[],
     callback: (
       host: DraftInputContext & {
-        betterSidebar: { registerTab: (tab: unknown) => () => void }
+        sidebarRight: NativeSidebarHost['sidebarRight']
+        sidebarRightTabs: NativeSidebarHost['sidebarRightTabs']
+        slots: NativeSidebarHost['slots']
         effect: (fn: () => () => void, label: string) => void
       }
     ) => void
@@ -378,16 +381,13 @@ export function apply(ctx: {
   effect: (fn: () => () => void, label: string) => void
 }): void {
   installUiStyles(ctx)
-  ctx.inject(['betterSidebar', 'sessions', 'conversation'], (host) =>
+  ctx.inject(['sidebarRight', 'sidebarRightTabs', 'slots', 'sessions', 'conversation'], (host) =>
     host.effect(
       () =>
-        host.betterSidebar.registerTab({
+        createNativeSidebar(host).registerTab({
           id: 'dsh-px-taskflow',
           title: '执行记录',
-          description: '工具执行记录与按需读取的输出',
           order: 15,
-          single: true,
-          icon: '✓',
           component: (props: { scope: { sessionId: string }; visible: boolean }) => (
             <TaskPanel {...props} inputContext={host} />
           )

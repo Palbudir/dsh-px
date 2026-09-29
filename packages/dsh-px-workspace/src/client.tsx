@@ -1,3 +1,4 @@
+import { createNativeSidebar } from '../../shared/native-sidebar'
 import type { Client, Panel } from './client/contracts'
 import { css } from './client/styles'
 import { QuoteAction } from './client/quote-action'
@@ -7,11 +8,12 @@ import { NotesPanel } from './client/notes'
 import { SchedulesPanel } from './client/schedules'
 import { installUiStyles, Icon } from '../../shared/ui'
 import { createCapabilities } from '../../shared/client-capabilities'
-export const inject = ['slots', 'sessions', 'uiWorkspace', 'conversation']
+export const inject = ['slots', 'sessions', 'uiWorkspace', 'conversation', 'layout']
 export function apply(raw: Omit<Client, 'capabilities'>): void {
   const capabilities = createCapabilities<ReturnType<Client['capabilities']['getSnapshot']>>({})
   const ctx: Client = {
     sessions: raw.sessions,
+    layout: raw.layout,
     uiWorkspace: raw.uiWorkspace,
     conversation: raw.conversation,
     slots: raw.slots,
@@ -20,6 +22,15 @@ export function apply(raw: Omit<Client, 'capabilities'>): void {
     capabilities
   }
   installUiStyles(ctx)
+  ctx.slots.inject('main', () =>
+    ctx.slots.register({ name: 'main', key: 'px-session-home' }, () => (
+      <section className="px-ui px-panel">
+        <h2>会话已关闭</h2>
+        <p>任务和会话记录仍会保留。可以重新打开会话，或开始新任务。</p>
+        <button onClick={() => ctx.uiWorkspace.startSession()}>开始新任务</button>
+      </section>
+    ))
+  )
   ctx.effect(() => {
     const style = document.createElement('style')
     style.textContent = css
@@ -52,8 +63,7 @@ export function apply(raw: Omit<Client, 'capabilities'>): void {
       'workspace: native panel registry'
     )
   })
-  ctx.inject(['betterSidebar'], (host) => {
-    const sidebar = host.betterSidebar
+  const mountPanels = (host: any, sidebar: import('./client/contracts').Sidebar): void => {
     capabilities.set({ sidebar })
     host.effect(
       () => () => {
@@ -92,5 +102,8 @@ export function apply(raw: Omit<Client, 'capabilities'>): void {
           }),
         `workspace: ${id}`
       )
+  }
+  ctx.inject(['sidebarRight', 'sidebarRightTabs'], (host) => {
+    if (typeof host.sidebarRightTabs.entries === 'function') mountPanels(host, createNativeSidebar(host))
   })
 }

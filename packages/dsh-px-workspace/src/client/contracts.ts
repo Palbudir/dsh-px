@@ -12,6 +12,7 @@ export interface SessionRow {
   blank?: boolean
   running: boolean
   completed?: boolean
+  retainedBy?: Readonly<Record<string, number>>
 }
 export interface SessionList {
   current?: string
@@ -40,7 +41,8 @@ export interface PanelCapabilities {
   }
 }
 export interface Client {
-  sessions: { list: Snapshot<SessionList>; scope: (id: string) => any; clear: () => void }
+  sessions: { list: Snapshot<SessionList>; scope: (id: string) => any; clear?: () => void }
+  layout?: { panelInfo: Snapshot<{ activePanelId: string | null }>; selectPanel: (id: string | null) => void }
   uiWorkspace: { openSession: (id: string) => void; startSession: () => void }
   conversation: {
     input: {

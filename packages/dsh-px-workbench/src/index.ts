@@ -1,4 +1,4 @@
-import { rejectUntrustedRequest } from '../../shared/request-trust'
+import { rejectUnauthenticatedRequest as rejectUntrustedRequest } from '../../shared/request-trust'
 import { isAbsolute } from 'node:path'
 import type { IncomingMessage } from 'node:http'
 import type { HostPluginContext, HostResponse } from '@deepseek-ai/cordis'
@@ -33,7 +33,7 @@ export function apply(ctx: HostPluginContext): void {
       'workbench: workspace capability'
     )
   })
-  ctx.inject(['webServer', 'web'], (host) => {
+  ctx.inject(['connection', 'webServer', 'web'], (host) => {
     const web = (host as typeof host & { web?: { fetch: FetchPage } }).web
     if (!host.webServer || !web) return
     let pending: Promise<NetworkCheck> | null = null
@@ -43,7 +43,7 @@ export function apply(ctx: HostPluginContext): void {
           kind: 'exact',
           path: `${DEFAULTS.routePrefix}/network-check`,
           handler: async (req, res) => {
-            if (rejectUntrustedRequest(req, res)) return
+            if (rejectUntrustedRequest(req, res, host.connection)) return
             if (req.method !== 'POST') return json(res, 405, { error: '请使用 POST' })
             if (req.headers?.['x-dsh-px-request'] !== '1')
               return json(res, 403, { error: '请从本机工作台提交请求' })
@@ -58,14 +58,14 @@ export function apply(ctx: HostPluginContext): void {
       'dsh-px-workbench: network check'
     )
   })
-  ctx.inject(['webServer'], (ctx) => {
+  ctx.inject(['connection', 'webServer'], (ctx) => {
     if (!ctx.webServer) return
     const dispose = [
       ctx.webServer.register({
         kind: 'exact',
         path: `${DEFAULTS.routePrefix}/status`,
         handler: (req, res) => {
-          if (rejectUntrustedRequest(req, res)) return
+          if (rejectUntrustedRequest(req, res, ctx.connection)) return
           if (req.method !== 'GET') return json(res, 405, { error: '请使用 GET' })
           json(res, 200, localStatus(activity()))
         }
@@ -74,7 +74,7 @@ export function apply(ctx: HostPluginContext): void {
         kind: 'exact',
         path: `${DEFAULTS.routePrefix}/restart`,
         handler: async (req, res) => {
-          if (rejectUntrustedRequest(req, res)) return
+          if (rejectUntrustedRequest(req, res, ctx.connection)) return
           if (req.method !== 'POST') return json(res, 405, { error: '请使用 POST' })
           if (req.headers?.['x-dsh-px-request'] !== '1')
             return json(res, 403, { error: '请从本机工作台提交请求' })
@@ -98,7 +98,7 @@ export function apply(ctx: HostPluginContext): void {
         kind: 'exact',
         path: `${DEFAULTS.routePrefix}/cancel-pending`,
         handler: async (req, res) => {
-          if (rejectUntrustedRequest(req, res)) return
+          if (rejectUntrustedRequest(req, res, ctx.connection)) return
           if (req.method !== 'POST') return json(res, 405, { error: '请使用 POST' })
           if (req.headers?.['x-dsh-px-request'] !== '1')
             return json(res, 403, { error: '请从本机应用提交请求' })
@@ -118,7 +118,7 @@ export function apply(ctx: HostPluginContext): void {
         kind: 'exact',
         path: `${DEFAULTS.routePrefix}/layout`,
         handler: async (req, res) => {
-          if (rejectUntrustedRequest(req, res)) return
+          if (rejectUntrustedRequest(req, res, ctx.connection)) return
           if (!process.env.DSH_HOME)
             return json(res, 503, { error: '服务未提供数据目录，标签仍可在当前窗口使用。' })
           const store = createLayoutStore(process.env.DSH_HOME)
@@ -139,7 +139,7 @@ export function apply(ctx: HostPluginContext): void {
         kind: 'exact',
         path: `${DEFAULTS.routePrefix}/workspace`,
         handler: async (req, res) => {
-          if (rejectUntrustedRequest(req, res)) return
+          if (rejectUntrustedRequest(req, res, ctx.connection)) return
           if (req.method !== 'POST') return json(res, 405, { error: '请使用 POST' })
           if (req.headers?.['x-dsh-px-request'] !== '1')
             return json(res, 403, { error: '请从本机工作台提交请求' })

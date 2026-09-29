@@ -51,6 +51,7 @@ test('真实宿主产物路由：检查请求、安装状态门禁、打开目�
       logger: { info: () => {} },
       inject: (_: string[], callback: (ctx: unknown) => void) =>
         callback({
+          connection: { requestRejection: () => undefined },
           webServer: {
             register: (route: { path: string; handler: Handler }) => {
               routes.set(route.path, localHandler(route.handler))

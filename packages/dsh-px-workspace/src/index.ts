@@ -1,4 +1,4 @@
-import { rejectUntrustedRequest } from '../../shared/request-trust'
+import { rejectUnauthenticatedRequest as rejectUntrustedRequest } from '../../shared/request-trust'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { SessionContentIndex, type RecordEvent } from './model'
@@ -13,6 +13,7 @@ interface Session {
   snapshotEvents: () => readonly RecordEvent[]
 }
 interface Host {
+  connection: import('../../shared/request-trust').HostAuthentication
   sessions: { get: (id: string) => Session | undefined }
   sessionPersistence?: { stat: (id: string) => Promise<{ revision: string } | undefined> }
   sessionController: {
@@ -63,7 +64,7 @@ function numberParam(params: URLSearchParams, key: string, fallback: number): nu
   return Number(v)
 }
 export function apply(ctx: { inject: (services: string[], cb: (host: Host) => void) => unknown }): void {
-  ctx.inject(['webServer', 'sessions', 'sessionController', 'sessionPersistence'], (host) => {
+  ctx.inject(['connection', 'webServer', 'sessions', 'sessionController', 'sessionPersistence'], (host) => {
     const lifetime = new AbortController()
     let store: WorkspaceStore | undefined,
       scheduler: Scheduler | undefined,
@@ -197,7 +198,7 @@ export function apply(ctx: { inject: (services: string[], cb: (host: Host) => vo
             kind: 'exact',
             path: `/${name}/${route}`,
             handler: async (req, res) => {
-              if (rejectUntrustedRequest(req, res)) return
+              if (rejectUntrustedRequest(req, res, host.connection)) return
               const send = (status: number, data: unknown): void => {
                 res.writeHead(status, {
                   'Content-Type': 'application/json; charset=utf-8',

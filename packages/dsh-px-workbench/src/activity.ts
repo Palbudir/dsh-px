@@ -1,7 +1,7 @@
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { IncomingMessage, ServerResponse } from 'node:http'
-import { rejectUntrustedRequest } from '../../shared/request-trust'
+import { rejectUnauthenticatedRequest as rejectUntrustedRequest } from '../../shared/request-trust'
 import { readJsonBody } from './http'
 import { readServiceState } from './status'
 import { registerTerminalActivity, type TerminalOwner } from './terminal-activity'
@@ -76,7 +76,7 @@ export function registerActivity(ctx: any): () => Activity {
     )
   })
   const read = (): Activity => activitySnapshot(services)
-  ctx.inject(['webServer'], (host: any) => {
+  ctx.inject(['connection', 'webServer'], (host: any) => {
     if (!host.webServer) return
     const json = (res: ServerResponse, code: number, value: unknown): void => {
       res.writeHead(code, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' })
@@ -88,7 +88,7 @@ export function registerActivity(ctx: any): () => Activity {
           kind: 'exact',
           path: '/dsh-px-workbench/activity',
           handler: (req: IncomingMessage, res: ServerResponse) => {
-            if (rejectUntrustedRequest(req, res)) return
+            if (rejectUntrustedRequest(req, res, host.connection)) return
             if (req.method !== 'GET') return json(res, 405, { error: '请使用 GET' })
             json(res, 200, { ...read(), instanceId: process.env.DSH_PX_INSTANCE_ID ?? null })
           }
@@ -97,7 +97,7 @@ export function registerActivity(ctx: any): () => Activity {
           kind: 'exact',
           path: '/dsh-px-workbench/shutdown',
           handler: async (req: IncomingMessage, res: ServerResponse) => {
-            if (rejectUntrustedRequest(req, res)) return
+            if (rejectUntrustedRequest(req, res, host.connection)) return
             if (req.method !== 'POST') return json(res, 405, { error: '请使用 POST' })
             if (req.headers['x-dsh-px-request'] !== '1')
               return json(res, 403, { error: '请从本机应用提交请求' })

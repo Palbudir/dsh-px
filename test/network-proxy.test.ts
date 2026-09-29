@@ -109,6 +109,7 @@ test('网页检查路由拒绝外部简单 POST 和自定目标；并发点击�
     effect: (fn: any) => {
       cleanups.push(fn())
     },
+    connection: { requestRejection: () => undefined },
     webServer: {
       register: (r: any) => {
         routes.set(r.path, localHandler(r.handler))

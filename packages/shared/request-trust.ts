@@ -5,6 +5,33 @@ interface Response {
   writeHead: (status: number, headers: Record<string, string>) => unknown
   end: (body: string) => unknown
 }
+/** Public DSH Connection contract, present in both pinned 0.1 and 0.2 hosts. */
+export interface HostAuthentication {
+  requestRejection(request: { headers: Record<string, string | string[] | undefined> }): 401 | 403 | undefined
+}
+
+/** Keep authentication with the host instead of treating loopback access as a login. */
+export function rejectUnauthenticatedRequest(
+  req: Request,
+  res: Response,
+  connection: HostAuthentication | undefined
+): boolean {
+  const rejection = connection?.requestRejection({ headers: req.headers ?? {} })
+  if (!connection || rejection !== undefined) {
+    res.writeHead(connection ? rejection! : 503, {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store'
+    })
+    res.end(
+      JSON.stringify({
+        code: connection ? 'HOST_AUTH_REQUIRED' : 'HOST_AUTH_UNAVAILABLE',
+        error: '请通过宿主提供的登录入口连接此服务。'
+      })
+    )
+    return true
+  }
+  return rejectUntrustedRequest(req, res)
+}
 /** Local browser-origin/DNS-rebinding fence, matching the bundled DSH deployment.
  * This is not account authentication: trusted local non-browser callers remain supported.
  */

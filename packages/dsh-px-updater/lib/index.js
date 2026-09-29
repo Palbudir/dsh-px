@@ -564,6 +564,23 @@ var require_gt = __commonJS({
 });
 
 // packages/shared/request-trust.ts
+function rejectUnauthenticatedRequest(req, res, connection) {
+  const rejection = connection?.requestRejection({ headers: req.headers ?? {} });
+  if (!connection || rejection !== void 0) {
+    res.writeHead(connection ? rejection : 503, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store"
+    });
+    res.end(
+      JSON.stringify({
+        code: connection ? "HOST_AUTH_REQUIRED" : "HOST_AUTH_UNAVAILABLE",
+        error: "\u8BF7\u901A\u8FC7\u5BBF\u4E3B\u63D0\u4F9B\u7684\u767B\u5F55\u5165\u53E3\u8FDE\u63A5\u6B64\u670D\u52A1\u3002"
+      })
+    );
+    return true;
+  }
+  return rejectUntrustedRequest(req, res);
+}
 function trustedLocalRequest(req) {
   const headers = req.headers ?? {}, host = headers.host, origin = headers.origin;
   if (typeof host !== "string" || headers["sec-fetch-site"] === "cross-site") return false;
@@ -924,7 +941,7 @@ function apply(ctx, rawConfig) {
     }
   };
   say(`\u5DF2\u52A0\u8F7D\uFF08dsh ${info.dshVersion ?? "\u672A\u77E5"}\uFF0C${info.platform ?? process.platform}\uFF09`);
-  ctx.inject(["webServer"], (hostCtx) => {
+  ctx.inject(["connection", "webServer"], (hostCtx) => {
     const webServer = hostCtx.webServer;
     if (webServer?.register === void 0) {
       say("webServer \u5DF2\u6CE8\u5165\u4F46\u6CA1\u6709 register \u65B9\u6CD5\uFF0C\u8DF3\u8FC7 HTTP \u7AEF\u70B9");
@@ -941,7 +958,7 @@ function apply(ctx, rawConfig) {
       kind: "exact",
       path: `${config.routePrefix}/status`,
       handler: (_req, res) => {
-        if (rejectUntrustedRequest(_req, res)) return;
+        if (rejectUnauthenticatedRequest(_req, res, hostCtx.connection)) return;
         sendJson(res, 200, {
           plugin: name,
           version: package_default.version,
@@ -960,7 +977,7 @@ function apply(ctx, rawConfig) {
       kind: "exact",
       path: `${config.routePrefix}/check`,
       handler: async (_req, res) => {
-        if (rejectUntrustedRequest(_req, res)) return;
+        if (rejectUnauthenticatedRequest(_req, res, hostCtx.connection)) return;
         const outcome = await checkUpdates(config);
         const bothFailed = outcome.errors.length >= 2;
         sendJson(res, bothFailed ? 502 : 200, outcome);
@@ -970,7 +987,7 @@ function apply(ctx, rawConfig) {
       kind: "exact",
       path: `${config.routePrefix}/check-shell`,
       handler: async (req, res) => {
-        if (rejectUntrustedRequest(req, res)) return;
+        if (rejectUnauthenticatedRequest(req, res, hostCtx.connection)) return;
         if (req.method !== "POST") {
           sendJson(res, 405, { ok: false, error: "\u53EA\u63A5\u53D7 POST" });
           return;
@@ -991,7 +1008,7 @@ function apply(ctx, rawConfig) {
       kind: "exact",
       path: `${config.routePrefix}/shell-state`,
       handler: (_req, res) => {
-        if (rejectUntrustedRequest(_req, res)) return;
+        if (rejectUnauthenticatedRequest(_req, res, hostCtx.connection)) return;
         const bridge = readShellState();
         sendJson(
           res,
@@ -1011,7 +1028,7 @@ function apply(ctx, rawConfig) {
       kind: "exact",
       path: `${config.routePrefix}/install`,
       handler: async (req, res) => {
-        if (rejectUntrustedRequest(req, res)) return;
+        if (rejectUnauthenticatedRequest(req, res, hostCtx.connection)) return;
         if (req.method !== "POST") {
           sendJson(res, 405, { ok: false, error: "\u53EA\u63A5\u53D7 POST" });
           return;
@@ -1037,7 +1054,7 @@ function apply(ctx, rawConfig) {
       kind: "exact",
       path: `${config.routePrefix}/open`,
       handler: async (req, res) => {
-        if (rejectUntrustedRequest(req, res)) return;
+        if (rejectUnauthenticatedRequest(req, res, hostCtx.connection)) return;
         if (req.method !== "POST") {
           sendJson(res, 405, { ok: false, error: "\u53EA\u63A5\u53D7 POST" });
           return;

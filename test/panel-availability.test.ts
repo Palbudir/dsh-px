@@ -599,9 +599,10 @@ test('sidebar activation registers the quote footer slot without disturbing the 
     'the footer comes from the sidebar injection, not from the workspace entry alone'
   )
   injections
-    .find((entry) => entry.names.includes('betterSidebar'))!
+    .find((entry) => entry.names.includes('sidebarRightTabs') && entry.names.includes('sidebarRight'))!
     .callback({
-      betterSidebar: f.sidebar.service,
+      sidebarRight: f.native.controller,
+      sidebarRightTabs: { entries: () => [], get: () => undefined },
       slots: raw.slots,
       effect: () => () => {}
     })

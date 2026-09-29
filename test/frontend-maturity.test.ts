@@ -256,6 +256,7 @@ test('shutdown is instance-bound, rejects active idle-mode, and awaits native di
     effect: (fn: () => () => void) => {
       disposers.push(fn())
     },
+    connection: { requestRejection: () => undefined },
     webServer: {
       register: (route: any) => {
         routes.set(route.path, route.handler)

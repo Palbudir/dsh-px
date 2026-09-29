@@ -6,6 +6,7 @@ import { Icon } from '../../../shared/ui'
 import { useSessionLayout } from './layout'
 import { attachToolbarLayout, isTypingTarget } from './host-layout'
 import { panelAvailability, usePanelCapabilities } from './panel-availability'
+import { selectedSession } from '../../../shared/native-navigation'
 
 const panels = [
   ['editor', '文件', 'file'],
@@ -17,8 +18,11 @@ const panels = [
   ['px-notes', '引用与批注', 'note'],
   ['px-schedules', '定时任务', 'schedule']
 ] as const
+const emptyPanel = { activePanelId: null }
+const defaultPanel = { getSnapshot: () => emptyPanel, subscribe: () => () => {} }
 export function SessionBar({ ctx }: { ctx: Client }): unknown {
   const sessions = useSnapshot(ctx.sessions.list)
+  const panelInfo = useSnapshot(ctx.layout?.panelInfo ?? defaultPanel)
   const capabilities = usePanelCapabilities(ctx)
   const layout = useSessionLayout()
   const { tabs, setTabs, ready } = layout
@@ -26,7 +30,7 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
   const bar = useRef<HTMLDivElement | null>(null)
   useEffect(() => (bar.current ? attachToolbarLayout(bar.current) : undefined), [])
   const selected = useRef<HTMLButtonElement | null>(null)
-  const current = sessions.current,
+  const current = selectedSession(sessions, panelInfo.activePanelId),
     row = current ? sessions.byId[current] : undefined
   // Child views belong to the native lineage; ordinary openSession cannot reopen them.
   const ordinaryCurrent = row?.origin === 'subagent' ? row.parentId : current
@@ -96,7 +100,8 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
     setTabs(result.tabs)
     if (id === ordinaryCurrent) {
       if (result.next) open(result.next)
-      else ctx.sessions.clear()
+      else if (ctx.layout) ctx.layout.selectPanel('px-session-home')
+      else ctx.sessions.clear?.()
     }
   }
   const reopen = (): void => {

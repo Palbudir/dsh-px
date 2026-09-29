@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { buildSync } from 'esbuild'
 import { runInNewContext } from 'node:vm'
 
-test('managed client entries activate without the optional sidebar and register panels when it appears', () => {
+test('managed client entries activate without the native sidebar and register panels when it appears', () => {
   const styles: any[] = []
   const document = {
     querySelector: () => styles.find((style) => style.dataset.dshPxUi),
@@ -58,6 +58,7 @@ test('managed client entries activate without the optional sidebar and register 
           return () => {}
         }
       },
+      layout: {},
       sessions: {},
       uiWorkspace: {},
       conversation: {},
@@ -78,8 +79,10 @@ test('managed client entries activate without the optional sidebar and register 
     const panels: string[] = []
     const host = {
       ...core,
-      betterSidebar: {
-        registerTab: (tab: { id: string }) => {
+      sidebarRight: {},
+      sidebarRightTabs: {
+        entries: () => [],
+        register: (tab: { id: string }) => {
           panels.push(tab.id)
           return () => {
             panels.splice(panels.indexOf(tab.id), 1)
@@ -87,7 +90,9 @@ test('managed client entries activate without the optional sidebar and register 
         }
       }
     }
-    for (const injection of pending.filter((entry) => entry.services.includes('betterSidebar')))
+    for (const injection of pending.filter(
+      (entry) => entry.services.includes('sidebarRightTabs') && entry.services.includes('sidebarRight')
+    ))
       injection.callback(host)
     assert.ok(panels.includes(name === 'dsh-px-workspace' ? 'px-artifacts' : 'dsh-px-taskflow'))
     cleanups.reverse().forEach((dispose) => dispose())

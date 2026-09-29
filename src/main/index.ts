@@ -1,6 +1,7 @@
 /** Desktop process ownership, update coordination and local recovery. DSH owns Agent execution. */
 import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage, Notification, ipcMain } from 'electron'
 import { PACK_VERSION } from '../shared/plugin-catalog'
+import { harnessFetch } from './harness-http'
 
 import { spawn, execFile } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
@@ -934,8 +935,8 @@ async function getActivity(): Promise<Activity> {
   if (preparing) return { known: true, runningAgents: 0, runningJobs: 1, queuedInputs: 0, openTerminals: 0 }
   if (!harness || harness.exitCode !== null || harness.signalCode !== null)
     return { known: true, runningAgents: 0, runningJobs: 0, queuedInputs: 0, openTerminals: 0 }
-  if (!currentCleanUrl) throw new Error('服务地址尚未就绪。')
-  const response = await fetch(new URL('dsh-px-workbench/activity', currentCleanUrl), {
+  if (!currentCleanUrl || !currentAuthenticatedUrl) throw new Error('服务地址尚未就绪。')
+  const response = await harnessFetch(currentCleanUrl, currentAuthenticatedUrl, 'dsh-px-workbench/activity', {
     signal: AbortSignal.timeout(4000)
   })
   if (!response.ok) throw new Error('暂不能确认活动任务。')
@@ -946,19 +947,24 @@ async function getActivity(): Promise<Activity> {
 
 async function stopHarness(child: ChildProcess, mode: 'idle' | 'cancel' = 'idle'): Promise<void> {
   if (child.exitCode !== null || child.signalCode !== null) return
-  if (!currentCleanUrl) throw new Error('未确定服务地址，保留当前进程。')
+  if (!currentCleanUrl || !currentAuthenticatedUrl) throw new Error('未确定服务地址，保留当前进程。')
   const requestId = randomUUID()
   expectedStops.add(child)
   try {
     await waitForGracefulStop({
       child,
       trigger: async () => {
-        const response = await fetch(new URL('dsh-px-workbench/shutdown', currentCleanUrl!), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-dsh-px-request': '1' },
-          body: JSON.stringify({ instanceId, requestId, mode }),
-          signal: AbortSignal.timeout(6000)
-        })
+        const response = await harnessFetch(
+          currentCleanUrl!,
+          currentAuthenticatedUrl!,
+          'dsh-px-workbench/shutdown',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-dsh-px-request': '1' },
+            body: JSON.stringify({ instanceId, requestId, mode }),
+            signal: AbortSignal.timeout(6000)
+          }
+        )
         if (!response.ok)
           throw Object.assign(
             new Error(((await response.json()) as { error?: string }).error ?? '服务拒绝停止请求。'),

@@ -311,6 +311,7 @@ test('authenticated API rejects write-by-GET and missing CSRF header; uses nativ
           effect: (fn) => {
             disposers.push(fn())
           },
+          connection: { requestRejection: () => undefined },
           webServer: {
             register: (r) => {
               routes.set(r.path, localHandler(r.handler))

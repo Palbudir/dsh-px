@@ -1,6 +1,6 @@
 import { readFailure } from '../../shared/session-errors'
 export { readFailure } from '../../shared/session-errors'
-import { rejectUntrustedRequest } from '../../shared/request-trust'
+import { rejectUnauthenticatedRequest as rejectUntrustedRequest } from '../../shared/request-trust'
 import {
   evidenceDetail,
   integerOption,
@@ -132,7 +132,7 @@ export function apply(ctx: Context): void {
         JSON.stringify({ checkpoint: validateCheckpoint(args, liveEvidence(session(exec))) })
     })
   })
-  ctx.inject(['webServer', 'sessions', 'sessionPersistence'], (host) => {
+  ctx.inject(['connection', 'webServer', 'sessions', 'sessionPersistence'], (host) => {
     const coldIndexes = new Map<string, { revision: string; index: EvidenceIndex }>()
     host.effect(() => () => coldIndexes.clear(), 'taskflow: stored evidence cache')
     for (const kind of ['review', 'evidence'] as const)
@@ -142,7 +142,7 @@ export function apply(ctx: Context): void {
             kind: 'exact',
             path: `${DEFAULTS.routePrefix}/${kind}`,
             handler: async (req: any, res: any) => {
-              if (rejectUntrustedRequest(req, res)) return
+              if (rejectUntrustedRequest(req, res, host.connection)) return
               const send = (status: number, data: unknown): void => {
                 res.writeHead(status, {
                   'Content-Type': 'application/json; charset=utf-8',

@@ -60,6 +60,7 @@ test('工作台：诊断不读取密钥内容；过期心跳不可重启，路�
   mod.apply({
     inject: (_: unknown, callback: (ctx: unknown) => void) =>
       callback({
+        connection: { requestRejection: () => undefined },
         webServer: {
           register: (r: { path: string; handler: (req: unknown, res: unknown) => void }) => {
             routes.set(r.path, localHandler(r.handler))

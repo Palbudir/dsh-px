@@ -1,5 +1,5 @@
 /** Update metadata and instance-bound desktop actions exposed through the DSH plugin host. */
-import { rejectUntrustedRequest } from '../../shared/request-trust'
+import { rejectUnauthenticatedRequest as rejectUntrustedRequest } from '../../shared/request-trust'
 import {
   freshHeartbeat,
   requestShellAction as sendShellAction,
@@ -252,7 +252,7 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
   }
   say(`已加载（dsh ${info.dshVersion ?? '未知'}，${info.platform ?? process.platform}）`)
 
-  ctx.inject(['webServer'], (hostCtx) => {
+  ctx.inject(['connection', 'webServer'], (hostCtx) => {
     const webServer = hostCtx.webServer
     if (webServer?.register === undefined) {
       say('webServer 已注入但没有 register 方法，跳过 HTTP 端点')
@@ -271,7 +271,7 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
       kind: 'exact',
       path: `${config.routePrefix}/status`,
       handler: (_req: HostRequest, res: HostResponse) => {
-        if (rejectUntrustedRequest(_req, res)) return
+        if (rejectUntrustedRequest(_req, res, hostCtx.connection)) return
         sendJson(res, 200, {
           plugin: name,
           version: packageInfo.version,
@@ -291,7 +291,7 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
       kind: 'exact',
       path: `${config.routePrefix}/check`,
       handler: async (_req: HostRequest, res: HostResponse) => {
-        if (rejectUntrustedRequest(_req, res)) return
+        if (rejectUntrustedRequest(_req, res, hostCtx.connection)) return
         const outcome = await checkUpdates(config)
         // 只有"两个来源都拿不到"才算网关故障；单一来源失败仍返回 200 并附 errors。
         const bothFailed = outcome.errors.length >= 2
@@ -304,7 +304,7 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
       kind: 'exact',
       path: `${config.routePrefix}/check-shell`,
       handler: async (req: HostRequest, res: HostResponse) => {
-        if (rejectUntrustedRequest(req, res)) return
+        if (rejectUntrustedRequest(req, res, hostCtx.connection)) return
         if (req.method !== 'POST') {
           sendJson(res, 405, { ok: false, error: '只接受 POST' })
           return
@@ -332,7 +332,7 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
       kind: 'exact',
       path: `${config.routePrefix}/shell-state`,
       handler: (_req: HostRequest, res: HostResponse) => {
-        if (rejectUntrustedRequest(_req, res)) return
+        if (rejectUntrustedRequest(_req, res, hostCtx.connection)) return
         const bridge = readShellState()
         // 外壳没写（开发态未打包、或应用刚启动）时给一个明确的空状态，
         // 而不是 404：界面只需渲染一次，不必处理两种失败形态。
@@ -360,7 +360,7 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
       kind: 'exact',
       path: `${config.routePrefix}/install`,
       handler: async (req: HostRequest, res: HostResponse) => {
-        if (rejectUntrustedRequest(req, res)) return
+        if (rejectUntrustedRequest(req, res, hostCtx.connection)) return
         if (req.method !== 'POST') {
           sendJson(res, 405, { ok: false, error: '只接受 POST' })
           return
@@ -391,7 +391,7 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
       kind: 'exact',
       path: `${config.routePrefix}/open`,
       handler: async (req: HostRequest, res: HostResponse) => {
-        if (rejectUntrustedRequest(req, res)) return
+        if (rejectUntrustedRequest(req, res, hostCtx.connection)) return
         if (req.method !== 'POST') {
           sendJson(res, 405, { ok: false, error: '只接受 POST' })
           return
