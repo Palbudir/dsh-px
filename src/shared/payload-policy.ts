@@ -26,6 +26,7 @@ export function forbiddenPayloadPaths(paths: readonly string[]): string[] {
     const home = path.startsWith('runtime/dsh-home/') ? path.slice('runtime/dsh-home/'.length) : null
     if (home === null) continue
     if (
+      /^\.dsh-px-(?:migration-lease\.sqlite(?:-(?:journal|wal|shm))?|lock-[\w-]+)(?:\/|$)/.test(home) ||
       /^(?:sessions|storages|backups|logs|workspaces|build-test|update-bridge|\.dsh-px-staging|\.dsh-px-migration-lock|\.dsh-px-maintenance-trash)(?:\/|$)/.test(
         home
       ) ||

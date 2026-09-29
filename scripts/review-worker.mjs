@@ -19,11 +19,10 @@ import {
   aggregate,
   attest,
   encodeReport,
-  splitBatches,
   requestFromZip,
   validateRequest,
   verifyAttestation,
-  collectReviewContext,
+  collectGroupedReview,
   parseReviewTree
 } from './review-core.mjs'
 import { command, runReviewBatch } from './review-process.mjs'
@@ -348,16 +347,16 @@ export async function prepareReviewSnapshot(config, request, git) {
     .decode(await git(['diff', '--name-only', '--no-renames', '-z', mergeBase, request.head], true, true))
     .split('\0')
     .filter(Boolean)
-  const snapshot = await collectReviewContext(
+  const snapshot = await collectGroupedReview(
     { ...request, repository: config.repository, mergeBase, names },
     {
       list: async (ref) => parseReviewTree(await git(['ls-tree', '-r', '-l', '-z', ref], true, true)),
       read: (ref, path) => git(['show', `${ref}:${path}`], true, true)
     },
-    config.contextLimits
+    config.contextLimits,
+    config.maxBatchChars ?? 500000
   )
-  const batches = splitBatches(snapshot.files, snapshot.context, config.maxBatchChars ?? 500000)
-  return { ...snapshot, batches, mergeBase, tree: sha(await git(['rev-parse', request.head + '^{tree}'])) }
+  return { ...snapshot, mergeBase, tree: sha(await git(['rev-parse', request.head + '^{tree}'])) }
 }
 
 export async function reviewSnapshot(config, request, directory, invoke = runReviewBatch) {

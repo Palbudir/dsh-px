@@ -398,7 +398,7 @@ export function reviewModuleReferences(source, options = {}) {
   return { literals: literals.sort((a, b) => a.at - b.at), dynamic: dynamic.sort((a, b) => a.at - b.at) }
 }
 /** Collect only immutable Git blobs, including before/base contracts when they differ from head. */
-export async function collectReviewContext(request, reader, limits = {}) {
+export async function collectReviewContext(request, reader, limits = {}, contracts = []) {
   const maxPaths = limits.maxPaths ?? 256,
     maxBytes = limits.maxBytes ?? 3000000,
     maxTreeEntries = limits.maxTreeEntries ?? 20000
@@ -476,6 +476,7 @@ export async function collectReviewContext(request, reader, limits = {}) {
     'docs/PLUGINS.md',
     'docs/STATUS.md',
     'package.json',
+    'config/products.json',
     'config/plugins.json'
   ]
   const governance = request.names.some((path) =>
@@ -502,6 +503,7 @@ export async function collectReviewContext(request, reader, limits = {}) {
     for (const path of common) add(ref, path, 'project contract', false)
     for (const path of support) add(ref, path, 'review policy and installation contract', false)
     for (const path of consumers) add(ref, path, 'release updater consumer contract', false)
+    for (const path of contracts) add(ref, path, 'producer and consumer contract', false)
   }
   // Changed roots already provide merge-base/head text in their change records. A divergent
   // requested base is a separate integration contract and must not remain a read-only hidden blob.
@@ -647,6 +649,97 @@ export async function collectReviewContext(request, reader, limits = {}) {
       contextChars: text.length,
       externalReferences: external.size,
       computedReferences: dynamic.length
+    }
+  }
+}
+/** Trusted grouping rules supply non-import relationships without duplicating all governance in every batch. */
+export async function collectGroupedReview(request, reader, limits = {}, maxChars = 500000) {
+  const pluginNames = ['updater', 'workbench', 'taskflow', 'workspace']
+  const groups = new Map()
+  const add = (group, path) => {
+    if (!groups.has(group)) groups.set(group, new Set())
+    groups.get(group).add(path)
+  }
+  if (new Set(request.names).size !== request.names.length) throw new Error('Duplicate changed paths')
+  for (const path of request.names) {
+    reviewSourcePath(path)
+    if (
+      /^(?:scripts\/(?:review|release)-|test\/(?:review|release)-|docs\/github\/|\.github\/workflows\/)/.test(
+        path
+      )
+    )
+      add('governance', path)
+    else if (path === 'package-lock.json') add('dependency-lock', path)
+    else if (path.startsWith('packages/shared/')) {
+      for (const name of pluginNames) add(name, path)
+      add('runtime', path)
+    } else {
+      const plugin = pluginNames.find(
+        (name) => path.startsWith(`packages/dsh-px-${name}/`) || path.startsWith(`test/${name}-`)
+      )
+      add(plugin ?? (path.startsWith('test/') ? 'verification' : 'runtime'), path)
+    }
+  }
+  if (!groups.size) throw new Error('No reviewable changes')
+  const runtimeContracts = [
+    'scripts/stage-runtime.ts',
+    'scripts/verify-package.ts',
+    'src/main/index.ts',
+    'src/shared/runtime-integrity.ts',
+    'src/main/managed-plugins.ts',
+    'config/products.json'
+  ]
+  const snapshots = []
+  const files = new Map()
+  const batches = []
+  for (const [group, names] of groups) {
+    const contracts =
+      group === 'runtime'
+        ? runtimeContracts
+        : pluginNames.includes(group)
+          ? [
+              `packages/dsh-px-${group}/src/index.ts`,
+              `packages/dsh-px-${group}/src/client.tsx`,
+              ...(group === 'updater'
+                ? ['src/main/update-controller.ts', 'src/main/update-bridge.ts', 'src/main/index.ts']
+                : [])
+            ]
+          : []
+    const snapshot = await collectReviewContext({ ...request, names: [...names] }, reader, limits, contracts)
+    const context =
+      `Review contract group: ${group}\nAll changed paths in this request: ${JSON.stringify(request.names)}\nOnly the changes assigned below are this group's approval scope. Do not assume another batch approved a missing dependency.\n` +
+      snapshot.context
+    for (const file of snapshot.files) {
+      const previous = files.get(file.path)
+      if (previous && canonical(previous) !== canonical(file))
+        throw new Error('Changed source differs between groups')
+      files.set(file.path, file)
+    }
+    batches.push(
+      ...splitBatches(snapshot.files, context, maxChars).map((batch) => ({
+        ...batch,
+        id: `${group}-${batch.id}`,
+        group
+      }))
+    )
+    snapshots.push({ ...snapshot, group, context })
+  }
+  if (files.size !== request.names.length || request.names.some((path) => !files.has(path)))
+    throw new Error('Review groups do not cover every changed file')
+  return {
+    files: request.names.map((path) => files.get(path)),
+    batches,
+    context: snapshots.map((snapshot) => snapshot.context).join('\n\n'),
+    identities: snapshots.flatMap((snapshot) =>
+      snapshot.identities.map((identity) => ({ ...identity, group: snapshot.group }))
+    ),
+    projections: snapshots.flatMap((snapshot) =>
+      snapshot.projections.map((projection) => ({ ...projection, group: snapshot.group }))
+    ),
+    metrics: {
+      groups: snapshots.length,
+      contextChars: snapshots.reduce((sum, s) => sum + s.context.length, 0),
+      groupMetrics: snapshots.map((snapshot) => ({ group: snapshot.group, ...snapshot.metrics }))
     }
   }
 }

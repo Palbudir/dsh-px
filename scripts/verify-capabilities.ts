@@ -161,7 +161,10 @@ async function bootProbe(nodeExe, dshEntry, home, options: { timeoutMs?: number 
           headers: cookie ? { Cookie: cookie } : {}
         })
         if (res.ok) {
-          const plugin = await fetch(`${url}dsh-px-workbench/status`, { signal: AbortSignal.timeout(2000) })
+          const plugin = await fetch(`${url}dsh-px-workbench/status`, {
+            signal: AbortSignal.timeout(2000),
+            headers: { Cookie: cookie }
+          })
           if (plugin.ok) return { ok: true, status: res.status, url, log: safeLog() }
         }
       } catch {

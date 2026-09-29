@@ -17,6 +17,7 @@ import {
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import * as asyncFs from 'node:fs/promises'
 import { MANAGED_PLUGIN_NAMES } from '../shared/plugin-catalog'
+import { acquireMigrationLease, claimMigrationDirectory } from './migration-lease'
 import {
   assertPluginIdentity,
   assertSidebarCompatibilityIdentity,
@@ -414,58 +415,63 @@ async function exclusive<T>(options: BaseOptions, action: () => Promise<T>): Pro
     .then(async () => {
       const lock = join(key, '.dsh-px-migration-lock')
       mkdirSync(key, { recursive: true })
-      const claim = join(key, `.dsh-px-lock-${randomUUID()}`)
-      mkdirSync(claim)
-      ownProcessIdentity ??= processIdentity(process.pid)
-      atomicJson(join(claim, 'owner.json'), {
-        pid: process.pid,
-        processIdentity: ownProcessIdentity,
-        acquiredAt: new Date().toISOString()
-      })
+      const releaseLease = acquireMigrationLease(key)
       try {
-        renameSync(claim, lock)
-      } catch (error) {
-        if (!entryExists(lock)) {
-          removeOwned(claim, key)
-          throw error
-        }
-        let pid = 0,
-          expectedProcessIdentity: string | undefined
+        const claim = join(key, `.dsh-px-lock-${randomUUID()}`)
+        mkdirSync(claim)
+        ownProcessIdentity ??= processIdentity(process.pid)
+        atomicJson(join(claim, 'owner.json'), {
+          pid: process.pid,
+          processIdentity: ownProcessIdentity,
+          acquiredAt: new Date().toISOString()
+        })
         try {
-          const owner = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'))
-          pid = owner.pid
-          expectedProcessIdentity =
-            typeof owner.processIdentity === 'string' ? owner.processIdentity : undefined
-        } catch {
-          removeOwned(claim, key)
-          throw new Error(`迁移锁不完整，请保留 ${lock} 并检查日志`)
+          await claimMigrationDirectory(claim, lock)
+        } catch (error) {
+          if (!entryExists(lock)) {
+            removeOwned(claim, key)
+            throw error
+          }
+          let pid = 0,
+            expectedProcessIdentity: string | undefined
+          try {
+            const owner = JSON.parse(readFileSync(join(lock, 'owner.json'), 'utf8'))
+            pid = owner.pid
+            expectedProcessIdentity =
+              typeof owner.processIdentity === 'string' ? owner.processIdentity : undefined
+          } catch {
+            removeOwned(claim, key)
+            throw new Error(`迁移锁不完整，请保留 ${lock} 并检查日志`)
+          }
+          let alive = true
+          try {
+            process.kill(pid, 0)
+          } catch (failure) {
+            alive = (failure as NodeJS.ErrnoException).code !== 'ESRCH'
+          }
+          if (alive && expectedProcessIdentity) {
+            const actualProcessIdentity = pid === process.pid ? ownProcessIdentity : processIdentity(pid)
+            if (actualProcessIdentity && actualProcessIdentity !== expectedProcessIdentity) alive = false
+          }
+          if (!Number.isInteger(pid) || pid <= 0 || alive) {
+            removeOwned(claim, key)
+            throw new Error(`另一个进程正在准备插件（PID ${pid}）；请稍后重试`)
+          }
+          removeOwned(lock, key)
+          try {
+            await claimMigrationDirectory(claim, lock)
+          } catch (failure) {
+            removeOwned(claim, key)
+            throw failure
+          }
         }
-        let alive = true
         try {
-          process.kill(pid, 0)
-        } catch (failure) {
-          alive = (failure as NodeJS.ErrnoException).code !== 'ESRCH'
+          return await action()
+        } finally {
+          removeOwned(lock, key)
         }
-        if (alive && expectedProcessIdentity) {
-          const actualProcessIdentity = pid === process.pid ? ownProcessIdentity : processIdentity(pid)
-          if (actualProcessIdentity && actualProcessIdentity !== expectedProcessIdentity) alive = false
-        }
-        if (!Number.isInteger(pid) || pid <= 0 || alive) {
-          removeOwned(claim, key)
-          throw new Error(`另一个进程正在准备插件（PID ${pid}）；请稍后重试`)
-        }
-        removeOwned(lock, key)
-        try {
-          renameSync(claim, lock)
-        } catch (failure) {
-          removeOwned(claim, key)
-          throw failure
-        }
-      }
-      try {
-        return await action()
       } finally {
-        removeOwned(lock, key)
+        releaseLease()
       }
     })
   inflight.set(key, current)

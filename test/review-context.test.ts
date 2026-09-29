@@ -7,9 +7,8 @@ import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const { collectReviewContext, reviewModuleReferences, parseReviewTree, splitBatches } = await import(
-  pathToFileURL(resolve('scripts/review-core.mjs')).href
-)
+const { collectReviewContext, collectGroupedReview, reviewModuleReferences, parseReviewTree, splitBatches } =
+  await import(pathToFileURL(resolve('scripts/review-core.mjs')).href)
 const { prepareReviewSnapshot } = await import(pathToFileURL(resolve('scripts/review-worker.mjs')).href)
 const head = 'a'.repeat(40),
   base = 'b'.repeat(40),
@@ -53,6 +52,71 @@ const request = (names: string[], refBase = base) => ({
   base: refBase,
   mergeBase: base,
   names
+})
+
+test('contract groups include runtime and updater producers without copying governance into every batch', async () => {
+  const sources = {
+    'README.md': 'Contract fixture',
+    'scripts/review-loop.mjs': 'export const loop = 1',
+    'scripts/stage-runtime.ts': 'export const producer = "stage"',
+    'scripts/verify-package.ts': 'export const verifier = "package"',
+    'src/main/index.ts': 'export const consumer = "activation"',
+    'src/shared/runtime-integrity.ts': 'export const schema = 2',
+    'packages/dsh-px-updater/src/index.ts': 'export const status = "producer"',
+    'packages/dsh-px-updater/src/client.tsx': 'export const page = "consumer"'
+  }
+  const names = [
+    'scripts/review-loop.mjs',
+    'src/shared/runtime-integrity.ts',
+    'packages/dsh-px-updater/src/client.tsx'
+  ]
+  const f = memory({
+    [base]: sources,
+    [head]: { ...sources, 'src/shared/runtime-integrity.ts': 'export const schema = 3' }
+  })
+  const plan = await collectGroupedReview(request(names), f.reader)
+  assert.deepEqual(
+    plan.files.map((file: any) => file.path),
+    names
+  )
+  const runtime = plan.batches.filter((batch: any) => batch.group === 'runtime')
+  const updater = plan.batches.filter((batch: any) => batch.group === 'updater')
+  assert.ok(runtime.length && updater.length)
+  for (const batch of runtime) {
+    assert.ok(batch.text.includes('export const producer = "stage"'))
+    assert.ok(batch.text.includes('export const verifier = "package"'))
+    assert.ok(batch.text.includes('export const consumer = "activation"'))
+    assert.ok(!batch.text.includes('export const loop = 1'))
+  }
+  for (const batch of updater) {
+    assert.ok(batch.text.includes('export const status = "producer"'))
+    assert.ok(batch.text.includes('export const page = "consumer"'))
+  }
+  assert.equal(new Set(plan.batches.map((batch: any) => batch.id)).size, plan.batches.length)
+  await assert.rejects(collectGroupedReview(request([...names, names[0]]), f.reader), /Duplicate changed/)
+})
+
+test('shared changes retain every byte across consumer groups and oversized contracts fail closed', async () => {
+  const path = 'packages/shared/shared.ts'
+  const before = 'export const shared = "' + 'a'.repeat(12000) + '"'
+  const after = 'export const shared = "' + 'b'.repeat(14000) + '"'
+  const f = memory({ [base]: { [path]: before }, [head]: { [path]: after } })
+  const plan = await collectGroupedReview(request([path]), f.reader, {}, 5000)
+  assert.equal(plan.files.length, 1)
+  assert.equal(plan.files[0].before, before)
+  assert.equal(plan.files[0].after, after)
+  assert.equal(plan.metrics.groups, 5)
+  for (const group of ['runtime', 'updater', 'workbench', 'workspace', 'taskflow']) {
+    const chunks = plan.batches.filter((batch: any) => batch.group === group)
+    assert.ok(chunks.length > 1)
+    assert.ok(chunks.every((batch: any) => batch.text.length <= 5000))
+    assert.ok(chunks.some((batch: any) => batch.text.includes('/' + after.length)))
+  }
+  const large = memory({ [base]: { 'src/main/index.ts': before }, [head]: { 'src/main/index.ts': after } })
+  await assert.rejects(
+    collectGroupedReview(request(['src/main/index.ts']), large.reader, {}, 5000),
+    /context exceeds/
+  )
 })
 
 test('local import/export/require closure is complete and ref-bound, preserving base/head contracts and leading spaces', async () => {

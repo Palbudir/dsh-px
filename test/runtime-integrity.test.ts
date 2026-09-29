@@ -88,6 +88,9 @@ test('bundle source identity covers the package, both entries and patch; copied 
 
 test('release payload rejects private credentials, sessions, migration backups and traversal', () => {
   const forbidden = [
+    'resources/runtime/dsh-home/.dsh-px-migration-lease.sqlite',
+    'resources/runtime/dsh-home/.dsh-px-migration-lease.sqlite-journal',
+    'resources/runtime/dsh-home/.dsh-px-lock-123/owner.json',
     'resources/runtime/dsh-home/.credentials.yaml',
     'resources/runtime/dsh-home/.dsh-px-maintenance-transaction.json',
     'resources/runtime/dsh-home/.dsh-px-maintenance-trash/old/profile/package.json',
