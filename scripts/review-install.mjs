@@ -167,12 +167,16 @@ async function main() {
           'scripts/release-version.mjs',
           'scripts/release-quality.mjs',
           'scripts/release-catalog.mjs',
-          // Executed from the candidate checkout by the Pack/Desktop build jobs.
-          'scripts/release-gate.mjs',
+          // release.yml also runs these from the candidate checkout. The controller checks these
+          // digests against the protected master at run.head_sha; what actually binds the
+          // executed code is that the candidate must be that independently reviewed master head.
           'scripts/build-native-pack.ts',
           'scripts/prepare-native-desktop.mjs',
           'scripts/brand-native-installer.mjs',
-          'scripts/brand-installer-images.ps1'
+          'scripts/brand-installer-images.ps1',
+          'scripts/build-icon.ts',
+          'scripts/check-secrets.mjs',
+          'scripts/run.mjs'
         ].map((path) => [path, sourceDigest(readFileSync(join(source, path)))])
       )
     },

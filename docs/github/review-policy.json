@@ -25,11 +25,13 @@
       "scripts/release-version.mjs": "132e7a2861532263beeb5547ceffad7227f58e61d0c6bbf58cd7508b374d2e66",
       "scripts/release-quality.mjs": "f0faef04f20f6afc226597616c9dd4b1791a5ce049ad99782bab96795181d01d",
       "scripts/release-catalog.mjs": "a3187d9c3dd0fb64e9007946218c42dc536ede16b66a85962c29bf938deb518c",
-      "scripts/release-gate.mjs": "0d80c19aeeab0ca8952521d60f3c8f07b77f494ec6c43c96fca55f31f3d10360",
       "scripts/build-native-pack.ts": "c2bcd9e39f4703947f4ed1be2d3195573efc6fc0ed0a1052905f5a45ef401619",
-      "scripts/prepare-native-desktop.mjs": "ceef5feeded997e91e3379de006757237b518fb17939bd5cb85ad2587d0b9dd7",
+      "scripts/prepare-native-desktop.mjs": "e4d496c0a45afcd3a09bdf541df29fa2683609e8a879a247b04d4620c29a6b88",
       "scripts/brand-native-installer.mjs": "47aca27d855dcba093c36322a56f8b4fc5107cdc8811e967c8dfca7551e6416c",
-      "scripts/brand-installer-images.ps1": "34dd2ca993d80a9c92960033b88b6958564d4127b5acb60f4fed3036ad6c5459"
+      "scripts/brand-installer-images.ps1": "34dd2ca993d80a9c92960033b88b6958564d4127b5acb60f4fed3036ad6c5459",
+      "scripts/build-icon.ts": "3d47e2d3d8511af37ddd20f99e4219f4fb951640f43cdc15c67da27859561162",
+      "scripts/check-secrets.mjs": "d7e97ee0193fe2e2d88836b7dc9698e09380f0d40dc2b2aad3a03a441492efbf",
+      "scripts/run.mjs": "e95a2c728d278790709ca243f82c7cbaebd15559fbb5d94d9deaf6cb1077b78e"
     }
   },
   "keys": {

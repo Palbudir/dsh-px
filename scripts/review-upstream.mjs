@@ -505,7 +505,9 @@ export async function loadUpstreamCatalog(options = {}, lock = UPSTREAM_LOCK) {
 
 /** Host versions declared anywhere in the candidate product contract must all be pinned. */
 export function requirePinnedHosts(catalog, productText) {
-  if (productText === undefined || productText === null) return []
+  // Without a product contract no host can be proven pinned; that is not "all pinned".
+  if (productText === undefined || productText === null)
+    throw new Error('Candidate product contract config/products.json is missing')
   let value
   try {
     value = JSON.parse(productText)
@@ -524,6 +526,7 @@ export function requirePinnedHosts(catalog, productText) {
       if (item && typeof item === 'object') stack.push(item)
     }
   }
+  if (!versions.size) throw new Error('Candidate product contract declares no host version')
   for (const version of versions)
     if (!catalog.hosts.has(version))
       throw new Error(`Upstream DSH contract is not pinned for declared host ${JSON.stringify(version)}`)

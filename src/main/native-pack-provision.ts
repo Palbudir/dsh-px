@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { isAbsolute, join, relative, resolve } from 'node:path'
-import { assertRegularOrAbsent, renameWithRetry, writeAtomic } from './native-atomic'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { assertRegularOrAbsent, isAtomicTemporary, renameWithRetry, writeAtomic } from './native-atomic'
 
 export { writeAtomic } from './native-atomic'
 
@@ -123,14 +123,36 @@ function sameSpec(a: string | null, b: string | null, profile: string): boolean 
   if (!left || !right) return false
   return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
 }
+/** Whether `spec` names a PX cache archive directly inside this profile's `.dsh-px` directory. */
+function ownCache(spec: string | null, directory: string, profile: string): boolean {
+  const path = specPath(spec, profile)
+  if (!path || !CACHE_PATTERN.test(basename(path))) return false
+  const parent = dirname(path)
+  return process.platform === 'win32'
+    ? parent.toLowerCase() === resolve(directory).toLowerCase()
+    : parent === resolve(directory)
+}
 function inside(directory: string, path: string): boolean {
   const rel = relative(directory, path)
   return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
 }
-/** Remove temporaries a crashed write left behind; the caller's profile lock excludes live writers. */
-function removeTemporaries(directory: string): void {
-  for (const name of readdirSync(directory))
-    if (name.endsWith('.tmp')) rmSync(join(directory, name), { force: true })
+/**
+ * Remove temporaries a crashed `writeAtomic` left behind; the caller's profile lock excludes live writers.
+ * Only regular files matching the exact `writeAtomic` name rule are removed; directories, links and other
+ * files (including other tools' `*.tmp`) are left alone, and a failed removal never stops provisioning.
+ */
+function removeTemporaries(directory: string, log: (message: string) => void): void {
+  for (const name of readdirSync(directory)) {
+    if (!isAtomicTemporary(name)) continue
+    const path = join(directory, name)
+    try {
+      if (lstatSync(path).isFile()) rmSync(path, { force: true })
+    } catch (error) {
+      // Only the error code is logged: the message would carry the profile path.
+      const code = (error as NodeJS.ErrnoException | null)?.code ?? 'unknown'
+      log(`[dsh-px] Stale temporary ${name} could not be removed (${code}); continuing`)
+    }
+  }
 }
 function pruneCorrupt(directory: string): void {
   const corrupt = readdirSync(directory)
@@ -185,7 +207,9 @@ export async function provisionNativePack(options: NativePackProvision): Promise
     if (!existsSync(directory)) mkdirSync(directory)
     if (!lstatSync(directory).isDirectory() || lstatSync(directory).isSymbolicLink())
       throw new Error('Pack state directory must be an owned directory')
-    removeTemporaries(directory)
+    // Profile-root temporaries come from writeAtomic callers such as the cordis.patch.yml defaults.
+    removeTemporaries(options.profile, log)
+    removeTemporaries(directory, log)
     file = join(directory, STATE_FILE)
     const state = loadState(file, log)
     pruneCorrupt(directory)
@@ -195,8 +219,10 @@ export async function provisionNativePack(options: NativePackProvision): Promise
     const targetSpec = 'file:' + cached.replaceAll('\\', '/')
     if (state?.phase === 'user-managed') return 'user-managed'
     // First adoption never takes over a user's existing dependency. Removal and custom replacement persist.
+    // Without state (first start, or state quarantined as corrupt) a dependency on PX's own cache archive in
+    // this profile is still PX-managed: only PX writes `.dsh-px/pack-<sha256>.tgz`, so it is verified and upgraded.
     const managed = !state
-      ? current === null
+      ? current === null || ownCache(current, directory, options.profile)
       : state.phase === 'installed'
         ? sameSpec(current, state.targetSpec, options.profile)
         : sameSpec(current, state.targetSpec, options.profile) ||

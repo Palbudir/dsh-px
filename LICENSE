@@ -26,13 +26,13 @@ SOFTWARE.
 
 （以下为中文说明；上方英文 MIT 正文是适用于本仓库自身代码的许可证。）
 
-`dsh-px` 在构建时会把下列第三方软件装配进生成的 `runtime/` 目录，
+`dsh-px` 构建 Pack 与 Desktop 时会使用并再分发下列第三方软件，
 它们**不受**上述许可证覆盖，各自适用其上游许可证：
 
-- **DeepSeek Harness（`@deepseek-ai/dsh`）** 及其全部 `@deepseek-ai/*` 传递依赖 —— MIT。
+- **DeepSeek Harness（`@deepseek-ai/dsh` 及官方 Desktop 源码）** 及其全部 `@deepseek-ai/*` 传递依赖 —— MIT。
   https://github.com/deepseek-ai/deepseek-harness
-- **Node.js** —— MIT 及其他许可证。https://nodejs.org
-- `scripts/stage-runtime.mjs` 中 `DEFAULT_PLUGINS` 列出的插件，各自适用其自身许可证。
+- **Electron、Node.js** 及官方 Desktop 随附的运行时组件 —— 各自的上游许可证。
+- `config/native-pack.json` 的 `dependencies` 中列出的 Pack 成员插件及其依赖，各自适用其自身许可证。
 
-上述组件被装配进生成的 `runtime/` 目录，而该目录**不入库**。
-但打包产物会再分发这些组件，因此在分发二进制之前，请逐一核对各上游许可证的要求。
+这些组件只出现在构建产物中，不入库。
+打包产物会再分发这些组件，因此在分发二进制之前，请逐一核对各上游许可证的要求。

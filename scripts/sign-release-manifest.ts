@@ -62,6 +62,43 @@ export function createReleaseManifest(input: ReleaseInput): ReleaseManifest {
   }
 }
 
+/** The CI-produced description of the one primary release file (Pack `artifact` or Desktop `file`). */
+export interface BuildArtifactRecord {
+  artifact?: string
+  file?: string
+  size: number
+  sha256: string
+  sha512: string
+  sourceCommit: string
+  sourceDirty?: boolean
+  candidate?: boolean
+}
+
+/**
+ * Refuse to sign unless the local primary file is byte-identical to what CI recorded and the
+ * checkout is the commit CI built. A mismatch means the wrong file or the wrong checkout.
+ */
+export function assertMatchesArtifact(
+  manifest: ReleaseManifest,
+  record: BuildArtifactRecord,
+  head: string
+): void {
+  const name = record.artifact ?? record.file
+  if (!name || record.sourceDirty === true || record.candidate === true)
+    throw new Error('Artifact record is not a clean release build')
+  if (record.sourceCommit !== head || manifest.sourceCommit !== head)
+    throw new Error('Checkout HEAD does not match the commit CI built')
+  const primary = manifest.files.find((f) => f.role === (manifest.product === 'pack' ? 'pack' : 'installer'))
+  if (
+    !primary ||
+    primary.name !== name ||
+    primary.size !== record.size ||
+    primary.sha256 !== record.sha256 ||
+    primary.sha512 !== record.sha512
+  )
+    throw new Error('Local release file does not match the CI artifact record')
+}
+
 /** Sign, then prove the envelope verifies with the pinned keys for its own target. */
 export function signAndVerify(
   manifest: ReleaseManifest,
@@ -89,11 +126,11 @@ function main(argv: string[]) {
   const args = maintenanceArgs(argv)
   if (args.action !== 'sign') {
     process.stdout.write(
-      'Usage: sign-release-manifest sign --product desktop|pack --channel preview|stable --file <role>=<path> [--file ...] [--upgrade-from <n> ...] --key <pem outside repo> --out <json> [--allow-dirty yes]\n'
+      'Usage: sign-release-manifest sign --product desktop|pack --channel preview|stable --file <role>=<path> [--file ...] --artifact <artifact.json from CI> [--upgrade-from <n> ...] --key <pem outside repo> --out <json>\n'
     )
     return
   }
-  args.allow(['--product', '--channel', '--file', '--upgrade-from', '--key', '--out', '--allow-dirty'])
+  args.allow(['--product', '--channel', '--file', '--artifact', '--upgrade-from', '--key', '--out'])
   const root = resolve(globalThis.__DSH_REPO__ ?? '.')
   const read = (file: string) => JSON.parse(readFileSync(resolve(root, file), 'utf8'))
   const products = read('config/products.json'),
@@ -107,8 +144,8 @@ function main(argv: string[]) {
   if (!isAbsolute(inside) && !inside.startsWith('..'))
     throw new Error('Private key must be outside the repository')
   const git = (...a: string[]) => execFileSync('git', a, { cwd: root, encoding: 'utf8' }).trim()
-  if (git('status', '--porcelain') && args.one('--allow-dirty', 'no') !== 'yes')
-    throw new Error('Release manifests must be signed from a clean checkout')
+  if (git('status', '--porcelain')) throw new Error('Release manifests must be signed from a clean checkout')
+  const record = JSON.parse(readFileSync(resolve(args.one('--artifact')), 'utf8')) as BuildArtifactRecord
   const files = args.many('--file').map((spec) => {
     const at = spec.indexOf('=')
     const role = spec.slice(0, at) as ReleaseFile['role'],
@@ -130,6 +167,7 @@ function main(argv: string[]) {
     issuedAt: new Date().toISOString(),
     files
   })
+  assertMatchesArtifact(manifest, record, git('rev-parse', 'HEAD'))
   const envelope = signAndVerify(manifest, readFileSync(keyPath, 'utf8'), keys)
   const out = resolve(args.one('--out'))
   writeFileSync(out, JSON.stringify(envelope, null, 2) + '\n', { flag: 'wx' })

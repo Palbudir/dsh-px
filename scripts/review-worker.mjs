@@ -446,6 +446,7 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
     projections,
     upstream: upstreamIdentities,
     secretFindings,
+    graphBlockers = [],
     declaredHosts,
     metrics
   } = await prepareReviewSnapshot(config, request, git, { upstream })
@@ -475,14 +476,19 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
       2
     )
   )
-  if (secretFindings.length) {
+  if (secretFindings.length || graphBlockers.length) {
     // Fail closed before any model sees the snapshot; only locations and rule ids are reported.
-    const blockers = secretBlockers(secretFindings)
+    const blockers = [...secretBlockers(secretFindings), ...graphBlockers.slice(0, 50)]
     return {
       verdict: 'fail',
       findings: [],
       blockers,
-      batches: [{ id: 'secret-scan', digest: sha256(canonical(blockers)) }],
+      batches: [
+        {
+          id: secretFindings.length ? 'secret-scan' : 'dependency-graph',
+          digest: sha256(canonical(blockers))
+        }
+      ],
       tree,
       mergeBase,
       contextDigest,
@@ -594,7 +600,10 @@ async function main() {
   if (sha256(canonical(installation.files)) !== config.workerDigest)
     throw new Error('Worker installation digest mismatch')
   // Fail before any GitHub or queue work when the model identity or its key is unusable.
-  readApiKey(installedModel(config))
+  const model = installedModel(config)
+  readApiKey(model)
+  // git and gh child processes must not inherit the configured model key variable.
+  process.env.DSHPX_REVIEW_KEY_ENV = model.apiKeyEnv
   const gh = async (route, options = {}) => {
     const args = ['api', route]
     if (options.method) args.push('--method', options.method)

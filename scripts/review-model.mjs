@@ -12,6 +12,35 @@ export const MODEL_MAX_TOKENS = 131072
 const RETRY_BASE_MS = 2000,
   RETRY_CAP_MS = 60000,
   ERROR_TEXT_LIMIT = 300
+/** Upper bound for one model response body; larger bodies fail closed. */
+export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+class ResponseTooLarge extends Error {}
+
+/** Read a response body without buffering more than `limit` bytes. */
+async function boundedText(response, limit) {
+  const declared = Number(response.headers?.get?.('content-length') ?? 0)
+  if (declared > limit) throw new ResponseTooLarge('Review model response exceeds size limit')
+  if (!response.body?.getReader) {
+    const text = await response.text()
+    if (Buffer.byteLength(text) > limit)
+      throw new ResponseTooLarge('Review model response exceeds size limit')
+    return text
+  }
+  const reader = response.body.getReader(),
+    chunks = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > limit) {
+      await reader.cancel().catch(() => {})
+      throw new ResponseTooLarge('Review model response exceeds size limit')
+    }
+    chunks.push(Buffer.from(value))
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
 
 /** Validates the installed model identity; the API key value is never part of it. */
 export function modelSettings(input = {}) {
@@ -191,6 +220,8 @@ export async function callReviewModel(config, messages, options = {}) {
             Authorization: `Bearer ${apiKey}`
           },
           body,
+          // A redirect would re-send the prompt to another location.
+          redirect: 'error',
           signal: AbortSignal.timeout(remaining)
         })
       } catch (error) {
@@ -199,8 +230,9 @@ export async function callReviewModel(config, messages, options = {}) {
       }
       let text
       try {
-        text = await response.text()
+        text = await boundedText(response, MAX_RESPONSE_BYTES)
       } catch (error) {
+        if (error instanceof ResponseTooLarge) throw new Error(error.message)
         if (error?.name === 'TimeoutError') throw new Error('Review model request timed out')
         throw new RetryableError(`Review model response read failed: ${redact(error?.message, apiKey)}`)
       }

@@ -784,6 +784,38 @@ test('secret scan runs over every review blob before model input and reports loc
   assert.ok(!blockers[0].includes(token))
 })
 
+test('a source the dependency graph cannot parse becomes a blocker instead of silently losing consumers', async () => {
+  const f = graphFixture({
+    'packages/shared/view.ts': 'export const view = ((( unterminated',
+    'packages/dsh-px-other/src/index.ts': 'export const unrelated = 2'
+  })
+  const plan = await collectGroupedReview(request(['packages/dsh-px-other/src/index.ts']), f.reader)
+  assert.ok(plan.graphBlockers.some((b: string) => b.includes('"packages/shared/view.ts"')))
+  const clean = await collectGroupedReview(
+    request(['packages/dsh-px-other/src/index.ts']),
+    graphFixture({
+      'packages/dsh-px-other/src/index.ts': 'export const unrelated = 2'
+    }).reader
+  )
+  assert.deepEqual(clean.graphBlockers, [])
+})
+
+test('a mode-only change is shown to the model even when the text is identical', async () => {
+  const tree = graphTree()
+  const f = memory({
+    [base]: tree,
+    [head]: {
+      ...tree,
+      'packages/dsh-px-other/src/index.ts': {
+        text: tree['packages/dsh-px-other/src/index.ts'] as string,
+        mode: '100755'
+      }
+    }
+  })
+  const plan = await collectGroupedReview(request(['packages/dsh-px-other/src/index.ts']), f.reader)
+  assert.ok(plan.batches.some((b: any) => b.text.includes('MODE CHANGE 100644 -> 100755')))
+})
+
 test('bb118989 regression: real Git groups include runtime producers and keep shared frontend in its consumers', async (t) => {
   const headSha = 'bb118989098f9b6ca3276af67fb86b411ded1c62',
     mergeSha = '82623e4135b6dfda87610e27a86da5a9100b3c86'

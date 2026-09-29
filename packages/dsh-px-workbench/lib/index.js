@@ -71,11 +71,11 @@ function rejectUntrustedRequest(req, res) {
 }
 
 // packages/dsh-px-workbench/src/index.ts
-import { isAbsolute } from "node:path";
+import { isAbsolute as isAbsolute2 } from "node:path";
 
 // packages/dsh-px-workbench/src/status.ts
 import { accessSync, constants, existsSync, readFileSync as readFileSync2, readdirSync, statSync as statSync2 } from "node:fs";
-import { delimiter, join as join2 } from "node:path";
+import { delimiter, isAbsolute, join as join2 } from "node:path";
 
 // packages/dsh-px-workbench/src/layout.ts
 import { createHash, randomUUID } from "node:crypto";
@@ -174,18 +174,19 @@ function findCommand(name2, path = process.env.PATH ?? "") {
   }
   return null;
 }
-function profileDirectory(home) {
-  const requested = process.env.DSH_PX_PROFILE;
-  if (requested && /^[\w.-]+$/.test(requested)) return join2(home, "profiles", requested);
-  for (const name2 of ["desktop", "web"]) {
-    const candidate = join2(home, "profiles", name2);
-    if (existsSync(join2(candidate, "package.json"))) return candidate;
+function profileDirectory(home, running) {
+  if (running && isAbsolute(running.dir)) return running.dir;
+  const profiles = join2(home, "profiles");
+  let names = [];
+  try {
+    names = readdirSync(profiles).filter((name2) => existsSync(join2(profiles, name2, "package.json")));
+  } catch {
   }
-  return join2(home, "profiles", "web");
+  return names.length === 1 ? join2(profiles, names[0]) : null;
 }
-function localStatus(activity = { known: false, runningAgents: 0, queuedInputs: 0, runningJobs: 0, openTerminals: 0 }) {
+function localStatus(activity = { known: false, runningAgents: 0, queuedInputs: 0, runningJobs: 0, openTerminals: 0 }, running) {
   const home = process.env.DSH_HOME ?? null;
-  const profile = home ? profileDirectory(home) : null;
+  const profile = home ? profileDirectory(home, running) : null;
   const plugins = [];
   let profileError = null;
   let writable = false;
@@ -197,7 +198,8 @@ function localStatus(activity = { known: false, runningAgents: 0, queuedInputs: 
     }
   }
   try {
-    if (!profile) throw new Error("\u672A\u63D0\u4F9B DSH_HOME");
+    if (!home) throw new Error("\u672A\u63D0\u4F9B DSH_HOME");
+    if (!profile) throw new Error("\u5BBF\u4E3B\u672A\u63D0\u4F9B\u5F53\u524D Profile\uFF0C\u4E14\u6570\u636E\u76EE\u5F55\u4E2D\u4E0D\u6B62\u4E00\u4E2A Profile\uFF0C\u65E0\u6CD5\u786E\u5B9A\u63D2\u4EF6\u6E05\u5355");
     const pkg = JSON.parse(readFileSync2(join2(profile, "package.json"), "utf8"));
     for (const [name2, requested] of Object.entries(pkg.dependencies ?? {})) {
       if (!/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i.test(name2)) continue;
@@ -468,6 +470,19 @@ function json(res, status, body) {
 }
 function apply(ctx) {
   const activity = registerActivity(ctx);
+  let runningProfile;
+  ctx.inject(["profileContext"], (host) => {
+    const value = host.profileContext;
+    if (typeof value?.name !== "string" || typeof value.dir !== "string") return;
+    const current = { name: value.name, dir: value.dir };
+    runningProfile = current;
+    host.effect?.(
+      () => () => {
+        if (runningProfile === current) runningProfile = void 0;
+      },
+      "workbench: running profile"
+    );
+  });
   let workspaceController;
   ctx.inject(["workspaceController"], (host) => {
     const current = host.workspaceController;
@@ -512,7 +527,7 @@ function apply(ctx) {
         handler: (req, res) => {
           if (rejectUnauthenticatedRequest(req, res, ctx2.connection)) return;
           if (req.method !== "GET") return json(res, 405, { error: "\u8BF7\u4F7F\u7528 GET" });
-          json(res, 200, localStatus(activity()));
+          json(res, 200, localStatus(activity(), runningProfile));
         }
       }),
       ctx2.webServer.register({
@@ -546,7 +561,7 @@ function apply(ctx) {
             return json(res, 403, { error: "\u8BF7\u4ECE\u672C\u673A\u5DE5\u4F5C\u53F0\u63D0\u4EA4\u8BF7\u6C42" });
           const params = new URL(req.url ?? "/", "http://127.0.0.1").searchParams;
           const path = params.get("path")?.trim();
-          if (!path || path.length > 4096 || params.getAll("path").length !== 1 || !isAbsolute(path)) {
+          if (!path || path.length > 4096 || params.getAll("path").length !== 1 || !isAbsolute2(path)) {
             return json(res, 400, { error: "\u8BF7\u8F93\u5165\u5DF2\u5B58\u5728\u6587\u4EF6\u5939\u7684\u5B8C\u6574\u8DEF\u5F84\uFF0C\u4F8B\u5982 C:\\Projects\\demo" });
           }
           const controller = workspaceController;

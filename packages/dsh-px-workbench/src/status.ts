@@ -1,5 +1,5 @@
 import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
-import { delimiter, join } from 'node:path'
+import { delimiter, isAbsolute, join } from 'node:path'
 import { serviceIdentity } from './layout'
 import type { Activity } from './activity'
 
@@ -39,22 +39,34 @@ export function findCommand(name: string, path = process.env.PATH ?? ''): string
   return null
 }
 
-/** Native profiles are named after the host surface; read the installed Pack's profile when known. */
-function profileDirectory(home: string): string {
-  const requested = process.env.DSH_PX_PROFILE
-  if (requested && /^[\w.-]+$/.test(requested)) return join(home, 'profiles', requested)
-  for (const name of ['desktop', 'web']) {
-    const candidate = join(home, 'profiles', name)
-    if (existsSync(join(candidate, 'package.json'))) return candidate
+/** The running profile as reported by the host's `profileContext` service (present in dsh-launched profiles). */
+export interface RunningProfile {
+  name: string
+  dir: string
+}
+
+/**
+ * Resolve the profile this host runs. The host's `profileContext` is authoritative; without it the only
+ * safe inference is a home with exactly one installed profile. Otherwise the profile is unknown.
+ */
+function profileDirectory(home: string, running: RunningProfile | undefined): string | null {
+  if (running && isAbsolute(running.dir)) return running.dir
+  const profiles = join(home, 'profiles')
+  let names: string[] = []
+  try {
+    names = readdirSync(profiles).filter((name) => existsSync(join(profiles, name, 'package.json')))
+  } catch {
+    /* no profiles directory */
   }
-  return join(home, 'profiles', 'web')
+  return names.length === 1 ? join(profiles, names[0]) : null
 }
 
 export function localStatus(
-  activity: Activity = { known: false, runningAgents: 0, queuedInputs: 0, runningJobs: 0, openTerminals: 0 }
+  activity: Activity = { known: false, runningAgents: 0, queuedInputs: 0, runningJobs: 0, openTerminals: 0 },
+  running?: RunningProfile
 ): LocalStatus {
   const home = process.env.DSH_HOME ?? null
-  const profile = home ? profileDirectory(home) : null
+  const profile = home ? profileDirectory(home, running) : null
   const plugins: LocalStatus['plugins'] = []
   let profileError: string | null = null
   let writable = false
@@ -67,7 +79,8 @@ export function localStatus(
     }
   }
   try {
-    if (!profile) throw new Error('未提供 DSH_HOME')
+    if (!home) throw new Error('未提供 DSH_HOME')
+    if (!profile) throw new Error('宿主未提供当前 Profile，且数据目录中不止一个 Profile，无法确定插件清单')
     const pkg = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8'))
     for (const [name, requested] of Object.entries(pkg.dependencies ?? {})) {
       // 包名来自本机清单；限制为标准包名，避免将诊断读取扩展到任意路径。

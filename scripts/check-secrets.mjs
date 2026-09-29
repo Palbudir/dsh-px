@@ -1,58 +1,101 @@
 /**
  * Pre-push secret scan over every tracked or to-be-pushed file, including tests, fixtures and examples.
  * Fails on credential-shaped content, private key material, local machine paths and forbidden file names.
+ * No file is exempt by path: rule sources below are assembled at runtime so this file never matches itself.
  * Usage: node scripts/check-secrets.mjs [--range <base>..<head>]   (default: all tracked + staged + untracked-not-ignored)
  */
 import { execFileSync } from 'node:child_process'
-import { readFileSync, existsSync, statSync } from 'node:fs'
+import { readFileSync, existsSync, lstatSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const git = (...args) =>
   execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 256 * 1024 * 1024 })
+const re = (parts, flags = '') => new RegExp(parts.join(''), flags)
 
-/** Content rules. Each hit reports file:line and the rule id only, never the matched value. */
+/** Names of variables and fields that hold credentials. */
+const KEY_NAME =
+  '[A-Za-z0-9_.-]*(?:api[_-]?key|secret|token|passw(?:or)?d|access[_-]?key|private[_-]?key)[A-Za-z0-9_]*'
+/**
+ * A credential-shaped value: long, no whitespace, and not an identifier used as code
+ * (followed by `(`, `[`, `?.`) or an UPPER_SNAKE environment variable *name*.
+ */
+const VALUE = '[A-Za-z0-9._~+/=-]{24,}(?![A-Za-z0-9._~+/=-]|\\(|\\[|\\?\\.)'
+/** Case-sensitive: an UPPER_SNAKE value is a variable name, not a credential. */
+const ENV_NAME = /^[A-Z][A-Z0-9_]*$/
+
+/**
+ * Content rules: [id, pattern, value group]. The value group (if any) is the part checked
+ * against the placeholder convention; each hit reports path:line and the rule id only.
+ */
 export const RULES = [
-  ['private-key', /-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----/],
-  ['github-token', /\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,})\b/],
-  ['openai-style-key', /\bsk-(?:proj-|ant-)?[A-Za-z0-9_-]{32,}\b/],
-  ['aws-access-key', /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/],
-  ['slack-token', /\bxox[abprs]-[A-Za-z0-9-]{10,}\b/],
-  ['google-api-key', /\bAIza[0-9A-Za-z_-]{35}\b/],
-  ['npm-token', /\bnpm_[A-Za-z0-9]{36}\b/],
-  ['jwt', /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/],
-  ['bearer-literal', /\b[Bb]earer\s+[A-Za-z0-9._~+/-]{32,}=*/],
+  ['private-key', re(['-----BEGIN (?:[A-Z0-9]+ )*PRIV', 'ATE KEY-----'])],
+  ['github-token', re(['\\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github', '_pat_[A-Za-z0-9_]{60,})'])],
+  ['openai-style-key', re(['(?<![A-Za-z0-9])(s', 'k-(?:proj-|ant-)?[A-Za-z0-9_-]{32,})']), 1],
+  ['aws-access-key', re(['\\b(?:AK', 'IA|AS', 'IA)[0-9A-Z]{16}\\b'])],
+  ['slack-token', re(['\\bxo', 'x[abprs]-[A-Za-z0-9-]{10,}'])],
+  ['google-api-key', re(['\\bAI', 'za[0-9A-Za-z_-]{35}'])],
+  ['npm-token', re(['\\bnp', 'm_[A-Za-z0-9]{36}'])],
+  ['jwt', re(['\\bey', 'J[A-Za-z0-9_-]{10,}\\.ey', 'J[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}'])],
+  ['authorization-header', re(['\\b(?:[Bb]earer|[Tt]oken|[Bb]asic)\\s+(', VALUE, ')']), 1],
+  // Quoted or unquoted assignments, including shell `export`, PowerShell `$env:` and `setx`.
   [
     'assigned-secret',
-    /\b(?:api[_-]?key|secret|token|password|passwd|access[_-]?key)\b["']?\s*[:=]\s*["'][A-Za-z0-9._~+/-]{24,}["']/i
+    re(['(?:^|[^A-Za-z0-9])', KEY_NAME, '["\']?\\s*(?::|=|\\s)\\s*["\']?(', VALUE, ')'], 'i'),
+    1
   ],
-  ['windows-user-path', /\b[A-Za-z]:[\\/]+Users[\\/]+(?!Public\b|<|\$|%|\{)[A-Za-z0-9._ -]+[\\/]/i],
-  ['posix-home-path', /(?:^|[\s"'(=])\/(?:home|Users)\/(?!runner\b|user\b|<|\$)[a-z0-9._-]+\//i]
+  // Any user name, including non-ASCII (e.g. Chinese) names, on Windows and WSL paths.
+  [
+    'windows-user-path',
+    re(['(?:\\b[A-Za-z]:|/mnt/[a-z])[\\\\/]+Users[\\\\/]+([^\\\\/\\s"\'`<>|:*?]+)[\\\\/]'], 'i'),
+    1
+  ],
+  ['posix-home-path', re(['(?:^|[\\s"\'(=])/(?:home|Users)/([^/\\s"\'`<>]+)/'], 'i'), 1]
 ]
-/** A match is a declared placeholder only when the matched text itself says so. */
-const PLACEHOLDER = /fixture|example|placeholder|dummy|redacted|synthetic|not-a-real|fake/i
+/**
+ * Declared placeholders are recognised by the captured value itself, never by nearby words:
+ * explicit fixture/example prefixes, masks like xxxx or ****, templates like <name> ${VAR} %VAR%.
+ */
+const PLACEHOLDER_VALUE =
+  /^(?:s[k]-)?(?:(?:fixture|example|placeholder|dummy|fake|redacted|synthetic|test-fixture)[-_]|[x*.0]{4,}$|<[^>]*>$|\$\{?[A-Za-z_]|%[A-Za-z_]+%|\{\{)/i
+/** Generic or explicitly synthetic account names that are not personal machine paths. */
+const PLACEHOLDER_USER =
+  /^(?:Public|Default|All Users|runner|user|username|<[^>]*>|%[^%]+%|\$\{?[A-Za-z_][^/\\]*|\{[^}]*\}|[A-Z0-9_]*FIXTURE[A-Z0-9_]*|用户名|你的用户名)$/i
+/** High-signal rules still applied to the printable bytes of binary files. */
+const BINARY_RULES = new Set([
+  'private-key',
+  'github-token',
+  'openai-style-key',
+  'aws-access-key',
+  'npm-token',
+  'slack-token',
+  'google-api-key'
+])
 /** Paths that must never be pushed regardless of content. */
 const FORBIDDEN_PATH =
   /(?:^|\/)(?:\.env(?:\.[^/]*)?|\.?credentials(?:\.[^/]*)?|id_(?:rsa|ed25519|ecdsa)(?:\.pub)?|\.npmrc|\.netrc)$|\.(?:pem|key|p12|pfx|keystore|jks)$|(?:^|\/)build-test\//i
-/** Explicitly reviewed public values that match a rule (path -> rule ids). Keep this list minimal. */
-const ALLOW = new Map([
-  // Pinned Ed25519 *public* keys only; the rule set does not match public keys, listed for clarity.
-  ['config/update-keys.json', new Set()],
-  // This scanner's own rule definitions.
-  ['scripts/check-secrets.mjs', new Set(RULES.map(([id]) => id))],
-  ['test/check-secrets.test.ts', new Set(RULES.map(([id]) => id))]
-])
+const MAX_TEXT_BYTES = 16 * 1024 * 1024
 
-export function scanText(path, text) {
+function placeholder(id, value) {
+  if (value === undefined) return false
+  if (id.endsWith('-path')) return PLACEHOLDER_USER.test(value)
+  if (id === 'assigned-secret' && ENV_NAME.test(value)) return true
+  return PLACEHOLDER_VALUE.test(value)
+}
+
+/** Scan one text blob; findings never include the matched value. */
+export function scanText(path, text, rules = RULES) {
   const findings = []
-  const allowed = ALLOW.get(path) ?? new Set()
   const lines = text.split(/\r?\n/)
   for (let i = 0; i < lines.length; i++)
-    for (const [id, rule] of RULES) {
-      if (allowed.has(id)) continue
-      const match = rule.exec(lines[i])
-      if (match && !PLACEHOLDER.test(match[0])) findings.push({ path, line: i + 1, rule: id })
+    for (const [id, rule, group] of rules) {
+      const flags = rule.flags.includes('g') ? rule.flags : rule.flags + 'g'
+      for (const match of lines[i].matchAll(new RegExp(rule.source, flags))) {
+        if (placeholder(id, group ? match[group] : undefined)) continue
+        findings.push({ path, line: i + 1, rule: id })
+        break
+      }
     }
   return findings
 }
@@ -72,10 +115,24 @@ export function scanRepository(range) {
       continue
     }
     const full = join(root, path)
-    if (!existsSync(full) || !statSync(full).isFile() || statSync(full).size > 16 * 1024 * 1024) continue
+    if (!existsSync(full)) continue
+    const stat = lstatSync(full)
+    if (!stat.isFile()) continue
+    // Nothing is silently skipped: an oversized file must be split or reviewed by hand.
+    if (stat.size > MAX_TEXT_BYTES) {
+      findings.push({ path, line: 0, rule: 'too-large-to-scan' })
+      continue
+    }
     const bytes = readFileSync(full)
-    if (bytes.subarray(0, 8000).includes(0)) continue // binary: covered by the path rule and artifact review
-    findings.push(...scanText(path, bytes.toString('utf8')))
+    if (bytes.subarray(0, 8000).includes(0))
+      findings.push(
+        ...scanText(
+          path,
+          bytes.toString('latin1'),
+          RULES.filter(([id]) => BINARY_RULES.has(id))
+        ).map((f) => ({ ...f, line: 0 }))
+      )
+    else findings.push(...scanText(path, bytes.toString('utf8')))
   }
   // Commit metadata in the pushed range can leak paths or tokens too.
   if (range) findings.push(...scanText('<commit messages>', git('log', '--format=%an <%ae>%n%B', range)))

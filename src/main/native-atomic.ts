@@ -50,15 +50,31 @@ export function assertRegularOrAbsent(path: string, label = 'Target'): void {
   if (existsSync(path) && !lstatSync(path).isFile()) throw new Error(`${label} must be a regular file`)
 }
 
+/** Replaceable filesystem steps of `writeAtomic`; tests inject failures here. */
+export interface AtomicOperations {
+  rename: (from: string, to: string) => void
+  remove: (path: string) => void
+}
+const defaultOperations: AtomicOperations = {
+  rename: renameWithRetry,
+  remove: (path) => rmSync(path, { force: true })
+}
+
 /**
  * Replace a file atomically: exclusive-create a random sibling, write, fsync, rename with retries.
- * The temporary file is always removed when the replacement does not complete.
+ * The temporary file is removed when the replacement does not complete; after a completed rename it no longer exists.
  * @param file - final path; an existing entry must be a regular file.
  * @param bytes - complete next content.
+ * @param operations - rename and cleanup steps; defaults to the retried native operations.
  */
-export function writeAtomic(file: string, bytes: string | Buffer): void {
+export function writeAtomic(
+  file: string,
+  bytes: string | Buffer,
+  operations: AtomicOperations = defaultOperations
+): void {
   assertRegularOrAbsent(file)
   const temporary = `${file}.${randomUUID()}.tmp`
+  let renamed = false
   try {
     const fd = openSync(temporary, 'wx', 0o600)
     try {
@@ -67,8 +83,22 @@ export function writeAtomic(file: string, bytes: string | Buffer): void {
     } finally {
       closeSync(fd)
     }
-    renameWithRetry(temporary, file)
+    operations.rename(temporary, file)
+    renamed = true
   } finally {
-    rmSync(temporary, { force: true })
+    // After a successful rename the temporary no longer exists; cleanup must not turn success into failure.
+    if (!renamed) operations.remove(temporary)
   }
+}
+
+/** Names `writeAtomic` gives its temporaries: `<basename>.<random UUID v4>.tmp`. */
+const TEMPORARY_PATTERN = /^.+\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/
+
+/**
+ * Whether a directory entry name matches the exact temporary naming rule of `writeAtomic`.
+ * @param name - entry basename.
+ * @returns true only for `<name>.<uuid v4>.tmp`.
+ */
+export function isAtomicTemporary(name: string): boolean {
+  return TEMPORARY_PATTERN.test(name)
 }

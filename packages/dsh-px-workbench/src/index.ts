@@ -2,7 +2,7 @@ import { rejectUnauthenticatedRequest as rejectUntrustedRequest } from '../../sh
 import { isAbsolute } from 'node:path'
 import type { IncomingMessage } from 'node:http'
 import type { HostPluginContext, HostResponse } from '@deepseek-ai/cordis'
-import { localStatus } from './status'
+import { localStatus, type RunningProfile } from './status'
 import { checkWebAccess, type FetchPage, type NetworkCheck } from './network'
 import { createLayoutStore, LayoutError } from './layout'
 import { readJsonBody } from './http'
@@ -19,6 +19,20 @@ function json(res: HostResponse, status: number, body: unknown): void {
 
 export function apply(ctx: HostPluginContext): void {
   const activity = registerActivity(ctx)
+  // dsh profile launchers provide `profileContext` (name, dir); it names the profile whose manifest we report.
+  let runningProfile: RunningProfile | undefined
+  ctx.inject(['profileContext'], (host) => {
+    const value = (host as typeof host & { profileContext?: Partial<RunningProfile> }).profileContext
+    if (typeof value?.name !== 'string' || typeof value.dir !== 'string') return
+    const current = { name: value.name, dir: value.dir }
+    runningProfile = current
+    host.effect?.(
+      () => () => {
+        if (runningProfile === current) runningProfile = undefined
+      },
+      'workbench: running profile'
+    )
+  })
   let workspaceController:
     { create: (request: { path: string }) => Promise<{ created: boolean }> } | undefined
   ctx.inject(['workspaceController'], (host) => {
@@ -66,7 +80,7 @@ export function apply(ctx: HostPluginContext): void {
         handler: (req, res) => {
           if (rejectUntrustedRequest(req, res, ctx.connection)) return
           if (req.method !== 'GET') return json(res, 405, { error: '请使用 GET' })
-          json(res, 200, localStatus(activity()))
+          json(res, 200, localStatus(activity(), runningProfile))
         }
       }),
       ctx.webServer.register({

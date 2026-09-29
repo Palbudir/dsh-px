@@ -90,9 +90,14 @@ main = replaceOnce(
   'async applyRelease() {\n\t\tawait this.withLock(async () => {'
 )
 // Branded preload copies: the originals stay untouched and are no longer loaded by px-main.
+// Each original is pinned by digest, so the text rewrite only ever runs over reviewed upstream content.
 const brandedPreloads = ['preload-app.cjs', 'preload-welcome.cjs']
 for (const name of brandedPreloads) {
   const source = readFileSync(join(lib, name), 'utf8')
+  const pinned = pin.preloadSha256?.[name]
+  if (typeof pinned !== 'string' || !/^[a-f0-9]{64}$/.test(pinned))
+    throw Error('Missing pinned digest for upstream preload: ' + name)
+  assertDigest(source, pinned, 'Desktop ' + name)
   if (!source.includes('DeepSeek Harness')) throw Error('Upstream preload brand anchor changed: ' + name)
   writeFileSync(join(lib, 'px-' + name), source.replaceAll('DeepSeek Harness', 'DSH-PX Desktop'))
   main = replaceOnce(
@@ -123,10 +128,15 @@ export function configurePxUpdates(updater){configureSignedUpdates(updater,${JSO
 import {prepareNativeProfileDefaults,applyNativeDesktopPolicy} from ${JSON.stringify(join(root, 'src/main/native-profile-defaults.ts'))};
 import {provisionNativePack} from ${JSON.stringify(join(root, 'src/main/native-pack-provision.ts'))};
 import {createRequire} from 'node:module';import {join,delimiter} from 'node:path';import {pathToFileURL} from 'node:url';import {existsSync} from 'node:fs';
-export function preparePxDefaults(profile){return prepareNativeProfileDefaults(profile,process.env.DSH_PX_DOCUMENTS_DIRECTORY||'')}
-// Pack provisioning never stops the Host: provisionNativePack records and logs its own failures.
+// PX profile preparation never stops the Host: defaults, telemetry policy and Pack provisioning only log failures.
+export function preparePxDefaults(profile){
+  try{return prepareNativeProfileDefaults(profile,process.env.DSH_PX_DOCUMENTS_DIRECTORY||'')}
+  catch(error){console.error('[dsh-px] Profile defaults could not be applied; the Host starts without them',error);return false}
+}
+// provisionNativePack records and logs its own failures.
 export async function preparePxPack(profile,runtimeDir){
-  applyNativeDesktopPolicy(profile);
+  try{applyNativeDesktopPolicy(profile)}
+  catch(error){console.error('[dsh-px] Desktop telemetry policy could not be applied; the Host starts with the current profile patch',error)}
   const archive=process.resourcesPath?join(process.resourcesPath,'px-pack.tgz'):'';
   if(process.env.DSH_DESKTOP_DEV_APP==='1'||!archive||!existsSync(archive)){
     console.error('[dsh-px] Bundled Pack archive unavailable (development app or missing resources/px-pack.tgz); Pack provisioning skipped');

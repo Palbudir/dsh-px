@@ -471,6 +471,7 @@ export async function buildReviewGraph(reader, refs, limits = {}) {
     releaseReaders = new Set(),
     manifests = new Map(),
     unresolved = [],
+    unparsed = [],
     cache = new Map()
   let bytes = 0,
     files = 0
@@ -515,6 +516,7 @@ export async function buildReviewGraph(reader, refs, limits = {}) {
         cache.set(entry.oid, text)
       }
       if (cache.get(entry.oid) !== null) texts.set(entry.path, cache.get(entry.oid))
+      else if (SOURCE_FILE.test(entry.path)) unparsed.push({ ref, path: entry.path })
     }
     // Package manifests: entry points and their maintained TypeScript sources.
     for (const [path, text] of texts) {
@@ -590,6 +592,8 @@ export async function buildReviewGraph(reader, refs, limits = {}) {
         references = reviewModuleReferences(text, { jsx: /\.[jt]sx$/.test(path), filename: path })
       } catch (error) {
         unresolved.push({ ref, path, reason: String(error.message ?? error).slice(0, 200) })
+        // Its consumers cannot be computed, so the review must not silently drop them.
+        unparsed.push({ ref, path })
         continue
       }
       for (const dependency of references.literals) {
@@ -660,7 +664,7 @@ export async function buildReviewGraph(reader, refs, limits = {}) {
       if (users.size >= 2 && users.size <= 8)
         for (const a of users) for (const b of users) if (a !== b) edge(a, b, 'artifact')
   }
-  return { forward, reverse, paths, externals, releaseReaders, manifests, unresolved, scripts }
+  return { forward, reverse, paths, externals, releaseReaders, manifests, unresolved, unparsed, scripts }
 }
 
 /** Files named by npm scripts whose command differs between two refs (added, removed or changed). */
@@ -1079,7 +1083,10 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
   for (const path of request.names) {
     const before = await read(request.mergeBase, path),
       after = await read(request.head, path)
-    files.push({ path, before: before?.text ?? '', after: after?.text ?? '', binary: false })
+    const file = { path, before: before?.text ?? '', after: after?.text ?? '', binary: false }
+    // A mode-only change (e.g. gaining the executable bit) has identical text; show it explicitly.
+    if (before && after && before.mode !== after.mode) file.mode = [before.mode, after.mode]
+    files.push(file)
   }
   // Upstream host contracts: selected from the external modules, host services and plugin
   // manifests that this group actually references; bytes come only from the trusted worker catalog.
@@ -1291,6 +1298,13 @@ export async function collectGroupedReview(request, reader, limits = {}, maxChar
       snapshot.upstream.map((identity) => ({ ...identity, group: snapshot.group }))
     ),
     secretFindings,
+    // Source files whose dependency edges could not be read: their consumers are unknown.
+    graphBlockers: [...new Map(graph.unparsed.map((u) => [u.path, u])).values()]
+      .sort((a, b) => a.path.localeCompare(b.path))
+      .map(
+        (u) =>
+          `Dependency graph could not parse ${JSON.stringify(u.path)}; its consumers cannot be placed in review context`
+      ),
     metrics: {
       groups: snapshots.length,
       contextChars: snapshots.reduce((sum, s) => sum + s.context.length, 0),
@@ -1350,7 +1364,7 @@ export function splitBatches(files, context, maxChars = 90000) {
           ae = endAt(after, a, size)
         return {
           scope: { path: file.path, before: [b, be, before.length], after: [a, ae, after.length] },
-          text: `FILE ${JSON.stringify(file.path)}\nBEFORE chars ${b}-${be}/${before.length}\n${before.slice(b, be)}\nAFTER chars ${a}-${ae}/${after.length}\n${after.slice(a, ae)}`
+          text: `FILE ${JSON.stringify(file.path)}\n${file.mode ? `MODE CHANGE ${file.mode[0]} -> ${file.mode[1]}\n` : ''}BEFORE chars ${b}-${be}/${before.length}\n${before.slice(b, be)}\nAFTER chars ${a}-${ae}/${after.length}\n${after.slice(a, ae)}`
         }
       }
       let chunk = make()

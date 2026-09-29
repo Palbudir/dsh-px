@@ -5,11 +5,22 @@ import { randomUUID } from 'node:crypto'
 import { validateResult, sha256 } from './review-core.mjs'
 import { callReviewModel, reviewMessages } from './review-model.mjs'
 
+/**
+ * git/gh never need the reviewer model key; strip it (and any configured key variable name)
+ * so no child process or its crash dump can see it.
+ */
+export function childEnvironment(env = process.env, extraKeyNames = []) {
+  const blocked = new Set(['DEEPSEEK_API_KEY', ...extraKeyNames].map((name) => name.toUpperCase()))
+  return Object.fromEntries(Object.entries(env).filter(([key]) => !blocked.has(key.toUpperCase())))
+}
 export function command(exe, args, options = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(exe, args, {
       cwd: options.cwd,
-      env: options.env,
+      env: childEnvironment(
+        options.env ?? process.env,
+        options.blockedEnv ?? process.env.DSHPX_REVIEW_KEY_ENV?.split(',') ?? []
+      ),
       shell: false,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe']

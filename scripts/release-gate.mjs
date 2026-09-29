@@ -117,6 +117,7 @@ export async function releaseGate({ product, version, tag, head, policy, api, bu
   if (
     !quality ||
     quality.pending ||
+    quality.failed ||
     quality.runId !== evidence.quality.runId ||
     quality.runAttempt !== evidence.quality.runAttempt
   )

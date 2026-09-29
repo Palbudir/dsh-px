@@ -37,6 +37,22 @@ test('workbench diagnostics never read secrets and never claim host lifecycle co
   })
   assert.doesNotMatch(JSON.stringify(status), /API_SECRET_SHOULD_NOT_APPEAR/)
   assert.equal('service' in status || 'pendingOperation' in status || 'lastAction' in status, false)
+  assert.equal(status.profileError, null, 'the only installed profile is used')
+
+  // A second profile makes the guess ambiguous: without the host's profileContext the status is unknown.
+  const web = join(process.env.DSH_HOME, 'profiles', 'web')
+  mkdirSync(web, { recursive: true })
+  writeFileSync(join(web, 'package.json'), JSON.stringify({ dependencies: { other: '3' } }))
+  const unknown = localStatus()
+  assert.deepEqual(unknown.plugins, [])
+  assert.match(unknown.profileError ?? '', /无法确定/)
+  // The host-reported running profile is authoritative.
+  const reported = localStatus(undefined, { name: 'web', dir: web })
+  assert.equal(reported.profileError, null)
+  assert.deepEqual(
+    reported.plugins.map((plugin) => plugin.name),
+    ['other']
+  )
 
   const routes = new Map<string, (req: unknown, res: unknown) => void>()
   const disposers: Array<() => void> = []
@@ -52,6 +68,7 @@ test('workbench diagnostics never read secrets and never claim host lifecycle co
             return () => routes.delete(r.path)
           }
         },
+        profileContext: { name: 'web', dir: web },
         workspaceController: {
           create: async ({ path }: { path: string }) => {
             created.push(path)
@@ -67,12 +84,22 @@ test('workbench diagnostics never read secrets and never claim host lifecycle co
   for (const path of ['restart', 'cancel-pending', 'shutdown'])
     assert.equal(routes.has(`/dsh-px-workbench/${path}`), false, path)
   let code = 0
+  let body = ''
   const res = {
     writeHead: (value: number) => {
       code = value
     },
-    end: () => {}
+    end: (value = '') => {
+      body = value
+    }
   }
+  await routes.get('/dsh-px-workbench/status')!({ method: 'GET', url: '/status', headers: {} }, res)
+  assert.equal(code, 200)
+  assert.deepEqual(
+    JSON.parse(body).plugins.map((plugin: { name: string }) => plugin.name),
+    ['other'],
+    'the status route reports the host-provided running profile'
+  )
   await routes.get('/dsh-px-workbench/workspace')!(
     { method: 'POST', url: '/workspace?path=relative', headers: { 'x-dsh-px-request': '1' } },
     res

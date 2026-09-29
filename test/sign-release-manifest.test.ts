@@ -4,7 +4,7 @@ import { createHash, generateKeyPairSync } from 'node:crypto'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createReleaseManifest, signAndVerify } from '../scripts/sign-release-manifest'
+import { assertMatchesArtifact, createReleaseManifest, signAndVerify } from '../scripts/sign-release-manifest'
 import { verifySignedRelease } from '../src/shared/signed-release'
 
 function keyPair() {
@@ -56,6 +56,36 @@ test('offline signer hashes real artifacts and yields a manifest the updater acc
     assert.throws(() => signAndVerify(manifest, keyPair().privateKey, keys), /pinned update key/)
     // Invalid manifests (preview version on stable) are rejected by the shared schema.
     assert.throws(() => signAndVerify({ ...manifest, channel: 'stable' }, k.privateKey, keys))
+
+    // The signed file must be byte-identical to CI's record, built from this very checkout.
+    const file = manifest.files[0]
+    const head = 'b'.repeat(40)
+    const record = {
+      file: file.name,
+      size: file.size,
+      sha256: file.sha256,
+      sha512: file.sha512,
+      sourceCommit: head,
+      sourceDirty: false
+    }
+    assertMatchesArtifact(manifest, record, head)
+    assert.throws(
+      () => assertMatchesArtifact(manifest, { ...record, sha256: 'd'.repeat(64) }, head),
+      /does not match the CI artifact/
+    )
+    assert.throws(
+      () => assertMatchesArtifact(manifest, { ...record, sha512: 'x' }, head),
+      /does not match the CI artifact/
+    )
+    assert.throws(() => assertMatchesArtifact(manifest, record, 'c'.repeat(40)), /HEAD does not match/)
+    assert.throws(
+      () => assertMatchesArtifact(manifest, { ...record, sourceCommit: 'c'.repeat(40) }, head),
+      /HEAD does not match/
+    )
+    assert.throws(
+      () => assertMatchesArtifact(manifest, { ...record, sourceDirty: true }, head),
+      /not a clean release build/
+    )
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

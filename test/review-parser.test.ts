@@ -107,6 +107,9 @@ function installerCli(t: TestContext) {
     'scripts/prepare-native-desktop.mjs',
     'scripts/brand-native-installer.mjs',
     'scripts/brand-installer-images.ps1',
+    'scripts/build-icon.ts',
+    'scripts/check-secrets.mjs',
+    'scripts/run.mjs',
     '.github/workflows/trusted-quality.yml',
     '.github/workflows/release.yml'
   ]

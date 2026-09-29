@@ -325,7 +325,12 @@ test('candidate hosts must be pinned; unknown or malformed product contracts blo
     /not pinned for declared host "0.3.0"/
   )
   assert.throws(() => requirePinnedHosts(catalog, '{bad'), /not valid JSON/)
-  assert.deepEqual(requirePinnedHosts(catalog, undefined), [])
+  // A missing contract, or one whose keys declare no host at all, proves nothing is pinned.
+  assert.throws(() => requirePinnedHosts(catalog, undefined), /products\.json is missing/)
+  assert.throws(
+    () => requirePinnedHosts(catalog, JSON.stringify({ packs: { hostVersionz: ['0.1.5-rc.2'] } })),
+    /declares no host version/
+  )
 })
 
 test('real pinned tarballs match the installed DSH 0.1.5-rc.2 runtime byte for byte', async (t) => {

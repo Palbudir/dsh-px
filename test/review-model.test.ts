@@ -179,6 +179,39 @@ test('retries are finite: persistent 5xx fails closed after the attempt limit', 
   assert.equal(api.calls.length, model.MODEL_MAX_ATTEMPTS)
 })
 
+test('git/gh child environments never carry the model key variable', async () => {
+  const { childEnvironment } = await load('review-process.mjs')
+  const env = childEnvironment(
+    { PATH: 'p', DEEPSEEK_API_KEY: SECRET, [KEY_ENV]: SECRET, deepseek_api_key: SECRET, KEEP: '1' },
+    [KEY_ENV]
+  )
+  assert.deepEqual(Object.keys(env).sort(), ['KEEP', 'PATH'])
+})
+
+test('redirects are refused and oversized responses fail closed without buffering them', async (t) => {
+  const w = workspace(t)
+  const redirected = scripted([reply(302, '', { location: 'https://elsewhere.example/' })])
+  await assert.rejects(runReviewBatch(config, request, batch, w.directory, options(redirected.fetch)))
+  assert.equal(redirected.calls[0].init.redirect, 'error')
+  const declared = scripted([reply(200, 'x', { 'content-length': String(model.MAX_RESPONSE_BYTES + 1) })])
+  await assert.rejects(
+    runReviewBatch(config, request, batch, w.directory, options(declared.fetch)),
+    /exceeds size limit/
+  )
+  assert.equal(declared.calls.length, 1)
+  const huge = new ReadableStream({
+    pull(controller) {
+      controller.enqueue(new Uint8Array(1024 * 1024))
+    }
+  })
+  const streamed = scripted([new Response(huge, { status: 200 })])
+  await assert.rejects(
+    runReviewBatch(config, request, batch, w.directory, options(streamed.fetch)),
+    /exceeds size limit/
+  )
+  assert.equal(streamed.calls.length, 1)
+})
+
 test('the configured timeout bounds the whole invocation and is not retried', async (t) => {
   const w = workspace(t)
   let calls = 0

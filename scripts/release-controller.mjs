@@ -280,8 +280,14 @@ async function main() {
         method: 'POST',
         body: { ref: `refs/tags/${tag}`, sha: head }
       })
-    const releases = await api(`repos/${policy.repository}/releases?per_page=100`)
-    let draft = releases.find((release) => release.tag_name === tag)
+    // Search every page: a draft past the first 100 releases must still be found, not duplicated.
+    let draft
+    for (let page = 1; !draft; page++) {
+      if (page > 100) throw new Error('Release history audit limit reached')
+      const releases = await api(`repos/${policy.repository}/releases?per_page=100&page=${page}`)
+      draft = releases.find((release) => release.tag_name === tag)
+      if (releases.length < 100) break
+    }
     if (draft && !draft.draft) throw new Error('Published releases are never overwritten')
     if (!draft)
       draft = await api(`repos/${policy.repository}/releases`, {
