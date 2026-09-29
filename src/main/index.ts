@@ -1,5 +1,6 @@
 /** Desktop process ownership, update coordination and local recovery. DSH owns Agent execution. */
 import { app, BrowserWindow, Menu, Tray, shell, dialog, nativeImage, Notification, ipcMain } from 'electron'
+import { PACK_VERSION } from '../shared/plugin-catalog'
 
 import { spawn, execFile } from 'node:child_process'
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs'
@@ -297,7 +298,7 @@ async function migrateManagedPlugins(
     runtimeNode: runtime.node,
     dshEntry: runtime.dshEntry,
     adoptSeed: initialSeed,
-    expectedVersion: appVersion(),
+    expectedVersion: PACK_VERSION,
     onProgress,
     onPhase: (phase) => onProgress({ done: 0, total: 0, copied: 0, phase: '正在准备插件升级：' + phase })
   })

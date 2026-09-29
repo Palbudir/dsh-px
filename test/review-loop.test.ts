@@ -11,6 +11,8 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
+  renameSync,
   realpathSync,
   rmSync,
   writeFileSync
@@ -29,8 +31,97 @@ const {
   runInstalledWorker,
   runReviewLoop,
   requestLoopStop,
+  saveLoopJson,
   LOOP_INTERVAL_MS
 } = await load('review-loop.mjs')
+
+test('Windows control-file replacement retries without deleting the old state and fails closed on expiry', (t) => {
+  const directory = mkdtempSync(join(tmpdir(), 'dshpx-loop-write-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const target = join(directory, 'state.json')
+  writeFileSync(target, '{"old":true}')
+  let attempts = 0
+  saveLoopJson(
+    target,
+    { current: true },
+    {
+      platform: 'win32',
+      wait: () => {},
+      rename: (source: string, destination: string) => {
+        assert.deepEqual(JSON.parse(readFileSync(target, 'utf8')), { old: true })
+        if (++attempts < 3) throw Object.assign(new Error('sharing conflict'), { code: 'EPERM' })
+        renameSync(source, destination)
+      }
+    }
+  )
+  assert.equal(attempts, 3)
+  assert.deepEqual(JSON.parse(readFileSync(target, 'utf8')), { current: true })
+  attempts = 0
+  const fail = () => {
+    attempts++
+    throw Object.assign(new Error('busy'), { code: 'EPERM' })
+  }
+  assert.throws(() => saveLoopJson(target, {}, { platform: 'win32', wait: () => {}, rename: fail }), /busy/)
+  assert.equal(attempts, 10)
+  assert.deepEqual(JSON.parse(readFileSync(target, 'utf8')), { current: true })
+  let clock = 0
+  attempts = 0
+  assert.throws(
+    () =>
+      saveLoopJson(
+        target,
+        {},
+        {
+          platform: 'win32',
+          now: () => clock,
+          deadline: 25,
+          wait: (ms: number) => {
+            clock += ms
+          },
+          rename: fail
+        }
+      ),
+    /deadline expired/
+  )
+  assert.equal(clock, 25)
+  assert.equal(attempts, 2)
+  assert.deepEqual(readdirSync(directory), ['state.json'])
+  assert.throws(
+    () =>
+      saveLoopJson(
+        target,
+        {},
+        {
+          platform: 'win32',
+          wait: () => {
+            throw new Error('must not retry')
+          },
+          rename: () => {
+            throw Object.assign(new Error('disk failure'), { code: 'EIO' })
+          }
+        }
+      ),
+    /disk failure/
+  )
+  const alias = join(directory, 'alias.json')
+  assert.throws(
+    () =>
+      saveLoopJson(
+        target,
+        {},
+        {
+          platform: 'win32',
+          wait: () => {},
+          rename: () => {
+            linkSync(target, alias)
+            throw Object.assign(new Error('busy'), { code: 'EPERM' })
+          }
+        }
+      ),
+    /private regular file/
+  )
+  assert.deepEqual(JSON.parse(readFileSync(target, 'utf8')), { current: true })
+})
 const fakeWorker = `console.log(JSON.stringify({fake:true,args:process.argv.slice(2),cwd:process.cwd(),cleanNodeOptions:!process.env.NODE_OPTIONS&&!process.env.NODE_PATH}));console.error('fake worker stderr');process.exit(Number(process.env.DSHPX_FAKE_WORKER_EXIT??0));\n`
 
 function fixture(t: TestContext) {

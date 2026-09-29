@@ -22,7 +22,10 @@ const DICT: Record<string, Record<string, string>> = {
     loading: '正在读取版本信息…',
     'section.app': 'DSH-PX',
     'section.dsh': '随附 dsh 核心',
-    'section.update': '更新',
+    'section.update': 'PX Desktop 更新',
+    pack: '插件整合包',
+    desktop: 'PX 客户端',
+    noDesktop: '未检测到 PX 客户端',
     check: '检查更新',
     checking: '正在检查…',
     checkFailed: '检查失败，可重试',
@@ -62,7 +65,10 @@ const DICT: Record<string, Record<string, string>> = {
     loading: 'Reading version information…',
     'section.app': 'DSH-PX',
     'section.dsh': 'Bundled dsh core',
-    'section.update': 'Updates',
+    'section.update': 'PX Desktop updates',
+    pack: 'Plugin pack',
+    desktop: 'PX Desktop',
+    noDesktop: 'PX Desktop not detected',
     check: 'Check for updates',
     checking: 'Checking…',
     checkFailed: 'Check failed; retry',
@@ -101,7 +107,7 @@ const DICT: Record<string, Record<string, string>> = {
 
 /** `/status` 端点的响应（字段由宿主半边决定）。 */
 interface StatusPayload {
-  current: { app: string | null; dsh: string | null; platform: string | null }
+  current: { app: string | null; pack: string; dsh: string | null; platform: string | null }
   manifestPath: string | null
   repository: string
 }
@@ -421,7 +427,13 @@ function DshPxSection({ t }: SlotComponentProps): unknown {
           {tr('unavailable')}（{statusError}）
         </div>
       ) : (
-        <Row label={tr('current')} value={status?.current.app ?? tr('loading')} />
+        <>
+          <Row label={tr('pack')} value={status?.current.pack ?? tr('loading')} />
+          <Row
+            label={tr('desktop')}
+            value={status ? (status.current.app ?? tr('noDesktop')) : tr('loading')}
+          />
+        </>
       )}
 
       <Heading>{tr('section.update')}</Heading>

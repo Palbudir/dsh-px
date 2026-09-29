@@ -173,7 +173,10 @@ window.__ModuleLoader__.load({
 		    loading: "\u6B63\u5728\u8BFB\u53D6\u7248\u672C\u4FE1\u606F\u2026",
 		    "section.app": "DSH-PX",
 		    "section.dsh": "\u968F\u9644 dsh \u6838\u5FC3",
-		    "section.update": "\u66F4\u65B0",
+		    "section.update": "PX Desktop \u66F4\u65B0",
+		    pack: "\u63D2\u4EF6\u6574\u5408\u5305",
+		    desktop: "PX \u5BA2\u6237\u7AEF",
+		    noDesktop: "\u672A\u68C0\u6D4B\u5230 PX \u5BA2\u6237\u7AEF",
 		    check: "\u68C0\u67E5\u66F4\u65B0",
 		    checking: "\u6B63\u5728\u68C0\u67E5\u2026",
 		    checkFailed: "\u68C0\u67E5\u5931\u8D25\uFF0C\u53EF\u91CD\u8BD5",
@@ -213,7 +216,10 @@ window.__ModuleLoader__.load({
 		    loading: "Reading version information\u2026",
 		    "section.app": "DSH-PX",
 		    "section.dsh": "Bundled dsh core",
-		    "section.update": "Updates",
+		    "section.update": "PX Desktop updates",
+		    pack: "Plugin pack",
+		    desktop: "PX Desktop",
+		    noDesktop: "PX Desktop not detected",
 		    check: "Check for updates",
 		    checking: "Checking\u2026",
 		    checkFailed: "Check failed; retry",
@@ -475,7 +481,16 @@ window.__ModuleLoader__.load({
 		      "\uFF08",
 		      statusError,
 		      "\uFF09"
-		    ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Row, { label: tr("current"), value: status?.current.app ?? tr("loading") }),
+		    ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Row, { label: tr("pack"), value: status?.current.pack ?? tr("loading") }),
+		      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+		        Row,
+		        {
+		          label: tr("desktop"),
+		          value: status ? status.current.app ?? tr("noDesktop") : tr("loading")
+		        }
+		      )
+		    ] }),
 		    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Heading, { children: tr("section.update") }),
 		    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
 		      Row,

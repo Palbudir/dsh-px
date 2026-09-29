@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import type { ProductCatalog } from './product-contract'
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return '[' + value.map(canonical).join(',') + ']'
@@ -23,11 +24,13 @@ export function runtimeContentIdentity(manifest: {
   node: { version: string }
   dsh: { version: string }
   integrity: Record<string, unknown>
+  products?: ProductCatalog
 }): string {
   return createHash('sha256')
     .update(
       canonical({
-        appVersion: manifest.app.version,
+        pack: manifest.products?.pack ?? { version: manifest.app.version },
+        protocolGeneration: manifest.products?.protocolGeneration ?? null,
         platform: manifest.platform,
         arch: manifest.arch,
         profile: manifest.profile,

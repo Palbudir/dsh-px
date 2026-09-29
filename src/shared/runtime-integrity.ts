@@ -2,7 +2,8 @@ import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import { readFileSync, statSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
-import { MANAGED_PLUGIN_NAMES } from './plugin-catalog'
+import { MANAGED_PLUGIN_NAMES, PRODUCT_CATALOG } from './plugin-catalog'
+import { assertRuntimeProducts } from './product-contract'
 import {
   inspectSidebarCompatibility,
   SIDEBAR_SOURCE,
@@ -177,7 +178,7 @@ export function verifyRuntimeIntegrity(
   expected?: { node?: string; dsh?: string; app?: string }
 ): void {
   const manifest = JSON.parse(readFileSync(join(root, 'runtime-manifest.json'), 'utf8'))
-  if (manifest.schemaVersion !== 2 || !manifest.integrity)
+  if (manifest.schemaVersion !== 3 || !manifest.integrity)
     throw new Error('运行时缺少可验证的来源与摘要清单；请重新装配')
   if (manifest.seedSource !== 'catalog') throw new Error('发布种子必须来自版本清单，不能来自个人 profile')
   if (
@@ -188,6 +189,7 @@ export function verifyRuntimeIntegrity(
     throw new Error('运行时平台、架构或 profile 标识与本机不一致')
   if (expected?.app && manifest.app?.version !== expected.app)
     throw new Error('应用版本与 runtime manifest 不一致')
+  assertRuntimeProducts(manifest.products, PRODUCT_CATALOG, manifest.app?.version, manifest.dsh?.version)
   const node = inspectNode(join(root, 'node', process.platform === 'win32' ? 'node.exe' : 'bin/node'), {
     version: expected?.node ?? manifest.node?.version,
     platform: manifest.platform,
@@ -214,7 +216,7 @@ export function verifyRuntimeIntegrity(
         join(root, 'dsh-home/profiles', manifest.profile, 'node_modules', name),
         name,
         expectedPlugin.source,
-        manifest.app.version
+        manifest.products.pack.version
       ),
       expectedPlugin
     )

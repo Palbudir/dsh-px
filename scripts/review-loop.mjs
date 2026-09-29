@@ -53,12 +53,35 @@ function optionalJson(path) {
     throw error
   }
 }
-function save(path, value) {
+export function saveLoopJson(
+  path,
+  value,
+  {
+    rename = renameSync,
+    wait = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms),
+    platform = process.platform,
+    now = Date.now,
+    deadline = Infinity
+  } = {}
+) {
   regularFile(path, true)
   const temporary = path + '.' + randomUUID() + '.tmp'
   try {
     writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { flag: 'wx', mode: 0o600, flush: true })
-    renameSync(temporary, path)
+    // Windows readers may briefly deny replacement. Never delete the destination to work around it.
+    for (let attempt = 0; ; attempt++) {
+      if (now() >= deadline) throw new Error('Control file write deadline expired')
+      regularFile(path, true)
+      regularFile(temporary)
+      try {
+        rename(temporary, path)
+        break
+      } catch (error) {
+        if (platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(error.code) || attempt >= 9)
+          throw error
+        wait(Math.min(20, Math.max(0, deadline - now())))
+      }
+    }
   } finally {
     try {
       unlinkSync(temporary)
@@ -67,6 +90,7 @@ function save(path, value) {
     }
   }
 }
+const save = saveLoopJson
 
 /** No repository checkout or mutable candidate scripts may serve as an installation. */
 export function verifyLoopInstallation(directory) {
@@ -359,12 +383,16 @@ export async function requestLoopStop(directory, { timeoutMs = 3000, pollMs = 50
   const requestId = randomUUID(),
     now = Date.now(),
     deadline = now + timeoutMs
-  save(join(installation.directory, stopName), {
-    instanceId: state.instanceId,
-    requestId,
-    requestedAt: new Date(now).toISOString(),
-    expiresAt: new Date(deadline).toISOString()
-  })
+  save(
+    join(installation.directory, stopName),
+    {
+      instanceId: state.instanceId,
+      requestId,
+      requestedAt: new Date(now).toISOString(),
+      expiresAt: new Date(deadline).toISOString()
+    },
+    { deadline }
+  )
   while (Date.now() <= deadline) {
     const current = optionalJson(join(installation.directory, stateName))
     if (current?.instanceId !== state.instanceId)

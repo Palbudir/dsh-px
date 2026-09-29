@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os'
 import { listZipEntries } from './unzip-list'
 import { repoRoot } from './paths'
 import { verifyBuiltApplication, verifyManagedPackageSources } from './package-integrity'
-import { MANAGED_PLUGIN_NAMES, RUNTIME_VERSIONS } from '../src/shared/plugin-catalog'
+import { MANAGED_PLUGIN_NAMES, RUNTIME_VERSIONS, PACK_VERSION } from '../src/shared/plugin-catalog'
 import { verifyRuntimeIntegrity, sha256File } from '../src/shared/runtime-integrity'
 import { forbiddenPayloadPaths } from '../src/shared/payload-policy'
 
@@ -154,7 +154,7 @@ function main(): void {
       dsh: process.env.DSH_PX_DSH_VERSION ?? RUNTIME_VERSIONS.dsh,
       app: version
     })
-    verifyManagedPackageSources(join(nsisRoot, 'resources/runtime'), REPO, 'web', version)
+    verifyManagedPackageSources(join(nsisRoot, 'resources/runtime'), REPO, 'web', PACK_VERSION)
     verifyBuiltApplication(join(nsisRoot, 'resources/app.asar'), REPO, version)
     log(`NSIS 与 ZIP 的应用、实际 Node/DSH、四插件版本与摘要一致：${version}`)
     log('交付物校验通过')

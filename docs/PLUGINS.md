@@ -1,6 +1,6 @@
 # 插件目录与扩展合约
 
-[config/plugins.json](../config/plugins.json) 是运行时与插件选型的唯一清单。自制插件随应用版本同步，社区插件按清单固定版本；构建、装配、迁移和载荷检查共享该清单。
+[config/plugins.json](../config/plugins.json) 是运行时与插件选型的唯一清单。自制插件共同跟随 [Pack 版本](../config/products.json)，与 Desktop 版本分别校验；社区插件按清单固定版本。构建、装配、迁移和载荷检查共享这些清单。版本与入口边界见 [Pack 与 Desktop](EDITIONS.md)。
 
 ## 能力所有者
 

@@ -15,7 +15,13 @@ import {
 import { join, resolve, sep } from 'node:path'
 import { repoRoot } from './paths'
 import { copyHoistedDependencies } from './copy-hoisted-dependencies'
-import { MANAGED_PLUGIN_NAMES, COMMUNITY_VERSIONS, RUNTIME_VERSIONS } from '../src/shared/plugin-catalog'
+import {
+  MANAGED_PLUGIN_NAMES,
+  COMMUNITY_VERSIONS,
+  RUNTIME_VERSIONS,
+  PRODUCT_CATALOG,
+  PACK_VERSION
+} from '../src/shared/plugin-catalog'
 import {
   inspectNode,
   inspectDsh,
@@ -328,19 +334,20 @@ async function main(): Promise<void> {
     arch: process.arch
   })
   const dsh = inspectDsh(dshDirectory, DSH_VERSION)
-  const plugins = inspectManagedPlugins(join(home, 'profiles', PROFILE), 'bundled-runtime', app.version).map(
+  const plugins = inspectManagedPlugins(join(home, 'profiles', PROFILE), 'bundled-runtime', PACK_VERSION).map(
     (plugin) => ({ ...plugin, source: `packages/${plugin.name}` })
   )
   for (const plugin of plugins)
     assertPluginIdentity(
-      inspectManagedPlugin(join(REPO, 'packages', plugin.name), plugin.name, plugin.source, app.version),
+      inspectManagedPlugin(join(REPO, 'packages', plugin.name), plugin.name, plugin.source, PACK_VERSION),
       plugin
     )
   const manifest = {
-    schemaVersion: 2,
+    schemaVersion: 3,
     seedSource: 'catalog',
     stagedAt: new Date().toISOString(),
     app: { name: app.name, version: app.version },
+    products: PRODUCT_CATALOG,
     platform: node.platform,
     arch: node.arch,
     node: {

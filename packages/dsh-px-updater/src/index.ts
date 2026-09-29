@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { HostPluginContext, HostRequest, HostResponse } from '@deepseek-ai/cordis'
 import { isNewer, isValidVersion } from './version'
+import packageInfo from '../package.json'
 
 /** Cordis 插件名（用于 loader 诊断）。 */
 export const name = 'dsh-px-updater'
@@ -273,8 +274,13 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
         if (rejectUntrustedRequest(_req, res)) return
         sendJson(res, 200, {
           plugin: name,
-          version: '0.1.0',
-          current: { app: info.appVersion, dsh: info.dshVersion, platform: info.platform },
+          version: packageInfo.version,
+          current: {
+            app: info.appVersion,
+            pack: packageInfo.version,
+            dsh: info.dshVersion,
+            platform: info.platform
+          },
           manifestPath: info.manifestPath,
           repository: config.repository
         })
