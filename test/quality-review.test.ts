@@ -14,7 +14,6 @@ import { WorkspaceStore, Scheduler } from '../packages/dsh-px-workspace/src/stor
 import { managedArtifacts, MANAGED_PLUGIN_NAMES } from '../src/shared/plugin-catalog'
 import { trustedLocalRequest } from '../packages/shared/request-trust'
 import { createOperation } from '../packages/shared/operation'
-import { summarizeAppLog } from '../src/shared/log-summary'
 
 test('closing a pinned tab selects its visual neighbour and restores legacy tab records', () => {
   const tabs = parseTabs(
@@ -235,15 +234,6 @@ test('a pending mutation stays exclusive while its panel is remounted', async ()
     calls++
   })
   assert.equal(calls, 2)
-})
-test('diagnostic summaries distinguish explicit update shutdowns and never export raw bodies', () => {
-  const summary = summarizeAppLog(
-    '[dsh-px] 启动 2026-09-24T00:00:00Z  版本 0.1.0-beta.re.0.10\nPRIVATE_SECRET Error in example text\nInstall on explicit quitAndInstall\n[dsh] harness exited code=1 signal=null\n[dsh-px-event] {"event":"schedule.settled","prompt":"PRIVATE_SECRET"}'
-  )
-  assert.equal(summary.boots[0].exits.expected, 1)
-  assert.equal(summary.boots[0].exits.unexplained, 0)
-  assert.equal(summary.structuredEvents['schedule.settled'], 1)
-  assert.ok(!JSON.stringify(summary).includes('PRIVATE_SECRET'))
 })
 test('rebuilding an artifact replaces its source entry without modifying a linked runtime copy', async () => {
   const root = mkdtempSync(join(tmpdir(), 'dshpx-artifact-'))

@@ -26,18 +26,61 @@ export function compareVersions(left, right) {
   return 0
 }
 
+/** Released products. Each has its own tag prefix, version source and monotonic history. */
+export const RELEASE_PRODUCTS = Object.freeze(['desktop', 'pack'])
+
+function product(value) {
+  if (!RELEASE_PRODUCTS.includes(value)) throw new Error('Unknown release product')
+  return value
+}
+
+/** `desktop-v<version>` / `pack-v<version>`: never a bare `v*` tag that legacy clients select. */
+export function releaseTag(name, version) {
+  product(name)
+  versionParts(version)
+  return `${name}-v${version}`
+}
+
+/** Parse a product tag; returns null for tags that belong to no current product (history). */
+export function parseReleaseTag(tag) {
+  const match = /^(desktop|pack)-v(.+)$/.exec(String(tag))
+  if (!match) return null
+  versionParts(match[2])
+  return { product: match[1], version: match[2] }
+}
+
+/**
+ * Old DSH-PX clients (electron-updater GitHub provider and the legacy updater plugin) treat any
+ * `v<semver>` tag and GitHub Latest as their own feed. New releases must never look like that.
+ */
+export function assertNotLegacyClientTag(tag) {
+  const value = String(tag).replace(/^refs\/tags\//, '')
+  if (/^v?\d/.test(value)) throw new Error('A bare v* tag would be selected by legacy DSH-PX clients')
+  if (!parseReleaseTag(value)) throw new Error('Release tag must be desktop-v<version> or pack-v<version>')
+}
+
+/** Delta feeds and auto-update YAML are never published; the signed manifest is the only feed. */
+export function assertPublishableAssetName(name) {
+  if (typeof name !== 'string' || !name || name !== name.trim() || /[/\\:\r\n]/.test(name))
+    throw new Error('Unsafe release asset name')
+  if (/\.(?:ya?ml|blockmap)$/i.test(name))
+    throw new Error(`Update feed or delta asset is not publishable: ${name}`)
+  if (/[^0-9A-Za-z._-]/.test(name)) throw new Error(`Release asset name is not GitHub-safe: ${name}`)
+  return name
+}
+
 /** GitHub-safe names, preserving build metadata without colliding with another valid SemVer. */
-export function releaseAssetNames(version) {
+export function releaseAssetNames(name, version) {
+  product(name)
   if (typeof version !== 'string') throw new Error('Invalid semantic version')
   versionParts(version)
   // Underscores are not valid SemVer characters, so this escape of '+' is unambiguous.
   const safeVersion = version.replace('+', '_')
   if (/[^0-9A-Za-z._-]/.test(safeVersion)) throw new Error('Invalid release asset version')
-  const installer = `DSH-PX-Setup-${safeVersion}.exe`
-  return {
-    installer,
-    blockmap: installer + '.blockmap',
-    zip: `DSH-PX-${safeVersion}-win.zip`,
-    metadata: 'latest.yml'
-  }
+  const assets =
+    name === 'desktop'
+      ? { installer: `DSH-PX-Desktop-${safeVersion}-win-x64.exe`, artifact: 'artifact.json' }
+      : { pack: `dsh-px-pack-${safeVersion}.tgz`, artifact: 'artifact.json' }
+  for (const asset of Object.values(assets)) assertPublishableAssetName(asset)
+  return assets
 }

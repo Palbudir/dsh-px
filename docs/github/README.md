@@ -20,9 +20,9 @@ App 没有代码、tag 或 Release 的写权限。RSA 私钥只存本机可信�
 必需检查为 `dsh-px/independent-review` 和 `dsh-px/quality`，都必须来自专用 App ID。同仓分支创建的同名 GitHub Actions job 无法满足这个身份条件。不要填通用 GitHub Actions App ID `15368`。
 
 1. `review-request.yml` 在所有分支 push 和 PR 变更时只记录元数据，不检出 PR 代码。请求按 run ID/attempt 定位。
-2. 本机可信 worker 从精确 head、base 与 merge-base 的 Git 对象收集变更、必要本地依赖、更新消费者和策略显式引用的源码，保留文件名原始空白和 UTF-8 内容。越界、必要依赖缺失或超预算会阻断；大文本分批完整审阅，不截断后放行。每批使用独立 Codex 会话，关闭工具、插件、hooks、记忆及项目指令加载。
-3. worker 沿用用户配置的模型和连接方式，只导入必要字段。已有 Codex 登录由 CLI 使用；GitHub 凭据不传给模型子进程。本次 CLI 最终响应必须与本次随机唯一输出文件一致，旧文件不能冒充新结果。
-4. 本地 Ed25519 证明绑定 repository、head、base、tree、批次、源码与上下文摘要、CLI/配置身份、worker 摘要和时间。全部批次通过且无 P0/P1/P2 或源码审查阻塞项，才能通过。这里的通过只指静态源码审查，CI 和目标环境实际运行验收仍是独立必需门禁；一般未附运行结果不自动构成源码缺陷，但具体缺陷、必要源码缺失或无法确认的关键假设仍须阻断并说明原因。
+2. 本机可信 worker 从精确 head、base 与 merge-base 的 Git 对象收集变更、必要本地依赖、更新消费者和策略显式引用的源码，保留文件名原始空白和 UTF-8 内容。越界、必要依赖缺失或超预算会阻断；大文本分批完整审阅，不截断后放行。每批是一次独立的 DeepSeek Chat Completions 请求（默认模型 `deepseek-flash`，开启 thinking 模式、JSON Output），请求不携带任何工具定义，模型只能返回文本；响应中出现工具调用、截断或非 JSON 内容都判为失败。
+3. worker 用 Node 内置 `fetch` 直接调用 `https://` 模型端点，零第三方依赖；设置 `HTTPS_PROXY` 时使用 Node 内置的环境代理支持。API key 只从安装时指定名称的环境变量读取（默认 `DEEPSEEK_API_KEY`），安装配置只记录变量名；key 不写入配置、日志、trace、证明或 GitHub 输出，变量缺失时 worker 启动即失败。每批响应必须严格符合审查 JSON Schema，并逐字回填本次 head/base/batchId，否则失败关闭。429、5xx 和网络错误在总超时内做有限次指数退避重试，其他 4xx 直接失败。
+4. 本地 Ed25519 证明绑定 repository、head、base、tree、批次、源码与上下文摘要、模型身份（provider、model、baseUrl 及其摘要）、worker 摘要和时间。全部批次通过且无 P0/P1/P2 或源码审查阻塞项，才能通过。这里的通过只指静态源码审查，CI 和目标环境实际运行验收仍是独立必需门禁；一般未附运行结果不自动构成源码缺陷，但具体缺陷、必要源码缺失或无法确认的关键假设仍须阻断并说明原因。
 5. App 核对证明后发布独立审查 check。维护者已有 gh 登录触发默认分支的只读 `trusted-quality.yml`。
 6. App 核对质量运行的 `workflow_id`、路径、事件、controller SHA、源码白名单摘要，以及 run-name 绑定的目标 SHA。通过后才发布 `dsh-px/quality`。
 
@@ -41,7 +41,7 @@ $reviewWorker = Join-Path $env:LOCALAPPDATA 'DSH-PX-review-worker'
 node scripts/review-install.mjs "--directory=$reviewWorker"
 ```
 
-安装器复制已审查的 `review-*.mjs`、`release-*.mjs`，以及经过锁定来源和摘要校验的独立解析器、许可证与来源记录，再记录完整摘要并生成本地签名密钥。解析器只在使用时校验后加载，不从候选检出加载依赖。目录必须在仓库外，`..name` 前缀的仓库子目录也会被拒绝。重新安装保留既有身份配置；程序、CLI 或模型配置变化需要重新验证。
+安装器复制已审查的 `review-*.mjs`、`release-*.mjs`，以及经过锁定来源和摘要校验的独立解析器、许可证与来源记录，再记录完整摘要并生成本地签名密钥。解析器只在使用时校验后加载，不从候选检出加载依赖。目录必须在仓库外，`..name` 前缀的仓库子目录也会被拒绝。重新安装保留既有身份配置；程序或模型配置变化需要重新验证。模型参数为 `--model=`（默认 `deepseek-flash`）、`--base-url=`（默认 `https://api.deepseek.com`，只接受 https）和 `--api-key-env=`（默认 `DEEPSEEK_API_KEY`）。运行 worker 前在当前用户的环境变量中设置该变量，勿写入仓库或可信目录。
 
 用户授权并创建私有 App 后：
 
@@ -56,7 +56,7 @@ npm test
 node (Join-Path $reviewWorker 'review-worker.mjs') --publish
 ```
 
-`review-smoke` 使用现有 Codex 登录执行正常/缺陷两个样例，不调用 GitHub 写接口。worker 默认不发布 check，`--publish` 才调用已授权 App。每次默认处理一个请求，`DSH_PX_REVIEW_MAX_JOBS` 可调整数量；`--rerun=运行ID --publish` 重审仍然有效的请求。已删除、被替代或已合并的旧 push 请求以及已关闭 PR 的请求退出队列，保留历史但不生成新的审查结论。重新打开 PR 会产生新请求；未知状态或读取失败保持等待与重试。
+`review-smoke` 通过同一模型接口执行正常/缺陷两个样例（会产生 API 计费），不调用 GitHub 写接口；可用同名参数指定模型、端点和 key 变量名。worker 默认不发布 check，`--publish` 才调用已授权 App。每次默认处理一个请求，`DSH_PX_REVIEW_MAX_JOBS` 可调整数量；`--rerun=运行ID --publish` 重审仍然有效的请求。已删除、被替代或已合并的旧 push 请求以及已关闭 PR 的请求退出队列，保留历史但不生成新的审查结论。重新打开 PR 会产生新请求；未知状态或读取失败保持等待与重试。
 
 公开检查不包含本机异常详情或未经完整验证的证明。私有原因保存在可信目录的 `queue-state.json` 和 `jobs/<runId>-<attempt>/publication-status.json`，后者区分源码审查结论与检查发布阶段；恢复后清理当前错误状态，不改写已签名的源码结论。
 
@@ -78,17 +78,17 @@ node (Join-Path $reviewWorker 'review-loop.mjs') --stop
 
 ## 只读构建与本机发布
 
-`release.yml` 仅响应明确的 workflow_dispatch，从受保护 master 加载可信控制器。它不响应 tag 自动公开，也不持有发布写权限。构建产物包含版本、候选 SHA、controller SHA 及四个资产的摘要。
+`release.yml` 仅响应明确的 workflow_dispatch，输入精确 SHA 与产品标签（`desktop-v<版本>` 或 `pack-v<版本>`），从受保护 master 加载可信控制器。它不响应 tag 自动公开，不持有发布写权限，也不读取 secret。run-name 同时绑定 SHA 与产品标签，一次运行只证明一个产品。Pack job 构建干净 release Pack；Desktop job 在 `windows-2025` 上从锁定官方源码构建未签名 NSIS 安装程序。构建产物只有主资产、`artifact.json` 与 `release-manifest.json`。
 
-对外资产在 `dist/release-artifacts` 中准备，使用不含空格的规范名称；更新索引与清单引用同一安装包名。原始 `dist` 文件保持原样，已有准备目录不会被覆盖。版本中的 `+` 在资产名中编码为 `_`，更新索引内的版本值仍保持完整 SemVer。
+资产使用不含空格的规范名称，版本中的 `+` 编码为 `_`。任何 `*.yml` 更新索引和 `*.blockmap` 差分文件都不会进入构建产物或 Release。
 
-最终发布由仓库外的本机 `release-controller.mjs` 使用维护者原有 gh 身份执行。它核对当前受保护 master、专用 App check、签名、最新可信质量运行、指定可信构建、版本顺序，以及下载和上传摘要；不执行 tag 或候选提交中的发布脚本。
+最终发布由仓库外的本机 `release-controller.mjs` 使用维护者原有 gh 身份执行。它核对当前受保护 master、专用 App check、签名、最新可信质量运行、同一产品标签的可信构建、产品内版本顺序、GitHub Latest 仍为旧外壳版本，以及下载和上传摘要；不执行 tag 或候选提交中的发布脚本。所有发布均为 prerelease，`make_latest` 为 false。
 
 ```powershell
-node (Join-Path $reviewWorker 'release-controller.mjs') --head=完整SHA --version=完整版本 --build-run=构建运行ID
+node (Join-Path $reviewWorker 'release-controller.mjs') --head=完整SHA --product=desktop --version=完整版本 --build-run=构建运行ID
 ```
 
-默认只准备可检查的 `release-plan.json`，不创建 tag 或 Release。公开说明放在可信目录 `releases/<版本>/notes.md`。完成原生窗口/Web/数据保留验收并得到本次发版确认后，使用同一参数加 `--publish`：先创建草稿资产，复核远端摘要及门禁后才公开。发布过程持有本机排他锁；已发布 tag/资产不重写。失败留下草稿时保留现场，核对后重试。
+默认只准备可检查的 `release-plan.json`，不创建 tag 或 Release。公开说明放在可信目录 `releases/<产品标签>/notes.md`。完成原生窗口/Web/数据保留验收并得到本次发版确认后，使用同一参数加 `--publish`：先创建草稿资产，复核远端摘要及门禁后才公开。发布过程持有本机排他锁；已发布 tag/资产不重写。失败留下草稿时保留现场，核对后重试。
 
 构建资产下载最多等待 30 分钟。后续运行只复用大小和 SHA-256 均符合 GitHub 当前元数据的完整归档；部分或损坏文件会重新下载，失败文件保留用于诊断。复用缓存不会跳过每次运行的发布门禁。
 
@@ -96,7 +96,7 @@ node (Join-Path $reviewWorker 'release-controller.mjs') --head=完整SHA --versi
 
 默认分支尚无可信 workflow 时，先完成独立 agent review、本机正常/故障测试及普通 CI，引入已审查的控制器。随后在用户授权的 App 下验证真实 check 来源，最后启用必需检查。初始化过程不能伪造通过记录。
 
-发布前必须在线确认：同名 Actions job 不能放行；新 SHA、旧证明、错误 workflow/controller、worker 离线/失败、CLI 输出写入失败和 CI rerun 均能阻断或正确恢复。
+发布前必须在线确认：同名 Actions job 不能放行；新 SHA、旧证明、错误 workflow/controller、worker 离线/失败、模型接口失败或输出不符和 CI rerun 均能阻断或正确恢复。
 
 ```powershell
 gh api repos/Palbudir/dsh-px/branches/master/protection
@@ -106,4 +106,4 @@ gh api -X PUT repos/Palbudir/dsh-px/branches/master/protection --input docs/gith
 
 `ruleset.json` 只负责禁止删除和非快进，`security.json` 保存密钥扫描的期望设置。更新规则集前先查现有 ID，避免重复创建。只有在线验收结果可以写成“已生效”。
 
-CLI 依据：[OpenAI 非交互模式](https://learn.chatgpt.com/docs/non-interactive-mode)。检查来源配置：[GitHub 分支保护](https://docs.github.com/en/rest/branches/branch-protection#update-branch-protection)。
+模型接口依据：[DeepSeek Chat Completions](https://api-docs.deepseek.com/api/create-chat-completion)、[JSON Output](https://api-docs.deepseek.com/guides/json_mode)、[Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode)。检查来源配置：[GitHub 分支保护](https://docs.github.com/en/rest/branches/branch-protection#update-branch-protection)。

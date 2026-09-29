@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "repository": "https://github.com/deepseek-ai/deepseek-harness.git",
+  "commit": "4878cdabd87d4041bdaff61d04c966883b9fd07a",
+  "version": "0.2.0-rc.1",
+  "compiledMainSha256": "c76db13771b6920c21a91f05acf33e360de1e4a0bfa4eab09433815a2f1fe544",
+  "builderFactorySha256": "1402156a2760de1ae1b79727344807ae7be002c62be6dd49ac202efb3c03fd8d"
+}

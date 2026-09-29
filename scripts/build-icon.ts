@@ -41,6 +41,8 @@ const log = (m) => process.stdout.write(`[icon] ${m}\n`)
 /** sharp 从随附的 dsh 运行时借用，避免为构建再装一个原生依赖。 */
 function loadSharp() {
   const candidates = [
+    // CI borrows sharp from the prepared official Desktop checkout instead of adding a native dependency.
+    ...(process.env.DSH_PX_SHARP_DIR ? [resolve(process.env.DSH_PX_SHARP_DIR)] : []),
     join(REPO, 'runtime', 'dsh', 'node_modules', 'sharp'),
     join(REPO, 'runtime', 'dsh-home', 'profiles', 'web', 'node_modules', 'sharp')
   ]

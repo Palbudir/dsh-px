@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { generateKeyPairSync } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { test } from 'node:test'
 import { pathToFileURL } from 'node:url'
@@ -13,8 +14,10 @@ const { releaseGate } = await load('release-gate.mjs')
 const head = 'a'.repeat(40),
   base = 'b'.repeat(40),
   tree = 'c'.repeat(40),
-  appId = 777,
-  version = '0.1.0-beta.re.0.11'
+  appId = 777
+// The gate reads the reviewed products manifest; use the repository's own as the fixture.
+const productsSource = readFileSync(resolve('config/products.json'), 'utf8')
+const version: string = JSON.parse(productsSource).desktop.version
 const privatePath = 'C:\\Users\\PRIVATE_FIXTURE_USER\\AppData\\Local\\worker\\jobs\\private.json'
 const privateMarker = 'SYNTHETIC_PRIVATE_DETAIL_DO_NOT_PUBLISH'
 const privateError = `ENOENT ${privatePath}; ${privateMarker}`
@@ -53,7 +56,18 @@ function proof(extra: Record<string, unknown> = {}) {
       completedAt: Date.now(),
       requestRunId: 123,
       requestAttempt: 1,
-      reviewer: { cliVersion: 'fixture-cli', configurationDigest: 'e'.repeat(64) },
+      reviewer: {
+        provider: 'deepseek',
+        model: 'deepseek-flash',
+        baseUrl: 'https://api.deepseek.com',
+        configurationDigest: core.sha256(
+          core.canonical({
+            provider: 'deepseek',
+            model: 'deepseek-flash',
+            baseUrl: 'https://api.deepseek.com'
+          })
+        )
+      },
       verdict: 'pass',
       findings: [],
       blockers: [],
@@ -115,6 +129,10 @@ function fixture() {
     if (route.endsWith('/branches/master')) return state.branch
     if (route.endsWith('/commits/' + head)) return state.commit
     if (route.includes('/compare/')) return { status: 'ahead' }
+    if (route.includes('/contents/config/products.json'))
+      return { content: Buffer.from(productsSource).toString('base64') }
+    if (route.endsWith('/releases/latest'))
+      return { tag_name: 'v0.1.0-beta.re.0.11', prerelease: false, draft: false }
     if (route.includes('/contents/package.json'))
       return { content: Buffer.from(JSON.stringify({ name: 'dsh-px', version })).toString('base64') }
     if (route.includes('/contents/' + workflowPath))
@@ -250,7 +268,14 @@ test('verified success preserves signed source findings and quality evidence req
   await publishQuality(policy, api.api, head, { runId: 91, untrustedDetail: privateError })
   const encoded = new RegExp(core.REPORT_MARKER + '([A-Za-z0-9+/=]+)').exec(api.created[0].output.summary)![1]
   assert.deepEqual(core.decodeReport(encoded), report)
-  const gate = await releaseGate({ version, tag: 'refs/tags/v' + version, head, policy, api: api.api })
+  const gate = await releaseGate({
+    product: 'desktop',
+    version,
+    tag: 'refs/tags/desktop-v' + version,
+    head,
+    policy,
+    api: api.api
+  })
   assert.equal(gate.head, head)
   assert.equal(gate.quality.runId, 91)
   assertPublicClean(api.created)

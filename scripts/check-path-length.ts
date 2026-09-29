@@ -69,8 +69,8 @@ console.log('\n结论：')
 console.log(`  安装后路径 = <安装目录> + "\\resources\\runtime\\" + <相对路径>`)
 console.log(`  要让最长路径不超过 ${MAX_PATH}，安装目录本身不能超过 ${budget} 字符。`)
 console.log(
-  `  例：C:\\Users\\Administrator\\AppData\\Local\\Programs\\dsh-px 长度约 ` +
-    `${'C:\\Users\\Administrator\\AppData\\Local\\Programs\\dsh-px'.length} 字符`
+  `  例：C:\\Users\\<用户名>\\AppData\\Local\\Programs\\dsh-px 长度约 ` +
+    `${'C:\\Users\\<用户名>\\AppData\\Local\\Programs\\dsh-px'.length} 字符`
 )
 
 if (over > 0) {

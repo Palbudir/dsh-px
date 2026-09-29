@@ -616,95 +616,10 @@ function rejectUntrustedRequest(req, res) {
   return true;
 }
 
-// packages/shared/shell-protocol.ts
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { randomUUID } from "node:crypto";
-var shellActions = [
-  "check",
-  "install",
-  "restart",
-  "open-data",
-  "open-log",
-  "cancel-pending"
-];
-var ShellUnavailable = class extends Error {
-  constructor(message, status = 503) {
-    super(message);
-    this.status = status;
-  }
-};
-function freshHeartbeat(dir, now = Date.now()) {
-  if (!dir) return null;
-  try {
-    const value = JSON.parse(readFileSync(join(dir, "service-state.json"), "utf8"));
-    const age = now - Date.parse(value.updatedAt);
-    if (typeof value.instanceId !== "string" || !/^[\w-]{16,80}$/.test(value.instanceId) || !["starting", "running", "restarting", "draining", "error"].includes(value.phase) || !Number.isFinite(age) || age < -5e3 || age > 15e3)
-      return null;
-    return value;
-  } catch {
-    return null;
-  }
-}
-function writeShellJson(file, value) {
-  const tmp = `${file}.${randomUUID()}.tmp`;
-  try {
-    writeFileSync(tmp, JSON.stringify(value), { mode: 384 });
-    renameSync(tmp, file);
-  } finally {
-    try {
-      unlinkSync(tmp);
-    } catch (e) {
-      if (e?.code !== "ENOENT") throw e;
-    }
-  }
-}
-function readShellReceipt(dir, id, instanceId) {
-  if (!/^[a-f0-9-]{36}$/.test(id)) return null;
-  try {
-    const row = JSON.parse(readFileSync(join(dir, "update-bridge", "receipts", `${id}.json`), "utf8"));
-    return row.id === id && row.instanceId === instanceId ? row : null;
-  } catch {
-    return null;
-  }
-}
-async function requestShellAction(dir, action, options = {}) {
-  const heartbeat = freshHeartbeat(dir);
-  if (!heartbeat || !dir) throw new ShellUnavailable("\u684C\u9762\u670D\u52A1\u672A\u8FDE\u63A5\uFF1B\u8BF7\u5148\u6253\u5F00 DSH-PX \u5BA2\u6237\u7AEF\u3002");
-  if (!shellActions.includes(action)) throw new ShellUnavailable("\u672A\u77E5\u684C\u9762\u64CD\u4F5C\u3002", 400);
-  const requests = join(dir, "update-bridge", "requests");
-  mkdirSync(requests, { recursive: true });
-  const request = {
-    id: randomUUID(),
-    instanceId: heartbeat.instanceId,
-    action,
-    createdAt: (/* @__PURE__ */ new Date()).toISOString()
-  };
-  const file = join(requests, `${request.id}.json`);
-  writeShellJson(file, request);
-  const deadline = Date.now() + (options.timeoutMs ?? 6e3);
-  while (Date.now() < deadline) {
-    const receipt = readShellReceipt(dir, request.id, heartbeat.instanceId);
-    if (receipt) {
-      if (receipt.status === "rejected" || receipt.status === "failed")
-        throw new ShellUnavailable(receipt.message, 409);
-      return receipt;
-    }
-    if (freshHeartbeat(dir)?.instanceId !== heartbeat.instanceId) break;
-    await new Promise((resolve) => setTimeout(resolve, options.pollMs ?? 50));
-  }
-  if (existsSync(file))
-    try {
-      unlinkSync(file);
-    } catch {
-    }
-  throw new ShellUnavailable("\u684C\u9762\u672A\u786E\u8BA4\u63A5\u6536\uFF1B\u8BF7\u6838\u5BF9\u5F53\u524D\u72B6\u6001\u540E\u91CD\u8BD5\uFF0C\u907F\u514D\u91CD\u590D\u64CD\u4F5C\u3002");
-}
-
 // packages/dsh-px-updater/src/metadata.ts
 import { brotliDecompressSync, gunzipSync, inflateSync } from "node:zlib";
 var LIMIT = 2 * 1024 * 1024;
-function decodeMetadata(bytes, encoding) {
+function decodeBody(bytes, encoding) {
   if (bytes.byteLength > LIMIT) throw new Error("\u7248\u672C\u4FE1\u606F\u8D85\u8FC7\u8BFB\u53D6\u4E0A\u9650");
   let body = Buffer.from(bytes);
   const plain = () => /^[\s\uFEFF]*[\[{]/u.test(body.toString("utf8", 0, Math.min(256, body.length)));
@@ -720,15 +635,9 @@ function decodeMetadata(bytes, encoding) {
       throw new Error("\u7248\u672C\u670D\u52A1\u8FD4\u56DE\u7684\u538B\u7F29\u6570\u636E\u65E0\u6CD5\u8BFB\u53D6\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5");
     }
   }
-  try {
-    const value = JSON.parse(body.toString("utf8").replace(/^\uFEFF/u, ""));
-    if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error();
-    return value;
-  } catch {
-    throw new Error("\u7248\u672C\u670D\u52A1\u672A\u8FD4\u56DE\u6709\u6548\u7684 JSON \u4FE1\u606F\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5");
-  }
+  return body;
 }
-async function fetchMetadata(url, timeoutMs) {
+async function fetchMetadataText(url, timeoutMs) {
   const controller = new AbortController(), timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, {
@@ -754,7 +663,7 @@ async function fetchMetadata(url, timeoutMs) {
     } finally {
       reader.releaseLock();
     }
-    return decodeMetadata(Buffer.concat(chunks), response.headers.get("content-encoding"));
+    return decodeBody(Buffer.concat(chunks), response.headers.get("content-encoding")).toString("utf8").replace(/^\uFEFF/u, "");
   } catch (error) {
     if (controller.signal.aborted) throw new Error("\u7248\u672C\u67E5\u8BE2\u8D85\u65F6\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5");
     throw error;
@@ -763,17 +672,136 @@ async function fetchMetadata(url, timeoutMs) {
   }
 }
 
-// packages/dsh-px-updater/src/index.ts
-import { existsSync as existsSync2, readFileSync as readFileSync2 } from "node:fs";
-import { dirname, join as join2 } from "node:path";
-import { fileURLToPath } from "node:url";
+// config/update-keys.json
+var update_keys_default = {
+  schemaVersion: 1,
+  keys: {
+    d03d2113641ecf60a2863ec0: "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAP4TqRQC4G9AQfAC1XcRfVyoEvUTtBTnEzYXLSR5jfIU=\n-----END PUBLIC KEY-----\n"
+  }
+};
+
+// config/products.json
+var products_default = {
+  schemaVersion: 1,
+  protocolGeneration: 2,
+  pack: {
+    version: "0.2.0-alpha.1",
+    dataSchemaVersion: 1,
+    hostVersions: ["0.2.0-rc.1"],
+    surfaces: ["web", "px-desktop"]
+  },
+  desktop: {
+    version: "0.2.0-alpha.1",
+    packVersion: "0.2.0-alpha.1",
+    hostVersion: "0.2.0-rc.1",
+    architecture: "official-derived"
+  }
+};
+
+// src/shared/signed-release.ts
+import { createPublicKey, sign, verify } from "node:crypto";
+
+// src/shared/product-contract.ts
+function versionGeneration(version) {
+  if (typeof version !== "string") throw new Error("Product version must be a string");
+  const match = /^0\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?$/.exec(
+    version
+  );
+  if (!match || !Number.isSafeInteger(Number(match[1])))
+    throw new Error("Product version must use canonical 0.x.y with an optional prerelease");
+  return Number(match[1]);
+}
+
+// src/shared/signed-release.ts
+function canonicalRelease(value) {
+  if (Array.isArray(value)) return "[" + value.map(canonicalRelease).join(",") + "]";
+  if (value && typeof value === "object")
+    return "{" + Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => JSON.stringify(key) + ":" + canonicalRelease(item)).join(",") + "}";
+  return JSON.stringify(value);
+}
+function exact(value, fields) {
+  if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).length !== fields.length || fields.some((key) => !Object.hasOwn(value, key)))
+    throw new Error("\u66F4\u65B0\u6E05\u5355\u5B57\u6BB5\u4E0D\u5B8C\u6574\u6216\u5305\u542B\u672A\u77E5\u5B57\u6BB5");
+}
+function base64(value, bytes) {
+  return typeof value === "string" && Buffer.from(value, "base64").length === bytes && Buffer.from(value, "base64").toString("base64") === value;
+}
+function validateReleaseManifest(value) {
+  exact(value, [
+    "schemaVersion",
+    "product",
+    "channel",
+    "platform",
+    "version",
+    "packVersion",
+    "protocolGeneration",
+    "upgradeFromGenerations",
+    "hostVersion",
+    "upstreamCommit",
+    "sourceCommit",
+    "issuedAt",
+    "files"
+  ]);
+  if (value.schemaVersion !== 1 || !["pack", "desktop"].includes(value.product) || !["stable", "preview"].includes(value.channel) || value.platform !== (value.product === "pack" ? "any" : "win32-x64"))
+    throw new Error("\u66F4\u65B0\u4EA7\u54C1\u6216\u5E73\u53F0\u65E0\u6548");
+  if (!Number.isSafeInteger(value.protocolGeneration) || value.protocolGeneration < 1 || versionGeneration(value.version) !== value.protocolGeneration || versionGeneration(value.packVersion) !== value.protocolGeneration)
+    throw new Error("\u66F4\u65B0\u7248\u672C\u4E0E\u534F\u8BAE\u4EE3\u9645\u4E0D\u4E00\u81F4");
+  if (value.product === "pack" && value.packVersion !== value.version) throw new Error("Pack \u7248\u672C\u4E0D\u4E00\u81F4");
+  if (!Array.isArray(value.upgradeFromGenerations) || value.upgradeFromGenerations.length > 16 || value.upgradeFromGenerations.some(
+    (generation) => !Number.isSafeInteger(generation) || Number(generation) < 1 || Number(generation) > value.protocolGeneration
+  ) || new Set(value.upgradeFromGenerations).size !== value.upgradeFromGenerations.length || (value.product === "pack" ? value.upgradeFromGenerations.length !== 0 : !value.upgradeFromGenerations.includes(value.protocolGeneration)))
+    throw new Error("\u66F4\u65B0\u4EE3\u9645\u8FC1\u79FB\u8BB8\u53EF\u65E0\u6548");
+  if (value.channel === "stable" && value.version.includes("-")) throw new Error("\u7A33\u5B9A\u901A\u9053\u4E0D\u80FD\u53D1\u5E03\u9884\u89C8\u7248\u672C");
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(value.hostVersion) || !/^[a-f0-9]{40}$/.test(value.sourceCommit) || !/^[a-f0-9]{40}$/.test(value.upstreamCommit) || typeof value.issuedAt !== "string" || !Number.isFinite(Date.parse(value.issuedAt)) || new Date(value.issuedAt).toISOString() !== value.issuedAt)
+    throw new Error("\u66F4\u65B0\u6765\u6E90\u6216\u65F6\u95F4\u65E0\u6548");
+  if (!Array.isArray(value.files) || value.files.length < 1 || value.files.length > 2)
+    throw new Error("\u66F4\u65B0\u6587\u4EF6\u6E05\u5355\u65E0\u6548");
+  const names = /* @__PURE__ */ new Set(), roles = /* @__PURE__ */ new Set();
+  for (const file of value.files) {
+    exact(file, ["role", "name", "url", "size", "sha256", "sha512"]);
+    if (!["installer", "blockmap", "pack"].includes(file.role) || typeof file.name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,149}$/.test(file.name) || file.name.includes("..") || names.has(file.name) || roles.has(file.role) || !Number.isSafeInteger(file.size) || file.size < 1 || file.size > 8 * 1024 ** 3 || !/^[a-f0-9]{64}$/.test(file.sha256) || !base64(file.sha512, 64))
+      throw new Error("\u66F4\u65B0\u6587\u4EF6\u8EAB\u4EFD\u6216\u6458\u8981\u65E0\u6548");
+    const expected = `https://github.com/Palbudir/dsh-px/releases/download/${value.product}-v${value.version}/${file.name}`;
+    if (file.url !== expected) throw new Error("\u66F4\u65B0\u6587\u4EF6\u5FC5\u987B\u6765\u81EA\u8BE5\u4EA7\u54C1\u7684\u56FA\u5B9A\u53D1\u884C\u5730\u5740");
+    if (file.role === "installer" && !file.name.endsWith(".exe") || file.role === "pack" && !file.name.endsWith(".tgz") || file.role === "blockmap" && !file.name.endsWith(".exe.blockmap"))
+      throw new Error("\u66F4\u65B0\u6587\u4EF6\u7C7B\u578B\u4E0D\u4E00\u81F4");
+    names.add(file.name);
+    roles.add(file.role);
+  }
+  if (value.product === "pack" ? roles.size !== 1 || !roles.has("pack") : !roles.has("installer") || roles.has("pack"))
+    throw new Error("\u66F4\u65B0\u6587\u4EF6\u4E0E\u4EA7\u54C1\u4E0D\u5339\u914D");
+  const blockmap = value.files.find((file) => file.role === "blockmap");
+  const installer = value.files.find((file) => file.role === "installer");
+  if (blockmap && blockmap.name !== installer.name + ".blockmap") throw new Error("\u5DEE\u5206\u6587\u4EF6\u4E0E\u5B89\u88C5\u5668\u4E0D\u5339\u914D");
+}
+function verifySignedRelease(source, keys, target) {
+  if (Buffer.byteLength(source) > 64 * 1024) throw new Error("\u66F4\u65B0\u6E05\u5355\u8FC7\u5927");
+  const envelope = JSON.parse(source);
+  exact(envelope, ["keyId", "payload", "signature"]);
+  if (typeof envelope.keyId !== "string" || !Object.hasOwn(keys, envelope.keyId) || !base64(envelope.signature, 64))
+    throw new Error("\u66F4\u65B0\u7B7E\u540D\u6216\u5BC6\u94A5\u4E0D\u53D7\u4FE1\u4EFB");
+  const key = createPublicKey(keys[envelope.keyId]);
+  if (key.asymmetricKeyType !== "ed25519" || !verify(
+    null,
+    Buffer.from(canonicalRelease(envelope.payload)),
+    key,
+    Buffer.from(envelope.signature, "base64")
+  ))
+    throw new Error("\u66F4\u65B0\u7B7E\u540D\u6821\u9A8C\u5931\u8D25");
+  validateReleaseManifest(envelope.payload);
+  for (const field of ["product", "channel", "platform"])
+    if (envelope.payload[field] !== target[field]) throw new Error("\u66F4\u65B0\u6E05\u5355\u4E0D\u5C5E\u4E8E\u5F53\u524D\u4EA7\u54C1\u3001\u901A\u9053\u6216\u534F\u8BAE\u4EE3\u9645");
+  if (envelope.payload.product === "desktop" ? !envelope.payload.upgradeFromGenerations.includes(target.protocolGeneration) : envelope.payload.protocolGeneration !== target.protocolGeneration)
+    throw new Error("\u66F4\u65B0\u6E05\u5355\u672A\u5141\u8BB8\u4ECE\u5F53\u524D\u534F\u8BAE\u4EE3\u9645\u5347\u7EA7");
+  for (const file of envelope.payload.files) Object.freeze(file);
+  Object.freeze(envelope.payload.files);
+  Object.freeze(envelope.payload.upgradeFromGenerations);
+  return Object.freeze(envelope.payload);
+}
 
 // packages/dsh-px-updater/src/version.ts
 var import_valid = __toESM(require_valid(), 1);
 var import_gt = __toESM(require_gt(), 1);
-function isValidVersion(value) {
-  return typeof value === "string" && (0, import_valid.default)(value.trim()) !== null;
-}
 function isNewer(candidate, current) {
   if (typeof candidate !== "string" || typeof current !== "string") return false;
   const a = (0, import_valid.default)(candidate.trim());
@@ -781,12 +809,52 @@ function isNewer(candidate, current) {
   return a !== null && b !== null && (0, import_gt.default)(a, b);
 }
 
+// packages/dsh-px-updater/src/pack-feed.ts
+var PACK_FEED_URL = "https://raw.githubusercontent.com/Palbudir/dsh-px/updates/pack-preview.json";
+var PACK_FEED_KEYS = Object.freeze({ ...update_keys_default.keys });
+var PACK_TARGET = Object.freeze({
+  product: "pack",
+  channel: "preview",
+  platform: "any",
+  protocolGeneration: products_default.protocolGeneration
+});
+function packReleaseUrl(manifest) {
+  return `https://github.com/Palbudir/dsh-px/releases/tag/${manifest.product}-v${encodeURIComponent(manifest.version)}`;
+}
+function evaluatePackFeed(source, currentPack, now = /* @__PURE__ */ new Date(), keys = PACK_FEED_KEYS) {
+  const result = {
+    checkedAt: now.toISOString(),
+    current: { pack: currentPack },
+    latest: { pack: null, hostVersion: null, issuedAt: null },
+    updateAvailable: false,
+    releaseUrl: null,
+    install: "manual",
+    error: null
+  };
+  let manifest;
+  try {
+    manifest = verifySignedRelease(source, keys, PACK_TARGET);
+  } catch (error) {
+    result.error = `\u7B7E\u540D\u66F4\u65B0\u6E05\u5355\u672A\u901A\u8FC7\u6821\u9A8C\uFF1A${error instanceof Error ? error.message : String(error)}`;
+    return result;
+  }
+  result.latest = { pack: manifest.version, hostVersion: manifest.hostVersion, issuedAt: manifest.issuedAt };
+  result.releaseUrl = packReleaseUrl(manifest);
+  result.updateAvailable = isNewer(manifest.version, currentPack);
+  return result;
+}
+
+// packages/dsh-px-updater/src/index.ts
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+
 // packages/dsh-px-updater/package.json
 var package_default = {
   name: "dsh-px-updater",
   version: "0.2.0-alpha.1",
   private: true,
-  description: "DSH-PX \u7684\u66F4\u65B0\u63D2\u4EF6\uFF1A\u7248\u672C/\u66F4\u65B0\u72B6\u6001\u67E5\u8BE2\u7684\u5BBF\u4E3B\u534A\u8FB9\uFF0C\u52A0\u4E0A dsh \u8BBE\u7F6E\u9875\u91CC\u7684 DSH-PX \u5206\u533A",
+  description: "DSH-PX \u7684\u7248\u672C\u63D2\u4EF6\uFF1A\u62A5\u544A Pack \u7248\u672C\u3001\u6821\u9A8C\u7B7E\u540D Pack \u66F4\u65B0\u6E05\u5355\u5E76\u5728 dsh \u8BBE\u7F6E\u9875\u63D0\u793A\uFF0C\u4E0D\u81EA\u52A8\u5B89\u88C5",
   _note: "\u4E24\u4E2A\u534A\u8FB9\u90FD\u662F**\u9884\u6784\u5EFA\u4EA7\u7269**\uFF08lib/index.js\u3001lib/client.js\uFF09\uFF0C\u6E90\u5728 src/\uFF08TypeScript\uFF09\u3002\u5BBF\u4E3B\u534A\u8FB9\u523B\u610F\u4FDD\u6301\u96F6\u8FD0\u884C\u65F6\u4F9D\u8D56\u4E0E\u96F6 peerDependencies\uFF1Apnpm \u7684 file:/link: \u5B89\u88C5\u4E0D\u4F1A\u5B89\u88C5 peer \u4F9D\u8D56\uFF0C\u800C link: \u4E0B Node \u53C8\u6309\u771F\u5B9E\u8DEF\u5F84\uFF08\u4ED3\u5E93\u5916\uFF09\u89E3\u6790\u6A21\u5757\uFF0C\u4E8E\u662F\u4EFB\u4F55 import \u7684\u5BBF\u4E3B\u5305\u90FD\u4F1A ERR_MODULE_NOT_FOUND\u3002\u914D\u7F6E\u9ED8\u8BA4\u503C\u81EA\u5DF1\u5408\u5E76\u5373\u53EF\uFF0C\u65E0\u9700 schemastery\u3002\u5BA2\u6237\u7AEF\u534A\u8FB9\u7684 react \u7B49\u7531**\u524D\u7AEF\u9759\u6001\u6A21\u5757\u8868**\u63D0\u4F9B\uFF0C\u662F\u6D4F\u89C8\u5668\u4FA7\u7684 require\uFF0C\u4E0D\u53D7\u6B64\u9650\u5236\u3002",
   type: "module",
   main: "lib/index.js",
@@ -829,110 +897,62 @@ var DEFAULTS = {
   repository: "Palbudir/dsh-px",
   timeoutMs: 8e3,
   registerTool: true,
-  routePrefix: "/dsh-px-updater"
+  routePrefix: "/dsh-px-updater",
+  feedUrl: PACK_FEED_URL
 };
-function resourcesPath() {
-  const v = process.resourcesPath;
-  return typeof v === "string" && v.length > 0 ? v : null;
-}
-function readAppInfo() {
-  const empty = { appVersion: null, dshVersion: null, platform: null, manifestPath: null };
-  const candidates = [];
-  if (process.env.DSH_PX_RUNTIME_ROOT) candidates.push(process.env.DSH_PX_RUNTIME_ROOT);
-  const res = resourcesPath();
-  if (res !== null) candidates.push(join2(res, "runtime"));
-  let here = dirname(fileURLToPath(import.meta.url));
-  for (let i = 0; i < 10; i += 1) {
-    candidates.push(here);
+function readPackIdentity(start = dirname(fileURLToPath(import.meta.url))) {
+  const empty = {
+    version: null,
+    hostVersion: null,
+    upstreamCommit: null,
+    candidate: null,
+    manifestPath: null
+  };
+  let here = start;
+  for (let i = 0; i < 8; i += 1) {
+    const manifestPath = join(here, "package.json");
+    if (existsSync(manifestPath)) {
+      try {
+        const m = JSON.parse(readFileSync(manifestPath, "utf8"));
+        if (m.name === "dsh-px-pack")
+          return {
+            version: typeof m.version === "string" ? m.version : null,
+            hostVersion: typeof m.dshPx?.hostVersion === "string" ? m.dshPx.hostVersion : null,
+            upstreamCommit: typeof m.dshPx?.upstreamCommit === "string" ? m.dshPx.upstreamCommit : null,
+            candidate: typeof m.dshPx?.candidate === "boolean" ? m.dshPx.candidate : null,
+            manifestPath
+          };
+      } catch {
+      }
+    }
     const parent = dirname(here);
     if (parent === here) break;
     here = parent;
   }
-  for (const root of candidates) {
-    const manifestPath = join2(root, "runtime-manifest.json");
-    if (!existsSync2(manifestPath)) continue;
-    try {
-      const m = JSON.parse(readFileSync2(manifestPath, "utf8"));
-      return {
-        // 应用版本来自装配时写入的 manifest —— 这是唯一可靠的来源。
-        // 不用 `app.getVersion()`（那是外壳的事，且开发态会返回 Electron 版本）。
-        appVersion: m.app?.version ?? null,
-        dshVersion: m.dsh?.version ?? null,
-        platform: m.platform ?? null,
-        manifestPath
-      };
-    } catch {
-    }
-  }
   return empty;
 }
-function shellUserData() {
-  const fromEnv = process.env.DSH_PX_USER_DATA;
-  return typeof fromEnv === "string" && fromEnv.length > 0 ? fromEnv : null;
-}
-function readShellState() {
-  const dir = shellUserData();
-  if (dir === null) return null;
+async function checkPackUpdates(config) {
   try {
-    const heartbeat = freshHeartbeat(dir);
-    if (!heartbeat) return null;
-    const raw = readFileSync2(join2(dir, "update-bridge", "state.json"), "utf8");
-    const parsed = JSON.parse(raw);
-    if (typeof parsed !== "object" || parsed === null || parsed.instanceId !== heartbeat.instanceId)
-      return null;
-    return { ...parsed, available: true };
-  } catch {
-    return null;
+    return evaluatePackFeed(await fetchMetadataText(config.feedUrl, config.timeoutMs), package_default.version);
+  } catch (error) {
+    return {
+      checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      current: { pack: package_default.version },
+      latest: { pack: null, hostVersion: null, issuedAt: null },
+      updateAvailable: false,
+      releaseUrl: null,
+      install: "manual",
+      error: `\u65E0\u6CD5\u8BFB\u53D6 Pack \u66F4\u65B0\u6E05\u5355\uFF1A${errText(error)}`
+    };
   }
-}
-async function requestShellAction2(action) {
-  return requestShellAction(shellUserData() ?? void 0, action);
-}
-async function checkUpdates(config) {
-  const info = readAppInfo();
-  const result = {
-    checkedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    current: {
-      app: info.appVersion ?? "\u672A\u77E5",
-      dsh: info.dshVersion ?? "\u672A\u77E5",
-      platform: info.platform ?? process.platform
-    },
-    latest: { app: null, dsh: null },
-    updateAvailable: { app: false, dsh: false },
-    releaseUrl: null,
-    releaseNotes: null,
-    errors: []
-  };
-  try {
-    const rel = await fetchMetadata(
-      `https://api.github.com/repos/${config.repository}/releases/latest`,
-      config.timeoutMs
-    );
-    if (!isValidVersion(rel.tag_name)) throw new Error("\u53D1\u5E03\u9875\u672A\u8FD4\u56DE\u6709\u6548\u7248\u672C\u53F7");
-    result.latest.app = typeof rel.tag_name === "string" ? rel.tag_name : null;
-    result.releaseUrl = typeof rel.html_url === "string" ? rel.html_url : null;
-    result.releaseNotes = typeof rel.body === "string" ? rel.body : null;
-    result.updateAvailable.app = isNewer(rel.tag_name ?? null, info.appVersion);
-  } catch (err) {
-    result.errors.push(`\u67E5\u8BE2 GitHub Releases \u5931\u8D25\uFF1A${errText(err)}`);
-  }
-  try {
-    const pkg = await fetchMetadata("https://registry.npmjs.org/@deepseek-ai%2Fdsh/latest", config.timeoutMs);
-    const latest = typeof pkg.version === "string" ? pkg.version : null;
-    if (!isValidVersion(latest)) throw new Error("npm \u672A\u8FD4\u56DE\u6709\u6548\u7248\u672C\u53F7");
-    result.latest.dsh = latest;
-    result.updateAvailable.dsh = isNewer(latest, info.dshVersion);
-  } catch (err) {
-    result.errors.push(`\u67E5\u8BE2 npm \u4E0A\u7684 dsh \u7248\u672C\u5931\u8D25\uFF1A${errText(err)}`);
-  }
-  return result;
 }
 function errText(err) {
   return err instanceof Error ? err.message : String(err);
 }
 function apply(ctx, rawConfig) {
   const config = { ...DEFAULTS, ...rawConfig ?? {} };
-  const info = readAppInfo();
+  if (config.feedUrl !== PACK_FEED_URL) config.feedUrl = PACK_FEED_URL;
+  const pack = readPackIdentity();
   const say = (msg) => {
     try {
       const sink = ctx.logger?.info ?? ctx.logger?.debug ?? console.log;
@@ -940,7 +960,7 @@ function apply(ctx, rawConfig) {
     } catch {
     }
   };
-  say(`\u5DF2\u52A0\u8F7D\uFF08dsh ${info.dshVersion ?? "\u672A\u77E5"}\uFF0C${info.platform ?? process.platform}\uFF09`);
+  say(`\u5DF2\u52A0\u8F7D\uFF08Pack ${pack.version ?? package_default.version}\uFF0C${process.platform}\uFF09`);
   ctx.inject(["connection", "webServer"], (hostCtx) => {
     const webServer = hostCtx.webServer;
     if (webServer?.register === void 0) {
@@ -957,18 +977,16 @@ function apply(ctx, rawConfig) {
     const disposeStatus = webServer.register({
       kind: "exact",
       path: `${config.routePrefix}/status`,
-      handler: (_req, res) => {
-        if (rejectUnauthenticatedRequest(_req, res, hostCtx.connection)) return;
+      handler: (req, res) => {
+        if (rejectUnauthenticatedRequest(req, res, hostCtx.connection)) return;
         sendJson(res, 200, {
           plugin: name,
           version: package_default.version,
-          current: {
-            app: info.appVersion,
-            pack: package_default.version,
-            dsh: info.dshVersion,
-            platform: info.platform
-          },
-          manifestPath: info.manifestPath,
+          pack,
+          platform: process.platform,
+          // Desktop updates belong to the Desktop host; there is no PX shell bridge in this generation.
+          desktopBridge: false,
+          feed: config.feedUrl,
           repository: config.repository
         });
       }
@@ -976,116 +994,17 @@ function apply(ctx, rawConfig) {
     const disposeCheck = webServer.register({
       kind: "exact",
       path: `${config.routePrefix}/check`,
-      handler: async (_req, res) => {
-        if (rejectUnauthenticatedRequest(_req, res, hostCtx.connection)) return;
-        const outcome = await checkUpdates(config);
-        const bothFailed = outcome.errors.length >= 2;
-        sendJson(res, bothFailed ? 502 : 200, outcome);
-      }
-    });
-    const disposeShellCheck = webServer.register({
-      kind: "exact",
-      path: `${config.routePrefix}/check-shell`,
       handler: async (req, res) => {
         if (rejectUnauthenticatedRequest(req, res, hostCtx.connection)) return;
-        if (req.method !== "POST") {
-          sendJson(res, 405, { ok: false, error: "\u53EA\u63A5\u53D7 POST" });
-          return;
-        }
-        if (req.headers?.["x-dsh-px-request"] !== "1")
-          return sendJson(res, 403, { ok: false, error: "\u8BF7\u4ECE DSH-PX \u754C\u9762\u63D0\u4EA4\u64CD\u4F5C\u3002" });
-        try {
-          sendJson(res, 202, { ok: true, ...await requestShellAction2("check") });
-        } catch (error) {
-          sendJson(res, error instanceof ShellUnavailable ? error.status : 503, {
-            ok: false,
-            error: errText(error)
-          });
-        }
+        const outcome = await checkPackUpdates(config);
+        sendJson(res, outcome.error === null ? 200 : 502, outcome);
       }
     });
-    const disposeShellState = webServer.register({
-      kind: "exact",
-      path: `${config.routePrefix}/shell-state`,
-      handler: (_req, res) => {
-        if (rejectUnauthenticatedRequest(_req, res, hostCtx.connection)) return;
-        const bridge = readShellState();
-        sendJson(
-          res,
-          200,
-          bridge ?? {
-            phase: "idle",
-            status: "\u5916\u58F3\u672A\u63D0\u4F9B\u66F4\u65B0\u72B6\u6001\uFF08\u5F00\u53D1\u6001\u6B63\u5E38\uFF09",
-            version: null,
-            percent: null,
-            error: null,
-            available: false
-          }
-        );
-      }
-    });
-    const disposeInstall = webServer.register({
-      kind: "exact",
-      path: `${config.routePrefix}/install`,
-      handler: async (req, res) => {
-        if (rejectUnauthenticatedRequest(req, res, hostCtx.connection)) return;
-        if (req.method !== "POST") {
-          sendJson(res, 405, { ok: false, error: "\u53EA\u63A5\u53D7 POST" });
-          return;
-        }
-        if (req.headers?.["x-dsh-px-request"] !== "1")
-          return sendJson(res, 403, { ok: false, error: "\u8BF7\u4ECE DSH-PX \u754C\u9762\u63D0\u4EA4\u64CD\u4F5C\u3002" });
-        const state = readShellState();
-        if (state?.phase !== "ready") {
-          sendJson(res, 409, { ok: false, error: "\u66F4\u65B0\u5C1A\u672A\u4E0B\u8F7D\u5B8C\u6210\uFF0C\u6216\u5B89\u88C5\u5DF2\u5728\u8FDB\u884C\u4E2D" });
-          return;
-        }
-        try {
-          sendJson(res, 202, { ok: true, ...await requestShellAction2("install") });
-        } catch (error) {
-          sendJson(res, error instanceof ShellUnavailable ? error.status : 503, {
-            ok: false,
-            error: errText(error)
-          });
-        }
-      }
-    });
-    const disposeOpen = webServer.register({
-      kind: "exact",
-      path: `${config.routePrefix}/open`,
-      handler: async (req, res) => {
-        if (rejectUnauthenticatedRequest(req, res, hostCtx.connection)) return;
-        if (req.method !== "POST") {
-          sendJson(res, 405, { ok: false, error: "\u53EA\u63A5\u53D7 POST" });
-          return;
-        }
-        if (req.headers?.["x-dsh-px-request"] !== "1")
-          return sendJson(res, 403, { ok: false, error: "\u8BF7\u4ECE DSH-PX \u754C\u9762\u63D0\u4EA4\u64CD\u4F5C\u3002" });
-        const params = new URL(req.url ?? "/", "http://127.0.0.1").searchParams;
-        const raw = params.getAll("what").length === 1 ? params.get("what") : null;
-        if (raw !== "open-data" && raw !== "open-log" && raw !== "cancel-pending") {
-          sendJson(res, 400, { ok: false, error: "what \u5FC5\u987B\u662F open-data \u6216 open-log" });
-          return;
-        }
-        try {
-          sendJson(res, 202, { ok: true, ...await requestShellAction2(raw) });
-        } catch (error) {
-          sendJson(res, error instanceof ShellUnavailable ? error.status : 503, {
-            ok: false,
-            error: errText(error)
-          });
-        }
-      }
-    });
-    say(`\u5DF2\u6CE8\u518C HTTP \u7AEF\u70B9 ${config.routePrefix}/{status,check,check-shell,shell-state,install,open}`);
+    say(`\u5DF2\u6CE8\u518C HTTP \u7AEF\u70B9 ${config.routePrefix}/{status,check}`);
     hostCtx.effect?.(
       () => () => {
         disposeStatus();
         disposeCheck();
-        disposeShellCheck();
-        disposeShellState();
-        disposeInstall();
-        disposeOpen();
       },
       "dsh-px-updater: http routes"
     );
@@ -1094,26 +1013,14 @@ function apply(ctx, rawConfig) {
     ctx.inject(["tools"], (toolCtx) => {
       toolCtx.tools?.register({
         name: "dsh_px_version",
-        description: "\u67E5\u8BE2\u5F53\u524D DSH-PX \u684C\u9762\u5BA2\u6237\u7AEF\u7684\u7248\u672C\u4FE1\u606F\uFF0C\u5E76\u68C0\u67E5\u662F\u5426\u6709\u65B0\u7248\u672C\u53EF\u7528\uFF08\u540C\u65F6\u68C0\u67E5\u5916\u58F3\u4E0E\u968F\u9644\u7684 dsh \u6838\u5FC3\uFF09\u3002",
-        // parameters 必须是**标准 JSON Schema**（ToolSchema.parameters 的类型是
-        // Record<string, unknown>，由 assertObjectJsonSchema 校验）。
-        //
-        // 这里曾写错：用了 `{ checkRemote: { type: 'boolean', required: false } }`
-        // 这种"属性表"简写 —— 那是 defineTool 的**输入**格式，不是 ToolSchema。
-        // JSON Schema 里 `required` 是**根级字符串数组**，不是属性上的布尔值；
-        // 传错会让宿主报
-        //   Invalid schema for function 'dsh_px_version': schema must be a JSON Schema
-        //   of 'type: "object"', got 'type: "null"'
-        // 并导致**整轮对话失败**（不只是本工具不可用），代价很大，故把原因写明。
-        //
-        // 本插件刻意不 import defineTool：见文件顶部说明 —— 自研插件保持零运行时
-        // 依赖，避免 pnpm file:/link: 不装 peer 依赖导致的 ERR_MODULE_NOT_FOUND。
+        description: "\u67E5\u8BE2\u5F53\u524D DSH-PX Pack \u7684\u7248\u672C\uFF0C\u5E76\u901A\u8FC7\u7B7E\u540D\u66F4\u65B0\u6E05\u5355\u68C0\u67E5\u662F\u5426\u6709\u65B0\u7684 Pack \u9884\u89C8\u7248\u672C\uFF08\u53EA\u63D0\u793A\uFF0C\u4E0D\u81EA\u52A8\u5B89\u88C5\uFF1B\u684C\u9762\u5BA2\u6237\u7AEF\u66F4\u65B0\u7531\u5BA2\u6237\u7AEF\u81EA\u8EAB\u8D1F\u8D23\uFF09\u3002",
+        // Standard JSON Schema: `required` is a root-level array, never a per-property boolean.
         parameters: {
           type: "object",
           properties: {
             checkRemote: {
               type: "boolean",
-              description: "\u662F\u5426\u8054\u7F51\u67E5\u8BE2\u6700\u65B0\u7248\u672C\u3002\u4F20 false \u65F6\u53EA\u8FD4\u56DE\u672C\u5730\u7248\u672C\u4FE1\u606F\u3002"
+              description: "\u662F\u5426\u8054\u7F51\u67E5\u8BE2\u7B7E\u540D\u66F4\u65B0\u6E05\u5355\u3002\u4F20 false \u65F6\u53EA\u8FD4\u56DE\u672C\u5730\u7248\u672C\u4FE1\u606F\u3002"
             }
           },
           additionalProperties: false
@@ -1123,17 +1030,16 @@ function apply(ctx, rawConfig) {
           render: (_args, value) => [{ type: "text", text: value }]
         },
         async execute(args) {
-          if (args?.checkRemote === false) {
-            return `\u672C\u5730\u7248\u672C\uFF1Adsh ${info.dshVersion ?? "\u672A\u77E5"}\uFF08${info.platform ?? process.platform}\uFF09`;
+          const local = `\u5F53\u524D\uFF1APack ${package_default.version}\uFF08\u58F0\u660E\u5BBF\u4E3B ${pack.hostVersion ?? "\u672A\u77E5"}\uFF0C${process.platform}\uFF09`;
+          if (args?.checkRemote === false) return local;
+          const r = await checkPackUpdates(config);
+          const lines = [local];
+          if (r.error !== null) lines.push(`\u68C0\u67E5\u5931\u8D25\uFF1A${r.error}`);
+          else {
+            lines.push(`\u5DF2\u7B7E\u540D\u7684\u6700\u65B0 Pack\uFF1A${r.latest.pack}`);
+            lines.push(`\u53EF\u66F4\u65B0\uFF1A${r.updateAvailable ? "\u662F\uFF08\u8BF7\u901A\u8FC7\u63D2\u4EF6\u7BA1\u7406\u5668\u624B\u52A8\u5B89\u88C5\uFF09" : "\u5426"}`);
+            if (r.releaseUrl !== null) lines.push(`\u53D1\u5E03\u9875\uFF1A${r.releaseUrl}`);
           }
-          const r = await checkUpdates(config);
-          const lines = [
-            `\u5F53\u524D\uFF1Adsh \u6838\u5FC3 ${r.current.dsh}`,
-            `\u6700\u65B0\uFF1A\u5916\u58F3 ${r.latest.app ?? "\u672A\u77E5"}\uFF0Cdsh ${r.latest.dsh ?? "\u672A\u77E5"}`,
-            `\u53EF\u66F4\u65B0\uFF1A\u5916\u58F3 ${r.updateAvailable.app ? "\u662F" : "\u5426"}\uFF0Cdsh \u6838\u5FC3 ${r.updateAvailable.dsh ? "\u662F" : "\u5426"}`
-          ];
-          if (r.releaseUrl !== null) lines.push(`\u53D1\u5E03\u9875\uFF1A${r.releaseUrl}`);
-          if (r.errors.length > 0) lines.push(`\u6CE8\u610F\uFF1A${r.errors.join("\uFF1B")}`);
           return lines.join("\n");
         }
       });
@@ -1143,6 +1049,8 @@ function apply(ctx, rawConfig) {
 export {
   DEFAULTS,
   apply,
+  checkPackUpdates,
   inject,
-  name
+  name,
+  readPackIdentity
 };

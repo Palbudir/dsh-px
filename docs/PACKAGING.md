@@ -1,49 +1,40 @@
-# 运行时装配与数据边界
+# 构建结构与数据边界
 
-## 发布载荷
+## 制品
 
-| 位置                            | 内容                               | 权威来源                                           |
-| ------------------------------- | ---------------------------------- | -------------------------------------------------- |
-| `runtime/node/`                 | 独立 Node 二进制                   | `config/plugins.json` 中的运行时版本及官方归档校验 |
-| `runtime/dsh/`                  | DSH CLI 与原生依赖                 | 固定包版本及实际 manifest                          |
-| `runtime/dsh-home/`             | 干净的 profile 与预装插件          | 插件目录和受控种子配置                             |
-| `runtime/runtime-manifest.json` | 实际版本、平台、架构及关键文件摘要 | 已校验的装配结果                                   |
+| 制品                                | 内容                                             | 构建方式                                    |
+| ----------------------------------- | ------------------------------------------------ | ------------------------------------------- |
+| `dsh-px-pack-<版本>.tgz`            | 四个自制插件 + 已认证补丁的侧栏插件，原生 bundle | `scripts/build-native-pack.ts`              |
+| `DSH-PX-Desktop-<版本>-win-x64.exe` | 官方 Desktop 源码 + PX 覆盖层 + 同提交的 Pack    | GitHub Windows runner 上的 electron-builder |
+| `artifact.json`                     | 版本、来源提交、宿主锁定、大小与 SHA-256/SHA-512 | 随对应制品生成                              |
 
-发布装配使用 `npm run stage -- --with-plugins`。不能以个人 profile、凭据、会话或运行中的数据目录作为发布种子。已存在的 Node、DSH 与插件必须核对实际版本、入口和摘要；仅检查文件存在不足以复用。
+Pack 的依赖与 peer 固定在 [native-pack.json](../config/native-pack.json)。Desktop 的上游提交、编译产物与构建工厂摘要固定在 [native-desktop.json](../config/native-desktop.json)。
 
-主进程与 DSH 分属不同进程。DSH 使用随附 Node，原生模块匹配该 Node 的 ABI；Electron 的内置 Node 不用于运行 Agent 服务。
+## Desktop 构建顺序
 
-## 安装与升级
+可信构建在 `windows-2025` runner 上执行，不读取任何 secret：
 
-初次启动将干净种子准备到用户数据目录。可变配置和业务数据独立复制；不可变依赖可按物化规则使用硬链接，链接不可用时回退复制。进度与失败必须可见，不将部分准备状态写成完成。
+1. 按锁定提交检出官方源码并核对 `native-desktop.json`；`pnpm@11.7.0 install --frozen-lockfile`。
+2. `build:official`，打包官方 dsh / vendor / landlock 闭包，再运行 `prepare:runtime`、`prepare:packages`、`prepare:dsh`；随后确认上游 tracked 树保持干净。
+3. 在 PX 检出中运行质量门禁，构建同提交的干净 release Pack。
+4. `scripts/prepare-native-desktop.mjs` 生成覆盖层：独立应用身份、签名更新源、首次默认配置与 Pack 预装，不修改官方原始文件。
+5. `scripts/brand-native-installer.mjs` 生成安装界面品牌：PX 包装脚本预先定义官方 `installer.nsh` 以 `!define /ifndef` 读取的 `INSTALLER_STRINGS_FILE` 与 `INSTALLER_BUILD_DIR`，再原样包含官方脚本；品牌位图由 `build/icon.png` 生成，官方安装器辅助库仍由官方准备步骤从源码编译。
+6. `electron-builder --win nsis --x64 --publish never`，只接受一个完整安装程序，不生成差分 blockmap；发布目录不携带任何 `*.yml`。
 
-受管插件升级在独立 profile 中准备与验证，完整后才切换。验证包括插件版本、宿主和客户端入口、来源摘要、组合声明及原生 DSH 校验。迁移日志用于恢复中断事务；失败时保留原 profile 和可操作的重试入口。
+安装器依赖官方安装界面辅助库，需要 x86 VC++ 编译器与 Windows SDK，因此正式构建只在 CI 进行。本机调试可用官方目录构建（`--dir`）配合 `DSH_PX_DIRECTORY_PROBE=1`，该模式不生成安装程序，也不能证明 NSIS 可用。
 
-用户凭据、会话、设置、业务存储和自定义插件声明不得由默认种子覆盖。受管插件载荷来自安装资源；用户新增第三方插件的安装依赖仍由 DSH 插件管理器决定。
+## 数据与卸载
 
-备份元数据记录来源版本、时间与用途。自动日志轮转只处理应用诊断日志，不删除会话；有效升级备份的清理必须经过明确操作，不能删除唯一恢复来源。
+Desktop 的 Electron 用户数据位于 `%APPDATA%\dsh-px-desktop`，DSH_HOME 位于 `%USERPROFILE%\.dsh-px`，文档目录位于 `Documents\DSH-PX`。官方卸载程序只清理 Electron 用户数据与更新缓存，从不处理 DSH_HOME；PX 不提供删除数据的选项，会话、凭据、profile 与 Pack 缓存在卸载后保留。
 
-## DSH 集成约束
+首次预装把随包的 Pack 复制到 profile 内的固定缓存，再调用原生插件管理器安装；写入采用临时文件、fsync 与原子替换，损坏的缓存先隔离再恢复。用户凭据、会话、设置、业务存储和自定义插件声明不得由默认配置覆盖。
 
-- DSH 管理的 module proxy、fallback 和临时安装目录不作为实体依赖复制进种子；真实第三方依赖仍需完整保留。
+## 集成约束
+
 - 插件组合通过 DSH bundle 与 profile 声明。组合成员变化需要重启；补丁热重载不等于动态装卸整个组合包。
-- 桌面加载 DSH 宣告的鉴权 URL。干净地址只用于检查服务是否响应；启动令牌不能记录到日志或文档。
-- 文件更新采用临时文件加原子替换，避免原地写入硬链接共享的依赖或构建产物。
-- 本机网页能力沿用 DSH 的代理与网络限制。系统代理自动接入只处理支持的本机静态 HTTP(S) 配置，显式配置优先。
-- Electron 依赖通过官方安装器准备并验证二进制；不手工解压未知缓存代替版本检查。
+- 文件更新采用临时文件加原子替换，避免原地写入共享的依赖或构建产物。
+- 发布载荷不得包含凭据、会话、本项目验收夹具、个人设置或构建机路径。
 
-## 打包检查
-
-```powershell
-npm run build
-npm run stage -- --with-plugins
-npm run verify -- --boot
-npm run prune
-npm run dist
-```
-
-启动验证可能产生运行数据，打包前必须再次裁剪种子。安装包检查应核对版本与摘要，并拒绝凭据、会话、本项目验收夹具、临时安装树、个人设置和源码链接。官方依赖随包发布的数据目录保持完整，不能仅因目录名为 `test` 就删除；裁剪只移除明确的源映射和生成数据。
-
-`runtime/`、`out/`、`dist/`、`build-scripts/` 与 `build-test/` 为生成目录，不入库。插件 `lib` 是受控交付产物，必须与源码构建结果一致。
+`build-scripts/`、`build-test/` 与 `build/icon*.png` 为生成内容，不入库。插件 `lib` 是受控交付产物，必须与源码构建结果一致。
 
 发布来源、顺序和安装后检查见 [RELEASING.md](RELEASING.md)。

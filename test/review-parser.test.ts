@@ -91,19 +91,22 @@ test('altered embedded metadata is rejected before any installed parser can be l
 
 function installerCli(t: TestContext) {
   const f = fixture(t),
-    auth = join(f.root, 'auth'),
     helper = join(f.root, 'invoke-installer.mjs')
-  mkdirSync(auth)
-  writeFileSync(join(auth, 'config.toml'), 'model="fixture-model"\n')
   const paths = [
     'scripts/review-install.mjs',
     'scripts/review-parser.mjs',
     'scripts/review-process.mjs',
+    'scripts/review-model.mjs',
     'scripts/review-core.mjs',
     'scripts/release-quality.mjs',
     'scripts/release-catalog.mjs',
     'scripts/release-package.mjs',
     'scripts/release-version.mjs',
+    'scripts/release-gate.mjs',
+    'scripts/build-native-pack.ts',
+    'scripts/prepare-native-desktop.mjs',
+    'scripts/brand-native-installer.mjs',
+    'scripts/brand-installer-images.ps1',
     '.github/workflows/trusted-quality.yml',
     '.github/workflows/release.yml'
   ]
@@ -129,14 +132,14 @@ cp.spawn=(exe,args)=>{
     if(args[0]==='api' && args[1]==='user'){
       if(mutate)writeFileSync(mutate,'CHANGED_AFTER_PREFLIGHT');
       child.stdout.end(JSON.stringify({login:'fixture'}));
-    }else if(args[0]==='--version')child.stdout.end('fixture-cli');
+    }
     else throw Error('Unexpected isolated command');
     child.emit('close',0);
   });
   return child;
 };
 syncBuiltinESMExports();
-process.argv=[process.execPath,installer,'--directory='+destination,'--codex='+process.execPath,'--git='+process.execPath,'--gh='+process.execPath,...extra];
+process.argv=[process.execPath,installer,'--directory='+destination,'--git='+process.execPath,'--gh='+process.execPath,...extra];
 try { await import(pathToFileURL(installer).href); console.log(JSON.stringify({ok:true,calls})); }
 catch(error){ console.log(JSON.stringify({ok:false,calls,error:String(error)})); process.exitCode=1; }
 `
@@ -151,7 +154,7 @@ catch(error){ console.log(JSON.stringify({ok:false,calls,error:String(error)}));
         timeout: 15000,
         env: {
           ...process.env,
-          CODEX_HOME: auth,
+          DSHPX_INSTALL_FIXTURE_KEY: 'install-fixture-secret-value',
           NODE_OPTIONS: '',
           NODE_PATH: '',
           GH_TOKEN: '',
@@ -220,7 +223,7 @@ test('installer CLI copies its validated memory snapshot even if source files ch
   const result = f.run(f.installed, path)
   assert.equal(result.status, 0, result.error)
   assert.equal(result.ok, true)
-  assert.equal(result.calls, 2, 'only isolated fake publisher and CLI version commands')
+  assert.equal(result.calls, 1, 'only the isolated fake publisher command')
   assert.equal(readFileSync(path, 'utf8'), 'CHANGED_AFTER_PREFLIGHT')
   assert.equal(
     hash(readFileSync(join(f.installed, 'review-parser.cjs'))),
@@ -230,6 +233,31 @@ test('installer CLI copies its validated memory snapshot even if source files ch
   for (const [name, expected] of Object.entries(REVIEW_PARSER_FILES))
     assert.equal(manifest.files[name], expected)
   assert.equal(typeof loadReviewParser(f.installed).parse, 'function')
+})
+
+test('installer records only the DeepSeek model identity and key variable name, never the key value', (t) => {
+  const f = installerCli(t)
+  const result = f.run(f.installed, '', ['--api-key-env=DSHPX_INSTALL_FIXTURE_KEY'])
+  assert.equal(result.status, 0, result.error)
+  const config = JSON.parse(readFileSync(join(f.installed, 'worker.json'), 'utf8'))
+  assert.deepEqual(config.model, {
+    provider: 'deepseek',
+    model: 'deepseek-flash',
+    baseUrl: 'https://api.deepseek.com',
+    apiKeyEnv: 'DSHPX_INSTALL_FIXTURE_KEY'
+  })
+  for (const legacy of ['codex', 'authHome', 'cliVersion', 'codexOverrides', 'codexEnvKeys'])
+    assert.equal(legacy in config, false, legacy)
+  for (const name of readdirSync(f.installed))
+    assert.doesNotMatch(readFileSync(join(f.installed, name), 'latin1'), /install-fixture-secret-value/, name)
+  const fresh = join(f.root, 'insecure-model-endpoint')
+  for (const bad of ['--base-url=http://api.deepseek.com', '--api-key-env=GH_TOKEN', '--model=bad model']) {
+    const rejected = f.run(fresh, '', [bad])
+    assert.equal(rejected.status, 1, bad)
+    assert.equal(rejected.calls, 0, 'model settings are validated before any command')
+    assert.match(rejected.error, /https|GitHub credentials|model name/, bad)
+    assert.equal(existsSync(fresh), false, 'invalid model settings cannot create an installation')
+  }
 })
 
 test('installer CLI rejects Git placement and linked destinations before mutating old scripts or keys', (t) => {

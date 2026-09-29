@@ -36,13 +36,11 @@ type CapabilityStore = ReturnType<typeof createCapabilities<Record<string, boole
 function Workbench({ capabilities }: { capabilities: CapabilityStore }): unknown {
   const [activated, setActivated] = useState(capabilities.getSnapshot)
   useEffect(() => capabilities.subscribe(() => setActivated(capabilities.getSnapshot())), [capabilities])
-  const carrier = pageCarrier((window as unknown as { dshPxShell?: unknown }).dshPxShell)
+  const carrier = pageCarrier((window as unknown as { dshDesktop?: unknown }).dshDesktop)
   const [data, setData] = useState<LocalStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [message, setMessage] = useState('')
-  const [confirm, setConfirm] = useState(false)
-  const [restarting, setRestarting] = useState(false)
   const [path, setPath] = useState('')
   const [adding, setAdding] = useState(false)
   const [workspaceMessage, setWorkspaceMessage] = useState('')
@@ -107,18 +105,6 @@ function Workbench({ capabilities }: { capabilities: CapabilityStore }): unknown
       clearTimeout(timer)
     }
   }, [])
-  async function restart(): Promise<void> {
-    setRestarting(true)
-    setConfirm(false)
-    try {
-      const result = await requestJson<{ message: string }>(`${prefix}/restart`, { method: 'POST' })
-      setMessage(result.message)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setRestarting(false)
-    }
-  }
   return (
     <div
       className="px-ui"
@@ -126,25 +112,16 @@ function Workbench({ capabilities }: { capabilities: CapabilityStore }): unknown
     >
       <div>
         <h2 style={{ margin: '0 0 8px' }}>运行与帮助</h2>
-        <p style={{ margin: 0, opacity: 0.7, lineHeight: 1.7 }}>查看当前连接、恢复服务或配置工作区。</p>
+        <p style={{ margin: 0, opacity: 0.7, lineHeight: 1.7 }}>查看当前连接、运行诊断或配置工作区。</p>
       </div>
       <section style={card} aria-label="当前连接">
         <h3 style={{ marginTop: 0 }}>当前连接</h3>
         <p>
-          {carrier === 'desktop' ? '桌面窗口' : '浏览器页面'} ·{' '}
-          {data
-            ? {
-                packaged: '桌面正式服务',
-                development: '隔离开发服务',
-                standalone: '独立 DSH 服务',
-                disconnected: '桌面连接待恢复'
-              }[data.runtime.mode]
-            : '正在识别服务…'}
+          {carrier === 'desktop' ? '桌面窗口' : '浏览器页面'} · {data ? '原生 DSH 服务' : '正在识别服务…'}
         </p>
         <p style={{ fontSize: 13, opacity: 0.75 }}>
-          {data?.runtime.owner === 'desktop'
-            ? '此服务由 DSH-PX 桌面应用持有。重启、退出或安装更新会影响连接它的所有桌面窗口与浏览器页面；活动任务将由桌面应用统一处理。'
-            : '浏览器页面连接独立运行的 Agent 服务；关闭页面不会关闭该服务。桌面更新与重启能力以当前服务诊断为准。'}
+          此服务由原生宿主（桌面客户端或 dsh
+          web）持有。重启、退出与客户端更新请使用宿主自身的入口；本整合包不控制这些操作，也不据此判断宿主状态。
         </p>
         <p style={{ fontSize: 12, opacity: 0.65 }}>
           会话标签随当前服务保存；未保存的批注和定时草稿只保留在当前窗口，关闭前请保存。
@@ -157,30 +134,6 @@ function Workbench({ capabilities }: { capabilities: CapabilityStore }): unknown
         ) : (
           <p>任务或终端状态尚未确认；请检查运行诊断及侧栏兼容性，不能据此判断服务空闲。</p>
         )}
-        {data?.pendingOperation ? (
-          <div role="status">
-            <p>{data.pendingOperation.message}</p>
-            <button
-              style={button}
-              disabled={!data.pendingOperation.canCancel || restarting}
-              onClick={() => {
-                setRestarting(true)
-                void requestJson<{ message: string }>(`${prefix}/cancel-pending`, { method: 'POST' })
-                  .then((result) => {
-                    setMessage(result.message)
-                    void refresh()
-                  })
-                  .catch((err) => setError(err instanceof Error ? err.message : String(err)))
-                  .finally(() => setRestarting(false))
-              }}
-            >
-              {data.pendingOperation.canCancel ? '取消等待，继续使用' : '正在停止服务，请等待'}
-            </button>
-          </div>
-        ) : null}
-        {data?.lastAction && ['failed', 'rejected'].includes(data.lastAction.status) ? (
-          <p role="alert">上次桌面操作未完成：{data.lastAction.message}</p>
-        ) : null}
       </section>
       <details style={card} open={data ? !data.credentialsFile : false}>
         <summary style={{ cursor: 'pointer' }}>首次配置与添加工作区</summary>
@@ -232,7 +185,7 @@ function Workbench({ capabilities }: { capabilities: CapabilityStore }): unknown
         </section>
       </details>
       <details style={card}>
-        <summary style={{ cursor: 'pointer' }}>本机运行诊断与服务恢复</summary>
+        <summary style={{ cursor: 'pointer' }}>本机运行诊断</summary>
         <section aria-label="本机运行检查">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
             <h3>本机运行检查</h3>
@@ -240,7 +193,7 @@ function Workbench({ capabilities }: { capabilities: CapabilityStore }): unknown
               {busy ? '检查中…' : '重新检查'}
             </button>
           </div>
-          {error ? <p role="alert">检查失败：{error}。可重新检查，或到桌面窗口恢复服务。</p> : null}
+          {error ? <p role="alert">检查失败：{error}。可重新检查，或通过原生宿主重启服务。</p> : null}
           {!data ? (
             <p>正在读取本机状态…</p>
           ) : (
@@ -261,12 +214,9 @@ function Workbench({ capabilities }: { capabilities: CapabilityStore }): unknown
                   {error ? '连接中断，以下为上次检查结果' : '已连接'} · 启动于{' '}
                   {new Date(data.startedAt).toLocaleTimeString()}
                 </dd>
-                <dt>桌面外壳</dt>
+                <dt>宿主管理</dt>
                 <dd style={{ margin: 0 }}>
-                  {data.service?.message ??
-                    (data.runtime.owner === 'desktop'
-                      ? '未连接，管理操作暂不可用；请在桌面应用检查服务。'
-                      : '此服务由独立 DSH 启动')}
+                  由原生宿主负责；本整合包不提供重启、安装或退出操作，此处不显示宿主进程状态。
                 </dd>
                 <dt>Node</dt>
                 <dd style={{ margin: 0 }}>
@@ -296,7 +246,7 @@ function Workbench({ capabilities }: { capabilities: CapabilityStore }): unknown
                 </dd>
                 <dt>网页网络</dt>
                 <dd style={{ margin: 0 }}>
-                  {data.network?.message ?? '尚无桌面网络诊断。可执行下方网页读取检查。'}
+                  代理与网络限制由原生 DSH 管理。可执行下方网页读取检查。
                   <br />
                   <small>代理设置在服务启动时生效；系统代理改变后需重启服务。</small>
                 </dd>
@@ -338,28 +288,6 @@ function Workbench({ capabilities }: { capabilities: CapabilityStore }): unknown
                   </div>
                 ) : null}
               </section>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                <button
-                  style={button}
-                  disabled={!data.canRestart || Boolean(error) || restarting}
-                  onClick={() => setConfirm(true)}
-                >
-                  重启本机服务
-                </button>
-              </div>
-              {confirm ? (
-                <div role="alert" style={{ marginTop: 12 }}>
-                  <p>
-                    将请求桌面应用重启此共享服务，所有连接页面都会短暂断开。存在活动任务时，桌面窗口会要求等待或明确中止；已有会话与配置会保留。
-                  </p>
-                  <button style={button} disabled={restarting} onClick={() => void restart()}>
-                    确认重启
-                  </button>{' '}
-                  <button style={button} onClick={() => setConfirm(false)}>
-                    取消
-                  </button>
-                </div>
-              ) : null}
               <p style={{ fontSize: 12, opacity: 0.6 }}>
                 检查时间：{new Date(data.checkedAt).toLocaleString()} · 工具路径检查不代表命令已执行成功。
               </p>

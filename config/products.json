@@ -4,13 +4,13 @@
   "pack": {
     "version": "0.2.0-alpha.1",
     "dataSchemaVersion": 1,
-    "hostVersions": ["0.1.5-rc.2"],
+    "hostVersions": ["0.2.0-rc.1"],
     "surfaces": ["web", "px-desktop"]
   },
   "desktop": {
     "version": "0.2.0-alpha.1",
     "packVersion": "0.2.0-alpha.1",
-    "hostVersion": "0.1.5-rc.2",
-    "architecture": "legacy-shell"
+    "hostVersion": "0.2.0-rc.1",
+    "architecture": "official-derived"
   }
 }

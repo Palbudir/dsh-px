@@ -1,8 +1,7 @@
 import { brotliDecompressSync, gunzipSync, inflateSync } from 'node:zlib'
 
 const LIMIT = 2 * 1024 * 1024
-/** Handles plain JSON, already-decoded fetch bodies, and encoded proxy responses. */
-export function decodeMetadata(bytes: Uint8Array, encoding: string | null): Record<string, unknown> {
+function decodeBody(bytes: Uint8Array, encoding: string | null): Buffer {
   if (bytes.byteLength > LIMIT) throw new Error('版本信息超过读取上限')
   let body = Buffer.from(bytes)
   const plain = (): boolean => /^[\s\uFEFF]*[\[{]/u.test(body.toString('utf8', 0, Math.min(256, body.length)))
@@ -22,6 +21,11 @@ export function decodeMetadata(bytes: Uint8Array, encoding: string | null): Reco
       throw new Error('版本服务返回的压缩数据无法读取，请稍后重试')
     }
   }
+  return body
+}
+/** Handles plain JSON, already-decoded fetch bodies, and encoded proxy responses. */
+export function decodeMetadata(bytes: Uint8Array, encoding: string | null): Record<string, unknown> {
+  const body = decodeBody(bytes, encoding)
   try {
     const value = JSON.parse(body.toString('utf8').replace(/^\uFEFF/u, ''))
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error()
@@ -30,7 +34,8 @@ export function decodeMetadata(bytes: Uint8Array, encoding: string | null): Reco
     throw new Error('版本服务未返回有效的 JSON 信息，请稍后重试')
   }
 }
-export async function fetchMetadata(url: string, timeoutMs: number): Promise<Record<string, unknown>> {
+/** Fetch the exact bounded text; signed feeds must be verified over the bytes that were served. */
+export async function fetchMetadataText(url: string, timeoutMs: number): Promise<string> {
   const controller = new AbortController(),
     timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
@@ -57,11 +62,16 @@ export async function fetchMetadata(url: string, timeoutMs: number): Promise<Rec
     } finally {
       reader.releaseLock()
     }
-    return decodeMetadata(Buffer.concat(chunks), response.headers.get('content-encoding'))
+    return decodeBody(Buffer.concat(chunks), response.headers.get('content-encoding'))
+      .toString('utf8')
+      .replace(/^\uFEFF/u, '')
   } catch (error) {
     if (controller.signal.aborted) throw new Error('版本查询超时，请稍后重试')
     throw error
   } finally {
     clearTimeout(timer)
   }
+}
+export async function fetchMetadata(url: string, timeoutMs: number): Promise<Record<string, unknown>> {
+  return decodeMetadata(Buffer.from(await fetchMetadataText(url, timeoutMs)), null)
 }

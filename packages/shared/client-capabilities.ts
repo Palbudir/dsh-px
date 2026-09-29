@@ -1,9 +1,13 @@
+/**
+ * The official Desktop preload exposes `window.dshDesktop` with a numeric protocol version.
+ * A browser connected to the same service has no such bridge, so it is never labelled Desktop.
+ */
 export function pageCarrier(value: unknown): 'desktop' | 'browser' {
   return Boolean(
     value &&
     typeof value === 'object' &&
-    (value as any).app === 'DSH-PX' &&
-    typeof (value as any).electron === 'string'
+    Number.isSafeInteger((value as any).protocolVersion) &&
+    (value as any).protocolVersion > 0
   )
     ? 'desktop'
     : 'browser'

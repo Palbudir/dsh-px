@@ -1,4 +1,3 @@
-import { createHash, randomUUID } from 'node:crypto'
 import {
   existsSync,
   mkdirSync,
@@ -13,8 +12,14 @@ import { fileURLToPath } from 'node:url'
 import { canonical, sha, sha256 } from './review-core.mjs'
 import { command, downloadCommand } from './review-process.mjs'
 import { acquireReviewLock } from './review-worker.mjs'
-import { releaseGate } from './release-gate.mjs'
-import { versionParts, releaseAssetNames } from './release-version.mjs'
+import { assertLegacyLatest, releaseGate } from './release-gate.mjs'
+import {
+  assertNotLegacyClientTag,
+  assertPublishableAssetName,
+  releaseAssetNames,
+  releaseTag,
+  versionParts
+} from './release-version.mjs'
 
 export const RELEASE_DOWNLOAD_TIMEOUT_MS = 30 * 60 * 1000
 
@@ -79,22 +84,48 @@ export function archiveMemberNames(output, archive) {
   if (new Set(names).size !== names.length) throw new Error('Duplicate artifact paths')
   return names
 }
+/** Every publication is a prerelease that never becomes GitHub Latest (old clients read Latest). */
+export function releaseCreateBody({ product, version, head, notes }) {
+  const tag = releaseTag(product, version)
+  assertNotLegacyClientTag(tag)
+  return {
+    tag_name: tag,
+    target_commitish: head,
+    name: `DSH-PX ${product === 'desktop' ? 'Desktop' : 'Pack'} ${version}`,
+    body: notes,
+    draft: true,
+    prerelease: true,
+    make_latest: 'false'
+  }
+}
+export function releasePublishBody({ product, version, notes }) {
+  return {
+    name: `DSH-PX ${product === 'desktop' ? 'Desktop' : 'Pack'} ${version}`,
+    body: notes,
+    draft: false,
+    prerelease: true,
+    make_latest: 'false'
+  }
+}
+
 export function verifyReleaseFiles(directory, manifest, expected) {
   if (
-    manifest?.schemaVersion !== 1 ||
+    manifest?.schemaVersion !== 2 ||
+    manifest.product !== expected.product ||
+    manifest.release !== releaseTag(expected.product, expected.version) ||
     manifest.head !== expected.head ||
     manifest.version !== expected.version ||
     manifest.controllerSha !== expected.controllerSha ||
     !Array.isArray(manifest.files) ||
-    manifest.files.length !== 4
+    manifest.files.length !== 2
   )
     throw new Error('Build artifact identity mismatch')
+  const assets = releaseAssetNames(expected.product, expected.version)
+  const expectedNames = new Set(Object.values(assets))
   const names = manifest.files.map((file) => file.name)
-  const assets = releaseAssetNames(expected.version),
-    expectedNames = new Set(Object.values(assets))
-  if (new Set(names).size !== 4 || names.some((name) => !expectedNames.has(name)))
+  for (const name of names) assertPublishableAssetName(name)
+  if (new Set(names).size !== 2 || names.some((name) => !expectedNames.has(name)))
     throw new Error('Incomplete release file inventory')
-  const exe = assets.installer
   for (const file of manifest.files) {
     if (
       typeof file.name !== 'string' ||
@@ -115,15 +146,21 @@ export function verifyReleaseFiles(directory, manifest, expected) {
     )
       throw new Error(`Release asset digest mismatch: ${file.name}`)
   }
-  const yml = readFileSync(join(directory, 'latest.yml'), 'utf8')
-  const digest = createHash('sha512')
-    .update(readFileSync(join(directory, exe)))
-    .digest('base64')
-  const dateLine = /^releaseDate: ("[^"\r\n]+")$/m.exec(yml.replaceAll('\r\n', '\n'))
-  const date = dateLine ? JSON.parse(dateLine[1]) : ''
-  const exact = `version: ${JSON.stringify(expected.version)}\nfiles:\n  - url: ${JSON.stringify(exe)}\n    sha512: ${digest}\n    size: ${statSync(join(directory, exe)).size}\npath: ${JSON.stringify(exe)}\nsha512: ${digest}\nreleaseDate: ${JSON.stringify(date)}\n`
-  if (!Number.isFinite(Date.parse(date)) || yml.replaceAll('\r\n', '\n') !== exact)
-    throw new Error('Update metadata does not identify this installer')
+  // artifact.json is the input to offline signing; it must describe the exact primary asset.
+  const primary = expected.product === 'desktop' ? assets.installer : assets.pack
+  const artifact = JSON.parse(readFileSync(join(directory, assets.artifact), 'utf8'))
+  const bytes = readFileSync(join(directory, primary))
+  if (
+    artifact.product !== expected.product ||
+    artifact.version !== expected.version ||
+    artifact.file !== primary ||
+    artifact.size !== bytes.length ||
+    artifact.sha256 !== sha256(bytes) ||
+    artifact.sourceCommit !== expected.head ||
+    artifact.sourceDirty !== false ||
+    (expected.product === 'pack' && artifact.candidate !== false)
+  )
+    throw new Error('artifact.json does not identify this release asset')
   return manifest.files
 }
 async function main() {
@@ -147,9 +184,12 @@ async function main() {
       })
   )
   const head = sha(args.head),
+    product = args.product,
     version = args.version,
     buildRunId = Number(args['build-run'])
   versionParts(version)
+  const tag = releaseTag(product, version)
+  assertNotLegacyClientTag(tag)
   if (!Number.isSafeInteger(buildRunId) || buildRunId <= 0)
     throw new Error('An explicit trusted build run ID is required')
   const policy = JSON.parse(readFileSync(join(root, 'public-policy.json'), 'utf8'))
@@ -167,9 +207,10 @@ async function main() {
   const unlock = acquireReviewLock(root)
   if (!unlock) throw new Error('Another trusted review/release operation is active; retry when it finishes')
   try {
-    const verify = () => releaseGate({ version, tag: `refs/tags/v${version}`, head, policy, api, buildRunId })
+    const verify = () =>
+      releaseGate({ product, version, tag: `refs/tags/${tag}`, head, policy, api, buildRunId })
     const eligibility = await verify()
-    const directory = join(root, 'releases', version, String(buildRunId)),
+    const directory = join(root, 'releases', tag, String(buildRunId)),
       archive = join(directory, 'assets.zip')
     mkdirSync(directory, { recursive: true })
     const artifacts = await api(
@@ -193,8 +234,9 @@ async function main() {
       await command(seven, ['l', '-slt', archive], { maxBytes: 1000000 }),
       archive
     )
-    if (names.length !== 5 || !names.includes('release-manifest.json'))
+    if (names.length !== 3 || !names.includes('release-manifest.json'))
       throw new Error('Unexpected artifact members')
+    for (const name of names) if (name !== 'release-manifest.json') assertPublishableAssetName(name)
     await command(seven, ['x', '-y', '-bd', '-bso0', '-bsp0', `-o${directory}`, archive, ...names], {
       timeout: 300000
     })
@@ -207,14 +249,15 @@ async function main() {
       throw new Error('Extracted release artifacts must be regular files')
     const manifest = JSON.parse(readFileSync(join(directory, 'release-manifest.json'), 'utf8'))
     const files = verifyReleaseFiles(directory, manifest, {
+      product,
       head,
       version,
       controllerSha: eligibility.build.controllerSha
     })
     if (names.some((name) => name !== 'release-manifest.json' && !files.some((file) => file.name === name)))
       throw new Error('Artifact inventory differs from verified manifest')
-    const notesFile = join(root, 'releases', version, 'notes.md')
-    const plan = { head, version, buildRunId, assets: files, notesFile, source: eligibility }
+    const notesFile = join(root, 'releases', tag, 'notes.md')
+    const plan = { head, product, version, tag, buildRunId, assets: files, notesFile, source: eligibility }
     writeFileSync(join(directory, 'release-plan.json'), JSON.stringify(plan, null, 2))
     if (!process.argv.includes('--publish')) {
       console.log(JSON.stringify({ prepared: true, plan: join(directory, 'release-plan.json'), notesFile }))
@@ -228,7 +271,6 @@ async function main() {
     if (!notes.trim() || notes.length > 20000)
       throw new Error('Release notes must be a concise reviewed document')
     await verify()
-    const tag = 'v' + version
     const refs = await api(`repos/${policy.repository}/git/matching-refs/tags/${tag}`)
     const existingRef = refs.find((ref) => ref.ref === `refs/tags/${tag}`)
     if (existingRef && (existingRef.object.type !== 'commit' || existingRef.object.sha !== head))
@@ -244,15 +286,9 @@ async function main() {
     if (!draft)
       draft = await api(`repos/${policy.repository}/releases`, {
         method: 'POST',
-        body: {
-          tag_name: tag,
-          target_commitish: head,
-          name: `DSH-PX ${version}`,
-          body: notes,
-          draft: true,
-          prerelease: false
-        }
+        body: releaseCreateBody({ product, version, head, notes })
       })
+    for (const asset of draft.assets) assertPublishableAssetName(asset.name)
     for (const file of files) {
       const old = draft.assets.find((asset) => asset.name === file.name)
       if (old && (old.digest !== 'sha256:' + file.sha256 || old.size !== file.size))
@@ -269,6 +305,8 @@ async function main() {
     draft = await api(`repos/${policy.repository}/releases/${draft.id}`)
     if (
       !draft.draft ||
+      draft.assets.length !== files.length ||
+      draft.assets.some((asset) => !assertPublishableAssetName(asset.name)) ||
       files.some(
         (file) =>
           !draft.assets.some(
@@ -281,9 +319,12 @@ async function main() {
     await verify()
     const published = await api(`repos/${policy.repository}/releases/${draft.id}`, {
       method: 'PATCH',
-      body: { name: `DSH-PX ${version}`, body: notes, draft: false, make_latest: 'true' }
+      body: releasePublishBody({ product, version, notes })
     })
-    console.log(JSON.stringify({ published: published.html_url, head, version }))
+    if (published.draft || !published.prerelease)
+      throw new Error('Published release is not a prerelease; inspect it immediately')
+    assertLegacyLatest(await api(`repos/${policy.repository}/releases/latest`))
+    console.log(JSON.stringify({ published: published.html_url, head, product, version }))
   } finally {
     unlock()
   }

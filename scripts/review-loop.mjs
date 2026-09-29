@@ -122,12 +122,15 @@ export function verifyLoopInstallation(directory) {
     Array.isArray(files) ||
     Object.keys(files).length > 100 ||
     files['review-loop.mjs'] !== selfDigest ||
-    !files['review-worker.mjs']
+    !files['review-worker.mjs'] ||
+    !files['review-upstream.mjs'] ||
+    !files['check-secrets.mjs']
   )
     throw new Error('Install the independently reviewed loop and worker before starting')
   for (const [name, digest] of Object.entries(files)) {
     if (
-      (!/^(?:review|release)-[\w-]+\.mjs$/.test(name) && !Object.hasOwn(REVIEW_PARSER_FILES, name)) ||
+      (!/^(?:(?:review|release)-[\w-]+|check-secrets)\.mjs$/.test(name) &&
+        !Object.hasOwn(REVIEW_PARSER_FILES, name)) ||
       !/^[a-f0-9]{64}$/.test(digest)
     )
       throw new Error('Invalid trusted script manifest')

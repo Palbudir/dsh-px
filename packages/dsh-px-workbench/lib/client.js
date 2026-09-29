@@ -146,7 +146,7 @@ window.__ModuleLoader__.load({
 		// packages/shared/client-capabilities.ts
 		function pageCarrier(value) {
 		  return Boolean(
-		    value && typeof value === "object" && value.app === "DSH-PX" && typeof value.electron === "string"
+		    value && typeof value === "object" && Number.isSafeInteger(value.protocolVersion) && value.protocolVersion > 0
 		  ) ? "desktop" : "browser";
 		}
 		function createCapabilities(initial) {
@@ -197,13 +197,11 @@ window.__ModuleLoader__.load({
 		function Workbench({ capabilities }) {
 		  const [activated, setActivated] = (0, import_react2.useState)(capabilities.getSnapshot);
 		  (0, import_react2.useEffect)(() => capabilities.subscribe(() => setActivated(capabilities.getSnapshot())), [capabilities]);
-		  const carrier = pageCarrier(window.dshPxShell);
+		  const carrier = pageCarrier(window.dshDesktop);
 		  const [data, setData] = (0, import_react2.useState)(null);
 		  const [error, setError] = (0, import_react2.useState)(null);
 		  const [busy, setBusy] = (0, import_react2.useState)(false);
 		  const [message, setMessage] = (0, import_react2.useState)("");
-		  const [confirm, setConfirm] = (0, import_react2.useState)(false);
-		  const [restarting, setRestarting] = (0, import_react2.useState)(false);
 		  const [path, setPath] = (0, import_react2.useState)("");
 		  const [adding, setAdding] = (0, import_react2.useState)(false);
 		  const [workspaceMessage, setWorkspaceMessage] = (0, import_react2.useState)("");
@@ -268,18 +266,6 @@ window.__ModuleLoader__.load({
 		      clearTimeout(timer);
 		    };
 		  }, []);
-		  async function restart() {
-		    setRestarting(true);
-		    setConfirm(false);
-		    try {
-		      const result = await requestJson(`${prefix}/restart`, { method: "POST" });
-		      setMessage(result.message);
-		    } catch (err) {
-		      setError(err instanceof Error ? err.message : String(err));
-		    } finally {
-		      setRestarting(false);
-		    }
-		  }
 		  return /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
 		    "div",
 		    {
@@ -288,22 +274,16 @@ window.__ModuleLoader__.load({
 		      children: [
 		        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { children: [
 		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h2", { style: { margin: "0 0 8px" }, children: "\u8FD0\u884C\u4E0E\u5E2E\u52A9" }),
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { margin: 0, opacity: 0.7, lineHeight: 1.7 }, children: "\u67E5\u770B\u5F53\u524D\u8FDE\u63A5\u3001\u6062\u590D\u670D\u52A1\u6216\u914D\u7F6E\u5DE5\u4F5C\u533A\u3002" })
+		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { margin: 0, opacity: 0.7, lineHeight: 1.7 }, children: "\u67E5\u770B\u5F53\u524D\u8FDE\u63A5\u3001\u8FD0\u884C\u8BCA\u65AD\u6216\u914D\u7F6E\u5DE5\u4F5C\u533A\u3002" })
 		        ] }),
 		        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { style: card, "aria-label": "\u5F53\u524D\u8FDE\u63A5", children: [
 		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { style: { marginTop: 0 }, children: "\u5F53\u524D\u8FDE\u63A5" }),
 		          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
 		            carrier === "desktop" ? "\u684C\u9762\u7A97\u53E3" : "\u6D4F\u89C8\u5668\u9875\u9762",
-		            " \xB7",
-		            " ",
-		            data ? {
-		              packaged: "\u684C\u9762\u6B63\u5F0F\u670D\u52A1",
-		              development: "\u9694\u79BB\u5F00\u53D1\u670D\u52A1",
-		              standalone: "\u72EC\u7ACB DSH \u670D\u52A1",
-		              disconnected: "\u684C\u9762\u8FDE\u63A5\u5F85\u6062\u590D"
-		            }[data.runtime.mode] : "\u6B63\u5728\u8BC6\u522B\u670D\u52A1\u2026"
+		            " \xB7 ",
+		            data ? "\u539F\u751F DSH \u670D\u52A1" : "\u6B63\u5728\u8BC6\u522B\u670D\u52A1\u2026"
 		          ] }),
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { fontSize: 13, opacity: 0.75 }, children: data?.runtime.owner === "desktop" ? "\u6B64\u670D\u52A1\u7531 DSH-PX \u684C\u9762\u5E94\u7528\u6301\u6709\u3002\u91CD\u542F\u3001\u9000\u51FA\u6216\u5B89\u88C5\u66F4\u65B0\u4F1A\u5F71\u54CD\u8FDE\u63A5\u5B83\u7684\u6240\u6709\u684C\u9762\u7A97\u53E3\u4E0E\u6D4F\u89C8\u5668\u9875\u9762\uFF1B\u6D3B\u52A8\u4EFB\u52A1\u5C06\u7531\u684C\u9762\u5E94\u7528\u7EDF\u4E00\u5904\u7406\u3002" : "\u6D4F\u89C8\u5668\u9875\u9762\u8FDE\u63A5\u72EC\u7ACB\u8FD0\u884C\u7684 Agent \u670D\u52A1\uFF1B\u5173\u95ED\u9875\u9762\u4E0D\u4F1A\u5173\u95ED\u8BE5\u670D\u52A1\u3002\u684C\u9762\u66F4\u65B0\u4E0E\u91CD\u542F\u80FD\u529B\u4EE5\u5F53\u524D\u670D\u52A1\u8BCA\u65AD\u4E3A\u51C6\u3002" }),
+		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { fontSize: 13, opacity: 0.75 }, children: "\u6B64\u670D\u52A1\u7531\u539F\u751F\u5BBF\u4E3B\uFF08\u684C\u9762\u5BA2\u6237\u7AEF\u6216 dsh web\uFF09\u6301\u6709\u3002\u91CD\u542F\u3001\u9000\u51FA\u4E0E\u5BA2\u6237\u7AEF\u66F4\u65B0\u8BF7\u4F7F\u7528\u5BBF\u4E3B\u81EA\u8EAB\u7684\u5165\u53E3\uFF1B\u672C\u6574\u5408\u5305\u4E0D\u63A7\u5236\u8FD9\u4E9B\u64CD\u4F5C\uFF0C\u4E5F\u4E0D\u636E\u6B64\u5224\u65AD\u5BBF\u4E3B\u72B6\u6001\u3002" }),
 		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { fontSize: 12, opacity: 0.65 }, children: "\u4F1A\u8BDD\u6807\u7B7E\u968F\u5F53\u524D\u670D\u52A1\u4FDD\u5B58\uFF1B\u672A\u4FDD\u5B58\u7684\u6279\u6CE8\u548C\u5B9A\u65F6\u8349\u7A3F\u53EA\u4FDD\u7559\u5728\u5F53\u524D\u7A97\u53E3\uFF0C\u5173\u95ED\u524D\u8BF7\u4FDD\u5B58\u3002" }),
 		          data?.activity.known ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
 		            "\u6D3B\u52A8\uFF1A",
@@ -316,29 +296,7 @@ window.__ModuleLoader__.load({
 		            " \u6761\u6392\u961F\u8F93\u5165 \xB7 ",
 		            data.activity.openTerminals,
 		            " \u9879\u6253\u5F00\u7684\u7EC8\u7AEF\u8D44\u6E90"
-		          ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u4EFB\u52A1\u6216\u7EC8\u7AEF\u72B6\u6001\u5C1A\u672A\u786E\u8BA4\uFF1B\u8BF7\u68C0\u67E5\u8FD0\u884C\u8BCA\u65AD\u53CA\u4FA7\u680F\u517C\u5BB9\u6027\uFF0C\u4E0D\u80FD\u636E\u6B64\u5224\u65AD\u670D\u52A1\u7A7A\u95F2\u3002" }),
-		          data?.pendingOperation ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "status", children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: data.pendingOperation.message }),
-		            /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-		              "button",
-		              {
-		                style: button,
-		                disabled: !data.pendingOperation.canCancel || restarting,
-		                onClick: () => {
-		                  setRestarting(true);
-		                  void requestJson(`${prefix}/cancel-pending`, { method: "POST" }).then((result) => {
-		                    setMessage(result.message);
-		                    void refresh();
-		                  }).catch((err) => setError(err instanceof Error ? err.message : String(err))).finally(() => setRestarting(false));
-		                },
-		                children: data.pendingOperation.canCancel ? "\u53D6\u6D88\u7B49\u5F85\uFF0C\u7EE7\u7EED\u4F7F\u7528" : "\u6B63\u5728\u505C\u6B62\u670D\u52A1\uFF0C\u8BF7\u7B49\u5F85"
-		              }
-		            )
-		          ] }) : null,
-		          data?.lastAction && ["failed", "rejected"].includes(data.lastAction.status) ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { role: "alert", children: [
-		            "\u4E0A\u6B21\u684C\u9762\u64CD\u4F5C\u672A\u5B8C\u6210\uFF1A",
-		            data.lastAction.message
-		          ] }) : null
+		          ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u4EFB\u52A1\u6216\u7EC8\u7AEF\u72B6\u6001\u5C1A\u672A\u786E\u8BA4\uFF1B\u8BF7\u68C0\u67E5\u8FD0\u884C\u8BCA\u65AD\u53CA\u4FA7\u680F\u517C\u5BB9\u6027\uFF0C\u4E0D\u80FD\u636E\u6B64\u5224\u65AD\u670D\u52A1\u7A7A\u95F2\u3002" })
 		        ] }),
 		        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { style: card, open: data ? !data.credentialsFile : false, children: [
 		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { style: { cursor: "pointer" }, children: "\u9996\u6B21\u914D\u7F6E\u4E0E\u6DFB\u52A0\u5DE5\u4F5C\u533A" }),
@@ -381,7 +339,7 @@ window.__ModuleLoader__.load({
 		          ] })
 		        ] }),
 		        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { style: card, children: [
-		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { style: { cursor: "pointer" }, children: "\u672C\u673A\u8FD0\u884C\u8BCA\u65AD\u4E0E\u670D\u52A1\u6062\u590D" }),
+		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("summary", { style: { cursor: "pointer" }, children: "\u672C\u673A\u8FD0\u884C\u8BCA\u65AD" }),
 		          /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { "aria-label": "\u672C\u673A\u8FD0\u884C\u68C0\u67E5", children: [
 		            /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }, children: [
 		              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { children: "\u672C\u673A\u8FD0\u884C\u68C0\u67E5" }),
@@ -390,7 +348,7 @@ window.__ModuleLoader__.load({
 		            error ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { role: "alert", children: [
 		              "\u68C0\u67E5\u5931\u8D25\uFF1A",
 		              error,
-		              "\u3002\u53EF\u91CD\u65B0\u68C0\u67E5\uFF0C\u6216\u5230\u684C\u9762\u7A97\u53E3\u6062\u590D\u670D\u52A1\u3002"
+		              "\u3002\u53EF\u91CD\u65B0\u68C0\u67E5\uFF0C\u6216\u901A\u8FC7\u539F\u751F\u5BBF\u4E3B\u91CD\u542F\u670D\u52A1\u3002"
 		            ] }) : null,
 		            !data ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u672C\u673A\u72B6\u6001\u2026" }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
 		              /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(
@@ -413,8 +371,8 @@ window.__ModuleLoader__.load({
 		                      " ",
 		                      new Date(data.startedAt).toLocaleTimeString()
 		                    ] }),
-		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: "\u684C\u9762\u5916\u58F3" }),
-		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { style: { margin: 0 }, children: data.service?.message ?? (data.runtime.owner === "desktop" ? "\u672A\u8FDE\u63A5\uFF0C\u7BA1\u7406\u64CD\u4F5C\u6682\u4E0D\u53EF\u7528\uFF1B\u8BF7\u5728\u684C\u9762\u5E94\u7528\u68C0\u67E5\u670D\u52A1\u3002" : "\u6B64\u670D\u52A1\u7531\u72EC\u7ACB DSH \u542F\u52A8") }),
+		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: "\u5BBF\u4E3B\u7BA1\u7406" }),
+		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { style: { margin: 0 }, children: "\u7531\u539F\u751F\u5BBF\u4E3B\u8D1F\u8D23\uFF1B\u672C\u6574\u5408\u5305\u4E0D\u63D0\u4F9B\u91CD\u542F\u3001\u5B89\u88C5\u6216\u9000\u51FA\u64CD\u4F5C\uFF0C\u6B64\u5904\u4E0D\u663E\u793A\u5BBF\u4E3B\u8FDB\u7A0B\u72B6\u6001\u3002" }),
 		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: "Node" }),
 		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dd", { style: { margin: 0 }, children: [
 		                      data.node.version,
@@ -435,7 +393,7 @@ window.__ModuleLoader__.load({
 		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dd", { style: { margin: 0 }, children: data.credentialsFile ? "\u5B58\u5728\u51ED\u636E\u6587\u4EF6\uFF0C\u8FDE\u63A5\u80FD\u529B\u9700\u5B9E\u9645\u8FD0\u884C\u4EFB\u52A1\u9A8C\u8BC1" : "\u672A\u53D1\u73B0\u51ED\u636E\u6587\u4EF6\uFF0C\u8BF7\u5728\u6A21\u578B\u8BBE\u7F6E\u4E2D\u914D\u7F6E\uFF08\u73AF\u5883\u53D8\u91CF\u914D\u7F6E\u4E5F\u53EF\u80FD\u53EF\u7528\uFF09" }),
 		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("dt", { children: "\u7F51\u9875\u7F51\u7EDC" }),
 		                    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("dd", { style: { margin: 0 }, children: [
-		                      data.network?.message ?? "\u5C1A\u65E0\u684C\u9762\u7F51\u7EDC\u8BCA\u65AD\u3002\u53EF\u6267\u884C\u4E0B\u65B9\u7F51\u9875\u8BFB\u53D6\u68C0\u67E5\u3002",
+		                      "\u4EE3\u7406\u4E0E\u7F51\u7EDC\u9650\u5236\u7531\u539F\u751F DSH \u7BA1\u7406\u3002\u53EF\u6267\u884C\u4E0B\u65B9\u7F51\u9875\u8BFB\u53D6\u68C0\u67E5\u3002",
 		                      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("br", {}),
 		                      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("small", { children: "\u4EE3\u7406\u8BBE\u7F6E\u5728\u670D\u52A1\u542F\u52A8\u65F6\u751F\u6548\uFF1B\u7CFB\u7EDF\u4EE3\u7406\u6539\u53D8\u540E\u9700\u91CD\u542F\u670D\u52A1\u3002" })
 		                    ] })
@@ -478,21 +436,6 @@ window.__ModuleLoader__.load({
 		                  ] })
 		                ] }) : null
 		              ] }),
-		              /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8 }, children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-		                "button",
-		                {
-		                  style: button,
-		                  disabled: !data.canRestart || Boolean(error) || restarting,
-		                  onClick: () => setConfirm(true),
-		                  children: "\u91CD\u542F\u672C\u673A\u670D\u52A1"
-		                }
-		              ) }),
-		              confirm ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { role: "alert", style: { marginTop: 12 }, children: [
-		                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u5C06\u8BF7\u6C42\u684C\u9762\u5E94\u7528\u91CD\u542F\u6B64\u5171\u4EAB\u670D\u52A1\uFF0C\u6240\u6709\u8FDE\u63A5\u9875\u9762\u90FD\u4F1A\u77ED\u6682\u65AD\u5F00\u3002\u5B58\u5728\u6D3B\u52A8\u4EFB\u52A1\u65F6\uFF0C\u684C\u9762\u7A97\u53E3\u4F1A\u8981\u6C42\u7B49\u5F85\u6216\u660E\u786E\u4E2D\u6B62\uFF1B\u5DF2\u6709\u4F1A\u8BDD\u4E0E\u914D\u7F6E\u4F1A\u4FDD\u7559\u3002" }),
-		                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { style: button, disabled: restarting, onClick: () => void restart(), children: "\u786E\u8BA4\u91CD\u542F" }),
-		                " ",
-		                /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("button", { style: button, onClick: () => setConfirm(false), children: "\u53D6\u6D88" })
-		              ] }) : null,
 		              /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { style: { fontSize: 12, opacity: 0.6 }, children: [
 		                "\u68C0\u67E5\u65F6\u95F4\uFF1A",
 		                new Date(data.checkedAt).toLocaleString(),

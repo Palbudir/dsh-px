@@ -1,20 +1,8 @@
 import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { delimiter, join } from 'node:path'
-import type { NetworkStatus } from '../../../src/shared/network-status'
 import { serviceIdentity } from './layout'
 import type { Activity } from './activity'
-import { freshHeartbeat, type ShellReceipt } from '../../shared/shell-protocol'
 
-export interface ServiceState {
-  phase: 'starting' | 'running' | 'restarting' | 'draining' | 'error' | 'stopped'
-  message: string
-  updatedAt: string
-  pid: number | null
-  instanceId?: string
-  runtimeMode?: 'packaged' | 'development'
-  appVersion?: string
-  currentOrigin?: string
-}
 export interface LocalStatus {
   checkedAt: string
   startedAt: string
@@ -25,19 +13,15 @@ export interface LocalStatus {
   plugins: { name: string; requested: string; version: string | null; enabled: boolean }[]
   profileError: string | null
   credentialsFile: boolean
-  service: ServiceState | null
-  canRestart: boolean
-  network: NetworkStatus | null
   serviceId: string | null
   runtime: {
-    mode: 'packaged' | 'development' | 'standalone' | 'disconnected'
-    owner: 'desktop' | 'standalone'
+    /** The native host owns process lifecycle, restarts and updates; the Pack never controls them. */
+    mode: 'native'
+    owner: 'native-host'
     shared: true
-    capabilities: { restart: boolean; install: boolean }
+    capabilities: { restart: false; install: false }
   }
   activity: Activity
-  lastAction: ShellReceipt | null
-  pendingOperation: { action: 'quit' | 'restart' | 'install'; message: string; canCancel: boolean } | null
 }
 
 const startedAt = new Date().toISOString()
@@ -55,15 +39,22 @@ export function findCommand(name: string, path = process.env.PATH ?? ''): string
   return null
 }
 
-export function readServiceState(userData = process.env.DSH_PX_USER_DATA): ServiceState | null {
-  return freshHeartbeat(userData)
+/** Native profiles are named after the host surface; read the installed Pack's profile when known. */
+function profileDirectory(home: string): string {
+  const requested = process.env.DSH_PX_PROFILE
+  if (requested && /^[\w.-]+$/.test(requested)) return join(home, 'profiles', requested)
+  for (const name of ['desktop', 'web']) {
+    const candidate = join(home, 'profiles', name)
+    if (existsSync(join(candidate, 'package.json'))) return candidate
+  }
+  return join(home, 'profiles', 'web')
 }
 
 export function localStatus(
   activity: Activity = { known: false, runningAgents: 0, queuedInputs: 0, runningJobs: 0, openTerminals: 0 }
 ): LocalStatus {
   const home = process.env.DSH_HOME ?? null
-  const profile = home ? join(home, 'profiles', process.env.DSH_PX_PROFILE ?? 'web') : null
+  const profile = home ? profileDirectory(home) : null
   const plugins: LocalStatus['plugins'] = []
   let profileError: string | null = null
   let writable = false
@@ -100,54 +91,6 @@ export function localStatus(
   } catch (err) {
     profileError = err instanceof Error ? err.message : String(err)
   }
-  const service = readServiceState()
-  let lastAction: LocalStatus['lastAction'] = null
-  let pendingOperation: LocalStatus['pendingOperation'] = null
-  if (service?.instanceId && process.env.DSH_PX_USER_DATA) {
-    try {
-      const bridge = JSON.parse(
-        readFileSync(join(process.env.DSH_PX_USER_DATA, 'update-bridge', 'state.json'), 'utf8')
-      )
-      if (bridge.instanceId === service.instanceId) {
-        if (
-          bridge.lastAction?.instanceId === service.instanceId &&
-          typeof bridge.lastAction.message === 'string'
-        )
-          lastAction = bridge.lastAction
-        if (
-          ['quit', 'restart', 'install'].includes(bridge.pendingOperation?.action) &&
-          typeof bridge.pendingOperation.message === 'string'
-        )
-          pendingOperation = {
-            ...bridge.pendingOperation,
-            canCancel: bridge.pendingOperation.canCancel === true
-          }
-      }
-    } catch {
-      /* Not every standalone or old service has a desktop action bridge. */
-    }
-  }
-  let network: NetworkStatus | null = null
-  try {
-    const state = JSON.parse(
-      readFileSync(join(process.env.DSH_PX_USER_DATA ?? '', 'network-state.json'), 'utf8')
-    )
-    if (
-      process.env.DSH_PX_USER_DATA &&
-      typeof state.message === 'string' &&
-      typeof state.source === 'string' &&
-      Number.isFinite(Date.parse(state.checkedAt))
-    ) {
-      network = {
-        source: state.source,
-        message: state.message,
-        checkedAt: state.checkedAt,
-        protocols: Array.isArray(state.protocols) ? state.protocols : []
-      }
-    }
-  } catch {
-    /* browser-only / old shell */
-  }
   return {
     checkedAt: new Date().toISOString(),
     startedAt,
@@ -158,21 +101,13 @@ export function localStatus(
     plugins,
     profileError,
     credentialsFile: Boolean(home && existsSync(join(home, '.credentials.yaml'))),
-    service,
-    canRestart: service?.phase === 'running',
-    network,
     serviceId: home ? serviceIdentity(home) : null,
     runtime: {
-      mode: service?.runtimeMode ?? (process.env.DSH_PX_USER_DATA ? 'disconnected' : 'standalone'),
-      owner: process.env.DSH_PX_USER_DATA ? 'desktop' : 'standalone',
+      mode: 'native',
+      owner: 'native-host',
       shared: true,
-      capabilities: {
-        restart: service?.phase === 'running',
-        install: service?.phase === 'running' && service.runtimeMode === 'packaged'
-      }
+      capabilities: { restart: false, install: false }
     },
-    activity,
-    lastAction,
-    pendingOperation
+    activity
   }
 }

@@ -26,6 +26,9 @@ import {
   parseReviewTree
 } from './review-core.mjs'
 import { command, runReviewBatch } from './review-process.mjs'
+import { installedModel, modelIdentity, readApiKey } from './review-model.mjs'
+import { loadUpstreamCatalog, requirePinnedHosts } from './review-upstream.mjs'
+import { scanText } from './check-secrets.mjs'
 import { createAppClient } from './review-app.mjs'
 import { PUBLIC_REVIEW_FAILURE, publishReview, publishQuality, settleQuality } from './review-verify.mjs'
 import { findTrustedQuality, qualityChanged } from './review-trusted-ci.mjs'
@@ -338,8 +341,22 @@ export async function loadReviewRequestIdentity(api, config, run, directory, pre
   return { ...request }
 }
 
+/** Secret scan result: locations and rule ids only, never the matched value. */
+export function secretBlockers(findings) {
+  const sorted = [...findings].sort(
+    (a, b) => a.path.localeCompare(b.path) || a.line - b.line || a.rule.localeCompare(b.rule)
+  )
+  return sorted
+    .slice(0, 50)
+    .map(
+      (finding) =>
+        `Secret scan blocked review input: ${finding.rule} at ${JSON.stringify(finding.path)}:${finding.line} (value withheld)`
+    )
+    .concat(sorted.length > 50 ? [`Secret scan found ${sorted.length - 50} further locations`] : [])
+}
+
 /** Prepare exact Git source and complete bounded context without invoking the model. */
-export async function prepareReviewSnapshot(config, request, git) {
+export async function prepareReviewSnapshot(config, request, git, options = {}) {
   sha(await git(['rev-parse', request.head + '^{commit}']))
   sha(await git(['rev-parse', request.base + '^{commit}']))
   const mergeBase = sha(await git(['merge-base', request.base, request.head]))
@@ -347,19 +364,47 @@ export async function prepareReviewSnapshot(config, request, git) {
     .decode(await git(['diff', '--name-only', '--no-renames', '-z', mergeBase, request.head], true, true))
     .split('\0')
     .filter(Boolean)
+  const reader = {
+    list: async (ref) => parseReviewTree(await git(['ls-tree', '-r', '-l', '-z', ref], true, true)),
+    read: (ref, path) => git(['show', `${ref}:${path}`], true, true)
+  }
+  let declaredHosts = []
+  if (options.upstream) {
+    // Every host the candidate declares must have trusted pinned contracts; unknown hosts block.
+    const tree = await reader.list(request.head)
+    const product = tree.find((entry) => entry.path === 'config/products.json')
+    declaredHosts = requirePinnedHosts(
+      options.upstream,
+      product
+        ? new TextDecoder('utf-8', { fatal: true }).decode(await reader.read(request.head, product.path))
+        : undefined
+    )
+  }
   const snapshot = await collectGroupedReview(
     { ...request, repository: config.repository, mergeBase, names },
-    {
-      list: async (ref) => parseReviewTree(await git(['ls-tree', '-r', '-l', '-z', ref], true, true)),
-      read: (ref, path) => git(['show', `${ref}:${path}`], true, true)
-    },
+    reader,
     config.contextLimits,
-    config.maxBatchChars ?? 500000
+    config.maxBatchChars ?? 500000,
+    { upstream: options.upstream, scan: options.scan ?? scanText }
   )
-  return { ...snapshot, mergeBase, tree: sha(await git(['rev-parse', request.head + '^{tree}'])) }
+  return {
+    ...snapshot,
+    declaredHosts,
+    mergeBase,
+    tree: sha(await git(['rev-parse', request.head + '^{tree}']))
+  }
 }
 
-export async function reviewSnapshot(config, request, directory, invoke = runReviewBatch) {
+/** Verified upstream catalog from the worker-owned lock and cache (re-verified on every use). */
+export async function workerUpstreamCatalog(config, options = {}) {
+  if (!options.fetch && (process.env.HTTPS_PROXY || process.env.https_proxy)) {
+    const http = await import('node:http')
+    if (typeof http.setGlobalProxyFromEnv === 'function') http.setGlobalProxyFromEnv()
+  }
+  return loadUpstreamCatalog({ cacheDirectory: join(config.directory, 'upstream-cache'), ...options })
+}
+
+export async function reviewSnapshot(config, request, directory, invoke = runReviewBatch, options = {}) {
   const mirror = join(config.directory, 'mirror.git')
   const git = (args, raw = false, binary = false) =>
     command(
@@ -390,8 +435,25 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
     request.head,
     request.base
   ])
-  const { files, batches, tree, mergeBase, context, identities, projections, metrics } =
-    await prepareReviewSnapshot(config, request, git)
+  const upstream = await (options.upstream ?? workerUpstreamCatalog(config))
+  const {
+    files,
+    batches,
+    tree,
+    mergeBase,
+    context,
+    identities,
+    projections,
+    upstream: upstreamIdentities,
+    secretFindings,
+    declaredHosts,
+    metrics
+  } = await prepareReviewSnapshot(config, request, git, { upstream })
+  // The context text contains every CONTEXT UPSTREAM byte, so this digest binds them too.
+  const contextDigest = sha256(context)
+  const filesDigest = sha256(
+    canonical(files.map((f) => ({ path: f.path, before: sha256(f.before), after: sha256(f.after) })))
+  )
   writeFileSync(
     join(directory, 'source-context.json'),
     JSON.stringify(
@@ -400,15 +462,34 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
         base: request.base,
         mergeBase,
         metrics,
-        contextDigest: sha256(context),
+        contextDigest,
+        upstreamLockDigest: upstream.lockDigest,
+        declaredHosts,
         sources: identities,
+        upstream: upstreamIdentities,
         projections,
+        secretFindings: secretFindings.length,
         batches: batches.map((batch) => ({ id: batch.id, chars: batch.text.length, scope: batch.scope }))
       },
       null,
       2
     )
   )
+  if (secretFindings.length) {
+    // Fail closed before any model sees the snapshot; only locations and rule ids are reported.
+    const blockers = secretBlockers(secretFindings)
+    return {
+      verdict: 'fail',
+      findings: [],
+      blockers,
+      batches: [{ id: 'secret-scan', digest: sha256(canonical(blockers)) }],
+      tree,
+      mergeBase,
+      contextDigest,
+      upstreamLockDigest: upstream.lockDigest,
+      filesDigest
+    }
+  }
   const results = []
   for (const batch of batches) {
     results.push(await invoke(config, request, batch, directory))
@@ -421,10 +502,9 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
     ...aggregate(request, batches, results),
     tree,
     mergeBase,
-    contextDigest: sha256(context),
-    filesDigest: sha256(
-      canonical(files.map((f) => ({ path: f.path, before: sha256(f.before), after: sha256(f.after) })))
-    )
+    contextDigest,
+    upstreamLockDigest: upstream.lockDigest,
+    filesDigest
   }
 }
 
@@ -513,8 +593,8 @@ async function main() {
       throw new Error('Trusted worker changed; reinstall after independent review')
   if (sha256(canonical(installation.files)) !== config.workerDigest)
     throw new Error('Worker installation digest mismatch')
-  if ((await command(config.codex, ['--version'])) !== config.cliVersion)
-    throw new Error('Codex CLI changed; repeat capability and fixture validation before reinstalling')
+  // Fail before any GitHub or queue work when the model identity or its key is unusable.
+  readApiKey(installedModel(config))
   const gh = async (route, options = {}) => {
     const args = ['api', route]
     if (options.method) args.push('--method', options.method)
@@ -613,7 +693,7 @@ async function main() {
                 head: request.head,
                 base: request.base,
                 workerDigest: config.workerDigest,
-                model: config.codexOverrides
+                model: modelIdentity(config)
               })
             ) +
             '.json'
@@ -640,8 +720,8 @@ async function main() {
           base: request.base,
           completedAt: cached?.completedAt ?? Date.now(),
           reviewer: {
-            cliVersion: await command(config.codex, ['--version']),
-            configurationDigest: sha256(canonical(config.codexOverrides))
+            ...modelIdentity(config),
+            configurationDigest: sha256(canonical(modelIdentity(config)))
           },
           ...result,
           requestRunId: run.id,

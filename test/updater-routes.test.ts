@@ -1,48 +1,115 @@
 import { localHandler } from './http-fixture'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { createHash, generateKeyPairSync } from 'node:crypto'
+import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { createServiceState } from '../src/main/service-state'
-import { serveShellActions } from '../src/main/shell-actions'
+import { signRelease, type ReleaseManifest } from '../src/shared/signed-release'
+import { evaluatePackFeed, PACK_FEED_URL, PACK_TARGET } from '../packages/dsh-px-updater/src/pack-feed'
+import products from '../config/products.json'
 
-test('真实宿主产物路由：检查请求、安装状态门禁、打开目标精确匹配与清理', async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'dshpx-routes-'))
-  const previous = process.env.DSH_PX_USER_DATA
-  const previousRuntime = process.env.DSH_PX_RUNTIME_ROOT
-  process.env.DSH_PX_USER_DATA = dir
-  process.env.DSH_PX_RUNTIME_ROOT = dir
-  const instanceId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
-  const heartbeat = createServiceState(dir, { instanceId, runtimeMode: 'packaged' })
-  heartbeat.set('running', 'test service', 123)
-  const actions: string[] = []
-  const stopActions = serveShellActions({
-    dir,
-    instanceId,
-    onAction: (request) => {
-      actions.push(request.action)
-      return { message: 'accepted' }
-    }
+const pair = generateKeyPairSync('ed25519')
+const privateKey = pair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString()
+const publicKey = pair.publicKey.export({ type: 'spki', format: 'pem' }).toString()
+const keyId = createHash('sha256').update(publicKey).digest('hex').slice(0, 24)
+const keys = { [keyId]: publicKey }
+
+function packManifest(version: string, changes: Partial<ReleaseManifest> = {}): ReleaseManifest {
+  const name = `dsh-px-pack-${version}.tgz`
+  return {
+    schemaVersion: 1,
+    product: 'pack',
+    channel: 'preview',
+    platform: 'any',
+    version,
+    packVersion: version,
+    protocolGeneration: products.protocolGeneration,
+    upgradeFromGenerations: [],
+    hostVersion: '0.2.0-rc.1',
+    upstreamCommit: 'a'.repeat(40),
+    sourceCommit: 'b'.repeat(40),
+    issuedAt: '2026-09-30T00:00:00.000Z',
+    files: [
+      {
+        role: 'pack',
+        name,
+        url: `https://github.com/Palbudir/dsh-px/releases/download/pack-v${version}/${name}`,
+        size: 10,
+        sha256: 'c'.repeat(64),
+        sha512: Buffer.alloc(64, 1).toString('base64')
+      }
+    ],
+    ...changes
+  }
+}
+const signed = (manifest: ReleaseManifest) => JSON.stringify(signRelease(manifest, keyId, privateKey))
+
+test('the Pack feed is fixed, preview-only and bound to this protocol generation', () => {
+  assert.equal(PACK_FEED_URL, 'https://raw.githubusercontent.com/Palbudir/dsh-px/updates/pack-preview.json')
+  assert.deepEqual(PACK_TARGET, {
+    product: 'pack',
+    channel: 'preview',
+    platform: 'any',
+    protocolGeneration: products.protocolGeneration
   })
-  writeFileSync(
-    join(dir, 'runtime-manifest.json'),
-    JSON.stringify({ app: { version: '0.1.0-beta.re.0.5' }, dsh: { version: '0.1.5-rc.2' } })
+})
+
+test('a verified newer Pack is announced for manual installation with its own release page', () => {
+  const result = evaluatePackFeed(signed(packManifest('0.2.0-alpha.2')), '0.2.0-alpha.1', new Date(0), keys)
+  assert.equal(result.error, null)
+  assert.equal(result.updateAvailable, true)
+  assert.equal(result.install, 'manual')
+  assert.equal(result.latest.pack, '0.2.0-alpha.2')
+  assert.equal(result.releaseUrl, 'https://github.com/Palbudir/dsh-px/releases/tag/pack-v0.2.0-alpha.2')
+  const same = evaluatePackFeed(signed(packManifest('0.2.0-alpha.1')), '0.2.0-alpha.1', new Date(0), keys)
+  assert.equal(same.updateAvailable, false)
+  assert.equal(same.error, null)
+})
+
+test('unsigned, foreign, wrong-product and wrong-generation feeds never report a version', () => {
+  const other = generateKeyPairSync('ed25519')
+  const foreign = JSON.stringify(
+    signRelease(packManifest('0.2.9'), keyId, other.privateKey.export({ type: 'pkcs8', format: 'pem' }))
   )
-  t.after(() => {
-    stopActions()
-    heartbeat.dispose()
-    if (previous === undefined) delete process.env.DSH_PX_USER_DATA
-    else process.env.DSH_PX_USER_DATA = previous
-    if (previousRuntime === undefined) delete process.env.DSH_PX_RUNTIME_ROOT
-    else process.env.DSH_PX_RUNTIME_ROOT = previousRuntime
-    rmSync(dir, { recursive: true, force: true })
-  })
-  type Handler = (
-    req: { method: string; url: string },
-    res: { writeHead: (code: number) => void; end: (body: string) => void }
-  ) => Promise<void> | void
+  const tampered = JSON.parse(signed(packManifest('0.2.9')))
+  tampered.payload.version = tampered.payload.packVersion = '0.2.10'
+  const desktop: ReleaseManifest = {
+    ...packManifest('0.2.9'),
+    product: 'desktop',
+    platform: 'win32-x64',
+    upgradeFromGenerations: [products.protocolGeneration],
+    files: [
+      {
+        role: 'installer',
+        name: 'DSH-PX-Desktop-0.2.9-win-x64.exe',
+        url: 'https://github.com/Palbudir/dsh-px/releases/download/desktop-v0.2.9/DSH-PX-Desktop-0.2.9-win-x64.exe',
+        size: 10,
+        sha256: 'c'.repeat(64),
+        sha512: Buffer.alloc(64, 1).toString('base64')
+      }
+    ]
+  }
+  const next = packManifest('0.3.0', { protocolGeneration: 3 })
+  for (const source of [
+    'not json',
+    JSON.stringify(packManifest('0.2.9')),
+    foreign,
+    JSON.stringify(tampered),
+    signed(desktop),
+    signed(next)
+  ]) {
+    const result = evaluatePackFeed(source, '0.2.0-alpha.1', new Date(0), keys)
+    assert.notEqual(result.error, null, source.slice(0, 40))
+    assert.equal(result.latest.pack, null)
+    assert.equal(result.updateAvailable, false)
+    assert.equal(result.releaseUrl, null)
+  }
+  // The shipped keys are the pinned update keys, so a feed signed by a test key is rejected there.
+  assert.notEqual(evaluatePackFeed(signed(packManifest('0.2.9')), '0.2.0-alpha.1').error, null)
+})
+
+test('the updater host exposes only status and a signed check; no desktop bridge is claimed', async (t) => {
+  type Handler = (req: any, res: any) => Promise<void> | void
   const routes = new Map<string, Handler>()
   let dispose: (() => void) | undefined
   const mod = await import(pathToFileURL(resolve('packages/dsh-px-updater/lib/index.js')).href)
@@ -63,75 +130,48 @@ test('真实宿主产物路由：检查请求、安装状态门禁、打开目�
           }
         })
     },
-    { registerTool: false }
+    { registerTool: false, feedUrl: 'https://attacker.example/feed.json' }
   )
-  async function request(path: string, method = 'POST', marker = true) {
+  assert.deepEqual([...routes.keys()].sort(), ['/dsh-px-updater/check', '/dsh-px-updater/status'])
+  async function request(path: string) {
     let status = 0
-    let body: Record<string, unknown> = {}
-    await routes.get(`/dsh-px-updater/${path.split('?')[0]}`)?.(
-      { method, url: `/dsh-px-updater/${path}`, headers: marker ? { 'x-dsh-px-request': '1' } : {} } as any,
+    let body: any = {}
+    await routes.get(`/dsh-px-updater/${path}`)!(
+      { method: 'GET', url: `/dsh-px-updater/${path}`, headers: {} },
       {
-        writeHead: (code) => {
+        writeHead: (code: number) => {
           status = code
         },
-        end: (value) => {
+        end: (value: string) => {
           body = JSON.parse(value)
         }
       }
     )
     return { status, body }
   }
-  assert.equal((await request('check-shell', 'GET')).status, 405)
-  for (const path of ['check-shell', 'install', 'open?what=open-log'])
-    assert.equal((await request(path, 'POST', false)).status, 403)
-  assert.equal((await request('check-shell')).status, 202)
-  assert.ok(actions.includes('check'))
-  assert.equal((await request('install')).status, 409)
-  assert.equal(existsSync(join(dir, 'update-bridge/install.req')), false)
-  mkdirSync(join(dir, 'update-bridge'), { recursive: true })
-  writeFileSync(join(dir, 'update-bridge/state.json'), JSON.stringify({ instanceId, phase: 'ready' }))
-  assert.equal((await request('install')).status, 202)
-  assert.ok(actions.includes('install'))
-  writeFileSync(join(dir, 'update-bridge/state.json'), JSON.stringify({ instanceId, phase: 'installing' }))
-  assert.equal((await request('install')).status, 409)
-  for (const value of ['open-data/extra', 'open-log.bad', '../file', 'open-data&what=open-log']) {
-    assert.equal((await request(`open?what=${value}`)).status, 400, value)
-  }
-  assert.equal((await request('open?what=open-data')).status, 202)
-  assert.equal((await request('open?what=open-log')).status, 202)
-  t.mock.method(
-    globalThis,
-    'fetch',
-    async (url: string) =>
-      new Response(
-        JSON.stringify(
-          url.includes('github') ? { tag_name: 'v0.1.0-beta.re.0.6' } : { version: '0.1.5-rc.3' }
-        )
-      )
-  )
-  const complete = await request('check', 'GET')
-  assert.equal(complete.status, 200)
-  assert.deepEqual(complete.body.updateAvailable, { app: true, dsh: true })
-  t.mock.method(
-    globalThis,
-    'fetch',
-    async (url: string) =>
-      new Response(
-        JSON.stringify(url.includes('github') ? { tag_name: 'v0.1.0-beta.re.0.6' } : { version: 'invalid' })
-      )
-  )
-  const partial = await request('check', 'GET')
-  assert.equal(partial.status, 200)
-  assert.match(String(partial.body.errors), /npm 未返回有效版本号/)
+  const status = await request('status')
+  assert.equal(status.status, 200)
+  assert.equal(status.body.desktopBridge, false)
+  assert.equal(status.body.version, products.pack.version)
+  assert.equal(status.body.feed, PACK_FEED_URL)
+  const urls: string[] = []
+  t.mock.method(globalThis, 'fetch', async (url: string) => {
+    urls.push(String(url))
+    return new Response(signed(packManifest('0.2.9')))
+  })
+  const check = await request('check')
+  // The feed override was ignored, and the test-key signature is not trusted by the shipped keys.
+  assert.deepEqual(urls, [PACK_FEED_URL])
+  assert.equal(check.status, 502)
+  assert.match(check.body.error, /签名/)
+  assert.equal(check.body.updateAvailable, false)
+  assert.equal(check.body.latest.pack, null)
   t.mock.method(globalThis, 'fetch', async () => {
     throw new Error('offline')
   })
-  const failed = await request('check', 'GET')
-  assert.equal(failed.status, 502)
-  assert.match(String(failed.body.errors), /GitHub Releases/)
-  assert.match(String(failed.body.errors), /npm/)
-  delete process.env.DSH_PX_USER_DATA
-  assert.equal((await request('check-shell')).status, 503)
+  const offline = await request('check')
+  assert.equal(offline.status, 502)
+  assert.match(offline.body.error, /无法读取/)
   dispose?.()
   assert.equal(routes.size, 0)
 })

@@ -142,8 +142,18 @@ export function verifyAttestation(report, policy, expected = {}, now = Date.now(
     payload.requestRunId < 1 ||
     !Number.isSafeInteger(payload.requestAttempt) ||
     payload.requestAttempt < 1 ||
-    typeof payload.reviewer?.cliVersion !== 'string' ||
-    !/^[a-f0-9]{64}$/.test(payload.reviewer?.configurationDigest)
+    !['provider', 'model', 'baseUrl'].every(
+      (key) => typeof payload.reviewer?.[key] === 'string' && payload.reviewer[key]
+    ) ||
+    !/^https:\/\//.test(payload.reviewer.baseUrl) ||
+    payload.reviewer.configurationDigest !==
+      sha256(
+        canonical({
+          provider: payload.reviewer.provider,
+          model: payload.reviewer.model,
+          baseUrl: payload.reviewer.baseUrl
+        })
+      )
   )
     throw new Error('Signed review lacks source or reviewer identity')
   if (
@@ -381,6 +391,14 @@ export function reviewModuleReferences(source, options = {}) {
       node.source
     )
       add(node.source, node, node.type)
+    else if (
+      node.type === 'TSModuleDeclaration' &&
+      node.id?.type === 'StringLiteral' &&
+      !node.id.value.startsWith('.') &&
+      !node.id.value.includes('*')
+    )
+      // Ambient `declare module 'pkg'` is a host contract assumption: disclose it as external.
+      literals.push({ specifier: node.id.value, at: node.id.start, ambient: true })
     else if (node.type === 'ImportExpression') add(node.source, node, 'import')
     else if (node.type === 'TSImportType') add(node.argument, node, 'import-type')
     else if (
@@ -397,8 +415,440 @@ export function reviewModuleReferences(source, options = {}) {
   }
   return { literals: literals.sort((a, b) => a.at - b.at), dynamic: dynamic.sort((a, b) => a.at - b.at) }
 }
+/** Resolve one repository-local module reference exactly as bundlers do; undefined when absent. */
+export function resolveLocalDependency(has, from, dependency) {
+  const specifier = dependency.specifier
+  if (specifier.includes('\\'))
+    throw new Error(`Escaped module references require explicit review context: ${from}`)
+  const joined = dependency.repositoryRelative ? specifier : posix.join(posix.dirname(from), specifier)
+  const path = reviewSourcePath(joined)
+  const extensions = ['.ts', '.tsx', '.mts', '.cts', '.mjs', '.js', '.cjs', '.json']
+  const candidates = [path]
+  if (/\.[cm]?js$/.test(path))
+    candidates.push(path.replace(/\.([cm]?)js$/, '.$1ts'), path.replace(/\.js$/, '.tsx'))
+  if (!posix.extname(path))
+    candidates.push(...extensions.map((ext) => path + ext), ...extensions.map((ext) => path + '/index' + ext))
+  return candidates.find((candidate) => has(candidate))
+}
+
+export const GOVERNANCE_PATH =
+  /^(?:scripts\/(?:review|release)-|test\/(?:review|release)-|docs\/github\/|\.github\/workflows\/)/
+export const RELEASE_PATH =
+  /^(?:scripts\/release-|test\/release-|docs\/RELEASING\.md$|docs\/github\/review-policy\.json$)/
+/** Edge kinds that change behaviour; the others are context-only and never decide group ownership. */
+const EXECUTABLE_EDGES = new Set(['import', 'route', 'npm-script', 'manifest'])
+const SOURCE_FILE = /\.[cm]?[jt]sx?$/
+const GENERATED_BUNDLE = /(?:^|\/)lib\//
+const safePath = (path) => {
+  try {
+    reviewSourcePath(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Repository dependency graph from immutable Git blobs of the given refs. Nodes are paths; edges
+ * are literal imports plus declared non-import relationships: package-manifest entries, npm
+ * scripts, plugin HTTP routes, literal repository paths, computed path patterns, shared artifact
+ * names and documentation links. Unresolvable references are recorded, never guessed.
+ */
+export async function buildReviewGraph(reader, refs, limits = {}) {
+  const maxBytes = limits.maxGraphBytes ?? 32000000,
+    maxFiles = limits.maxGraphFiles ?? 20000,
+    maxTreeEntries = limits.maxTreeEntries ?? 20000
+  for (const [value, maximum] of [
+    [maxBytes, 64000000],
+    [maxFiles, 50000]
+  ])
+    if (!Number.isSafeInteger(value) || value < 1 || value > maximum)
+      throw new Error('Invalid bounded review graph limits')
+  const forward = new Map(),
+    reverse = new Map(),
+    paths = new Set(),
+    externals = new Map(),
+    releaseReaders = new Set(),
+    manifests = new Map(),
+    unresolved = [],
+    cache = new Map()
+  let bytes = 0,
+    files = 0
+  const scripts = new Map()
+  const edge = (from, to, kind) => {
+    if (from === to) return
+    // Only reviewable text sources become context; binary assets named by path are not edges.
+    if (!/\.(?:[cm]?[jt]sx?|json|md|ya?ml|txt|css|html?)$/i.test(to)) return
+    if (!forward.has(from)) forward.set(from, new Map())
+    if (!forward.get(from).has(to)) forward.get(from).set(to, new Set())
+    forward.get(from).get(to).add(kind)
+    if (!reverse.has(to)) reverse.set(to, new Map())
+    if (!reverse.get(to).has(from)) reverse.get(to).set(from, new Set())
+    reverse.get(to).get(from).add(kind)
+  }
+  const addEdge = edge
+  const wanted = (path) =>
+    safePath(path) &&
+    ((SOURCE_FILE.test(path) && !GENERATED_BUNDLE.test(path)) ||
+      path.endsWith('.md') ||
+      /(?:^|\/)package\.json$/.test(path))
+  for (const ref of [...new Set(refs)]) {
+    const entries = await reader.list(ref)
+    if (entries.length > maxTreeEntries) throw new Error('Review source inventory exceeds entry limit')
+    const tree = new Map(entries.map((entry) => [entry.path, entry]))
+    const has = (path) => tree.has(path)
+    const texts = new Map()
+    for (const entry of entries) {
+      if (safePath(entry.path)) paths.add(entry.path)
+      if (!wanted(entry.path) || !['100644', '100755'].includes(entry.mode) || entry.type !== 'blob') continue
+      if (!cache.has(entry.oid)) {
+        files++
+        bytes += entry.size ?? 0
+        if (files > maxFiles || bytes > maxBytes) throw new Error('Review dependency graph exceeds budget')
+        let text = null
+        try {
+          const raw = await reader.read(ref, entry.path)
+          if (raw.length === entry.size) text = decodeSource(raw, entry.path)
+        } catch {
+          text = null
+        }
+        cache.set(entry.oid, text)
+      }
+      if (cache.get(entry.oid) !== null) texts.set(entry.path, cache.get(entry.oid))
+    }
+    // Package manifests: entry points and their maintained TypeScript sources.
+    for (const [path, text] of texts) {
+      const match = /^(packages\/[^/]+)\/package\.json$/.exec(path)
+      if (!match && path !== 'package.json') continue
+      let manifest
+      try {
+        manifest = JSON.parse(text)
+      } catch {
+        unresolved.push({ ref, path, reason: 'invalid package manifest' })
+        continue
+      }
+      const directory = match ? match[1] + '/' : ''
+      if (match && typeof manifest.name === 'string') manifests.set(match[1], manifest.name)
+      const targets = []
+      const collect = (value) => {
+        if (typeof value === 'string') targets.push(value)
+        else if (value && typeof value === 'object') for (const item of Object.values(value)) collect(item)
+      }
+      if (match) collect([manifest.main, manifest.module, manifest.types, manifest.exports, manifest.bin])
+      if (match) collect(manifest.dsh?.bundle)
+      for (const target of targets) {
+        if (/^(?:https?:|node:)/.test(target) || target.includes('*')) continue
+        const resolved = posix.normalize(directory + target.replace(/^\.\//, ''))
+        if (!safePath(resolved)) continue
+        if (has(resolved)) edge(path, resolved, 'manifest')
+        const source = resolved.replace(/(^|\/)lib\//, '$1src/').replace(/\.[cm]?js$/, '')
+        for (const extension of ['.ts', '.tsx', '.mts'])
+          if (source !== resolved && has(source + extension)) edge(path, source + extension, 'manifest')
+      }
+      if (path !== 'package.json') continue
+      // npm scripts: direct file arguments and maintained runner indirection (`runner.mjs <name>`).
+      if (!scripts.has(ref)) scripts.set(ref, new Map())
+      for (const [scriptName, command] of Object.entries(manifest.scripts ?? {})) {
+        if (typeof command !== 'string') continue
+        const targets = new Set()
+        scripts.get(ref).set(scriptName, { command, targets })
+        const edge = (from, to, kind) => {
+          targets.add(to)
+          addEdge(from, to, kind)
+        }
+        const words = command.split(/\s+/)
+        for (let i = 0; i < words.length; i++) {
+          const word = words[i].replace(/^['"]|['"]$/g, '')
+          if (safePath(word) && has(word)) edge(path, word, 'npm-script')
+          const previous = words[i - 1]?.replace(/^['"]|['"]$/g, '')
+          if (previous && safePath(previous) && has(previous) && /^[\w-]+$/.test(word)) {
+            const directory = posix.dirname(previous)
+            for (const extension of ['.ts', '.mts', '.mjs', '.js']) {
+              const target = posix.join(directory, word + extension)
+              if (has(target)) edge(path, target, 'npm-script')
+            }
+          }
+        }
+      }
+    }
+    const routeProducers = new Map(),
+      routeUsers = [],
+      artifacts = new Map()
+    const packageOf = (path) => /^(packages\/[^/]+)\//.exec(path)?.[1]
+    for (const [path, text] of texts) {
+      if (path.endsWith('.md')) {
+        for (const match of text.matchAll(/\]\(([^)\s#?]+)(?:[#?][^)\s]*)?\)/g)) {
+          if (/^[a-z]+:/i.test(match[1])) continue
+          const target = posix.normalize(posix.join(posix.dirname(path), decodeURI(match[1])))
+          if (safePath(target) && has(target)) edge(path, target, 'doc')
+        }
+        continue
+      }
+      if (!SOURCE_FILE.test(path)) continue
+      let references
+      try {
+        references = reviewModuleReferences(text, { jsx: /\.[jt]sx$/.test(path), filename: path })
+      } catch (error) {
+        unresolved.push({ ref, path, reason: String(error.message ?? error).slice(0, 200) })
+        continue
+      }
+      for (const dependency of references.literals) {
+        const specifier = dependency.specifier
+        if (dependency.repositoryRelative || specifier.startsWith('.')) {
+          let target
+          try {
+            target = resolveLocalDependency(has, path, dependency)
+          } catch {
+            target = undefined
+          }
+          if (target) edge(path, target, 'import')
+          else unresolved.push({ ref, path, specifier })
+        } else if (!specifier.startsWith('/') && !isBuiltin(specifier)) {
+          const name = /^(@[^/]+\/[^/]+|[^/]+)/.exec(specifier)?.[1]
+          if (!externals.has(path)) externals.set(path, new Set())
+          externals.get(path).add(name)
+        }
+      }
+      if (/\/releases\//.test(text)) releaseReaders.add(path)
+      const test = path.startsWith('test/')
+      for (const match of text.matchAll(/(['"`])([^'"`\s$\\]{3,200})\1/g)) {
+        const value = match[2]
+        // Literal repository paths (read, spawned or checked by path) are explicit context.
+        // Data/config/doc targets are read as contracts; named code files are mentions only.
+        if (value.includes('/') && safePath(value) && has(value))
+          edge(path, value, SOURCE_FILE.test(value) ? 'mention' : 'path')
+        const route = /^\/?([a-z0-9][\w.-]*)\/([\w./-]+)$/i.exec(value)
+        if (route) routeUsers.push({ path, name: route[1], route: route[1] + '/' + route[2] })
+        if (
+          !test &&
+          /^[\w.-]+\.(?:json|ya?ml)$/.test(value) &&
+          !/^(?:package|package-lock|tsconfig)\.json$/.test(value)
+        ) {
+          if (!artifacts.has(value)) artifacts.set(value, new Set())
+          artifacts.get(value).add(path)
+        }
+      }
+      // Computed path patterns such as `packages/${name}/package.json` link every matching file.
+      for (const match of text.matchAll(/`([\w@.-]+(?:\/[\w@.-]+)*\/)\$\{[^}`]{1,80}\}([\w@./-]*)`/g)) {
+        const [, prefix, suffix] = match
+        const hits = [...tree.keys()].filter(
+          (candidate) =>
+            candidate.startsWith(prefix) &&
+            candidate.endsWith(suffix) &&
+            candidate.length > prefix.length + suffix.length &&
+            !candidate.slice(prefix.length, candidate.length - suffix.length).includes('/') &&
+            safePath(candidate)
+        )
+        if (hits.length <= 64) for (const hit of hits) edge(path, hit, 'path-pattern')
+      }
+    }
+    // Plugin HTTP routes: `/<package name>/<route>` is produced by that package's own sources.
+    const packageNames = new Map([...manifests].map(([directory, name]) => [name, directory]))
+    for (const { path, name, route } of routeUsers) {
+      const directory = packageNames.get(name)
+      if (!directory) continue
+      if (packageOf(path) === directory && !path.startsWith('test/')) {
+        if (!routeProducers.has(route)) routeProducers.set(route, new Set())
+        routeProducers.get(route).add(path)
+      }
+    }
+    for (const { path, route } of routeUsers)
+      for (const producer of routeProducers.get(route) ?? [])
+        if (producer !== path && packageOf(path) !== packageOf(producer)) edge(path, producer, 'route')
+    // A small set of files naming the same artifact file are its producers and consumers.
+    for (const users of artifacts.values())
+      if (users.size >= 2 && users.size <= 8)
+        for (const a of users) for (const b of users) if (a !== b) edge(a, b, 'artifact')
+  }
+  return { forward, reverse, paths, externals, releaseReaders, manifests, unresolved, scripts }
+}
+
+/** Files named by npm scripts whose command differs between two refs (added, removed or changed). */
+export function changedScriptTargets(graph, before, after) {
+  const a = graph.scripts.get(before) ?? new Map(),
+    b = graph.scripts.get(after) ?? new Map(),
+    targets = new Set()
+  for (const name of new Set([...a.keys(), ...b.keys()]))
+    if (a.get(name)?.command !== b.get(name)?.command)
+      for (const side of [a.get(name), b.get(name)])
+        for (const target of side?.targets ?? []) targets.add(target)
+  return targets
+}
+
+const EMPTY = new Map()
+/** Package-owned paths belong to that package's review group, named without the product prefix. */
+export function reviewPackageGroup(graph, path) {
+  const directory = /^(packages\/[^/]+)\//.exec(path)?.[1]
+  if (!directory || !graph.manifests.has(directory)) return undefined
+  return directory.slice('packages/'.length).replace(/^dsh-px-/, '')
+}
+function componentOf(graph, path) {
+  if (GOVERNANCE_PATH.test(path)) return 'governance'
+  if (path.startsWith('test/')) return undefined
+  const own = reviewPackageGroup(graph, path)
+  if (own) return own
+  if (path.startsWith('packages/')) return undefined // shared sources belong to their consumers
+  return 'runtime'
+}
+const executable = (kinds) => [...kinds].some((kind) => EXECUTABLE_EDGES.has(kind))
+
+/** Review groups for one changed path, from its executable consumer closure (never path lists). */
+export function reviewOwners(graph, path) {
+  if (GOVERNANCE_PATH.test(path)) return ['governance']
+  if (path === 'package-lock.json') return ['dependency-lock']
+  const own = reviewPackageGroup(graph, path)
+  if (own) {
+    // A plugin route handler is also reviewed by every other component that calls the route.
+    const owners = new Set([own])
+    for (const [source, kinds] of graph.reverse.get(path) ?? EMPTY)
+      if (kinds.has('route') && !source.startsWith('test/')) {
+        const owner = componentOf(graph, source)
+        if (owner) owners.add(owner)
+      }
+    return [...owners].sort()
+  }
+  const owners = new Set()
+  if (path.startsWith('test/')) {
+    for (const [target, kinds] of graph.forward.get(path) ?? EMPTY) {
+      if (!executable(kinds)) continue
+      const direct = componentOf(graph, target)
+      if (direct) owners.add(direct)
+      else if (target.startsWith('packages/') && !target.startsWith('test/'))
+        for (const owner of reviewOwners(graph, target)) owners.add(owner)
+    }
+    return owners.size ? [...owners].sort() : ['verification']
+  }
+  const self = componentOf(graph, path)
+  if (self) owners.add(self)
+  const seen = new Set([path]),
+    queue = [path]
+  while (queue.length) {
+    const current = queue.shift()
+    for (const [source, kinds] of graph.reverse.get(current) ?? EMPTY) {
+      if (seen.has(source) || !executable(kinds) || source.startsWith('test/')) continue
+      seen.add(source)
+      const owner = componentOf(graph, source)
+      if (owner) owners.add(owner)
+      // Only unowned shared sources forward their consumers; owned components are the boundary.
+      else queue.push(source)
+    }
+  }
+  if (!owners.size) owners.add('runtime')
+  return [...owners].sort()
+}
+
+/** Unchanged direct producers/consumers that a group needs to assess its changed files. */
+export function reviewContracts(graph, group, names) {
+  const changed = new Set(names),
+    contracts = new Set()
+  const admit = (path) =>
+    !changed.has(path) &&
+    !path.startsWith('test/') &&
+    !GENERATED_BUNDLE.test(path) &&
+    path !== 'package-lock.json' &&
+    safePath(path)
+  for (const path of names) {
+    // Manifests and documents fan out to many declared files; their changed declarations are
+    // reviewed from the change record, and each declared target already has its own group.
+    const hub = /(?:^|\/)package\.json$/.test(path) || path.endsWith('.md')
+    const supplied = (kinds) => [...kinds].some((kind) => kind !== 'mention')
+    for (const [target, kinds] of graph.forward.get(path) ?? EMPTY)
+      if (
+        admit(target) &&
+        supplied(kinds) &&
+        (!hub || (graph.changedScripts?.has(target) ?? false) || kinds.has('manifest'))
+      )
+        contracts.add(target)
+    // A file merely naming this path (tooling inventories, messages) is not its consumer.
+    for (const [source, kinds] of graph.reverse.get(path) ?? EMPTY)
+      if (
+        admit(source) &&
+        supplied(kinds) &&
+        (!hub || !kinds.has('doc')) &&
+        !(hub && [...kinds].every((kind) => kind === 'artifact' || kind === 'mention'))
+      )
+        contracts.add(source)
+  }
+  // Package groups always see their own manifest entry points.
+  for (const [directory] of graph.manifests)
+    if (reviewPackageGroup(graph, directory + '/package.json') === group)
+      for (const [target, kinds] of graph.forward.get(directory + '/package.json') ?? EMPTY)
+        if (kinds.has('manifest') && admit(target)) contracts.add(target)
+  return [...contracts].sort()
+}
+
+/** Local consumers of published releases: updater clients and release-feed readers. */
+export function releaseConsumers(graph) {
+  const consumers = new Set()
+  for (const [path, names] of graph.externals)
+    if (names.has('electron-updater') && !path.startsWith('test/')) consumers.add(path)
+  for (const path of graph.releaseReaders)
+    if (!GOVERNANCE_PATH.test(path) && !path.startsWith('test/')) consumers.add(path)
+  return [...consumers].sort()
+}
+
+/**
+ * Select verified upstream contract projections for the modules and host services a group uses.
+ * Files identical across hosts are printed once with every host label.
+ */
+export function selectUpstreamContracts(catalog, { modules = [], services = [], manifest = false } = {}) {
+  const known = new Set([...catalog.hosts.values()].flatMap((packages) => [...packages.keys()]))
+  const selected = new Set(),
+    unprojectedModules = new Set(),
+    unprojectedServices = new Set()
+  for (const specifier of modules) {
+    const name = /^(@[^/]+\/[^/]+)/.exec(specifier)?.[1]
+    if (!name?.startsWith('@deepseek-ai/')) continue
+    if (known.has(name)) selected.add(name)
+    else unprojectedModules.add(name)
+  }
+  for (const service of services) {
+    const names = Object.hasOwn(catalog.services, service) ? catalog.services[service] : undefined
+    if (names) for (const name of names) selected.add(name)
+    else unprojectedServices.add(service)
+  }
+  if (manifest) for (const name of catalog.manifest) selected.add(name)
+  const files = new Map()
+  for (const [host, packages] of catalog.hosts)
+    for (const name of [...selected].sort()) {
+      const pkg = packages.get(name)
+      if (!pkg) continue
+      for (const file of pkg.files) {
+        const key = name + '\0' + file.path + '\0' + file.sha256 + '\0' + JSON.stringify(file.slice ?? null)
+        if (!files.has(key))
+          files.set(key, {
+            name,
+            path: file.path,
+            sha256: file.sha256,
+            bytes: file.bytes,
+            ...(file.slice ? { slice: file.slice } : {}),
+            license: pkg.license,
+            hosts: [],
+            text: file.text
+          })
+        files.get(key).hosts.push({ version: pkg.version, tarball: pkg.tarball, integrity: pkg.integrity })
+      }
+    }
+  return {
+    packages: [...selected].sort(),
+    files: [...files.values()],
+    unprojectedModules: [...unprojectedModules].sort(),
+    unprojectedServices: [...unprojectedServices].sort()
+  }
+}
+
+/** Host services a plugin source requests (`ctx.inject([...])`) or dereferences (`ctx.<name>`). */
+export function reviewHostServices(text, known) {
+  const services = new Set()
+  for (const match of text.matchAll(/\binject\(\s*\[([^\]]{0,500})\]/g))
+    for (const item of match[1].matchAll(/['"`]([A-Za-z][\w]*)['"`]/g)) services.add(item[1])
+  for (const match of text.matchAll(/\b(?:ctx|host|hostCtx|\w+Ctx)\??\.([A-Za-z]\w*)\b/g))
+    if (known.has(match[1])) services.add(match[1])
+  return [...services].sort()
+}
+
 /** Collect only immutable Git blobs, including before/base contracts when they differ from head. */
-export async function collectReviewContext(request, reader, limits = {}, contracts = []) {
+export async function collectReviewContext(request, reader, limits = {}, contracts = [], options = {}) {
   const maxPaths = limits.maxPaths ?? 256,
     maxBytes = limits.maxBytes ?? 3000000,
     maxTreeEntries = limits.maxTreeEntries ?? 20000
@@ -420,7 +870,8 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
     contextPaths = new Set(),
     reasons = new Map(),
     external = new Map(),
-    dynamic = []
+    dynamic = [],
+    secretFindings = []
   let bytesRead = 0
   for (const [, ref] of roles)
     if (!trees.has(ref)) {
@@ -444,6 +895,10 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
       const bytes = await reader.read(ref, path)
       if (bytes.length !== entry.size) throw new Error(`Git source size changed: ${path}`)
       const text = decodeSource(bytes, path)
+      // Every repository blob that could reach the model is scanned first; only locations are kept.
+      if (options.scan)
+        for (const finding of options.scan(path, text))
+          secretFindings.push({ path, line: finding.line, rule: finding.rule })
       cached.set(entry.oid, text)
       bytesRead += bytes.length
     }
@@ -451,7 +906,10 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
   }
   const queue = [],
     queued = new Set()
-  const add = (ref, path, reason, required = true, context = true) => {
+  // Leaf contracts (graph consumers) are printed but their own imports are not followed: they
+  // show how the change is used. Traversed sources supply their complete producer closure.
+  const leaves = new Set()
+  const add = (ref, path, reason, required = true, context = true, traverse = true) => {
     reviewSourcePath(path)
     if (!trees.get(ref).has(path)) {
       if (required) throw new Error(`Required review source is absent at ${ref}: ${path}`)
@@ -465,6 +923,10 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
       const key = snapshot + ':' + path
       if (!queued.has(key)) {
         queued.add(key)
+        if (!traverse) leaves.add(key)
+        queue.push({ ref: snapshot, path })
+      } else if (traverse && leaves.delete(key)) {
+        // A leaf later required as a producer is scanned for its dependencies after all.
         queue.push({ ref: snapshot, path })
       }
     }
@@ -488,51 +950,44 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
   const support = governance
     ? ['scripts/review-install.mjs', 'docs/github/review-policy.json', '.github/workflows/review-request.yml']
     : []
+  // Release consumers come from the dependency graph (updater clients and release-feed readers),
+  // never from a fixed list of shell files that may be renamed or removed.
   const consumers = release
-    ? [
-        'src/main/update-controller.ts',
-        'src/main/update-bridge.ts',
-        'packages/dsh-px-updater/src/index.ts',
-        'packages/dsh-px-updater/src/metadata.ts',
-        'packages/dsh-px-updater/src/client-data.ts',
-        'packages/dsh-px-updater/src/version.ts'
-      ]
+    ? releaseConsumers(options.graph ?? (await buildReviewGraph(reader, [request.head], limits)))
     : []
   for (const [, ref] of roles) {
     for (const path of request.names) add(ref, path, 'changed source dependency root', false, false)
     for (const path of common) add(ref, path, 'project contract', false)
     for (const path of support) add(ref, path, 'review policy and installation contract', false)
     for (const path of consumers) add(ref, path, 'release updater consumer contract', false)
-    for (const path of contracts) add(ref, path, 'producer and consumer contract', false)
+    for (const contract of contracts)
+      typeof contract === 'string'
+        ? add(ref, contract, 'producer and consumer contract', false)
+        : add(
+            ref,
+            contract.path,
+            contract.reason ?? 'producer and consumer contract',
+            false,
+            true,
+            contract.traverse !== false
+          )
   }
   // Changed roots already provide merge-base/head text in their change records. A divergent
   // requested base is a separate integration contract and must not remain a read-only hidden blob.
   if (request.base !== request.mergeBase)
     for (const path of request.names) add(request.base, path, 'requested-base changed-root contract', false)
   const resolveDependency = (ref, from, dependency) => {
-    const specifier = dependency.specifier
-    if (specifier.includes('\\'))
-      throw new Error(`Escaped module references require explicit review context: ${from}`)
-    const joined = dependency.repositoryRelative ? specifier : posix.join(posix.dirname(from), specifier)
-    const path = reviewSourcePath(joined)
-    const extensions = ['.ts', '.tsx', '.mts', '.cts', '.mjs', '.js', '.cjs', '.json']
-    const candidates = [path]
-    if (/\.[cm]?js$/.test(path))
-      candidates.push(path.replace(/\.([cm]?)js$/, '.$1ts'), path.replace(/\.js$/, '.tsx'))
-    if (!posix.extname(path))
-      candidates.push(
-        ...extensions.map((ext) => path + ext),
-        ...extensions.map((ext) => path + '/index' + ext)
-      )
-    const found = candidates.find((candidate) => trees.get(ref).has(candidate))
+    const found = resolveLocalDependency((path) => trees.get(ref).has(path), from, dependency)
     if (!found)
-      throw new Error(`Unresolved local dependency ${JSON.stringify(specifier)} from ${from} at ${ref}`)
+      throw new Error(
+        `Unresolved local dependency ${JSON.stringify(dependency.specifier)} from ${from} at ${ref}`
+      )
     return found
   }
   for (let index = 0; index < queue.length; index++) {
     const { ref, path } = queue[index],
       entry = await read(ref, path)
-    if (/\.[cm]?[jt]sx?$/.test(path)) {
+    if (/\.[cm]?[jt]sx?$/.test(path) && !leaves.has(ref + ':' + path)) {
       const references = reviewModuleReferences(entry.text, { jsx: /\.[jt]sx$/.test(path), filename: path })
       for (const dependency of references.literals) {
         const specifier = dependency.specifier
@@ -626,6 +1081,52 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
       after = await read(request.head, path)
     files.push({ path, before: before?.text ?? '', after: after?.text ?? '', binary: false })
   }
+  // Upstream host contracts: selected from the external modules, host services and plugin
+  // manifests that this group actually references; bytes come only from the trusted worker catalog.
+  const upstream = [],
+    projectedPackages = new Set()
+  let unprojectedServices = [],
+    upstreamHosts = []
+  if (options.upstream) {
+    const catalog = options.upstream,
+      known = new Set(Object.keys(catalog.services)),
+      services = new Set()
+    for (const file of files)
+      if (SOURCE_FILE.test(file.path))
+        for (const text of [file.before, file.after])
+          for (const service of reviewHostServices(text, known)) services.add(service)
+    const selection = selectUpstreamContracts(catalog, {
+      modules: [...external.keys()],
+      services: [...services],
+      manifest: request.names.some((path) =>
+        /^packages\/[^/]+\/(?:package\.json|cordis\.patch\.ya?ml)$/.test(path)
+      )
+    })
+    for (const name of selection.packages) projectedPackages.add(name)
+    unprojectedServices = selection.unprojectedServices
+    upstreamHosts = [...catalog.hosts.keys()]
+    for (const file of selection.files) {
+      const identity = {
+        package: file.name,
+        path: file.path,
+        sha256: file.sha256,
+        bytes: file.bytes,
+        license: file.license,
+        hosts: file.hosts,
+        ...(file.slice ? { slice: file.slice } : {})
+      }
+      upstream.push(identity)
+      context.push(
+        `CONTEXT UPSTREAM ${JSON.stringify(identity)}\n${file.text}\nEND CONTEXT UPSTREAM ${JSON.stringify(file.name + '/' + file.path)}`
+      )
+    }
+  }
+  const unprojected = [...external.keys()]
+    .filter((specifier) => !projectedPackages.has(/^(@[^/]+\/[^/]+)/.exec(specifier)?.[1]))
+    .sort()
+  const upstreamHeader = options.upstream
+    ? `Upstream DSH contracts (CONTEXT UPSTREAM; trusted worker lock ${options.upstream.lockDigest}; tarball SRI and full-file sha256 verified by the worker for hosts ${JSON.stringify(upstreamHosts)}): ${JSON.stringify([...projectedPackages].sort())}\nHost services referenced without an upstream projection: ${JSON.stringify(unprojectedServices)}\n`
+    : 'Upstream DSH contracts: none supplied to this snapshot.\n'
   const baseRoots =
     request.base === request.mergeBase
       ? []
@@ -635,97 +1136,147 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
           ref: request.base,
           oid: trees.get(request.base).get(path)?.oid ?? null
         }))
-  const header = `Repository: ${request.repository}\nBase: ${request.base}\nMerge base: ${request.mergeBase}\nHead: ${request.head}\nGroup change inventory (not per-batch scope): ${JSON.stringify(request.names)}\nRequested-base changed roots (null oid means absent): ${JSON.stringify(baseRoots)}\nContext contract: selected source sections are complete immutable Git blobs. Any JSON-pointer projection is explicitly labelled; all batches together supply the complete changed files; this batch supplies only its explicit ranges. Source roles are explicit; identical blobs are printed once. External packages and computed references are not silently treated as reviewed implementations.\nExternal module references (use package.json versions; external code is not in this Git snapshot): ${JSON.stringify([...external.keys()].sort())}\nComputed module references (assess whether their targets need additional context): ${JSON.stringify(dynamic)}\n`
+  const header = `Repository: ${request.repository}\nBase: ${request.base}\nMerge base: ${request.mergeBase}\nHead: ${request.head}\nGroup change inventory (not per-batch scope): ${JSON.stringify(request.names)}\nRequested-base changed roots (null oid means absent): ${JSON.stringify(baseRoots)}\nContext contract: selected source sections are complete immutable Git blobs. Any JSON-pointer projection is explicitly labelled; all batches together supply the complete changed files; this batch supplies only its explicit ranges. Source roles are explicit; identical blobs are printed once. External packages and computed references are not silently treated as reviewed implementations.\n${upstreamHeader}External module references without upstream projection (use package.json versions; external code is not supplied): ${JSON.stringify(unprojected)}\nComputed module references (assess whether their targets need additional context): ${JSON.stringify(dynamic)}\n`
   const text = header + context.join('\n\n')
   return {
     files,
     context: text,
     identities,
     projections,
+    upstream,
+    secretFindings,
     metrics: {
       paths: paths.size,
       blobs: cached.size,
       bytesRead,
       contextChars: text.length,
       externalReferences: external.size,
+      upstreamFiles: upstream.length,
       computedReferences: dynamic.length
     }
   }
 }
-/** Trusted grouping rules supply non-import relationships without duplicating all governance in every batch. */
-export async function collectGroupedReview(request, reader, limits = {}, maxChars = 500000) {
-  const pluginNames = ['updater', 'workbench', 'taskflow', 'workspace']
-  const groups = new Map()
-  const add = (group, path) => {
-    if (!groups.has(group)) groups.set(group, new Set())
-    groups.get(group).add(path)
-  }
+/**
+ * Group changed files by the dependency graph: each group is a component (plugin package, runtime,
+ * governance) that executes or consumes the change, with its unchanged direct producers and
+ * consumers as context. A group whose complete context exceeds the budget is split along its
+ * dependency closure; context is never truncated.
+ */
+export async function collectGroupedReview(request, reader, limits = {}, maxChars = 500000, options = {}) {
   if (new Set(request.names).size !== request.names.length) throw new Error('Duplicate changed paths')
-  for (const path of request.names) {
-    reviewSourcePath(path)
-    if (
-      /^(?:scripts\/(?:review|release)-|test\/(?:review|release)-|docs\/github\/|\.github\/workflows\/)/.test(
-        path
-      )
-    )
-      add('governance', path)
-    else if (path === 'package-lock.json') add('dependency-lock', path)
-    else if (path.startsWith('packages/shared/')) {
-      for (const name of pluginNames) add(name, path)
-      add('runtime', path)
-    } else {
-      const plugin = pluginNames.find(
-        (name) => path.startsWith(`packages/dsh-px-${name}/`) || path.startsWith(`test/${name}-`)
-      )
-      add(plugin ?? (path.startsWith('test/') ? 'verification' : 'runtime'), path)
+  for (const path of request.names) reviewSourcePath(path)
+  if (!request.names.length) throw new Error('No reviewable changes')
+  const graph = options.graph ?? (await buildReviewGraph(reader, [request.head, request.mergeBase], limits))
+  graph.changedScripts ??= changedScriptTargets(graph, request.mergeBase, request.head)
+  const groups = new Map()
+  for (const path of request.names)
+    for (const group of reviewOwners(graph, path)) {
+      if (!groups.has(group)) groups.set(group, [])
+      groups.get(group).push(path)
     }
-  }
-  if (!groups.size) throw new Error('No reviewable changes')
-  const runtimeContracts = [
-    'scripts/stage-runtime.ts',
-    'scripts/verify-package.ts',
-    'src/main/index.ts',
-    'src/shared/runtime-integrity.ts',
-    'src/main/managed-plugins.ts',
-    'config/products.json'
-  ]
-  const snapshots = []
-  const files = new Map()
-  const batches = []
-  for (const [group, names] of groups) {
-    const contracts =
-      group === 'runtime'
-        ? runtimeContracts
-        : pluginNames.includes(group)
-          ? [
-              `packages/dsh-px-${group}/src/index.ts`,
-              `packages/dsh-px-${group}/src/client.tsx`,
-              ...(group === 'updater'
-                ? ['src/main/update-controller.ts', 'src/main/update-bridge.ts', 'src/main/index.ts']
-                : [])
-            ]
-          : []
-    const snapshot = await collectReviewContext({ ...request, names: [...names] }, reader, limits, contracts)
+  const snapshots = [],
+    files = new Map(),
+    batches = []
+  const collect = async (group, names) => {
+    // Producers (what the change calls) keep their full import closure; consumers (what calls the
+    // change) are supplied as complete files without pulling in their unrelated dependencies.
+    const changed = new Set(names)
+    // Only code the change executes is a producer; shared artifact names and mentions are peers.
+    const producer = (path) =>
+      names.some((name) =>
+        [...(graph.forward.get(name)?.get(path) ?? [])].some((kind) => EXECUTABLE_EDGES.has(kind))
+      )
+    const contracts = reviewContracts(graph, group, names).map((path) => ({
+      path,
+      reason: producer(path)
+        ? 'direct producer in the dependency graph'
+        : 'direct consumer in the dependency graph',
+      traverse: producer(path) || changed.has(path)
+    }))
+    const snapshot = await collectReviewContext({ ...request, names }, reader, limits, contracts, {
+      ...options,
+      graph
+    })
     const context =
       `Review contract group: ${group}\nAll changed paths in this request: ${JSON.stringify(request.names)}\nThis group inventory is for navigation, not per-batch approval scope. Do not assume another batch approved a missing dependency.\n` +
       snapshot.context
-    for (const file of snapshot.files) {
-      const previous = files.get(file.path)
-      if (previous && canonical(previous) !== canonical(file))
-        throw new Error('Changed source differs between groups')
-      files.set(file.path, file)
+    return { snapshot, context }
+  }
+  // Connected components of the changed files inside one group, over direct graph edges.
+  const components = (names) => {
+    const set = new Set(names),
+      seen = new Set(),
+      parts = []
+    for (const start of names) {
+      if (seen.has(start)) continue
+      const part = [],
+        queue = [start]
+      seen.add(start)
+      while (queue.length) {
+        const current = queue.shift()
+        part.push(current)
+        for (const map of [graph.forward.get(current), graph.reverse.get(current)])
+          for (const [next] of map ?? EMPTY)
+            if (set.has(next) && !seen.has(next)) {
+              seen.add(next)
+              queue.push(next)
+            }
+      }
+      parts.push(names.filter((path) => part.includes(path)))
     }
-    batches.push(
-      ...splitBatches(snapshot.files, context, maxChars).map((batch) => ({
-        ...batch,
-        id: `${group}-${batch.id}`,
-        group
-      }))
-    )
-    snapshots.push({ ...snapshot, group, context })
+    return parts
+  }
+  const plan = async (group, names, depth = 0) => {
+    const attempt = await collect(group, names)
+    try {
+      // Admission is decided by the real batch splitter, so the threshold is exact.
+      splitBatches(attempt.snapshot.files, attempt.context, maxChars)
+      return [{ group, names, ...attempt }]
+    } catch (error) {
+      if (!/budget/.test(String(error?.message))) throw error
+    }
+    const parts = components(names)
+    const split =
+      parts.length > 1
+        ? parts
+        : names.length > 1
+          ? [names.slice(0, Math.ceil(names.length / 2)), names.slice(Math.ceil(names.length / 2))]
+          : null
+    if (!split || depth > 12)
+      throw new Error(
+        `Review context exceeds batch budget for group ${group}: ${JSON.stringify(names.slice(0, 5))} needs ${attempt.context.length} context characters`
+      )
+    const result = []
+    for (const part of split) result.push(...(await plan(group, part, depth + 1)))
+    return result
+  }
+  for (const [group, names] of groups) {
+    const planned = await plan(group, names)
+    planned.forEach((item, index) => {
+      const id = planned.length > 1 ? `${group}.${index + 1}` : group
+      for (const file of item.snapshot.files) {
+        const previous = files.get(file.path)
+        if (previous && canonical(previous) !== canonical(file))
+          throw new Error('Changed source differs between groups')
+        files.set(file.path, file)
+      }
+      batches.push(
+        ...splitBatches(item.snapshot.files, item.context, maxChars).map((batch) => ({
+          ...batch,
+          id: `${id}-${batch.id}`,
+          group
+        }))
+      )
+      snapshots.push({ ...item.snapshot, group: id, context: item.context })
+    })
   }
   if (files.size !== request.names.length || request.names.some((path) => !files.has(path)))
     throw new Error('Review groups do not cover every changed file')
+  const secretFindings = [
+    ...new Map(
+      snapshots.flatMap((snapshot) => snapshot.secretFindings).map((finding) => [canonical(finding), finding])
+    ).values()
+  ]
   return {
     files: request.names.map((path) => files.get(path)),
     batches,
@@ -736,10 +1287,19 @@ export async function collectGroupedReview(request, reader, limits = {}, maxChar
     projections: snapshots.flatMap((snapshot) =>
       snapshot.projections.map((projection) => ({ ...projection, group: snapshot.group }))
     ),
+    upstream: snapshots.flatMap((snapshot) =>
+      snapshot.upstream.map((identity) => ({ ...identity, group: snapshot.group }))
+    ),
+    secretFindings,
     metrics: {
       groups: snapshots.length,
       contextChars: snapshots.reduce((sum, s) => sum + s.context.length, 0),
-      groupMetrics: snapshots.map((snapshot) => ({ group: snapshot.group, ...snapshot.metrics }))
+      graphUnresolved: graph.unresolved.length,
+      groupMetrics: snapshots.map((snapshot) => ({
+        group: snapshot.group,
+        changed: snapshot.files.length,
+        ...snapshot.metrics
+      }))
     }
   }
 }

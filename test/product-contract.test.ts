@@ -1,12 +1,14 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import products from '../config/products.json'
+import nativePack from '../config/native-pack.json'
+import nativeDesktop from '../config/native-desktop.json'
 import {
+  assertNativeHostPins,
   assertRuntimeProducts,
   validateProductCatalog,
   versionGeneration
 } from '../src/shared/product-contract'
-import { runtimeContentIdentity } from '../src/shared/runtime-identity'
 
 test('independent patches and prereleases retain the same generation', () => {
   const c = structuredClone(products)
@@ -25,14 +27,51 @@ test('independent patches and prereleases retain the same generation', () => {
   validateProductCatalog(next)
 })
 
-test('wrong Pack baseline, host, surfaces or runtime identity fail before activation', () => {
+test('the active products are official-derived on the pinned 0.2.0-rc.1 host', () => {
   validateProductCatalog(products)
+  assert.equal(products.desktop.architecture, 'official-derived')
+  assert.equal(products.desktop.hostVersion, '0.2.0-rc.1')
+  assert.deepEqual(products.pack.hostVersions, ['0.2.0-rc.1'])
+  // Not claimed until the unmodified official Desktop is verified with the same Pack.
+  assert.equal(products.pack.surfaces.includes('official-desktop'), false)
+  assertNativeHostPins(products, { pack: nativePack, desktop: nativeDesktop })
+})
+
+test('the retired legacy shell and unknown architectures are rejected', () => {
+  for (const architecture of ['legacy-shell', 'electron', '']) {
+    const c: any = structuredClone(products)
+    c.desktop.architecture = architecture
+    assert.throws(() => validateProductCatalog(c), /official-derived/)
+  }
+})
+
+test('native Pack, native Desktop and products must pin one host version and commit', () => {
+  const pins = () => ({ pack: structuredClone(nativePack), desktop: structuredClone(nativeDesktop) })
+  const wrongDesktop = pins()
+  wrongDesktop.desktop.version = '0.2.0-rc.2'
+  assert.throws(() => assertNativeHostPins(products, wrongDesktop), /different host versions/)
+  const wrongCommit = pins()
+  wrongCommit.pack.upstreamCommit = 'f'.repeat(40)
+  assert.throws(() => assertNativeHostPins(products, wrongCommit), /different upstream commits/)
+  const shortCommit = pins()
+  shortCommit.pack.upstreamCommit = shortCommit.desktop.commit = '4878cdab'
+  assert.throws(() => assertNativeHostPins(products, shortCommit), /exact upstream commits/)
+  const drifted = structuredClone(products)
+  drifted.desktop.hostVersion = '0.2.0-rc.2'
+  drifted.pack.hostVersions = ['0.2.0-rc.2']
+  assert.throws(() => assertNativeHostPins(drifted, pins()), /pinned native Desktop/)
+  const packOnly = structuredClone(products)
+  packOnly.pack.hostVersions = ['0.2.0-rc.1', '0.2.0-rc.2']
+  assertNativeHostPins(packOnly, pins())
+})
+
+test('wrong Pack baseline, host, surfaces or runtime identity fail before activation', () => {
   for (const mutate of [
     (c: typeof products) => {
       c.desktop.packVersion = '0.2.99'
     },
     (c: typeof products) => {
-      c.desktop.hostVersion = '0.2.0-rc.1'
+      c.desktop.hostVersion = '0.2.0-rc.9'
     },
     (c: typeof products) => {
       c.pack.dataSchemaVersion = 0
@@ -57,26 +96,4 @@ test('wrong Pack baseline, host, surfaces or runtime identity fail before activa
   assert.throws(() =>
     assertRuntimeProducts(substituted, products, products.desktop.version, products.desktop.hostVersion)
   )
-})
-
-test('Desktop-only changes do not migrate a profile; Pack or host changes do', () => {
-  validateProductCatalog(products)
-  const m = {
-    app: { version: products.desktop.version },
-    products,
-    platform: 'win32',
-    arch: 'x64',
-    profile: 'web',
-    node: { version: '24.16.0' },
-    dsh: { version: products.desktop.hostVersion },
-    integrity: { payload: 'same' }
-  }
-  const original = runtimeContentIdentity(m)
-  const desktop = structuredClone(m)
-  desktop.app.version = desktop.products.desktop.version = '0.2.9'
-  assert.equal(runtimeContentIdentity(desktop), original)
-  const pack = structuredClone(m)
-  pack.products.pack.version = pack.products.desktop.packVersion = '0.2.9'
-  assert.notEqual(runtimeContentIdentity(pack), original)
-  assert.notEqual(runtimeContentIdentity({ ...m, dsh: { version: '0.2.0-rc.1' } }), original)
 })

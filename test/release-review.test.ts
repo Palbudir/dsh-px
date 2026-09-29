@@ -10,11 +10,13 @@ const load = (name: string): Promise<any> => import(pathToFileURL(resolve('scrip
 const core = await load('review-core.mjs')
 const { publishReview, publishQuality, settleQuality } = await load('review-verify.mjs')
 const { trustedRun, qualityChanged, runTitle } = await load('review-trusted-ci.mjs')
-const { assertChecks, assertNewerVersion, releaseGate } = await load('release-gate.mjs')
+const { assertChecks, assertNewerVersion, assertLegacyLatest, releaseGate, LEGACY_LATEST_TAG } =
+  await load('release-gate.mjs')
+const releaseProducts = JSON.parse(readFileSync(resolve('config/products.json'), 'utf8'))
+const desktopTag = `desktop-v${releaseProducts.desktop.version}`
 const { compareVersions } = await load('release-version.mjs')
-const { codexConfigOverrides, outsideRepository } = await load('review-install.mjs')
-const { reviewEnvironment, codexArguments, runReviewBatch, command, downloadCommand } =
-  await load('review-process.mjs')
+const { outsideRepository } = await load('review-install.mjs')
+const { command, downloadCommand } = await load('review-process.mjs')
 const { APP_PERMISSIONS, appJwt, createAppClient, assertAppPermissions } = await load('review-app.mjs')
 const { acquireReviewLock } = await load('review-worker.mjs')
 const { validateCatalog } = await load('release-catalog.mjs')
@@ -64,7 +66,18 @@ function proof(extra = {}) {
       completedAt: Date.now(),
       requestRunId: 123,
       requestAttempt: 1,
-      reviewer: { cliVersion: 'fixture-cli', configurationDigest: 'e'.repeat(64) },
+      reviewer: {
+        provider: 'deepseek',
+        model: 'deepseek-flash',
+        baseUrl: 'https://api.deepseek.com',
+        configurationDigest: core.sha256(
+          core.canonical({
+            provider: 'deepseek',
+            model: 'deepseek-flash',
+            baseUrl: 'https://api.deepseek.com'
+          })
+        )
+      },
       verdict: 'pass',
       findings: [],
       blockers: [],
@@ -96,7 +109,7 @@ function workflow(kind = 'quality', extra = {}) {
     event: 'workflow_dispatch',
     head_branch: 'master',
     head_sha: base,
-    display_title: runTitle(kind, head, '0.1.0-beta.re.0.11'),
+    display_title: runTitle(kind, head, desktopTag),
     repository: { full_name: policy.repository },
     status: 'completed',
     conclusion: 'success',
@@ -177,15 +190,25 @@ function fixtureApi(options: any = {}) {
     if (route.includes('/compare/')) return { status: options.ancestry ?? 'ahead' }
     if (route.includes('/contents/package.json'))
       return {
-        content: Buffer.from(JSON.stringify({ name: 'dsh-px', version: '0.1.0-beta.re.0.11' })).toString(
-          'base64'
-        )
+        content: Buffer.from(
+          JSON.stringify({ name: 'dsh-px', version: releaseProducts.desktop.version })
+        ).toString('base64')
       }
+    if (route.includes('/contents/config/products.json'))
+      return { content: Buffer.from(JSON.stringify(options.products ?? releaseProducts)).toString('base64') }
     if (route.includes('/contents/'))
       return { content: Buffer.from(options.controllerSource ?? controllerSource).toString('base64') }
     if (route.endsWith('/commits/' + head))
       return { sha: head, commit: { tree: { sha: tree } }, parents: [{ sha: base }] }
-    if (route.includes('/releases')) return [{ tag_name: 'v0.1.0-beta.re.0.10.1', draft: false }]
+    if (route.endsWith('/releases/latest'))
+      return options.latest ?? { tag_name: 'v0.1.0-beta.re.0.11', prerelease: false, draft: false }
+    if (route.includes('/releases'))
+      return (
+        options.releases ?? [
+          { tag_name: 'v0.1.0-beta.re.0.11', draft: false },
+          { tag_name: 'v0.1.0-beta.re.0.10.1', draft: false }
+        ]
+      )
     throw new Error('Unexpected fixture API: ' + route)
   }
   return { api, created, checks }
@@ -205,6 +228,14 @@ test('signed reviews bind exact SHA, base, worker and reviewer; missing hashes a
     /stale/
   )
   assert.throws(() => core.verifyAttestation(proof({ filesDigest: '' }), policy), /identity/)
+  const reviewer = proof().payload.reviewer
+  for (const changed of [
+    { cliVersion: 'fixture-cli', configurationDigest: 'e'.repeat(64) },
+    { ...reviewer, model: 'other-model' },
+    { ...reviewer, baseUrl: 'http://api.deepseek.com' },
+    { ...reviewer, provider: undefined }
+  ])
+    assert.throws(() => core.verifyAttestation(proof({ reviewer: changed }), policy), /reviewer identity/)
 })
 test('all batches must complete; any P0/P1/P2 or missing context prevents a pass', () => {
   const batches = [
@@ -243,85 +274,6 @@ test('large sources are fully split; invalid UTF8, NUL and binary changes cannot
   assert.throws(() => core.decodeSource(Buffer.from([0xff, 0xfe, 0x41]), 'non-utf8.txt'))
   assert.throws(() => core.decodeSource(Buffer.from([0, 65]), 'binary.dat'), /Binary/)
   assert.equal(core.decodeSource(Buffer.from('\ufefftext'), 'bom.txt'), '\ufefftext')
-})
-test('a stale prior pass cannot replace this invocation failure or missing output', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'review-fresh-output-'))
-  const batch = core.splitBatches([{ path: 'fixture.ts', before: '', after: 'fixture' }], 'context')[0]
-  const passing = result(batch.id),
-    failing = result(batch.id, {
-      verdict: 'fail',
-      findings: [{ priority: 1, path: 'x', line: 1, title: 'Bug', detail: 'Broken' }]
-    })
-  writeFileSync(join(directory, 'one.json'), JSON.stringify(passing))
-  const finalTrace = (value: any) =>
-    JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: JSON.stringify(value) } }) +
-    '\n' +
-    JSON.stringify({ type: 'turn.completed' })
-  const config = { codex: 'fixture-only', codexOverrides: [], codexEnvKeys: [] },
-    request = { head, base }
-  try {
-    for (const invalid of [
-      { ...batch, scope: undefined },
-      { ...batch, scope: [] },
-      { ...batch, scope: [{ path: 'other.ts', before: [0, 0, 0], after: [0, 7, 7] }] },
-      { ...batch, text: batch.text + 'modified' },
-      { ...batch, id: 'wrong-digest' }
-    ]) {
-      await assert.rejects(
-        runReviewBatch(config, request, invalid, directory, async () => {
-          assert.fail('Malformed scope must be rejected before invoking reviewer')
-        }),
-        /Invalid or unbound review scope/
-      )
-    }
-    await assert.rejects(
-      runReviewBatch(config, request, batch, directory, async (_exe: string, args: string[]) => {
-        const output = args[args.indexOf('--output-last-message') + 1]
-        assert.notEqual(output, join(directory, 'one.json'))
-        return finalTrace(failing)
-      }),
-      /ENOENT/
-    )
-    await assert.rejects(
-      runReviewBatch(config, request, batch, directory, async (_exe: string, args: string[]) => {
-        writeFileSync(args[args.indexOf('--output-last-message') + 1], JSON.stringify(passing))
-        return finalTrace(failing)
-      }),
-      /does not match/
-    )
-    const value = await runReviewBatch(
-      config,
-      request,
-      batch,
-      directory,
-      async (_exe: string, args: string[]) => {
-        writeFileSync(args[args.indexOf('--output-last-message') + 1], JSON.stringify(failing))
-        return finalTrace(failing)
-      }
-    )
-    assert.equal(value.verdict, 'fail')
-  } finally {
-    rmSync(directory, { recursive: true, force: true })
-  }
-})
-test('configuration preserves selected model/endpoint while excluding hooks, plugins and GitHub auth', () => {
-  const config = codexConfigOverrides(
-    'model = "configured-model"\nmodel_provider = "proxy"\nnotify = ["untrusted"]\n[model_providers.proxy]\nname = "Configured"\nbase_url = "https://example.invalid/v1"\nwire_api = "responses"\nenv_key = "MODEL_TOKEN"\n[plugins.any]\nenabled = true'
-  )
-  assert.ok(config.codexOverrides.includes('model="configured-model"'))
-  assert.ok(config.codexOverrides.includes('model_providers.proxy.base_url="https://example.invalid/v1"'))
-  assert.ok(!config.codexOverrides.some((v: string) => /notify|plugins/.test(v)))
-  assert.deepEqual(
-    reviewEnvironment(
-      { GH_TOKEN: 'hidden', GITHUB_TOKEN: 'hidden', MODEL_TOKEN: 'fixture', SYSTEMROOT: 'system' },
-      config.codexEnvKeys
-    ),
-    { MODEL_TOKEN: 'fixture', SYSTEMROOT: 'system' }
-  )
-  const args = codexArguments(config, 'working', 'out', 'schema')
-  assert.ok(
-    args.includes('--ephemeral') && args.includes('--ignore-user-config') && args.includes('read-only')
-  )
 })
 test('trusted installation boundary rejects dot-prefixed descendants as well as ordinary children', () => {
   const root = mkdtempSync(join(tmpdir(), 'review-boundary-'))
@@ -477,16 +429,20 @@ test('App JWT and installation token stay inside the local client and request no
     rmSync(directory, { recursive: true, force: true })
   }
 })
-test('local release gate binds protected HEAD, signed App checks, latest trusted CI, build and increasing version', async () => {
+test('local release gate binds protected HEAD, signed App checks, latest trusted CI, product build and version', async () => {
+  const version = releaseProducts.desktop.version
   const input = {
-    version: '0.1.0-beta.re.0.11',
-    tag: 'refs/tags/v0.1.0-beta.re.0.11',
+    product: 'desktop',
+    version,
+    tag: `refs/tags/${desktopTag}`,
     head,
     policy,
     buildRunId: 92,
     api: fixtureApi().api
   }
-  assert.equal((await releaseGate(input)).build.runId, 92)
+  const gate = await releaseGate(input)
+  assert.equal(gate.build.runId, 92)
+  assert.equal(gate.tag, desktopTag)
   await assert.rejects(
     releaseGate({ ...input, api: fixtureApi({ branchHead: base }).api }),
     /current protected/
@@ -499,65 +455,95 @@ test('local release gate binds protected HEAD, signed App checks, latest trusted
     releaseGate({ ...input, api: fixtureApi({ build: workflow('build', { head_branch: 'feature' }) }).api }),
     /Untrusted/
   )
-  assert.throws(() => assertNewerVersion(input.version, [{ tag_name: 'v' + input.version }]), /not newer/)
+  // A build run for the other product (different run-name) cannot authorize this release.
+  await assert.rejects(
+    releaseGate({
+      ...input,
+      api: fixtureApi({
+        build: workflow('build', { display_title: runTitle('build', head, `pack-v${version}`) })
+      }).api
+    }),
+    /Untrusted/
+  )
+  for (const tag of [`refs/tags/v${version}`, `refs/tags/pack-v${version}`, `desktop-v${version}`])
+    await assert.rejects(releaseGate({ ...input, tag }), /exact product version tag/)
+  await assert.rejects(releaseGate({ ...input, version: '0.2.99' }), /tag|reviewed desktop version/)
+  const legacy = structuredClone(releaseProducts)
+  legacy.desktop.architecture = 'legacy-shell'
+  await assert.rejects(
+    releaseGate({ ...input, api: fixtureApi({ products: legacy }).api }),
+    /official-derived/
+  )
+  await assert.rejects(
+    releaseGate({
+      ...input,
+      api: fixtureApi({ latest: { tag_name: `desktop-v0.2.0-alpha.0`, prerelease: true } }).api
+    }),
+    /GitHub Latest must remain/
+  )
+  await assert.rejects(
+    releaseGate({ ...input, api: fixtureApi({ releases: [{ tag_name: desktopTag, draft: false }] }).api }),
+    /not newer/
+  )
   assert.ok(compareVersions('0.1.0-beta.re.0.10.1', '0.1.0-beta.re.0.10') > 0)
   assert.ok(compareVersions('1.0.0', '1.0.0-rc.99') > 0)
 })
+
+test('versions are monotonic per product prefix; history tags and drafts are not compared', () => {
+  const history = [
+    { tag_name: 'v0.1.0-beta.re.0.11', draft: false },
+    { tag_name: 'v9.9.9', draft: false },
+    { tag_name: 'pack-v0.2.0-alpha.3', draft: false },
+    { tag_name: 'desktop-v0.2.0-alpha.1', draft: false },
+    { tag_name: 'desktop-v0.2.0-alpha.9', draft: true }
+  ]
+  assertNewerVersion('desktop', '0.2.0-alpha.2', history)
+  assertNewerVersion('pack', '0.2.0-alpha.4', history)
+  assert.throws(() => assertNewerVersion('desktop', '0.2.0-alpha.1', history), /not newer/)
+  assert.throws(() => assertNewerVersion('pack', '0.2.0-alpha.2', history), /not newer/)
+  assert.throws(
+    () => assertNewerVersion('pack', '0.2.1', [{ tag_name: 'pack-vbroken', draft: false }]),
+    /invalid tag/
+  )
+})
+
+test('the legacy Latest release must stay the unchanged legacy-shell prerelease-free tag', () => {
+  assert.equal(LEGACY_LATEST_TAG, 'v0.1.0-beta.re.0.11')
+  assertLegacyLatest({ tag_name: LEGACY_LATEST_TAG, prerelease: false, draft: false })
+  for (const latest of [
+    null,
+    { tag_name: 'desktop-v0.2.0-alpha.1', prerelease: true },
+    { tag_name: 'pack-v0.2.0-alpha.1', prerelease: false },
+    { tag_name: LEGACY_LATEST_TAG, prerelease: true }
+  ])
+    assert.throws(() => assertLegacyLatest(latest), /GitHub Latest must remain/)
+})
+
 test('release archives reject traversal and payload identities fail before any publication', () => {
   assert.deepEqual(
-    archiveMemberNames('Path = archive.zip\nPath = release-manifest.json\nPath = latest.yml', 'archive.zip'),
-    ['release-manifest.json', 'latest.yml']
+    archiveMemberNames(
+      'Path = archive.zip\nPath = release-manifest.json\nPath = artifact.json',
+      'archive.zip'
+    ),
+    ['release-manifest.json', 'artifact.json']
   )
   assert.throws(
     () => archiveMemberNames('Path = archive.zip\nPath = ../signing-key.pem', 'archive.zip'),
     /unsafe/
   )
   assert.throws(
+    () => archiveMemberNames('Path = a.zip\nPath = artifact.json\nSymbolic Link = secret', 'a.zip'),
+    /links/
+  )
+  assert.throws(
     () =>
       verifyReleaseFiles(
         'unused',
         { schemaVersion: 1, head, version: '1.0.0', files: [] },
-        { head, version: '1.0.0', controllerSha: base }
+        { product: 'pack', head, version: '1.0.0', controllerSha: base }
       ),
     /identity/
   )
-})
-
-test('release metadata must exactly address the verified installer, not merely mention its values', () => {
-  const directory = mkdtempSync(join(tmpdir(), 'release-metadata-'))
-  const version = '1.0.0',
-    exe = 'DSH-PX-Setup-1.0.0.exe',
-    bytes = Buffer.from('synthetic installer')
-  const digest = createHash('sha512').update(bytes).digest('base64')
-  const yml = `version: "1.0.0"\nfiles:\n  - url: "${exe}"\n    sha512: ${digest}\n    size: ${bytes.length}\npath: "${exe}"\nsha512: ${digest}\nreleaseDate: "2026-09-24T00:00:00.000Z"\n`
-  try {
-    writeFileSync(join(directory, exe), bytes)
-    writeFileSync(join(directory, exe + '.blockmap'), 'fixture blockmap')
-    writeFileSync(join(directory, 'DSH-PX-1.0.0-win.zip'), 'fixture zip')
-    writeFileSync(join(directory, 'latest.yml'), yml)
-    const manifest = () => ({
-      schemaVersion: 1,
-      head,
-      version,
-      controllerSha: base,
-      files: [exe, exe + '.blockmap', 'DSH-PX-1.0.0-win.zip', 'latest.yml'].map((name) => {
-        const content = readFileSync(join(directory, name))
-        return { name, size: content.length, sha256: core.sha256(content) }
-      })
-    })
-    assert.equal(verifyReleaseFiles(directory, manifest(), { head, version, controllerSha: base }).length, 4)
-    writeFileSync(join(directory, 'latest.yml'), yml + 'path: "wrong.exe"\n')
-    assert.throws(
-      () => verifyReleaseFiles(directory, manifest(), { head, version, controllerSha: base }),
-      /metadata/
-    )
-    assert.throws(
-      () => archiveMemberNames('Path = a.zip\nPath = latest.yml\nSymbolic Link = secret', 'a.zip'),
-      /links/
-    )
-  } finally {
-    rmSync(directory, { recursive: true, force: true })
-  }
 })
 test('process failure, timeout and bounded binary download cannot produce success', async () => {
   await assert.rejects(command(process.execPath, ['-e', 'process.exit(7)']), /failed/)

@@ -12,70 +12,15 @@ import { fileURLToPath } from 'node:url'
 import { generateKeyPairSync, createPublicKey } from 'node:crypto'
 import { command } from './review-process.mjs'
 import { canonical, sha256, sourceDigest } from './review-core.mjs'
+import { modelSettings } from './review-model.mjs'
 import {
   copyReviewParserPayload,
   preflightReviewParserDestination,
   readLockedParserSource
 } from './review-parser.mjs'
 
-/** Import only model/transport fields; never hooks, MCP servers, plugins, rules, or literal secrets. */
-export function codexConfigOverrides(source) {
-  const globalKeys = new Set([
-    'model',
-    'model_provider',
-    'model_reasoning_effort',
-    'model_context_window',
-    'model_auto_compact_token_limit',
-    'service_tier'
-  ])
-  const providerKeys = new Set([
-    'name',
-    'base_url',
-    'wire_api',
-    'env_key',
-    'requires_openai_auth',
-    'request_max_retries',
-    'stream_max_retries',
-    'stream_idle_timeout_ms',
-    'supports_websockets'
-  ])
-  const selected = /^model_provider\s*=\s*["']([^"']+)["']/m.exec(source)?.[1]
-  const overrides = [],
-    envKeys = []
-  let table = '',
-    providerSeen = false,
-    modelSeen = false
-  for (const raw of source.split(/\r?\n/)) {
-    const line = raw.trim()
-    if (!line || line.startsWith('#')) continue
-    if (line.startsWith('[')) {
-      table = line
-      continue
-    }
-    const match = /^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.+)$/.exec(line)
-    if (!match) continue
-    const [, key, value] = match
-    const providerTable =
-      selected && (table === `[model_providers.${selected}]` || table === `[model_providers."${selected}"]`)
-    if ((!table && globalKeys.has(key)) || (providerTable && providerKeys.has(key))) {
-      if (!/^(?:"(?:[^"\\]|\\.)*"|'[^']*'|true|false|[0-9]+)$/.test(value))
-        throw new Error(
-          `Unsupported model configuration syntax for ${key}; use a single literal without inline comments`
-        )
-      if (key === 'model') modelSeen = true
-      if (providerTable) providerSeen = true
-      if (key === 'env_key') envKeys.push(value.slice(1, -1))
-      overrides.push(`${providerTable ? `model_providers.${selected}.` : ''}${key}=${value}`)
-    } else if (providerTable && /token|header|key/i.test(key)) {
-      throw new Error(
-        'Selected provider uses non-importable inline authentication; configure an environment reference before installing the review worker'
-      )
-    }
-  }
-  if (!modelSeen || (selected && selected !== 'openai' && !providerSeen))
-    throw new Error('Configured model/provider could not be preserved')
-  return { codexOverrides: overrides, codexEnvKeys: envKeys }
-}
+/** Trusted worker scripts: review/release controllers plus the zero-dependency secret scanner. */
+export const INSTALLED_SCRIPT = /^(?:(?:review|release)-[\w-]+|check-secrets)\.mjs$/
 export function installationDigest(files) {
   return sha256(canonical(files))
 }
@@ -97,6 +42,8 @@ async function main() {
   const root = resolve(args.directory)
   if (!outsideRepository(source, root))
     throw new Error('Trusted worker cannot be installed inside the repository')
+  // Explicit model arguments are validated before any filesystem mutation.
+  modelSettings({ model: args.model, baseUrl: args['base-url'], apiKeyEnv: args['api-key-env'] })
   // A bad dependency must leave an existing installation and its keys untouched.
   const parserSource = readLockedParserSource(source)
   preflightReviewParserDestination(root)
@@ -111,13 +58,16 @@ async function main() {
     : {}
   const resolveExe = async (name) =>
     (await command('where.exe', [name])).split(/\r?\n/).find((path) => path.toLowerCase().endsWith('.exe'))
-  const codex = args.codex ?? (await resolveExe('codex')),
-    git = args.git ?? (await resolveExe('git')),
+  // Only the variable NAME is stored; the key value stays in the user's environment.
+  const model = modelSettings({
+    model: args.model ?? previous.model?.model,
+    baseUrl: args['base-url'] ?? previous.model?.baseUrl,
+    apiKeyEnv: args['api-key-env'] ?? previous.model?.apiKeyEnv
+  })
+  const git = args.git ?? (await resolveExe('git')),
     gh = args.gh ?? (await resolveExe('gh'))
-  if (![codex, git, gh].every((path) => path && isAbsolute(path) && existsSync(path)))
-    throw new Error('Codex, Git and gh must resolve to installed absolute executable paths')
-  const authHome = process.env.CODEX_HOME ?? join(process.env.USERPROFILE ?? process.env.HOME, '.codex')
-  const imported = codexConfigOverrides(readFileSync(join(authHome, 'config.toml'), 'utf8'))
+  if (![git, gh].every((path) => path && isAbsolute(path) && existsSync(path)))
+    throw new Error('Git and gh must resolve to installed absolute executable paths')
   const publisher = JSON.parse(await command(gh, ['api', 'user'])).login
   if (previous.publisher && previous.publisher !== publisher)
     throw new Error('Existing trusted publisher differs from the current gh identity')
@@ -154,16 +104,15 @@ async function main() {
     .toString()
   const keyId = sha256(publicKey).slice(0, 24)
   const files = {}
-  for (const filename of readdirSync(join(source, 'scripts')).filter((name) =>
-    /^(?:review|release)-[\w-]+\.mjs$/.test(name)
-  )) {
+  // The upstream contract lock lives inside review-upstream.mjs and the secret rules inside
+  // check-secrets.mjs, so both are bound by the installed file digests and workerDigest.
+  for (const filename of readdirSync(join(source, 'scripts')).filter((name) => INSTALLED_SCRIPT.test(name))) {
     const from = join(source, 'scripts', filename)
     files[filename] = sha256(readFileSync(from))
     copyFileSync(from, join(root, filename))
   }
   Object.assign(files, copyReviewParserPayload(parserSource, root))
   const workerDigest = installationDigest(files)
-  const cliVersion = await command(codex, ['--version'])
   writeFileSync(join(root, 'installation.json'), JSON.stringify({ files, workerDigest }, null, 2))
   writeFileSync(
     join(root, 'worker.json'),
@@ -174,17 +123,14 @@ async function main() {
         repository: 'Palbudir/dsh-px',
         branch: 'master',
         publisher,
-        codex,
         git,
         gh,
         sevenZip: args['seven-zip'] ?? previous.sevenZip ?? 'C:/Program Files/7-Zip/7z.exe',
         githubApp,
-        authHome,
         keyId,
         workerDigest,
-        cliVersion,
-        timeoutMs: 900000,
-        ...imported
+        model,
+        timeoutMs: 900000
       },
       null,
       2
@@ -220,7 +166,13 @@ async function main() {
           'scripts/release-package.mjs',
           'scripts/release-version.mjs',
           'scripts/release-quality.mjs',
-          'scripts/release-catalog.mjs'
+          'scripts/release-catalog.mjs',
+          // Executed from the candidate checkout by the Pack/Desktop build jobs.
+          'scripts/release-gate.mjs',
+          'scripts/build-native-pack.ts',
+          'scripts/prepare-native-desktop.mjs',
+          'scripts/brand-native-installer.mjs',
+          'scripts/brand-installer-images.ps1'
         ].map((path) => [path, sourceDigest(readFileSync(join(source, path)))])
       )
     },
@@ -233,6 +185,9 @@ async function main() {
       publicPolicy: join(root, 'public-policy.json'),
       workerDigest,
       publisher,
+      model: { provider: model.provider, model: model.model, baseUrl: model.baseUrl },
+      apiKeyEnv: model.apiKeyEnv,
+      apiKeyPresent: Boolean(process.env[model.apiKeyEnv]?.trim()),
       note: 'Worker was not started; review and commit the public policy, then configure trusted workflows and required checks.'
     })
   )

@@ -1,53 +1,49 @@
 # DSH-PX
 
-DSH-PX 是面向 Windows 本机工作的 Agent 工作台，基于 DeepSeek Harness（DSH）的原生插件架构。它把模型、文件、终端、会话、执行记录和产物组织到同一个桌面应用中。
+DSH-PX 是面向 Windows 本机工作的 Agent 工作能力，基于 DeepSeek Harness（DSH）的原生插件架构。它由两个独立发布的产品组成：
+
+- **DSH-PX Pack**：原生 DSH 插件整合包，提供会话标签、执行记录、产物、批注、定时任务和运行诊断，可在 `dsh web` 与 PX Desktop 中使用。
+- **DSH-PX Desktop**：以锁定版本的官方 Desktop 源码为基础构建的 Windows 客户端，首次启动自动安装同版本 Pack。
 
 > 本项目为第三方客户端，与深度求索（DeepSeek）无从属、合作或授权关系。品牌与依赖说明见 [NOTICE.md](NOTICE.md)。
 
 ## 使用
 
-从 [GitHub Releases](https://github.com/Palbudir/dsh-px/releases) 获取已发布安装包。应用随附 Node 与 DSH；模型访问需要自行配置提供商和凭据，具体项目仍可能需要 Git、包管理器或语言运行环境。
+从 [GitHub Releases](https://github.com/Palbudir/dsh-px/releases) 获取已发布的预览版本：`desktop-v<版本>` 为 Desktop 安装程序，`pack-v<版本>` 为 Pack 归档。模型访问需要自行配置提供商和凭据，具体项目仍可能需要 Git、包管理器或语言运行环境。
 
-1. 打开 DSH-PX，在模型设置中配置提供商与模型。
+1. 安装并打开 DSH-PX Desktop，按欢迎页配置模型提供商。
 2. 添加本机项目文件夹，新建会话并描述任务。
 3. 按提示审阅工具权限，在文件、终端、执行记录及文件变动面板检查结果。
 
-**设置 → 运行与帮助** 显示服务、依赖和网页读取诊断。通过托盘的“在浏览器中打开”连接同一个服务，使用应用提供的鉴权入口。
+Pack 也可以通过原生插件管理器安装到 `dsh web`。**设置 → 运行与帮助**显示当前连接、依赖和网页读取诊断；**设置 → DSH-PX 版本**显示 Pack 版本并检查签名更新清单。
 
-## 工作能力
+## 与旧客户端的关系
 
-- 会话标签：切换、固定、关闭与恢复最近关闭的标签。关闭标签不会取消任务。
-- 文件与终端：复用 DSH 和侧栏插件的文件查看、编辑、命令执行及文件变动视图。
-- 执行记录：按会话查看工具状态，按需读取历史输出。工具正常返回不等于测试通过。
-- 产物与引用：查看明确交付的文件，从会话正文保存批注，确认后加入输入框。
-- 后台任务：沿用 DSH 的子 Agent、后台命令与完成通知机制。
-- 定时任务：向指定会话排队投递保存的要求；服务停止时不执行。
-
-能力分工与使用边界见 [当前状态](docs/STATUS.md)。产品标准见 [PRODUCT.md](docs/PRODUCT.md)，后续优先项统一在 [ROADMAP.md](docs/ROADMAP.md)。
+旧版 DSH-PX（`v0.1.0-beta.re.*`）是另一套已停止开发的 Electron 外壳，继续按原方式使用，不会收到新产品的更新。新 Desktop 使用独立的应用身份、安装目录和数据目录（`%USERPROFILE%\.dsh-px`），两者可以并行安装。历史版本与资产保持不变。
 
 ## 更新与数据
 
-在 **设置 → 版本与更新** 检查更新。更新下载与安装分开；安装、重启或退出会影响连接同一服务的全部页面。遇到活动任务时，按桌面提示等待或明确中止。
+Desktop 通过签名更新清单检查新版本；更新只选择完整安装包，不使用差分下载。Pack 更新只做提示，在插件管理器中安装新版本后按提示重启服务。
 
-模型、会话与插件业务数据保存在用户数据目录。通过设置中的目录入口查看实际位置并备份；不要将凭据、会话或项目文件放入发布包。卸载程序可选择是否删除应用数据，删除前应另行备份。
+模型、会话与插件业务数据保存在用户数据目录。卸载 Desktop 时始终保留 `%USERPROFILE%\.dsh-px`，安装器不提供删除选项；需要清理时请先备份后手动处理。不要将凭据、会话或项目文件放入发布包。
 
 ## 开发
 
-需要 Node 24 或更新的兼容版本、npm 和 Git。运行时装配按锁定清单准备 DSH 与插件，可能需要联网下载。
+需要 Node 24 或更新的兼容版本、npm 和 Git。
 
 ```powershell
 npm ci
-npm run stage -- --with-plugins
-npm run dev
+npm run build
+npm run test
 ```
 
-开发入口默认使用隔离数据目录。提交与测试见 [CONTRIBUTING.md](CONTRIBUTING.md)，运行时结构见 [PACKAGING.md](docs/PACKAGING.md)，发布门禁见 [RELEASING.md](docs/RELEASING.md)。
+提交与检查见 [CONTRIBUTING.md](CONTRIBUTING.md)，产品与版本边界见 [EDITIONS.md](docs/EDITIONS.md)，构建结构见 [PACKAGING.md](docs/PACKAGING.md)，发布门禁见 [RELEASING.md](docs/RELEASING.md)。
 
 ## 范围
 
-当前面向 Windows 本机使用，不承诺跨平台安装、远程多人服务或云端常驻。应用未签名时，系统可能要求确认安装。用户自行添加的第三方插件可能需要 pnpm、网络或额外运行环境。
+当前面向 Windows 本机使用，不承诺跨平台安装、远程多人服务或云端常驻。安装程序未进行 Authenticode 签名，系统可能要求确认安装；更新清单另有 PX 的 Ed25519 签名，两者不是同一种签名。用户自行添加的第三方插件可能需要 pnpm、网络或额外运行环境。
 
-DSH 核心与选定插件随整合包验证后更新。上游版本提示仅供参考，不代表当前整合包已经支持独立替换核心。文件版本保护、工具权限与原生网络限制仍由 DSH 执行。
+旧 Pack 中的社区插件 dshmarket、dsh-mermaid-render 与 dsh-find-plugin 首发不随 Pack 提供，后续逐个迁移到原生宿主接口；需要时可通过官方插件管理器自行安装。文件版本保护、工具权限与原生网络限制仍由 DSH 执行。
 
 ## 许可证
 

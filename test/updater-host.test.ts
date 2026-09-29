@@ -78,36 +78,6 @@ test('插件宿主半边：导出面完整（dsh loader 按这些名字认插件
   assert.equal(typeof mod.DEFAULTS.registerTool, 'boolean')
 })
 
-test('外壳：触发安装必须是**静默**的，否则会弹出 NSIS 向导', () => {
-  // NsisUpdater adds /S only for isSilent=true; the desktop requests restart after installation.
-  const main = readFileSync(resolve(process.cwd(), 'src', 'main', 'update-controller.ts'), 'utf8')
-
-  // Only inspect calls in code, excluding explanatory comments.
-  const code = main
-    .split('\n')
-    .filter((line) => {
-      const t = line.trim()
-      return !t.startsWith('//') && !t.startsWith('*') && !t.startsWith('/*')
-    })
-    .join('\n')
-
-  const calls = [...code.matchAll(/quitAndInstall\s*\(([^)]*)\)/g)].map((m) => m[1].trim())
-  assert.ok(calls.length > 0, '应当存在 quitAndInstall 调用')
-
-  for (const args of calls) {
-    const parts = args.split(',').map((s) => s.trim())
-    assert.equal(
-      parts[0],
-      'true',
-      `quitAndInstall 的第一个参数必须是 true（静默）。实际：(${args})。` +
-        '传 false 会让安装器不带 /S，从而弹出 NSIS 安装向导。'
-    )
-  }
-
-  // 我们自己触发安装的那条路径应当同时要求装完重启。
-  assert.match(code, /quitAndInstall\(true,\s*true\)/, '触发安装时应传 (true, true)：静默安装 + 装完自动重启')
-})
-
 test('插件：客户端半边与宿主半边的路由前缀保持一致', () => {
   const clientSrc = readFileSync(join(PKG, 'src', 'client.tsx'), 'utf8')
   const host = readFileSync(HOST, 'utf8')

@@ -8,7 +8,6 @@ import {
   type Event
 } from '../packages/dsh-px-taskflow/src/evidence'
 import { apply, readFailure } from '../packages/dsh-px-taskflow/src/index'
-import { desktopCheckLabel } from '../packages/dsh-px-updater/src/client-data'
 const start = (id: string, tool: string, seq: number, args = {}): Event => ({
   seq,
   time: seq * 100,
@@ -340,12 +339,4 @@ test('读取错误类型和 HTTP 查询参数明确，未知执行不误报会�
   assert.equal((await request('evidence', 'sessionId=live&callId=a&offset=3&maxChars=4')).data.output, '3456')
   assert.equal((await request('evidence', 'sessionId=live&callId=missing')).data.code, 'EVIDENCE_NOT_FOUND')
   assert.equal((await request('review', 'sessionId=missing')).data.code, 'SESSION_NOT_FOUND')
-})
-
-test('桌面检查完成不再同时显示尚未检查；历史时间不会冒充本次结果', () => {
-  const shell = { phase: 'idle', version: '0.1.0-beta.re.0.7', lastCheckedAt: new Date().toISOString() }
-  assert.equal(desktopCheckLabel(shell, false), 'upToDate')
-  assert.equal(desktopCheckLabel({ ...shell, version: null }, false), 'notChecked')
-  assert.equal(desktopCheckLabel(shell, true), 'shellDisconnected')
-  assert.equal(desktopCheckLabel({ ...shell, phase: 'error' }, false), 'checkFailed')
 })

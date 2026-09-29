@@ -1,5 +1,6 @@
 name: release-build
-run-name: dsh-px-build:${{ inputs.head }}:${{ inputs.version }}
+# The run name binds the exact source commit and one product tag; the release gate verifies it.
+run-name: dsh-px-build:${{ inputs.head }}:${{ inputs.release }}
 
 on:
   workflow_dispatch:
@@ -8,24 +9,37 @@ on:
         description: Exact candidate commit SHA
         required: true
         type: string
-      version:
-        description: Candidate package version
+      release:
+        description: Product tag, desktop-v<version> or pack-v<version>
         required: true
         type: string
 
 permissions:
   contents: read
 
+concurrency:
+  group: release-build-${{ inputs.head }}-${{ inputs.release }}
+  cancel-in-progress: false
+
+env:
+  DSH_TELEMETRY_DISABLED: '1'
+
 jobs:
-  build:
-    if: github.ref == 'refs/heads/master'
-    runs-on: windows-latest
+  pack:
+    if: github.ref == 'refs/heads/master' && startsWith(inputs.release, 'pack-v')
+    runs-on: windows-2025
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - name: Validate candidate identity
-        shell: pwsh
         env:
           BUILD_HEAD: ${{ inputs.head }}
-        run: if ($env:BUILD_HEAD -notmatch '^[a-f0-9]{40}$') { throw 'Exact SHA required' }
+          BUILD_RELEASE: ${{ inputs.release }}
+        run: |
+          if ($env:BUILD_HEAD -notmatch '^[a-f0-9]{40}$') { throw 'Exact SHA required' }
+          if ($env:BUILD_RELEASE -notmatch '^pack-v[0-9A-Za-z.+-]+$') { throw 'pack-v<version> required' }
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -40,23 +54,20 @@ jobs:
         with:
           node-version: '24'
           package-manager-cache: false
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: 10
-      - name: Install package inspection tools
-        run: choco install 7zip -y --no-progress
+      - name: Secret scan of the candidate
+        working-directory: candidate
+        run: node scripts/check-secrets.mjs
       - name: Install locked candidate dependencies
         working-directory: candidate
         run: npm ci
-      - name: Build and inspect without publication credentials
+      - name: Quality gates and clean release Pack
         working-directory: candidate
         env:
           BUILD_HEAD: ${{ inputs.head }}
-          BUILD_VERSION: ${{ inputs.version }}
-        run: node ../controller/scripts/release-package.mjs
+          BUILD_RELEASE: ${{ inputs.release }}
+        run: node ../controller/scripts/release-package.mjs pack "--out=$env:RUNNER_TEMP/release-artifacts"
       - name: Verify candidate remains unchanged
         working-directory: candidate
-        shell: pwsh
         env:
           BUILD_HEAD: ${{ inputs.head }}
         run: |
@@ -67,7 +78,178 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ inputs.head }}-${{ github.run_attempt }}
-          path: candidate/dist/release-artifacts/*
+          path: ${{ runner.temp }}/release-artifacts/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+  desktop:
+    if: github.ref == 'refs/heads/master' && startsWith(inputs.release, 'desktop-v')
+    # Pinned image; if its compiler rejects the official /W4 /WX helper, fall back to windows-2022.
+    runs-on: windows-2025
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      UPSTREAM_REPOSITORY: deepseek-ai/deepseek-harness
+      # Must equal config/native-desktop.json "commit"; the job re-checks it.
+      UPSTREAM_COMMIT: 4878cdabd87d4041bdaff61d04c966883b9fd07a
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      DSH_DESKTOP_TARGET_PLATFORM: win32
+      DSH_DESKTOP_TARGET_ARCH: x64
+      DSH_DESKTOP_APP_ID: com.palbudir.dshpx.desktop
+      DSH_DESKTOP_UNSIGNED: '1'
+      # DSH_PX_DIRECTORY_PROBE is never set: this job runs the official installer preparation.
+    steps:
+      - name: Validate candidate identity
+        env:
+          BUILD_HEAD: ${{ inputs.head }}
+          BUILD_RELEASE: ${{ inputs.release }}
+        run: |
+          if ($env:BUILD_HEAD -notmatch '^[a-f0-9]{40}$') { throw 'Exact SHA required' }
+          if ($env:BUILD_RELEASE -notmatch '^desktop-v[0-9A-Za-z.+-]+$') { throw 'desktop-v<version> required' }
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: controller
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.head }}
+          path: candidate
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.UPSTREAM_REPOSITORY }}
+          ref: ${{ env.UPSTREAM_COMMIT }}
+          path: upstream
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify pins and toolchain
+        env:
+          BUILD_HEAD: ${{ inputs.head }}
+        run: |
+          if ((git -C candidate rev-parse HEAD) -ne $env:BUILD_HEAD) { throw 'Candidate checkout mismatch' }
+          if ((git -C upstream rev-parse HEAD) -ne $env:UPSTREAM_COMMIT) { throw 'Upstream checkout mismatch' }
+          $pin = Get-Content candidate/config/native-desktop.json -Raw | ConvertFrom-Json
+          if ($pin.commit -ne $env:UPSTREAM_COMMIT) { throw 'Workflow pin differs from config/native-desktop.json' }
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio/Installer/vswhere.exe'
+          $vs = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vs) { throw 'Runner lacks VC x86/x64 tools' }
+          "Visual Studio: $vs"
+          & $vswhere -latest -products '*' -property catalog_productDisplayVersion
+          Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\Include" -Name
+      # Upstream CI enables this for symlink support on Windows.
+      - name: Enable Developer Mode
+        run: reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" /t REG_DWORD /f /v "AllowDevelopmentWithoutDevLicense" /d "1"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '24'
+          package-manager-cache: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+        with:
+          version: 11.7.0
+
+      # ---- DSH-PX: quality gates and the exact release Pack embedded in Desktop ----
+      - name: Secret scan of the candidate
+        working-directory: candidate
+        run: node scripts/check-secrets.mjs
+      - name: Install locked candidate dependencies
+        working-directory: candidate
+        run: npm ci
+      - name: Quality gates and clean release Pack
+        working-directory: candidate
+        env:
+          BUILD_HEAD: ${{ inputs.head }}
+          BUILD_RELEASE: ${{ inputs.release }}
+        run: node ../controller/scripts/release-package.mjs desktop-pack "--out=$env:RUNNER_TEMP/px-pack"
+
+      # ---- Official source: the win32 unsigned sequence of apps/desktop/scripts/package-target.ts ----
+      - name: Install upstream (immutable)
+        working-directory: upstream
+        run: pnpm install --frozen-lockfile
+      - name: Build official
+        working-directory: upstream
+        run: pnpm run build:official
+      - name: Pack first-party closures
+        working-directory: upstream
+        run: |
+          $packed = 'apps/desktop/.desktop-build/targets/win-x64/packed'
+          pnpm run release:pack --family dsh --out "$packed/dsh"
+          if ($LASTEXITCODE -ne 0) { throw 'release:pack dsh failed' }
+          pnpm --dir apps/desktop-host pack --pack-destination "$PWD/$packed/dsh"
+          if ($LASTEXITCODE -ne 0) { throw 'desktop-host pack failed' }
+          pnpm run release:pack --family vendor --out "$packed/vendor"
+          if ($LASTEXITCODE -ne 0) { throw 'release:pack vendor failed' }
+          New-Item -ItemType Directory -Force "$packed/landlock" | Out-Null
+          pnpm --dir native/system run build:ts
+          if ($LASTEXITCODE -ne 0) { throw 'native/system build failed' }
+          pnpm --dir native/system/packages/entry pack --pack-destination "$PWD/$packed/landlock"
+          if ($LASTEXITCODE -ne 0) { throw 'landlock pack failed' }
+      - name: Prepare Desktop runtime, packages and dsh
+        working-directory: upstream/apps/desktop
+        run: |
+          pnpm run prepare:runtime;  if ($LASTEXITCODE -ne 0) { throw 'prepare:runtime failed' }
+          pnpm run prepare:packages; if ($LASTEXITCODE -ne 0) { throw 'prepare:packages failed' }
+          pnpm run prepare:dsh;      if ($LASTEXITCODE -ne 0) { throw 'prepare:dsh failed' }
+      - name: Upstream sources remain clean
+        working-directory: upstream
+        run: |
+          $dirty = git status --porcelain
+          if ($dirty) { $dirty; throw 'Upstream tracked tree changed' }
+
+      # ---- PX overlay, branding and NSIS ----
+      - name: Generate PX icon
+        working-directory: candidate
+        run: |
+          # sharp comes from the prepared official Desktop dependency tree; no PX native dependency.
+          $env:DSH_PX_SHARP_DIR = (Resolve-Path ../upstream/apps/desktop/node_modules/sharp).Path
+          npm run icon
+          if ($LASTEXITCODE -ne 0) { throw 'icon build failed' }
+      - name: Generate PX overlay from the release Pack
+        working-directory: candidate
+        run: |
+          $pack = @(Get-ChildItem "$env:RUNNER_TEMP/px-pack" -Filter 'dsh-px-pack-*.tgz' -File)
+          if ($pack.Count -ne 1) { throw 'Expected one release Pack archive' }
+          node scripts/prepare-native-desktop.mjs ../upstream "--pack=$($pack[0].FullName)"
+          if ($LASTEXITCODE -ne 0) { throw 'prepare-native-desktop failed' }
+          node scripts/brand-native-installer.mjs ../upstream --icon=build/icon.png
+          if ($LASTEXITCODE -ne 0) { throw 'installer branding failed' }
+      - name: electron-builder NSIS (unsigned, full installer only)
+        working-directory: upstream/apps/desktop
+        run: |
+          pnpm exec electron-builder --win nsis --x64 --publish never --config .desktop-build/px/builder-branded.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'electron-builder failed' }
+      - name: Inspect and hash the installer
+        working-directory: candidate
+        env:
+          BUILD_HEAD: ${{ inputs.head }}
+          BUILD_RELEASE: ${{ inputs.release }}
+        run: |
+          $dist = '../upstream/apps/desktop/.desktop-build/px/dist'
+          $exe = @(Get-ChildItem $dist -Filter '*.exe' -File)
+          if ($exe.Count -ne 1) { throw "Expected one installer, found $($exe.Count)" }
+          if (Get-ChildItem $dist -Filter '*.blockmap' -File) { throw 'Differential blockmap must not be produced' }
+          $env:BUILD_AUTHENTICODE = (Get-AuthenticodeSignature $exe[0].FullName).Status.ToString()
+          node ../controller/scripts/release-package.mjs desktop "--upstream=../upstream" "--out=$env:RUNNER_TEMP/release-artifacts"
+          if ($LASTEXITCODE -ne 0) { throw 'Desktop release inspection failed' }
+          $record = Get-Content "$env:RUNNER_TEMP/release-artifacts/artifact.json" -Raw | ConvertFrom-Json
+          "file: $($record.file)`nsize: $($record.size)`nsha256: $($record.sha256)`nsha512: $($record.sha512)`nauthenticode: $($record.authenticode)" | Add-Content $env:GITHUB_STEP_SUMMARY
+      - name: Candidate and upstream remain unchanged
+        env:
+          BUILD_HEAD: ${{ inputs.head }}
+        run: |
+          if ((git -C candidate rev-parse HEAD) -ne $env:BUILD_HEAD) { throw 'Candidate checkout changed' }
+          git -C candidate diff --exit-code
+          if ($LASTEXITCODE -ne 0) { throw 'Tracked candidate files changed' }
+          git -C upstream diff --exit-code
+          if ($LASTEXITCODE -ne 0) { throw 'Tracked upstream files changed' }
+      - name: Upload inspected release assets
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ inputs.head }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release-artifacts/*
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

@@ -1,10 +1,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Readable } from 'node:stream'
-import { randomUUID } from 'node:crypto'
 import { createDraftRegistry, createDraftCell } from '../packages/shared/draft-store'
 import { validNoteDraft, validScheduleDraft } from '../packages/dsh-px-workspace/src/client/draft-validation'
 import { createOperationRegistry } from '../packages/shared/operation'
@@ -12,7 +10,6 @@ import { createQuoteRequests } from '../packages/shared/quote-requests'
 import { pageCarrier } from '../packages/shared/client-capabilities'
 import { createLayoutStore, LayoutError, serviceIdentity } from '../packages/dsh-px-workbench/src/layout'
 import { activitySnapshot, isIdle, registerActivity } from '../packages/dsh-px-workbench/src/activity'
-import { createServiceState } from '../src/main/service-state'
 import { closeTabState, parseTabs } from '../packages/dsh-px-workspace/src/client/tab-state'
 
 test('inactive persisted drafts leave bounded memory and restore all unsaved text', () => {
@@ -178,7 +175,11 @@ test('closing many tabs reclaims titles outside the bounded reopen list', () => 
 test('page carrier never infers Electron from the desktop service behind a browser', () => {
   assert.equal(pageCarrier(undefined), 'browser')
   assert.equal(pageCarrier({ runtimeMode: 'packaged' }), 'browser')
-  assert.equal(pageCarrier({ app: 'DSH-PX', electron: '44.4.5' }), 'desktop')
+  // The retired PX shell preload no longer identifies a Desktop window.
+  assert.equal(pageCarrier({ app: 'DSH-PX', electron: '44.4.5' }), 'browser')
+  assert.equal(pageCarrier({ protocolVersion: 'x' }), 'browser')
+  assert.equal(pageCarrier({ protocolVersion: 0 }), 'browser')
+  assert.equal(pageCarrier({ protocolVersion: 1 }), 'desktop')
 })
 test('activity counts all owners once and never equates missing native services with idle', () => {
   const a = { id: 'a', status: 'running' as const, inbox: { nextTurn: ['queued'], nextStep: ['steer'] } }
@@ -212,47 +213,13 @@ test('activity counts all owners once and never equates missing native services 
     true
   )
 })
-test('shutdown is instance-bound, rejects active idle-mode, and awaits native disposal', async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'dshpx-shutdown-'))
-  const oldData = process.env.DSH_PX_USER_DATA,
-    oldInstance = process.env.DSH_PX_INSTANCE_ID
-  const instanceId = 'fixture-instance-0123456789'
-  process.env.DSH_PX_USER_DATA = dir
-  process.env.DSH_PX_INSTANCE_ID = instanceId
-  const heartbeat = createServiceState(dir, { instanceId })
-  heartbeat.set('running', 'fixture', process.pid)
+test('activity is a read-only authenticated snapshot; the Pack exposes no shutdown route', () => {
   const disposers: Array<() => void> = []
-  t.after(() => {
-    disposers.forEach((dispose) => dispose())
-    heartbeat.dispose()
-    if (oldData === undefined) delete process.env.DSH_PX_USER_DATA
-    else process.env.DSH_PX_USER_DATA = oldData
-    if (oldInstance === undefined) delete process.env.DSH_PX_INSTANCE_ID
-    else process.env.DSH_PX_INSTANCE_ID = oldInstance
-    rmSync(dir, { recursive: true, force: true })
-  })
-  let running = true,
-    finish!: () => void,
-    started = false,
-    shouldThrow = false
   const routes = new Map<string, any>()
   const host = {
     loader: { entries: () => [] },
-    agents: {
-      list: () => (running ? [{ id: 'live', status: 'running', inbox: { nextTurn: [], nextStep: [] } }] : [])
-    },
+    agents: { list: () => [{ id: 'live', status: 'running', inbox: { nextTurn: [], nextStep: [] } }] },
     jobs: { list: () => [] },
-    root: {
-      fiber: {
-        dispose: () => {
-          if (shouldThrow) throw new Error('native disposal fixture failure')
-          started = true
-          return new Promise<void>((resolve) => {
-            finish = resolve
-          })
-        }
-      }
-    },
     effect: (fn: () => () => void) => {
       disposers.push(fn())
     },
@@ -265,45 +232,28 @@ test('shutdown is instance-bound, rejects active idle-mode, and awaits native di
     }
   }
   registerActivity({ inject: (_: unknown, callback: any) => callback(host) })
-  async function request(value: unknown) {
-    const req = Readable.from([JSON.stringify({ requestId: randomUUID(), ...(value as object) })]) as any
-    req.method = 'POST'
-    req.headers = { host: '127.0.0.1:9999', 'content-type': 'application/json', 'x-dsh-px-request': '1' }
+  assert.deepEqual([...routes.keys()], ['/dsh-px-workbench/activity'])
+  const call = (method: string) => {
     let status = 0,
       body: any
-    await routes.get('/dsh-px-workbench/shutdown')(req, {
-      writeHead: (code: number) => {
-        status = code
-      },
-      end: (raw: string) => {
-        body = JSON.parse(raw)
+    routes.get('/dsh-px-workbench/activity')(
+      { method, headers: { host: '127.0.0.1:9999' } },
+      {
+        writeHead: (code: number) => {
+          status = code
+        },
+        end: (raw: string) => {
+          body = JSON.parse(raw)
+        }
       }
-    })
+    )
     return { status, body }
   }
-  assert.equal((await request({ instanceId: 'stale', mode: 'cancel' })).status, 409)
-  assert.equal((await request({ instanceId, mode: 'idle' })).status, 409)
-  assert.equal(started, false)
-  running = false
-  assert.equal((await request({ instanceId, mode: 'idle' })).status, 202)
-  running = true
-  await new Promise((resolve) => setTimeout(resolve, 5))
-  const path = join(dir, 'shutdown-ack.json')
-  assert.equal(JSON.parse(readFileSync(path, 'utf8')).errorCode, 'NEW_ACTIVITY')
-  assert.equal(started, false, 'a newly queued task must survive the final idle claim')
-  running = false
-  shouldThrow = true
-  assert.equal((await request({ instanceId, mode: 'idle' })).status, 202)
-  await new Promise((resolve) => setTimeout(resolve, 5))
-  assert.equal(JSON.parse(readFileSync(path, 'utf8')).errorCode, 'DISPOSE_FAILED')
-  shouldThrow = false
-  assert.equal((await request({ instanceId, mode: 'idle' })).status, 202)
-  await new Promise((resolve) => setTimeout(resolve, 5))
-  assert.equal(started, true)
-  assert.equal(existsSync(path), true)
-  assert.equal(JSON.parse(readFileSync(path, 'utf8')).disposedAt, undefined)
-  assert.match(JSON.parse(readFileSync(path, 'utf8')).requestId, /^[a-f0-9-]{36}$/)
-  finish()
-  await new Promise((resolve) => setTimeout(resolve, 1))
-  assert.equal(typeof JSON.parse(readFileSync(path, 'utf8')).disposedAt, 'string')
+  assert.equal(call('POST').status, 405)
+  const snapshot = call('GET')
+  assert.equal(snapshot.status, 200)
+  assert.equal(snapshot.body.runningAgents, 1)
+  assert.equal('instanceId' in snapshot.body, false)
+  disposers.forEach((dispose) => dispose())
+  assert.equal(routes.size, 0)
 })

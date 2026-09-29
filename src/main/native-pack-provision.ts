@@ -1,0 +1,282 @@
+import { createHash, randomUUID } from 'node:crypto'
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { isAbsolute, join, relative, resolve } from 'node:path'
+import { assertRegularOrAbsent, renameWithRetry, writeAtomic } from './native-atomic'
+
+export { writeAtomic } from './native-atomic'
+
+/**
+ * Durable provisioning record in `<profile>/.dsh-px/pack-state.json`.
+ * - `pending`: an install of `targetSpec` started; `previousSpec` is the dependency it replaces.
+ * - `failed`: the last install attempt failed; the Host runs with `previousSpec` (or without a Pack).
+ * - `installed`: `targetSpec` is the managed dependency.
+ * - `user-managed`: PX never changes the dependency again in this profile.
+ */
+interface ProvisionState {
+  schemaVersion: 1
+  phase: 'pending' | 'installed' | 'failed' | 'user-managed'
+  version: string
+  sha256: string
+  previousSpec: string | null
+  /** Managed dependency spec; null only for `user-managed`. */
+  targetSpec: string | null
+  /** Consecutive attempts for this `sha256`; reset on success or a new bundled Pack. */
+  attempts?: number
+  /** Redacted message of the last failure; profile and home paths are replaced by placeholders. */
+  lastError?: string
+  updatedAt?: string
+}
+export type NativePackProvisionResult = 'installed' | 'unchanged' | 'repaired' | 'user-managed' | 'failed'
+export interface NativePackProvision {
+  profile: string
+  archive: string
+  version: string
+  sha256: string
+  /** Native runPluginCommand, using its own package lock, compatibility checks and reconciliation. */
+  install: (archive: string) => Promise<void>
+  /** Diagnostic sink; defaults to console.error so the native Desktop log captures it. */
+  log?: (message: string) => void
+}
+
+const STATE_FILE = 'pack-state.json'
+const CACHE_PATTERN = /^pack-[a-f0-9]{64}\.tgz$/
+const CORRUPT_MARKER = '.corrupt-'
+/** Quarantined files kept for diagnosis; older ones are removed. */
+const CORRUPT_RETAINED = 3
+const ERROR_LIMIT = 500
+
+const hash = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
+function dependency(profile: string): string | null {
+  const manifest = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8'))
+  const value = manifest.dependencies?.['dsh-px-pack']
+  if (value !== undefined && typeof value !== 'string') throw new Error('Invalid Pack dependency declaration')
+  return value ?? null
+}
+function installed(profile: string, version: string): boolean {
+  const file = join(profile, 'node_modules/dsh-px-pack/package.json')
+  if (!existsSync(file)) return false
+  const manifest = JSON.parse(readFileSync(file, 'utf8'))
+  return manifest.name === 'dsh-px-pack' && manifest.version === version
+}
+function validState(state: unknown): state is ProvisionState {
+  if (typeof state !== 'object' || state === null) return false
+  const value = state as Record<string, unknown>
+  return (
+    value.schemaVersion === 1 &&
+    typeof value.phase === 'string' &&
+    ['pending', 'installed', 'failed', 'user-managed'].includes(value.phase) &&
+    typeof value.version === 'string' &&
+    typeof value.sha256 === 'string' &&
+    /^[a-f0-9]{64}$/.test(value.sha256) &&
+    (typeof value.targetSpec === 'string' || (value.targetSpec === null && value.phase === 'user-managed')) &&
+    (value.previousSpec === null || typeof value.previousSpec === 'string') &&
+    (value.attempts === undefined ||
+      (Number.isSafeInteger(value.attempts) && (value.attempts as number) >= 0))
+  )
+}
+function quarantine(path: string): string {
+  const target = `${path}${CORRUPT_MARKER}${randomUUID()}`
+  renameWithRetry(path, target)
+  return target
+}
+/** Corrupt or empty state is quarantined; provisioning then continues as if no state existed. */
+function loadState(file: string, log: (message: string) => void): ProvisionState | undefined {
+  assertRegularOrAbsent(file, 'Pack state')
+  if (!existsSync(file)) return
+  let state: unknown
+  try {
+    state = JSON.parse(readFileSync(file, 'utf8'))
+  } catch (error) {
+    // Unparseable (including empty) state carries no decision to preserve.
+    void error
+  }
+  if (validState(state)) return state
+  const moved = quarantine(file)
+  log(`[dsh-px] Pack state was unreadable and was moved to ${moved}; continuing without it`)
+  return
+}
+function saveState(file: string, state: ProvisionState): void {
+  writeAtomic(file, JSON.stringify({ ...state, updatedAt: new Date().toISOString() }, null, 2) + '\n')
+}
+function redact(error: unknown, profile: string): string {
+  let text = error instanceof Error ? error.message : String(error)
+  const home = homedir()
+  for (const [path, label] of [
+    [profile, '<profile>'],
+    [home, '~']
+  ] as const)
+    for (const form of [path, path.replaceAll('\\', '/')]) if (form) text = text.split(form).join(label)
+  return text.replace(/\s+/g, ' ').trim().slice(0, ERROR_LIMIT)
+}
+/** Absolute path of a `file:` spec resolved against the profile, or undefined for other specs. */
+function specPath(spec: string | null, profile: string): string | undefined {
+  if (!spec?.startsWith('file:')) return
+  const path = spec.slice('file:'.length)
+  return isAbsolute(path) ? resolve(path) : resolve(profile, path)
+}
+/** Spec equality with `file:` paths compared after resolution (case-insensitive on Windows). */
+function sameSpec(a: string | null, b: string | null, profile: string): boolean {
+  if (a === b) return true
+  const left = specPath(a, profile)
+  const right = specPath(b, profile)
+  if (!left || !right) return false
+  return process.platform === 'win32' ? left.toLowerCase() === right.toLowerCase() : left === right
+}
+function inside(directory: string, path: string): boolean {
+  const rel = relative(directory, path)
+  return rel !== '' && !rel.startsWith('..') && !isAbsolute(rel)
+}
+/** Remove temporaries a crashed write left behind; the caller's profile lock excludes live writers. */
+function removeTemporaries(directory: string): void {
+  for (const name of readdirSync(directory))
+    if (name.endsWith('.tmp')) rmSync(join(directory, name), { force: true })
+}
+function pruneCorrupt(directory: string): void {
+  const corrupt = readdirSync(directory)
+    .filter((name) => name.includes(CORRUPT_MARKER))
+    .map((name) => ({ name, time: statSync(join(directory, name)).mtimeMs }))
+    .sort((a, b) => b.time - a.time)
+  for (const { name } of corrupt.slice(CORRUPT_RETAINED)) rmSync(join(directory, name), { force: true })
+}
+/** Keep only the current cache and the archive the current dependency points to. */
+function pruneCaches(directory: string, keep: readonly (string | undefined)[]): void {
+  for (const name of readdirSync(directory)) {
+    if (!CACHE_PATTERN.test(name)) continue
+    const path = join(directory, name)
+    if (!keep.some((kept) => kept !== undefined && resolve(kept).toLowerCase() === path.toLowerCase()))
+      rmSync(path, { force: true })
+  }
+}
+function verifiedBundle(options: NativePackProvision): Buffer {
+  const bytes = readFileSync(options.archive)
+  if (!/^[a-f0-9]{64}$/.test(options.sha256) || hash(bytes) !== options.sha256)
+    throw new Error('Bundled Pack archive integrity mismatch')
+  return bytes
+}
+/** Ensure the cache holds exactly the verified bytes; returns whether it was rewritten. */
+function writeCache(cached: string, bytes: Buffer, sha256: string): boolean {
+  assertRegularOrAbsent(cached, 'Pack cache')
+  if (existsSync(cached)) {
+    if (hash(readFileSync(cached)) === sha256) return false
+    quarantine(cached)
+  }
+  writeAtomic(cached, bytes)
+  return true
+}
+function cacheValid(cached: string, sha256: string): boolean {
+  return existsSync(cached) && lstatSync(cached).isFile() && hash(readFileSync(cached)) === sha256
+}
+
+/**
+ * Provision the bundled Pack into a native Desktop profile before the Host starts.
+ * Never throws: every failure is logged and, once an install was decided, recorded as `failed`, so the
+ * Host still starts without a Pack or with the previous one. The next start retries automatically.
+ * Host must be stopped; caller holds the native Desktop profile lock for this entire operation.
+ * @param options - profile, bundled archive and its verified identity, and the native install callback.
+ * @returns what this start did.
+ */
+export async function provisionNativePack(options: NativePackProvision): Promise<NativePackProvisionResult> {
+  const log = options.log ?? ((message: string) => console.error(message))
+  const directory = join(options.profile, '.dsh-px')
+  let file: string | undefined
+  let failure: ProvisionState | undefined
+  try {
+    if (!existsSync(directory)) mkdirSync(directory)
+    if (!lstatSync(directory).isDirectory() || lstatSync(directory).isSymbolicLink())
+      throw new Error('Pack state directory must be an owned directory')
+    removeTemporaries(directory)
+    file = join(directory, STATE_FILE)
+    const state = loadState(file, log)
+    pruneCorrupt(directory)
+    const current = dependency(options.profile)
+    // pnpm's durable file dependency must survive later Desktop resource replacement.
+    const cached = join(directory, `pack-${options.sha256}.tgz`)
+    const targetSpec = 'file:' + cached.replaceAll('\\', '/')
+    if (state?.phase === 'user-managed') return 'user-managed'
+    // First adoption never takes over a user's existing dependency. Removal and custom replacement persist.
+    const managed = !state
+      ? current === null
+      : state.phase === 'installed'
+        ? sameSpec(current, state.targetSpec, options.profile)
+        : sameSpec(current, state.targetSpec, options.profile) ||
+          sameSpec(current, state.previousSpec, options.profile)
+    if (!managed) {
+      saveState(file, {
+        schemaVersion: 1,
+        phase: 'user-managed',
+        version: options.version,
+        sha256: options.sha256,
+        previousSpec: current,
+        targetSpec: null
+      })
+      return 'user-managed'
+    }
+    if (
+      state?.phase === 'installed' &&
+      state.sha256 === options.sha256 &&
+      state.version === options.version &&
+      sameSpec(state.targetSpec, targetSpec, options.profile) &&
+      installed(options.profile, options.version)
+    ) {
+      let result: NativePackProvisionResult = 'unchanged'
+      if (!cacheValid(cached, options.sha256)) {
+        // The installed bytes are already verified; restoring the file dependency needs no reinstall.
+        writeCache(cached, verifiedBundle(options), options.sha256)
+        log('[dsh-px] Restored missing or damaged Pack cache from the bundled archive')
+        result = 'repaired'
+      }
+      pruneCaches(directory, [cached, specPath(current, options.profile)])
+      return result
+    }
+    const previousPath = specPath(state?.targetSpec ?? null, options.profile)
+    // A copied profile keeps absolute file: specs to the source profile; this profile rebuilds its own cache.
+    if (previousPath && state?.targetSpec === current && !inside(directory, previousPath))
+      log(
+        '[dsh-px] Managed Pack dependency points outside this profile; reinstalling from this profile cache'
+      )
+    const retry = state !== undefined && state.phase !== 'installed' ? state : undefined
+    const pending: ProvisionState = {
+      schemaVersion: 1,
+      phase: 'pending',
+      version: options.version,
+      sha256: options.sha256,
+      // A half-applied retry keeps the dependency that was active before the first attempt.
+      previousSpec:
+        retry && sameSpec(current, retry.targetSpec, options.profile) ? retry.previousSpec : current,
+      targetSpec,
+      attempts: (retry?.sha256 === options.sha256 ? (retry.attempts ?? 0) : 0) + 1
+    }
+    failure = pending
+    writeCache(cached, verifiedBundle(options), options.sha256)
+    saveState(file, pending)
+    await options.install(cached)
+    if (
+      !sameSpec(dependency(options.profile), targetSpec, options.profile) ||
+      !installed(options.profile, options.version)
+    )
+      throw new Error('Native Pack install did not produce the expected dependency; retry required')
+    saveState(file, {
+      schemaVersion: 1,
+      phase: 'installed',
+      version: pending.version,
+      sha256: pending.sha256,
+      previousSpec: pending.previousSpec,
+      targetSpec
+    })
+    failure = undefined
+    pruneCaches(directory, [cached, specPath(dependency(options.profile), options.profile)])
+    return 'installed'
+  } catch (error) {
+    const message = redact(error, options.profile)
+    log(`[dsh-px] Pack provisioning failed; the Host starts with the previous Pack state: ${message}`)
+    if (file && failure) {
+      try {
+        saveState(file, { ...failure, phase: 'failed', lastError: message })
+      } catch (stateError) {
+        log(`[dsh-px] Pack failure could not be recorded: ${redact(stateError, options.profile)}`)
+      }
+    }
+    return 'failed'
+  }
+}

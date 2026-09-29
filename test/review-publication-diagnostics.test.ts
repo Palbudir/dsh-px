@@ -58,7 +58,18 @@ function fixture(t: TestContext) {
       completedAt: Date.now(),
       requestRunId: 123,
       requestAttempt: 1,
-      reviewer: { cliVersion: 'fixture-cli', configurationDigest: 'e'.repeat(64) },
+      reviewer: {
+        provider: 'deepseek',
+        model: 'deepseek-flash',
+        baseUrl: 'https://api.deepseek.com',
+        configurationDigest: core.sha256(
+          core.canonical({
+            provider: 'deepseek',
+            model: 'deepseek-flash',
+            baseUrl: 'https://api.deepseek.com'
+          })
+        )
+      },
       verdict: 'pass',
       findings: [],
       blockers: [],

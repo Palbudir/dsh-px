@@ -33,14 +33,8 @@ DeepSeek Harness 自己的 `website/public/favicon.svg` 与 wordmark 是**官方
 
 ## 随附的第三方软件
 
-`dsh-px` 在构建时会把下列软件装配进生成的 `runtime/` 目录（该目录不入库）：
+DSH-PX Desktop 由锁定提交的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 官方 Desktop 源码构建（MIT，`Copyright (c) 2026 DeepSeek`），包含其随附的 Electron、Node.js 与 `@deepseek-ai/*` 依赖及各自许可。PX 以覆盖层修改应用身份、品牌、更新源与首次配置，不修改官方原始文件；安装界面的文字与位图由 PX 包装脚本替换，安装与卸载逻辑沿用官方实现。
 
-| 组件                                                                                                                        | 许可         |
-| --------------------------------------------------------------------------------------------------------------------------- | ------------ |
-| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`@deepseek-ai/dsh`）及其全部 `@deepseek-ai/*` 传递依赖 | MIT          |
-| [Node.js](https://nodejs.org)                                                                                               | MIT 及其他   |
-| `dshmarket`、`dsh-better-sidebar`、`dsh-mermaid-render`、`dsh-find-plugin`                                                  | 各自上游许可 |
+DSH-PX Pack 随附 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 0.24.1（MIT，`Copyright (c) 2026 dsh-external`），并对其宿主入口应用版本及摘要限定的认证补丁；补丁来源与范围见 [插件合约](docs/PLUGINS.md)。
 
-打包产物会再分发这些组件，因此在分发二进制前请逐一核对各上游许可要求。
-
-DSH-PX 对 `dsh-better-sidebar 0.19.1` 的宿主入口应用版本及摘要限定的终端生命周期兼容补丁；原项目采用 MIT 许可，版权声明为 `Copyright (c) 2026 dsh-external`。原包许可保留在运行时中，补丁来源与范围见 [插件合约](docs/PLUGINS.md)。
+分发二进制前请逐一核对各上游许可要求。

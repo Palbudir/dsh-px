@@ -58,10 +58,18 @@ test('contract groups include runtime and updater producers without copying gove
   const sources = {
     'README.md': 'Contract fixture',
     'scripts/review-loop.mjs': 'export const loop = 1',
-    'scripts/stage-runtime.ts': 'export const producer = "stage"',
-    'scripts/verify-package.ts': 'export const verifier = "package"',
-    'src/main/index.ts': 'export const consumer = "activation"',
+    'scripts/stage-runtime.ts':
+      'import { schema } from \'../src/shared/runtime-integrity\'; export const producer = "stage"',
+    'scripts/verify-package.ts':
+      'import { schema } from \'../src/shared/runtime-integrity\'; export const verifier = "package"',
+    'src/main/index.ts':
+      'import { schema } from \'../shared/runtime-integrity\'; export const consumer = "activation"',
     'src/shared/runtime-integrity.ts': 'export const schema = 2',
+    'packages/dsh-px-updater/package.json': JSON.stringify({
+      name: 'dsh-px-updater',
+      main: 'lib/index.js',
+      exports: { '.': './lib/index.js', './client': './lib/client.js' }
+    }),
     'packages/dsh-px-updater/src/index.ts': 'export const status = "producer"',
     'packages/dsh-px-updater/src/client.tsx': 'export const page = "consumer"'
   }
@@ -100,7 +108,12 @@ test('shared changes retain every byte across consumer groups and oversized cont
   const path = 'packages/shared/shared.ts'
   const before = 'export const shared = "' + 'a'.repeat(12000) + '"'
   const after = 'export const shared = "' + 'b'.repeat(14000) + '"'
-  const f = memory({ [base]: { [path]: before }, [head]: { [path]: after } })
+  const consumers: Record<string, string> = { 'src/main/index.ts': "import '../../packages/shared/shared'" }
+  for (const name of ['updater', 'workbench', 'workspace', 'taskflow']) {
+    consumers[`packages/dsh-px-${name}/package.json`] = JSON.stringify({ name: `dsh-px-${name}` })
+    consumers[`packages/dsh-px-${name}/src/index.ts`] = "import '../../shared/shared'"
+  }
+  const f = memory({ [base]: { ...consumers, [path]: before }, [head]: { ...consumers, [path]: after } })
   const plan = await collectGroupedReview(request([path]), f.reader, {}, 5000)
   assert.equal(plan.files.length, 1)
   assert.equal(plan.files[0].before, before)
@@ -112,7 +125,12 @@ test('shared changes retain every byte across consumer groups and oversized cont
     assert.ok(chunks.every((batch: any) => batch.text.length <= 5000))
     assert.ok(chunks.some((batch: any) => batch.text.includes('/' + after.length)))
   }
-  const large = memory({ [base]: { 'src/main/index.ts': before }, [head]: { 'src/main/index.ts': after } })
+  // A required producer larger than the budget is never truncated: the plan fails closed.
+  const big = { 'src/main/big.ts': before }
+  const large = memory({
+    [base]: { ...big, 'src/main/index.ts': "import './big'" },
+    [head]: { ...big, 'src/main/index.ts': "import './big'; export const changed = 1" }
+  })
   await assert.rejects(
     collectGroupedReview(request(['src/main/index.ts']), large.reader, {}, 5000),
     /context exceeds/
@@ -159,15 +177,18 @@ test('policy explicitly referenced sources, installer and actual local updater c
     'scripts/build.mjs': 'export const build = true',
     'scripts/contract.mjs': 'export const contract = 1',
     'scripts/review-install.mjs': 'export const installed = true',
-    'src/main/update-controller.ts':
-      "import './update-bridge'; export const consumer = 'electron-updater caller'",
-    'src/main/update-bridge.ts': 'export const bridge = true',
-    'packages/dsh-px-updater/src/metadata.ts': 'export const feed = true'
+    // Consumers are discovered from the graph (updater client and release-feed readers), not names.
+    'src/renamed/updater-client.ts':
+      "import type { AppUpdater } from 'electron-updater'; import './bridge'; export const consumer = 'electron-updater caller'",
+    'src/renamed/bridge.ts': 'export const bridge = true',
+    'packages/dsh-px-updater/src/feed.ts':
+      'export const feed = (repo: string) => `https://api.github.com/repos/${repo}/releases/latest`'
   }
-  const f = memory({ [base]: tree, [head]: tree })
+  const f = memory({ [base]: tree, [head]: { ...tree, 'src/unrelated.ts': 'export const other = 1' } })
   const result = await collectReviewContext(request(['docs/github/review-policy.json']), f.reader)
   for (const file of Object.keys(tree)) assert.ok(result.context.includes(file), file)
   assert.match(result.context, /electron-updater caller/)
+  assert.ok(!result.context.includes('export const other = 1'))
 })
 
 test('requested base is distinct from merge base and each changed contract is labelled by its immutable ref', async () => {
@@ -583,4 +604,233 @@ test('worker default admits complete associated context and an explicitly smalle
     prepareReviewSnapshot({ repository: 'fixture/repo', maxBatchChars: 120000 }, { head, base }, git),
     /context exceeds batch budget/
   )
+})
+
+const graphTree = (): Record<string, string> => ({
+  'package.json': JSON.stringify({
+    name: 'fixture',
+    scripts: {
+      verify: 'node scripts/run.mjs verify-capabilities',
+      'check:plugins': 'node scripts/check-plugins.mjs'
+    }
+  }),
+  'scripts/run.mjs': 'export const runner = true',
+  'scripts/verify-capabilities.ts': "export const verify = 'VERIFY_CAPABILITIES'",
+  'scripts/check-plugins.mjs':
+    "const manifest = `packages/${name}/package.json`; export const check = 'CHECK_PLUGINS'",
+  'src/main/index.ts':
+    "import { rule } from '../../packages/shared/rule'\nexport const stop = () => fetch(base + 'dsh-px-bench/shutdown')",
+  'packages/shared/rule.ts': "export const rule = 'SHARED_RULE'",
+  'packages/shared/view.tsx': "export const view = 'SHARED_VIEW'",
+  'packages/dsh-px-bench/package.json': JSON.stringify({ name: 'dsh-px-bench', main: 'lib/index.js' }),
+  'packages/dsh-px-bench/src/index.ts': "import './activity'\nimport '../../shared/rule'",
+  'packages/dsh-px-bench/src/activity.ts':
+    "export const route = { path: '/dsh-px-bench/shutdown', owner: 'ACTIVITY' }",
+  'packages/dsh-px-panel/package.json': JSON.stringify({ name: 'dsh-px-panel', main: 'lib/index.js' }),
+  'packages/dsh-px-panel/src/index.ts': "import '../../shared/view'",
+  'packages/dsh-px-other/package.json': JSON.stringify({ name: 'dsh-px-other', main: 'lib/index.js' }),
+  'packages/dsh-px-other/src/index.ts': 'export const unrelated = true',
+  'docs/EDITIONS.md': '# Editions\nSee [plugins](PLUGINS.md).',
+  'docs/PLUGINS.md': 'Plugin catalog; editions in [EDITIONS](EDITIONS.md).',
+  'test/view.test.ts': "import '../packages/shared/view'"
+})
+const graphFixture = (changes: Record<string, string>) => {
+  const tree = graphTree()
+  return memory({ [base]: tree, [head]: { ...tree, ...changes } })
+}
+
+test('dependency graph owns shared sources by real consumers, routes and declared entries, not path prefixes', async () => {
+  const f = graphFixture({
+    'packages/shared/view.tsx': "export const view = 'SHARED_VIEW_2'",
+    'packages/shared/rule.ts': "export const rule = 'SHARED_RULE_2'",
+    'packages/dsh-px-bench/src/activity.ts':
+      "export const route = { path: '/dsh-px-bench/shutdown', owner: 'ACTIVITY_2' }",
+    'scripts/verify-capabilities.ts': "export const verify = 'VERIFY_CAPABILITIES_2'",
+    'test/view.test.ts': "import '../packages/shared/view'\n// changed"
+  })
+  const names = [
+    'packages/shared/view.tsx',
+    'packages/shared/rule.ts',
+    'packages/dsh-px-bench/src/activity.ts',
+    'scripts/verify-capabilities.ts',
+    'test/view.test.ts'
+  ]
+  const plan = await collectGroupedReview(request(names), f.reader)
+  const owners = (path: string) =>
+    [
+      ...new Set(
+        plan.batches.filter((b: any) => b.scope.some((s: any) => s.path === path)).map((b: any) => b.group)
+      )
+    ].sort()
+  assert.deepEqual(
+    owners('packages/shared/view.tsx'),
+    ['panel'],
+    'a shared view is not copied into unrelated groups'
+  )
+  assert.deepEqual(owners('packages/shared/rule.ts'), ['bench', 'runtime'])
+  assert.deepEqual(
+    owners('packages/dsh-px-bench/src/activity.ts'),
+    ['bench', 'runtime'],
+    'HTTP route callers review it'
+  )
+  assert.deepEqual(owners('scripts/verify-capabilities.ts'), ['runtime'])
+  assert.deepEqual(owners('test/view.test.ts'), ['panel'], 'tests follow the component they import')
+  assert.ok(!plan.batches.some((b: any) => b.group === 'other'))
+  const runtime = plan.batches.filter((b: any) => b.group === 'runtime')
+  assert.ok(
+    runtime.every((b: any) => b.text.includes("owner: 'ACTIVITY_2'")),
+    'route producer is runtime context'
+  )
+  assert.ok(runtime.every((b: any) => b.text.includes('dsh-px-bench/shutdown')))
+  const panel = plan.batches.filter((b: any) => b.group === 'panel')
+  assert.ok(
+    panel.every((b: any) => b.text.includes("import '../../shared/view'")),
+    'consumer is supplied'
+  )
+  assert.ok(!panel.some((b: any) => b.text.includes('SHARED_RULE')), 'unrelated shared sources stay out')
+})
+
+test('manifest, npm-script and documentation changes carry their declared producers without fanning out', async () => {
+  const f = graphFixture({
+    'package.json': JSON.stringify({
+      name: 'fixture',
+      scripts: {
+        verify: 'node scripts/run.mjs verify-capabilities --strict',
+        'check:plugins': 'node scripts/check-plugins.mjs'
+      }
+    }),
+    'docs/EDITIONS.md': '# Editions v2\nSee [plugins](PLUGINS.md).'
+  })
+  const plan = await collectGroupedReview(request(['package.json', 'docs/EDITIONS.md']), f.reader)
+  const text = plan.batches.map((b: any) => b.text).join('\n')
+  assert.ok(text.includes("'VERIFY_CAPABILITIES'"), 'changed npm script target reaches through the runner')
+  assert.ok(!text.includes("'CHECK_PLUGINS'"), 'unchanged npm scripts are not pulled into context')
+  assert.ok(text.includes('Plugin catalog'), 'linked documentation is supplied')
+  // A computed path pattern links the plugin checker to every package manifest.
+  const checker = graphFixture({
+    'scripts/check-plugins.mjs': "const manifest = `packages/${name}/package.json`; export const check = 'X'"
+  })
+  const checked = await collectGroupedReview(request(['scripts/check-plugins.mjs']), checker.reader)
+  const all = checked.batches.map((b: any) => b.text).join('\n')
+  for (const name of ['bench', 'panel', 'other']) assert.ok(all.includes(`"name":"dsh-px-${name}"`), name)
+})
+
+test('graph grouping splits oversized groups along dependency closure and never truncates', async () => {
+  const tree = graphTree()
+  // Two independent changed files, each with its own large producer: together their context
+  // exceeds one batch, separately each fits.
+  const filler = (tag: string) => `export const ${tag} = '${tag}'\n` + `// ${tag}\n`.repeat(2500)
+  tree['packages/shared/big-a.ts'] = filler('BIGA')
+  tree['packages/shared/big-b.ts'] = filler('BIGB')
+  tree['packages/shared/a.ts'] = "import './big-a'\nexport const a = 1"
+  tree['packages/shared/b.ts'] = "import './big-b'\nexport const b = 1"
+  tree['packages/dsh-px-panel/src/index.ts'] =
+    "import '../../shared/view'\nimport '../../shared/a'\nimport '../../shared/b'"
+  const f = memory({
+    [base]: tree,
+    [head]: {
+      ...tree,
+      'packages/shared/a.ts': "import './big-a'\nexport const a = 2",
+      'packages/shared/b.ts': "import './big-b'\nexport const b = 2"
+    }
+  })
+  const names = ['packages/shared/a.ts', 'packages/shared/b.ts']
+  const whole = await collectGroupedReview(request(names), f.reader, {}, 200000)
+  assert.equal(whole.metrics.groups, 1)
+  const single = whole.metrics.groupMetrics[0].contextChars
+  const budget = Math.ceil(single * 0.8)
+  const split = await collectGroupedReview(request(names), f.reader, {}, budget)
+  assert.deepEqual(
+    split.metrics.groupMetrics.map((g: any) => g.group),
+    ['panel.1', 'panel.2'],
+    'split along independent dependency closures'
+  )
+  assert.ok(split.batches.every((b: any) => b.text.length <= budget))
+  assert.ok(split.batches.some((b: any) => b.text.includes("'BIGA'") && !b.text.includes("'BIGB'")))
+  assert.ok(split.batches.some((b: any) => b.text.includes("'BIGB'") && !b.text.includes("'BIGA'")))
+  for (const path of names) {
+    const covered = split.batches.flatMap((b: any) => b.scope.filter((s: any) => s.path === path))
+    assert.equal(
+      Math.max(...covered.map((s: any) => s.after[1])),
+      covered[0].after[2],
+      'complete changed file'
+    )
+  }
+  // One file whose own producer exceeds the budget cannot be split further: fail closed.
+  await assert.rejects(
+    collectGroupedReview(request(names), f.reader, {}, Math.ceil(single / 3)),
+    /context exceeds batch budget/
+  )
+})
+
+test('secret scan runs over every review blob before model input and reports locations only', async () => {
+  const token = 'gh' + 'p_' + 'Q'.repeat(36)
+  const f = graphFixture({
+    'packages/shared/rule.ts': `export const rule = 'SHARED_RULE'\nconst leaked = '${token}'`
+  })
+  const { scanText } = await import(pathToFileURL(resolve('scripts/check-secrets.mjs')).href)
+  const plan = await collectGroupedReview(request(['packages/shared/rule.ts']), f.reader, {}, 500000, {
+    scan: scanText
+  })
+  assert.deepEqual(
+    plan.secretFindings.map((x: any) => [x.path, x.line, x.rule]),
+    [['packages/shared/rule.ts', 2, 'github-token']]
+  )
+  assert.ok(!JSON.stringify(plan.secretFindings).includes(token))
+  const { secretBlockers } = await import(pathToFileURL(resolve('scripts/review-worker.mjs')).href)
+  const blockers = secretBlockers(plan.secretFindings)
+  assert.equal(blockers.length, 1)
+  assert.match(blockers[0], /github-token at "packages\/shared\/rule.ts":2 \(value withheld\)/)
+  assert.ok(!blockers[0].includes(token))
+})
+
+test('bb118989 regression: real Git groups include runtime producers and keep shared frontend in its consumers', async (t) => {
+  const headSha = 'bb118989098f9b6ca3276af67fb86b411ded1c62',
+    mergeSha = '82623e4135b6dfda87610e27a86da5a9100b3c86'
+  const git = (args: string[]) => execFileSync('git', args, { maxBuffer: 256e6, windowsHide: true })
+  try {
+    git(['cat-file', '-e', headSha + '^{commit}'])
+    git(['cat-file', '-e', mergeSha + '^{commit}'])
+  } catch {
+    return t.skip('fixture commits are not present in this clone')
+  }
+  const { buildReviewGraph, reviewOwners, reviewContracts, changedScriptTargets } = await import(
+    pathToFileURL(resolve('scripts/review-core.mjs')).href
+  )
+  const reader = {
+    list: async (ref: string) => parseReviewTree(git(['ls-tree', '-r', '-l', '-z', ref])),
+    read: async (ref: string, path: string) => git(['show', `${ref}:${path}`])
+  }
+  const graph = await buildReviewGraph(reader, [headSha, mergeSha])
+  graph.changedScripts = changedScriptTargets(graph, mergeSha, headSha)
+  const names = git(['diff', '--name-only', '--no-renames', '-z', mergeSha, headSha])
+    .toString()
+    .split('\0')
+    .filter(Boolean)
+  assert.equal(names.length, 64)
+  const owners = Object.fromEntries(names.map((path: string) => [path, reviewOwners(graph, path)]))
+  assert.deepEqual(owners['packages/shared/native-navigation.ts'], ['taskflow', 'workspace'])
+  assert.deepEqual(owners['packages/shared/native-sidebar.tsx'], ['taskflow', 'workspace'])
+  assert.ok(!owners['packages/shared/request-trust.ts'].includes('verification'))
+  assert.deepEqual(owners['packages/dsh-px-workbench/src/activity.ts'], ['runtime', 'workbench'])
+  for (const path of [
+    'scripts/check-plugins.mjs',
+    'scripts/verify-capabilities.ts',
+    'docs/EDITIONS.md',
+    'package.json'
+  ])
+    assert.ok(owners[path].includes('runtime'), path)
+  const runtimeNames = names.filter((path: string) => owners[path].includes('runtime'))
+  const runtime = new Set([...reviewContracts(graph, 'runtime', runtimeNames), ...runtimeNames])
+  for (const path of [
+    'packages/dsh-px-workbench/src/activity.ts',
+    'scripts/check-plugins.mjs',
+    'scripts/verify-capabilities.ts',
+    'docs/EDITIONS.md',
+    'packages/dsh-px-workbench/package.json',
+    'packages/dsh-px-updater/package.json',
+    'src/main/graceful-stop.ts'
+  ])
+    assert.ok(runtime.has(path), 'runtime context includes ' + path)
+  for (const path of names) assert.ok(owners[path].length > 0, path)
 })

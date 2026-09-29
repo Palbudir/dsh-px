@@ -75,10 +75,10 @@ const api=(route)=>{
  if(route.includes('/contents/'))return {content:Buffer.from(data.controller).toString('base64')};
  throw Error('Unexpected isolated route '+route);
 };
-cp.spawn=(exe,args)=>{const child=new EventEmitter();child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>true;process.nextTick(()=>{try{let result;if(exe==='fixture-codex'&&args[0]==='--version')result='fixture-cli';else if(exe==='fixture-gh'){calls.gh.push(args[1]);result=api(args[1])}else if(exe==='fixture-git'){calls.git++;throw Error('Fixture forbids Git/model execution')}else{calls.model++;throw Error('Fixture forbids model execution')}child.stdout.end(Buffer.isBuffer(result)?result:typeof result==='string'?result:JSON.stringify(result));child.emit('close',0)}catch(error){child.stderr.end(String(error));child.emit('close',1)}});return child};
+cp.spawn=(exe,args)=>{const child=new EventEmitter();child.stdin=new PassThrough();child.stdout=new PassThrough();child.stderr=new PassThrough();child.kill=()=>true;process.nextTick(()=>{try{let result;if(exe==='fixture-gh'){calls.gh.push(args[1]);result=api(args[1])}else if(exe==='fixture-git'){calls.git++;throw Error('Fixture forbids Git/model execution')}else{calls.model++;throw Error('Fixture forbids model execution')}child.stdout.end(Buffer.isBuffer(result)?result:typeof result==='string'?result:JSON.stringify(result));child.emit('close',0)}catch(error){child.stderr.end(String(error));child.emit('close',1)}});return child};
 syncBuiltinESMExports();
 const permissions={contents:'read',pull_requests:'read',actions:'read',checks:'write'};
-globalThis.fetch=async(url,options={})=>{const route=String(url).replace('https://api.github.com/','');calls.app.push({route,method:options.method??'GET'});let value;if(route==='app')value={id:777,permissions};else if(route==='app/installations/7/access_tokens')value={token:'fixture-token',expires_at:new Date(Date.now()+3600000).toISOString(),permissions};else if(route.startsWith('installation/repositories?'))value={total_count:1,repositories:[{id:1,full_name:'fixture/repo'}]};else if(route.includes('/check-runs?'))value={check_runs:checks};else if(route.endsWith('/check-runs')&&options.method==='POST'){const body=JSON.parse(options.body);value={...body,id:checks.length+1,app:{id:777}};checks.push(value);calls.published.push(value)}else value=api(route);return {ok:true,status:200,json:async()=>value}};
+globalThis.fetch=async(url,options={})=>{if(!String(url).startsWith('https://api.github.com/')){calls.model++;throw Error('Fixture forbids model execution')}const route=String(url).replace('https://api.github.com/','');calls.app.push({route,method:options.method??'GET'});let value;if(route==='app')value={id:777,permissions};else if(route==='app/installations/7/access_tokens')value={token:'fixture-token',expires_at:new Date(Date.now()+3600000).toISOString(),permissions};else if(route.startsWith('installation/repositories?'))value={total_count:1,repositories:[{id:1,full_name:'fixture/repo'}]};else if(route.includes('/check-runs?'))value={check_runs:checks};else if(route.endsWith('/check-runs')&&options.method==='POST'){const body=JSON.parse(options.body);value={...body,id:checks.length+1,app:{id:777}};checks.push(value);calls.published.push(value)}else value=api(route);return {ok:true,status:200,json:async()=>value}};
 const worker=join(directory,'review-worker.mjs');process.argv=[process.execPath,worker,'--publish',...(data.rerun?['--rerun=913']:[])];
 let fatal;try{await import(pathToFileURL(worker).href)}catch(error){fatal=String(error);process.exitCode=1}finally{fs.writeFileSync('observed.json',JSON.stringify({calls,checks,fatal,exitCode:process.exitCode??0}))}
 `
@@ -96,9 +96,12 @@ function fixture(t: TestContext) {
     'review-core.mjs',
     'review-parser.mjs',
     'review-process.mjs',
+    'review-model.mjs',
     'review-app.mjs',
     'review-verify.mjs',
-    'review-trusted-ci.mjs'
+    'review-trusted-ci.mjs',
+    'review-upstream.mjs',
+    'check-secrets.mjs'
   ]) {
     copyFileSync(join('scripts', name), join(directory, name))
     files[name] = sha256(readFileSync(join(directory, name)))
@@ -124,15 +127,23 @@ function fixture(t: TestContext) {
     branch: 'master',
     publisher: 'fixture',
     workerDigest,
-    cliVersion: 'fixture-cli',
-    codex: 'fixture-codex',
     git: 'fixture-git',
     gh: 'fixture-gh',
     githubApp: { appId: 777, installationId: 7, repositoryId: 1 },
     keyId: 'fixture',
-    codexOverrides: [],
-    codexEnvKeys: []
+    model: {
+      provider: 'deepseek',
+      model: 'deepseek-flash',
+      baseUrl: 'https://api.deepseek.com',
+      apiKeyEnv: 'DSHPX_FIXTURE_MODEL_KEY'
+    }
   }
+  const reviewerIdentity = {
+    provider: 'deepseek',
+    model: 'deepseek-flash',
+    baseUrl: 'https://api.deepseek.com'
+  }
+  const fixtureReviewer = { ...reviewerIdentity, configurationDigest: sha256(canonical(reviewerIdentity)) }
   for (const [name, value] of [
     ['installation.json', { files, workerDigest }],
     ['worker.json', config],
@@ -156,7 +167,7 @@ function fixture(t: TestContext) {
       requestRunId: 913,
       requestAttempt: 1,
       completedAt: Date.now(),
-      reviewer: { cliVersion: 'fixture-cli', configurationDigest: 'f'.repeat(64) },
+      reviewer: fixtureReviewer,
       verdict: 'pass',
       findings: [],
       blockers: [],
@@ -167,7 +178,7 @@ function fixture(t: TestContext) {
   )
   const cache = join(
     directory,
-    'cache-' + sha256(canonical({ head, base, workerDigest, model: [] })) + '.json'
+    'cache-' + sha256(canonical({ head, base, workerDigest, model: reviewerIdentity })) + '.json'
   )
   writeFileSync(cache, JSON.stringify(proof))
   const request = {
@@ -202,20 +213,32 @@ function fixture(t: TestContext) {
   const queuePath = join(directory, 'queue-state.json')
   const queue = (): Record<string, any> =>
     existsSync(queuePath) ? JSON.parse(readFileSync(queuePath, 'utf8')) : {}
-  const poll = () => {
-    const state = queue()
-    for (const value of Object.values(state)) value.retryAt = 0
-    writeFileSync(queuePath, JSON.stringify(state))
+  const launch = (env: Record<string, string | undefined> = {}) => {
     writeFileSync(join(directory, 'fixture-data.json'), JSON.stringify(data))
+    const launchEnv: Record<string, string | undefined> = {
+      ...process.env,
+      NODE_OPTIONS: '',
+      NODE_PATH: '',
+      DSH_PX_REVIEW_MAX_JOBS: '1',
+      DSHPX_FIXTURE_MODEL_KEY: 'fixture-model-key',
+      ...env
+    }
+    for (const [name, value] of Object.entries(launchEnv)) if (value === undefined) delete launchEnv[name]
     const result = spawnSync(process.execPath, ['run-fixture.mjs'], {
       cwd: directory,
       windowsHide: true,
       encoding: 'utf8',
       timeout: 10000,
-      env: { ...process.env, NODE_OPTIONS: '', NODE_PATH: '', DSH_PX_REVIEW_MAX_JOBS: '1' }
+      env: launchEnv
     })
     assert.equal(result.error, undefined)
-    const observed = JSON.parse(readFileSync(join(directory, 'observed.json'), 'utf8'))
+    return { result, observed: JSON.parse(readFileSync(join(directory, 'observed.json'), 'utf8')) }
+  }
+  const poll = () => {
+    const state = queue()
+    for (const value of Object.values(state)) value.retryAt = 0
+    writeFileSync(queuePath, JSON.stringify(state))
+    const { result, observed } = launch()
     assert.equal(observed.fatal, undefined, result.stderr)
     data.checks = observed.checks
     return { ...observed, processStatus: result.status, queue: queue() }
@@ -231,9 +254,21 @@ function fixture(t: TestContext) {
     assert.equal(JSON.parse(readFileSync(identity(), 'utf8')).request.base, artifactBase)
     return result
   }
-  return { directory, workerDigest, data, request, cache, queuePath, queue, poll, capture, identity }
+  return { directory, workerDigest, data, request, cache, queuePath, queue, launch, poll, capture, identity }
 }
 
+test('real worker main fails before any GitHub or model call when the configured key variable is missing', (t) => {
+  const f = fixture(t)
+  for (const value of [undefined, '']) {
+    const { result, observed } = f.launch({ DSHPX_FIXTURE_MODEL_KEY: value })
+    assert.equal(result.status, 1)
+    assert.match(observed.fatal, /API key is missing: set the DSHPX_FIXTURE_MODEL_KEY environment variable/)
+    assert.deepEqual(observed.calls.gh, [])
+    assert.deepEqual(observed.calls.app, [])
+    assert.equal(observed.calls.model + observed.calls.git, 0)
+    assert.equal(existsSync(f.queuePath), false)
+  }
+})
 test('real worker main captures once and keeps unchanged quality monitors after artifact expiry or deletion', (t) => {
   const f = fixture(t)
   f.capture()

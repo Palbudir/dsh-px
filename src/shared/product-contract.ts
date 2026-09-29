@@ -11,8 +11,14 @@ export interface ProductCatalog {
     version: string
     packVersion: string
     hostVersion: string
-    architecture: 'legacy-shell' | 'official-derived'
+    architecture: 'official-derived'
   }
+}
+
+/** The pinned official host sources: config/native-pack.json and config/native-desktop.json. */
+export interface NativeHostPins {
+  pack: { hostVersion: string; upstreamCommit: string }
+  desktop: { version: string; commit: string }
 }
 
 /** PX 0.x.y uses x for its bridge generation; patch and prerelease advance independently. */
@@ -57,8 +63,25 @@ export function validateProductCatalog(value: unknown): asserts value is Product
     new Set(c.pack.surfaces).size !== c.pack.surfaces.length
   )
     throw new Error('Invalid Pack surfaces')
-  if (!['legacy-shell', 'official-derived'].includes(c.desktop.architecture))
-    throw new Error('Unknown Desktop architecture')
+  // The retired Electron shell is not a buildable product any more; its releases stay historical.
+  if (c.desktop.architecture !== 'official-derived')
+    throw new Error('Desktop architecture must be official-derived')
+}
+
+/** One pinned official host describes Desktop, Pack and the upstream checkout used to build both. */
+export function assertNativeHostPins(catalog: unknown, pins: NativeHostPins): void {
+  validateProductCatalog(catalog)
+  const commit = /^[a-f0-9]{40}$/
+  if (!commit.test(pins.pack?.upstreamCommit ?? '') || !commit.test(pins.desktop?.commit ?? ''))
+    throw new Error('Native host pins require exact upstream commits')
+  if (pins.pack.upstreamCommit !== pins.desktop.commit)
+    throw new Error('Native Pack and Desktop pin different upstream commits')
+  if (pins.pack.hostVersion !== pins.desktop.version)
+    throw new Error('Native Pack and Desktop pin different host versions')
+  if (catalog.desktop.hostVersion !== pins.desktop.version)
+    throw new Error('Desktop host version differs from the pinned native Desktop')
+  if (!catalog.pack.hostVersions.includes(pins.pack.hostVersion))
+    throw new Error('Pack host compatibility does not include the pinned native host')
 }
 
 /** Fail closed on a mismatched manifest before a runtime is activated or migrated. */

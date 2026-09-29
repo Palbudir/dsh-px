@@ -7,7 +7,6 @@ import { checkWebAccess, type FetchPage, type NetworkCheck } from './network'
 import { createLayoutStore, LayoutError } from './layout'
 import { readJsonBody } from './http'
 import { registerActivity } from './activity'
-import { requestShellAction, ShellUnavailable } from '../../shared/shell-protocol'
 
 export const name = 'dsh-px-workbench'
 export const inject: string[] = []
@@ -68,50 +67,6 @@ export function apply(ctx: HostPluginContext): void {
           if (rejectUntrustedRequest(req, res, ctx.connection)) return
           if (req.method !== 'GET') return json(res, 405, { error: '请使用 GET' })
           json(res, 200, localStatus(activity()))
-        }
-      }),
-      ctx.webServer.register({
-        kind: 'exact',
-        path: `${DEFAULTS.routePrefix}/restart`,
-        handler: async (req, res) => {
-          if (rejectUntrustedRequest(req, res, ctx.connection)) return
-          if (req.method !== 'POST') return json(res, 405, { error: '请使用 POST' })
-          if (req.headers?.['x-dsh-px-request'] !== '1')
-            return json(res, 403, { error: '请从本机工作台提交请求' })
-          if (!localStatus().canRestart)
-            return json(res, 409, { error: '桌面服务未就绪或正在重启，请在桌面窗口重试。' })
-          try {
-            const receipt = await requestShellAction(process.env.DSH_PX_USER_DATA, 'restart')
-            json(res, 202, {
-              ok: true,
-              ...receipt,
-              message: '桌面应用已收到重启请求；服务上的所有页面将重新连接。'
-            })
-          } catch (err) {
-            json(res, err instanceof ShellUnavailable ? err.status : 503, {
-              error: err instanceof Error ? err.message : '无法提交重启请求，请通过桌面托盘重试。'
-            })
-          }
-        }
-      }),
-      ctx.webServer.register({
-        kind: 'exact',
-        path: `${DEFAULTS.routePrefix}/cancel-pending`,
-        handler: async (req, res) => {
-          if (rejectUntrustedRequest(req, res, ctx.connection)) return
-          if (req.method !== 'POST') return json(res, 405, { error: '请使用 POST' })
-          if (req.headers?.['x-dsh-px-request'] !== '1')
-            return json(res, 403, { error: '请从本机应用提交请求' })
-          try {
-            json(res, 202, {
-              ok: true,
-              ...(await requestShellAction(process.env.DSH_PX_USER_DATA, 'cancel-pending'))
-            })
-          } catch (err) {
-            json(res, err instanceof ShellUnavailable ? err.status : 503, {
-              error: err instanceof Error ? err.message : '取消请求未完成'
-            })
-          }
         }
       }),
       ctx.webServer.register({

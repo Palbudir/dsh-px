@@ -130,16 +130,19 @@ function fixture(t: TestContext) {
   const directory = join(root, 'trusted installation')
   const children: ChildProcess[] = []
   mkdirSync(directory)
-  for (const file of ['review-loop.mjs', 'review-core.mjs', 'review-parser.mjs'])
-    copyFileSync(resolve('scripts', file), join(directory, file))
+  const trusted = [
+    'review-loop.mjs',
+    'review-core.mjs',
+    'review-parser.mjs',
+    'review-upstream.mjs',
+    'check-secrets.mjs'
+  ]
+  for (const file of trusted) copyFileSync(resolve('scripts', file), join(directory, file))
   writeFileSync(join(directory, 'review-worker.mjs'), fakeWorker)
   const parserFiles = installReviewParser(resolve('.'), directory)
   function seal(extra: Record<string, string> = {}) {
     const files = Object.fromEntries(
-      ['review-loop.mjs', 'review-core.mjs', 'review-parser.mjs', 'review-worker.mjs'].map((name) => [
-        name,
-        sha256(readFileSync(join(directory, name)))
-      ])
+      [...trusted, 'review-worker.mjs'].map((name) => [name, sha256(readFileSync(join(directory, name)))])
     )
     Object.assign(files, parserFiles, extra)
     const workerDigest = sha256(canonical(files))
@@ -642,7 +645,7 @@ test('stop during the wait exits without another worker and a changed installati
   acquireLoopLock(f.directory)()
 })
 
-for (const setting of ['codexOverrides', 'codex', 'authHome', 'policy'])
+for (const setting of ['model', 'gh', 'git', 'policy'])
   test(`a ${setting}-only change stops after waiting without changing the code digest`, async (t) => {
     const f = fixture(t),
       before = verifyLoopInstallation(f.directory)
@@ -662,7 +665,14 @@ for (const setting of ['codexOverrides', 'codex', 'authHome', 'policy'])
             if (setting === 'policy') value.maxAgeHours = 24
             else
               value[setting] =
-                setting === 'codexOverrides' ? ['model="different-fixture"'] : 'changed-fixture-path'
+                setting === 'model'
+                  ? {
+                      provider: 'deepseek',
+                      model: 'different-fixture',
+                      baseUrl: 'https://api.deepseek.com',
+                      apiKeyEnv: 'DEEPSEEK_API_KEY'
+                    }
+                  : 'changed-fixture-path'
             writeFileSync(file, JSON.stringify(value))
           }
         }
@@ -700,7 +710,7 @@ test('configuration changes during a worker are detected before starting the nex
           calls++
           const file = join(f.directory, 'worker.json'),
             value = JSON.parse(readFileSync(file, 'utf8'))
-          value.codexOverrides = ['model="changed-during-worker"']
+          value.model = { provider: 'deepseek', model: 'changed-during-worker' }
           writeFileSync(file, JSON.stringify(value))
           return { exitCode: 0, signal: null }
         },
