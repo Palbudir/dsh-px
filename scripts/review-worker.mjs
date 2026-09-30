@@ -448,6 +448,7 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
     upstream: upstreamIdentities,
     secretFindings,
     graphBlockers = [],
+    maskedPaths = [],
     declaredHosts,
     metrics
   } = await prepareReviewSnapshot(config, request, git, { upstream })
@@ -471,6 +472,7 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
         upstream: upstreamIdentities,
         projections,
         secretFindings: secretFindings.length,
+        maskedPaths,
         batches: batches.map((batch) => ({ id: batch.id, chars: batch.text.length, scope: batch.scope }))
       },
       null,

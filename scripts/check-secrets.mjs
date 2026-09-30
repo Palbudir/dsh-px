@@ -107,22 +107,32 @@ export function scanText(path, text, rules = RULES) {
 }
 
 /**
- * Same rules as scanText, but replace every matched character with `*`. Length and line breaks
- * are kept, so offsets computed on the masked text still describe the original file.
+ * Same rules as scanText, but replace matched characters with `*`. Every rule is evaluated on the
+ * original line and the union of their ranges is written once, so a narrow rule can never hide
+ * the rest of a value from a wider one. Rules with a value group mask only that value (the user
+ * name of a path, the credential of an assignment), so surrounding syntax stays intact. Length and
+ * line breaks are kept, so offsets computed on the masked text still describe the original file.
  */
 export function maskSecrets(text, rules = RULES) {
   const lines = text.split(/(\r?\n)/)
   for (let i = 0; i < lines.length; i += 2) {
-    let line = lines[i]
+    const line = lines[i]
+    const hidden = new Uint8Array(line.length)
+    let any = false
     for (const [id, rule, group] of rules) {
-      const flags = rule.flags.includes('g') ? rule.flags : rule.flags + 'g'
-      line = line.replace(new RegExp(rule.source, flags), (...args) => {
-        const match = args[0]
-        const value = group ? args[group] : undefined
-        return placeholder(id, value) ? match : '*'.repeat(match.length)
-      })
+      const flags = [...new Set((rule.flags + 'gd').split(''))].join('')
+      for (const match of line.matchAll(new RegExp(rule.source, flags))) {
+        const value = group ? match[group] : undefined
+        if (placeholder(id, value)) continue
+        const [start, end] = group && match.indices[group] ? match.indices[group] : match.indices[0]
+        hidden.fill(1, start, end)
+        any = true
+      }
     }
-    lines[i] = line
+    if (!any) continue
+    let out = ''
+    for (let c = 0; c < line.length; c++) out += hidden[c] ? '*' : line[c]
+    lines[i] = out
   }
   return lines.join('')
 }

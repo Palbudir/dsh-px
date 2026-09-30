@@ -909,7 +909,9 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
       bytesRead += bytes.length
     }
     const blob = cached.get(entry.oid)
-    if (!blob.findings.length) return { ...entry, text: blob.text }
+    // `source` is the exact blob and is only parsed locally (imports, policy JSON); `text` is what
+    // may reach the model. They differ only for masked already-merged content.
+    if (!blob.findings.length) return { ...entry, source: blob.text, text: blob.text }
     // Candidate (head) content with a finding blocks the review. Content that exists only on
     // the already-merged side is masked character-for-character, so it never reaches the model.
     if (ref === request.head || !options.mask) {
@@ -918,11 +920,11 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
         for (const finding of blob.findings)
           secretFindings.push({ path, line: finding.line, rule: finding.rule })
       }
-      return { ...entry, text: blob.text }
+      return { ...entry, source: blob.text, text: blob.text }
     }
     blob.masked ??= options.mask(blob.text)
     maskedFindings.add(path)
-    return { ...entry, text: blob.masked }
+    return { ...entry, source: blob.text, text: blob.masked, masked: true }
   }
   const queue = [],
     queued = new Set()
@@ -1008,7 +1010,7 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
     const { ref, path } = queue[index],
       entry = await read(ref, path)
     if (/\.[cm]?[jt]sx?$/.test(path) && !leaves.has(ref + ':' + path)) {
-      const references = reviewModuleReferences(entry.text, { jsx: /\.[jt]sx$/.test(path), filename: path })
+      const references = reviewModuleReferences(entry.source, { jsx: /\.[jt]sx$/.test(path), filename: path })
       for (const dependency of references.literals) {
         const specifier = dependency.specifier
         if (dependency.repositoryRelative || specifier.startsWith('.')) {
@@ -1029,7 +1031,7 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
         dynamic.push({
           ref,
           path,
-          line: entry.text.slice(0, item.at).split('\n').length,
+          line: entry.source.slice(0, item.at).split('\n').length,
           kind: item.kind,
           ...(item.incompleteLiteralPrefix ? { incompleteLiteralPrefix: item.incompleteLiteralPrefix } : {})
         })
@@ -1037,7 +1039,7 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
     if (path === 'docs/github/review-policy.json') {
       let policy
       try {
-        policy = JSON.parse(entry.text)
+        policy = JSON.parse(entry.source)
       } catch {
         throw new Error(`Review policy is not valid JSON at ${ref}`)
       }
@@ -1094,7 +1096,9 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
         path,
         oid: entry.oid,
         roles: at,
-        sha256: sha256(entry.text),
+        // sha256 always describes the exact Git blob; masked text is labelled, not re-hashed.
+        sha256: sha256(entry.source),
+        ...(entry.masked ? { masked: true } : {}),
         reasons: [...reasons.get(path)]
       }
       identities.push(identity)
@@ -1167,7 +1171,10 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
           ref: request.base,
           oid: trees.get(request.base).get(path)?.oid ?? null
         }))
-  const header = `Repository: ${request.repository}\nBase: ${request.base}\nMerge base: ${request.mergeBase}\nHead: ${request.head}\nGroup change inventory (not per-batch scope): ${JSON.stringify(request.names)}\nRequested-base changed roots (null oid means absent): ${JSON.stringify(baseRoots)}\nContext contract: selected source sections are complete immutable Git blobs. Any JSON-pointer projection is explicitly labelled; all batches together supply the complete changed files; this batch supplies only its explicit ranges. Source roles are explicit; identical blobs are printed once. External packages and computed references are not silently treated as reviewed implementations.\n${upstreamHeader}External module references without upstream projection (use package.json versions; external code is not supplied): ${JSON.stringify(unprojected)}\nComputed module references (assess whether their targets need additional context): ${JSON.stringify(dynamic)}\n`
+  const maskedNote = maskedFindings.size
+    ? `Masked already-merged sources: ${JSON.stringify([...maskedFindings].sort())}. In these files only, runs of * replace secret-shaped values or personal path segments that already exist on the merged side; length and syntax are unchanged. Treat each run as an opaque placeholder, not as a code defect. Candidate (head) content is never masked: a finding there blocks the review before any model call.\n`
+    : ''
+  const header = `Repository: ${request.repository}\nBase: ${request.base}\nMerge base: ${request.mergeBase}\nHead: ${request.head}\nGroup change inventory (not per-batch scope): ${JSON.stringify(request.names)}\nRequested-base changed roots (null oid means absent): ${JSON.stringify(baseRoots)}\n${maskedNote}Context contract: selected source sections are complete immutable Git blobs except the masked sources listed above. Any JSON-pointer projection is explicitly labelled; all batches together supply the complete changed files; this batch supplies only its explicit ranges. Source roles are explicit; identical blobs are printed once. External packages and computed references are not silently treated as reviewed implementations.\n${upstreamHeader}External module references without upstream projection (use package.json versions; external code is not supplied): ${JSON.stringify(unprojected)}\nComputed module references (assess whether their targets need additional context): ${JSON.stringify(dynamic)}\n`
   const text = header + context.join('\n\n')
   return {
     files,

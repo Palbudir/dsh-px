@@ -825,6 +825,8 @@ test('already-merged content with a secret-shaped match is masked; candidate con
   const file = plan.files.find((f: any) => f.path === 'packages/shared/legacy.ts')
   assert.equal(file.before.length, legacy.length)
   assert.ok(file.before.endsWith('export const kept = 1'))
+  // The model is told which files are masked.
+  assert.ok(plan.context.includes('Masked already-merged sources: ["packages/shared/legacy.ts"]'))
   // The same content on the candidate side is new content and blocks before any model call.
   const added = memory({ [base]: tree, [head]: { ...tree, 'packages/shared/legacy.ts': legacy } })
   const blocked = await collectGroupedReview(
@@ -841,6 +843,23 @@ test('already-merged content with a secret-shaped match is masked; candidate con
     blocked.secretFindings.map((f: any) => [f.path, f.rule]),
     [['packages/shared/legacy.ts', 'windows-user-path']]
   )
+})
+
+test('masked merged sources are still parsed from the exact blob, so imports resolve', async () => {
+  const { scanText, maskSecrets } = await import(pathToFileURL(resolve('scripts/check-secrets.mjs')).href)
+  const tree = graphTree()
+  const legacy = `const p = "C:\\\\Users\\\\${'alice'}\\\\x"\nimport './dep'\nexport {}`
+  const f = memory({
+    [base]: { ...tree, 'src/old.ts': legacy, 'src/dep.ts': 'export const dep = 1' },
+    [head]: { ...tree, 'src/dep.ts': 'export const dep = 1' }
+  })
+  const plan = await collectGroupedReview(request(['src/old.ts']), f.reader, {}, 500000, {
+    scan: scanText,
+    mask: maskSecrets
+  })
+  assert.deepEqual(plan.secretFindings, [])
+  assert.ok(plan.batches.every((b: any) => !b.text.includes('alice')))
+  assert.ok(plan.context.includes('local dependency of src/old.ts'))
 })
 
 test('a deleted merged file importing a generated tree is reviewable; candidate code still may not', async () => {

@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { maskSecrets, scanText } from '../scripts/check-secrets.mjs'
+import { RULES, maskSecrets, scanText } from '../scripts/check-secrets.mjs'
 
 const rules = (text: string) => scanText('sample/file.ts', text).map((f: { rule: string }) => f.rule)
 // Samples are assembled at runtime so this file itself never contains a matching literal.
@@ -38,6 +38,42 @@ test('masking keeps length and line breaks and removes every match', () => {
   assert.deepEqual(rules(masked), [])
   // Declared placeholders are left as they are.
   assert.equal(maskSecrets('C:\\Users\\Public\\x'), 'C:\\Users\\Public\\x')
+})
+
+test('every character any rule matches on the original is masked, even across overlapping rules', () => {
+  const marker = j('QZ9', 'RESIDUE', 'QZ9')
+  const r = (n: number) => 'Kq7Pz3Xw9Lm2Rt5Vb8Nc4Hd6Jf1Gs0Ya'.repeat(3).slice(0, n)
+  // A narrow rule covers only the head of the value; a wider rule covers the marker tail too.
+  const credentials = [
+    j('apikey = "', 'AI', 'za', r(35), marker, '"'),
+    j('token = ', 's', 'k-', r(40), '.', marker),
+    j('secret: ', 'np', 'm_', r(36), marker),
+    j('Authorization: Bearer ', 'gh', 'p_', r(36), '.', marker)
+  ]
+  for (const sample of credentials) {
+    const masked = maskSecrets(sample)
+    assert.equal(masked.length, sample.length)
+    assert.ok(!masked.includes(marker), 'no unmasked tail may survive')
+    // Independent oracle: each rule's own value range on the original must be all `*`.
+    for (const [id, rule, group] of RULES) {
+      for (const m of sample.matchAll(new RegExp(rule.source, rule.flags.replace('g', '') + 'gd'))) {
+        const range = (group ? m.indices![group] : undefined) ?? m.indices![0]
+        const [s, e] = range!
+        assert.ok(/^\*+$/.test(masked.slice(s, e)), `${id} range left unmasked`)
+      }
+    }
+  }
+  // For a personal path only the user name is the secret; the rest of the path stays readable.
+  const path = j('password = C:/Users/', 'alice', '/', marker)
+  assert.equal(maskSecrets(path), path.replace('alice', '*****'))
+})
+
+test('masking a path keeps the surrounding syntax parseable', () => {
+  const source = j('const p = "C:\\\\Users\\\\', 'alice', '\\\\x"\nexport {}')
+  const masked = maskSecrets(source)
+  assert.ok(!masked.includes('alice'))
+  // Only the user name is replaced; quotes and escape sequences are unchanged.
+  assert.equal(masked, source.replace('alice', '*****'))
 })
 
 test('nearby placeholder words no longer excuse a real-looking value', () => {
