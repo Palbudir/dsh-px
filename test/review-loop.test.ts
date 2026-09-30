@@ -362,7 +362,12 @@ test('stale receipts and expired stop requests cannot stand in for owner accepta
     JSON.stringify({ instanceId, requestId: expired.requestId, acceptedAt: new Date().toISOString() })
   )
   try {
-    await assert.rejects(requestLoopStop(f.directory, { timeoutMs: 100, pollMs: 10 }), /not acknowledged/)
+    // Either way the stale receipt is refused: on a slow runner the stop request's own write can
+    // already exceed the 100 ms request window before any receipt is read.
+    await assert.rejects(
+      requestLoopStop(f.directory, { timeoutMs: 100, pollMs: 10 }),
+      /not acknowledged|write deadline expired/
+    )
   } finally {
     unlock()
   }
