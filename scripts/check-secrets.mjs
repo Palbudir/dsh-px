@@ -65,9 +65,12 @@ export const RULES = [
  */
 const PLACEHOLDER_VALUE =
   /^(?:s[k]-)?(?:(?:fixture|example|placeholder|dummy|fake|redacted|synthetic|test-fixture)[-_]|[x*.0]{4,}$|<[^>]*>$|\$\{?[A-Za-z_]|%[A-Za-z_]+%|\{\{)/i
-/** Generic or explicitly synthetic account names that are not personal machine paths. */
+/**
+ * Generic or explicitly synthetic account names that are not personal machine paths. A run of `*`
+ * is a name already masked by maskSecrets, so masked text rescans clean on every path form.
+ */
 const PLACEHOLDER_USER =
-  /^(?:Public|Default|All Users|runner|user|username|<[^>]*>|%[^%]+%|\$\{?[A-Za-z_][^/\\]*|\{[^}]*\}|[A-Z0-9_]*FIXTURE[A-Z0-9_]*|用户名|你的用户名)$/i
+  /^(?:Public|Default|All Users|runner|user|username|<[^>]*>|%[^%]+%|\$\{?[A-Za-z_][^/\\]*|\{[^}]*\}|[A-Z0-9_]*FIXTURE[A-Z0-9_]*|用户名|你的用户名|\*+)$/i
 /** High-signal rules still applied to the printable bytes of binary files. */
 const BINARY_RULES = new Set([
   'private-key',

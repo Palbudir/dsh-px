@@ -862,6 +862,35 @@ test('masked merged sources are still parsed from the exact blob, so imports res
   assert.ok(plan.context.includes('local dependency of src/old.ts'))
 })
 
+test('header fields parsed from a masked merged blob are masked too; the final batch scan backs it up', async () => {
+  const { scanText, maskSecrets } = await import(pathToFileURL(resolve('scripts/check-secrets.mjs')).href)
+  const user = 'ivan'
+  const tree = graphTree()
+  const sources = [
+    `const x = 'a'\nawait import('C:/Users/${user}/lib/' + x)\nexport {}`,
+    `import 'file:///C:/Users/${user}/x.mjs'\nexport {}`,
+    `const x = 'a'\nrequire('/home/${user}/m/' + x)\nexport {}`
+  ]
+  for (const src of sources) {
+    const f = memory({ [base]: { ...tree, 'src/old.mjs': src }, [head]: tree })
+    const plan = await collectGroupedReview(request(['src/old.mjs']), f.reader, {}, 500000, {
+      scan: scanText,
+      mask: maskSecrets
+    })
+    assert.deepEqual(plan.secretFindings, [])
+    assert.ok(
+      plan.batches.every((b: any) => !b.text.includes(user)),
+      'raw user name reached the model input'
+    )
+  }
+  // Without masking, the final scan over the exact batch text blocks the same input.
+  const f = memory({ [base]: { ...tree, 'src/old.mjs': sources[0] }, [head]: tree })
+  const unmasked = await collectGroupedReview(request(['src/old.mjs']), f.reader, {}, 500000, {
+    scan: scanText
+  })
+  assert.ok(unmasked.secretFindings.length > 0)
+})
+
 test('a deleted merged file importing a generated tree is reviewable; candidate code still may not', async () => {
   const tree = graphTree()
   const script = "await import('../runtime/dsh/node_modules/pkg/lib/index.js')\nexport {}"

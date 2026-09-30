@@ -66,6 +66,9 @@ test('every character any rule matches on the original is masked, even across ov
   // For a personal path only the user name is the secret; the rest of the path stays readable.
   const path = j('password = C:/Users/', 'alice', '/', marker)
   assert.equal(maskSecrets(path), path.replace('alice', '*****'))
+  // Masked text rescans clean for every path form, including POSIX home directories.
+  for (const p of [j('C:\\Users\\', 'bob', '\\x'), j('/home/', 'bob', '/x'), j('/c/Users/', 'bob', '/x')])
+    assert.deepEqual(rules(maskSecrets(p)), [])
 })
 
 test('masking a path keeps the surrounding syntax parseable', () => {

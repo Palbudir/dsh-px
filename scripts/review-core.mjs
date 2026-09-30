@@ -1011,6 +1011,9 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
       entry = await read(ref, path)
     if (/\.[cm]?[jt]sx?$/.test(path) && !leaves.has(ref + ':' + path)) {
       const references = reviewModuleReferences(entry.source, { jsx: /\.[jt]sx$/.test(path), filename: path })
+      // Strings parsed from the exact blob that are printed for the model (external specifiers,
+      // computed-reference prefixes) are masked when the blob itself is masked.
+      const shown = (value) => (entry.masked && options.mask ? options.mask(value) : value)
       for (const dependency of references.literals) {
         const specifier = dependency.specifier
         if (dependency.repositoryRelative || specifier.startsWith('.')) {
@@ -1021,11 +1024,11 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
             ? specifier
             : posix.normalize(posix.join(posix.dirname(path), specifier))
           if (ref !== request.head && !target.startsWith('../') && generatedTree(target))
-            external.set(target, true)
+            external.set(shown(target), true)
           else add(ref, resolveDependency(ref, path, dependency), `local dependency of ${path}`)
         } else if (specifier.startsWith('/') || /^[a-z]:[\\/]/i.test(specifier))
           throw new Error(`Absolute dependency is outside the Git snapshot: ${path}`)
-        else if (!isBuiltin(specifier)) external.set(specifier, true)
+        else if (!isBuiltin(specifier)) external.set(shown(specifier), true)
       }
       for (const item of references.dynamic)
         dynamic.push({
@@ -1033,7 +1036,9 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
           path,
           line: entry.source.slice(0, item.at).split('\n').length,
           kind: item.kind,
-          ...(item.incompleteLiteralPrefix ? { incompleteLiteralPrefix: item.incompleteLiteralPrefix } : {})
+          ...(item.incompleteLiteralPrefix
+            ? { incompleteLiteralPrefix: shown(item.incompleteLiteralPrefix) }
+            : {})
         })
     }
     if (path === 'docs/github/review-policy.json') {
@@ -1061,7 +1066,7 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
       if (!lock) continue
       let value
       try {
-        value = JSON.parse(lock.text)
+        value = JSON.parse(lock.source)
       } catch {
         throw new Error(`Invalid parser lockfile source at ${ref}`)
       }
@@ -1070,7 +1075,7 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
         oid: lock.oid,
         role,
         ref,
-        sha256: sha256(lock.text),
+        sha256: sha256(lock.source),
         purpose:
           'Exact parser provenance JSON pointers, not a truncated source file. Full lockfile changes remain in the changed-file records.',
         pointers: {
@@ -1323,11 +1328,15 @@ export async function collectGroupedReview(
   }
   if (files.size !== request.names.length || request.names.some((path) => !files.has(path)))
     throw new Error('Review groups do not cover every changed file')
-  const secretFindings = [
-    ...new Map(
-      snapshots.flatMap((snapshot) => snapshot.secretFindings).map((finding) => [canonical(finding), finding])
-    ).values()
-  ]
+  const collected = snapshots.flatMap((snapshot) => snapshot.secretFindings)
+  // Final gate over the exact model input: any secret-shaped text that reached a batch through
+  // any path (source text, header fields, projections) blocks the review before a model call.
+  // It only adds findings when no source finding already blocks, so reported locations stay exact.
+  if (options.scan && !collected.length)
+    for (const batch of batches)
+      for (const finding of options.scan(`<batch ${batch.id}>`, batch.text))
+        collected.push({ path: `<batch ${batch.id}>`, line: finding.line, rule: finding.rule })
+  const secretFindings = [...new Map(collected.map((finding) => [canonical(finding), finding])).values()]
   return {
     files: request.names.map((path) => files.get(path)),
     batches,
