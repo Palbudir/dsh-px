@@ -78,16 +78,33 @@ interface TerminalHost {
 interface TerminalHostEffects {
   effect?: (setup: () => () => void, label: string) => void
 }
+/** The part of DSH `agentPresets` used here: a service mounted inside an Agent's preset group. */
+interface AgentPresetLookup {
+  serviceFor: (agent: { ctx: unknown }, name: string) => unknown
+}
 
 export function registerTerminalActivity(
   ctx: TerminalHost
 ): (owners: readonly TerminalOwner[]) => { known: boolean; openTerminals: number } {
   const read = createTerminalActivityReader()
-  // `terminals` is an Agent-scoped service: presets isolate it inside each Agent's plugin group, so
-  // it is read per owner through `owner.ctx`. A host-level provider is used when one exists, but
-  // its absence does not make the count unknown. The host-level `terminalController` is required.
+  // `terminals` is an Agent-scoped service. Official presets mount it inside an isolated preset
+  // group that is not under the Agent's own fiber, so `agent.ctx.get('terminals')` cannot see it;
+  // the owning `agentPresets.serviceFor(agent, 'terminals')` lookup can. An Agent is listed only
+  // after its preset finished mounting, so "no terminals service" there means it has none. The
+  // host-level `terminalController` is required.
   let native: NativeTerminalRegistry | undefined
   let browser: BrowserTerminalController | undefined
+  let presets: AgentPresetLookup | undefined
+  ctx.inject(['agentPresets'], (host) => {
+    const value = host.agentPresets as AgentPresetLookup | undefined
+    presets = value
+    host.effect?.(
+      () => () => {
+        if (presets === value) presets = undefined
+      },
+      'workbench: agent preset terminal lookup'
+    )
+  })
   ctx.inject(['terminals'], (host) => {
     const value = host.terminals as NativeTerminalRegistry | undefined
     native = value
@@ -113,7 +130,13 @@ export function registerTerminalActivity(
       owners,
       browser
         ? {
-            native: (owner) => (owner.ctx?.get('terminals') as NativeTerminalRegistry | undefined) ?? native,
+            native: (owner) =>
+              (owner.ctx && typeof presets?.serviceFor === 'function'
+                ? (presets.serviceFor(owner as { ctx: unknown }, 'terminals') as
+                    NativeTerminalRegistry | undefined)
+                : undefined) ??
+              (owner.ctx?.get('terminals') as NativeTerminalRegistry | undefined) ??
+              native,
             browser
           }
         : undefined

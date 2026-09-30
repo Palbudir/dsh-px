@@ -335,6 +335,17 @@ function registerTerminalActivity(ctx) {
   const read = createTerminalActivityReader();
   let native;
   let browser;
+  let presets;
+  ctx.inject(["agentPresets"], (host) => {
+    const value = host.agentPresets;
+    presets = value;
+    host.effect?.(
+      () => () => {
+        if (presets === value) presets = void 0;
+      },
+      "workbench: agent preset terminal lookup"
+    );
+  });
   ctx.inject(["terminals"], (host) => {
     const value = host.terminals;
     native = value;
@@ -358,7 +369,7 @@ function registerTerminalActivity(ctx) {
   return (owners) => read(
     owners,
     browser ? {
-      native: (owner) => owner.ctx?.get("terminals") ?? native,
+      native: (owner) => (owner.ctx && typeof presets?.serviceFor === "function" ? presets.serviceFor(owner, "terminals") : void 0) ?? owner.ctx?.get("terminals") ?? native,
       browser
     } : void 0
   );

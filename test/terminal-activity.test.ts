@@ -17,9 +17,9 @@ test('without both terminal services, terminal activity is unknown rather than i
   assert.equal(createTerminalActivityReader()([]).known, false)
 })
 
-test('real composition: terminalController at host level, terminals only inside each Agent', () => {
-  // Official presets isolate `terminals` inside each Agent's plugin group; only
-  // `terminalController` is a host service. Activity must be known in that composition.
+test('real composition: terminalController at host level, terminals only inside each Agent preset', () => {
+  // Official presets mount `terminals` in an isolated preset group outside the Agent's fiber:
+  // agent.ctx.get('terminals') is undefined and only agentPresets.serviceFor finds it.
   const effects: Array<() => void> = []
   const injected = new Map<string, (host: any) => void>()
   const read = registerTerminalActivity({
@@ -31,11 +31,15 @@ test('real composition: terminalController at host level, terminals only inside 
     effect: (setup: () => () => void) => effects.push(setup())
   })
   const agentTerminals: NativeTerminalRegistry = { hasOwnerActivity: () => true, list: () => [{}, {}] }
-  const withTerminals = {
-    id: 'session-1',
-    ctx: { get: (name: string) => (name === 'terminals' ? agentTerminals : undefined) }
-  }
+  const withTerminals = { id: 'session-1', ctx: { get: () => undefined } }
   const withoutTerminals = { id: 'session-2', ctx: { get: () => undefined } }
+  injected.get('agentPresets')!({
+    agentPresets: {
+      serviceFor: (agent: { ctx: unknown }, name: string) =>
+        agent === withTerminals && name === 'terminals' ? agentTerminals : undefined
+    },
+    effect: () => {}
+  })
   assert.deepEqual(read([withTerminals, withoutTerminals]), { known: true, openTerminals: 3 })
   // An Agent that leaves the list keeps its terminals counted until its registry drains.
   assert.deepEqual(read([withoutTerminals]), { known: true, openTerminals: 2 })
@@ -45,6 +49,48 @@ test('real composition: terminalController at host level, terminals only inside 
   // Disposing terminalController makes the count unknown again.
   for (const dispose of effects) dispose()
   assert.equal(read([withoutTerminals]).known, false)
+})
+
+test('an open Agent tool terminal in an isolated preset is never reported as idle', () => {
+  const injected = new Map<string, (host: any) => void>()
+  const read = registerTerminalActivity({ inject: (names, apply) => injected.set(names[0], apply) })
+  injected.get('terminalController')!({ terminalController: { list: () => [] }, effect: () => {} })
+  const agent = { id: 'session-1', ctx: { get: () => undefined } }
+  const terminals: NativeTerminalRegistry = { hasOwnerActivity: () => true, list: () => [{}] }
+  injected.get('agentPresets')!({ agentPresets: { serviceFor: () => terminals }, effect: () => {} })
+  const activity = read([agent])
+  assert.deepEqual(activity, { known: true, openTerminals: 1 })
+  assert.equal(
+    isIdle(
+      activitySnapshot({
+        agents: { list: () => [] },
+        jobs: { list: () => [] },
+        terminalActivity: () => activity
+      })
+    ),
+    false
+  )
+})
+
+test('an open Agent tool terminal in an isolated preset is never reported as idle', () => {
+  const injected = new Map<string, (host: any) => void>()
+  const read = registerTerminalActivity({ inject: (names, apply) => injected.set(names[0], apply) })
+  injected.get('terminalController')!({ terminalController: { list: () => [] }, effect: () => {} })
+  const agent = { id: 'session-1', ctx: { get: () => undefined } }
+  const terminals: NativeTerminalRegistry = { hasOwnerActivity: () => true, list: () => [{}] }
+  injected.get('agentPresets')!({ agentPresets: { serviceFor: () => terminals }, effect: () => {} })
+  const activity = read([agent])
+  assert.deepEqual(activity, { known: true, openTerminals: 1 })
+  assert.equal(
+    isIdle(
+      activitySnapshot({
+        agents: { list: () => [] },
+        jobs: { list: () => [] },
+        terminalActivity: () => activity
+      })
+    ),
+    false
+  )
 })
 
 test('no Agent terminal and no open sidebar shell reports a known zero', () => {
