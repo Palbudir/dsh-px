@@ -110,11 +110,12 @@ export function scanText(path, text, rules = RULES) {
 }
 
 /**
- * Same rules as scanText, but replace matched characters with `*`. Every rule is evaluated on the
- * original line and the union of their ranges is written once, so a narrow rule can never hide
- * the rest of a value from a wider one. Rules with a value group mask only that value (the user
- * name of a path, the credential of an assignment), so surrounding syntax stays intact. Length and
- * line breaks are kept, so offsets computed on the masked text still describe the original file.
+ * Same rules as scanText, but replace matched characters with `*`. In each pass every rule is
+ * evaluated on the same text and the union of their ranges is masked, so a narrow rule can never
+ * hide the rest of a value from a wider one; passes repeat per line until nothing new is masked.
+ * Rules with a value group mask only that value (the user name of a path, the credential of an
+ * assignment), so surrounding syntax stays intact. Length and line breaks are kept, so offsets
+ * computed on the masked text still describe the original file.
  */
 export function maskSecrets(text, rules = RULES) {
   const lines = text.split(/(\r?\n)/)
