@@ -11,7 +11,7 @@
     "workflowId": 368449529,
     "path": ".github/workflows/trusted-quality.yml",
     "files": {
-      ".github/workflows/trusted-quality.yml": "413f94f33987d90dd121bda5718f3597602921a72f350c00f275d79817fc084a",
+      ".github/workflows/trusted-quality.yml": "bc5b4172fb3f525c1d24ac6c1629eea8ea1f0b38b406facabf2e52d5b8e504e8",
       "scripts/release-quality.mjs": "f0faef04f20f6afc226597616c9dd4b1791a5ce049ad99782bab96795181d01d",
       "scripts/release-catalog.mjs": "a3187d9c3dd0fb64e9007946218c42dc536ede16b66a85962c29bf938deb518c"
     }
@@ -20,13 +20,13 @@
     "workflowId": 361620914,
     "path": ".github/workflows/release.yml",
     "files": {
-      ".github/workflows/release.yml": "7bdf3cea6136a98925f376f7a70b9792a0a32abbc2ca965b5b2e9c4862fac4c6",
-      "scripts/release-package.mjs": "74d019b60d416e4cc747b98d73a4754a7c7699a2175735afba2c0a82bc247e2b",
+      ".github/workflows/release.yml": "5f9492771e8f4c1934ff5fa1e36da7b5931ba19ecf6f5f085061be49d5886164",
+      "scripts/release-package.mjs": "055ce7071545e3e4d0842f9600f87a4cf800f15d6f94cb8ff56bedb513abfe86",
       "scripts/release-version.mjs": "132e7a2861532263beeb5547ceffad7227f58e61d0c6bbf58cd7508b374d2e66",
       "scripts/release-quality.mjs": "f0faef04f20f6afc226597616c9dd4b1791a5ce049ad99782bab96795181d01d",
       "scripts/release-catalog.mjs": "a3187d9c3dd0fb64e9007946218c42dc536ede16b66a85962c29bf938deb518c",
       "scripts/build-native-pack.ts": "c2bcd9e39f4703947f4ed1be2d3195573efc6fc0ed0a1052905f5a45ef401619",
-      "scripts/prepare-native-desktop.mjs": "65d733eb46a3541c18241c9bbe34d7b47a4211294f230f82f05c7b2902aedb03",
+      "scripts/prepare-native-desktop.mjs": "47346e2bd9d4f791cc1aab76675f679be0bf41188572dfb652ad10c7a47ab073",
       "scripts/brand-native-installer.mjs": "47aca27d855dcba093c36322a56f8b4fc5107cdc8811e967c8dfca7551e6416c",
       "scripts/brand-installer-images.ps1": "34dd2ca993d80a9c92960033b88b6958564d4127b5acb60f4fed3036ad6c5459",
       "scripts/build-icon.ts": "3d47e2d3d8511af37ddd20f99e4219f4fb951640f43cdc15c67da27859561162",

@@ -169,8 +169,18 @@ export const UPSTREAM_LOCK = deepFreeze({
         'package.json',
         'LICENSE',
         'lib/types/client/index.d.ts',
-        'lib/types/client/contract/sessions.d.ts'
+        'lib/types/client/contract/sessions.d.ts',
+        'lib/types/client/sessions/service.d.ts'
       ]
+    },
+    '@deepseek-ai/dsh-client-ui-workspace': {
+      integrity: {
+        '0.1.5-rc.2':
+          'sha512-BRe/RDIJJblCECYLwVroy8h4+cXrf3eXSfLjJ6BdpnW2fI3CBJuEKlFaBPGtKAFTTain0rQ+dP6SscZNrXm5Gw==',
+        '0.2.0-rc.1':
+          'sha512-8ehLXqZGvFWk93RxQwnCKkaoMrTxdyE7HBbKyXaav3V6GAMOpe+MbUmR8fLm17JTno4cfMr/Mg2S4P9hS5dBAw=='
+      },
+      files: ['package.json', 'LICENSE', 'lib/types/client/navigation.d.ts']
     },
     '@deepseek-ai/dsh-client-ui-renderer': {
       integrity: {
@@ -277,6 +287,7 @@ export const UPSTREAM_LOCK = deepFreeze({
     sessionPersistence: ['@deepseek-ai/dsh-session-persistence'],
     conversation: ['@deepseek-ai/dsh-client-ui-conversation'],
     workspaceController: ['@deepseek-ai/dsh-api-workspace-controller'],
+    uiWorkspace: ['@deepseek-ai/dsh-client-ui-workspace'],
     web: ['@deepseek-ai/dsh-web'],
     jobs: ['@deepseek-ai/dsh-jobs'],
     agents: ['@deepseek-ai/dsh-agent'],

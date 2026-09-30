@@ -81,6 +81,29 @@ if (!candidate) {
   )
     throw Error('Pack archive does not match its release artifact record')
 }
+// First-start Pack provisioning calls runPluginCommand(context, args, options) from the packaged dsh
+// directory, which the official build stages at .desktop-build/targets/win-x64/dsh. Verify that
+// contract here so a changed upstream fails the build instead of silently skipping the Pack.
+const pluginManager = join(
+  app,
+  '.desktop-build/targets/win-x64/dsh/node_modules/@deepseek-ai/dsh-plugin-manager'
+)
+let pluginManifest
+try {
+  pluginManifest = JSON.parse(readFileSync(join(pluginManager, 'package.json'), 'utf8'))
+} catch {
+  throw Error('Packaged dsh does not contain @deepseek-ai/dsh-plugin-manager')
+}
+const operationsEntry = pluginManifest.exports?.['./operations']?.default
+if (
+  pluginManifest.name !== '@deepseek-ai/dsh-plugin-manager' ||
+  pluginManifest.version !== pin.version ||
+  typeof operationsEntry !== 'string'
+)
+  throw Error('Packaged dsh plugin manager does not match the pinned host or lacks ./operations')
+const { runPluginCommand: operation } = await import(pathToFileURL(join(pluginManager, operationsEntry)).href)
+if (typeof operation !== 'function' || operation.length !== 3)
+  throw Error('Packaged dsh plugin manager no longer exports runPluginCommand(context, args, options)')
 function replaceOnce(text, from, to) {
   if (text.split(from).length !== 2) throw Error('Upstream patch anchor changed: ' + from)
   return text.replace(from, to)

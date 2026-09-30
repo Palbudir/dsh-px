@@ -1182,6 +1182,10 @@ test('bb118989 regression: real Git groups include runtime producers and keep sh
     git(['cat-file', '-e', headSha + '^{commit}'])
     git(['cat-file', '-e', mergeSha + '^{commit}'])
   } catch {
+    // CI checkouts fetch full history, so a missing commit there is a gate misconfiguration and
+    // must fail rather than let this regression pass unchecked. Local shallow clones may skip.
+    if (process.env.CI)
+      throw new Error('Regression fixture commits are missing; CI needs a full-history checkout')
     return t.skip('fixture commits are not present in this clone')
   }
   const { buildReviewGraph, reviewOwners, reviewContracts, changedScriptTargets } = await import(

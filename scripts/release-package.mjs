@@ -210,10 +210,21 @@ function main() {
     const upstream = option('upstream')
     if (!upstream) throw new Error('--upstream=<prepared official checkout> is required')
     const px = join(resolve(upstream), 'apps/desktop/.desktop-build/px')
+    // First-start Pack provisioning runs pnpm through these packaged resources.
+    const resources = join(px, 'dist/win-unpacked/resources')
+    for (const path of ['runtime/pnpm/bin/pnpm.mjs', 'runtime/bin', 'px-pack.tgz'])
+      if (!existsSync(join(resources, path)))
+        throw new Error(`Packaged Desktop lacks resources/${path} required for Pack provisioning`)
+    const overlay = readJson(join(px, 'overlay.json'))
+    const bundled = createHash('sha256')
+      .update(regularFile(join(resources, 'px-pack.tgz')))
+      .digest('hex')
+    if (bundled !== overlay.packSha256)
+      throw new Error('Packaged resources/px-pack.tgz is not the Pack recorded in overlay.json')
     const installer = selectInstaller(join(px, 'dist'), products.desktop.version)
     const artifact = desktopArtifact({
       installer,
-      overlay: readJson(join(px, 'overlay.json')),
+      overlay,
       products,
       nativeDesktop: readJson(join(root, 'config/native-desktop.json')),
       head,
