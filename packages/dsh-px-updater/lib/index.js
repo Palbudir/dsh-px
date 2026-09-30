@@ -951,7 +951,9 @@ function errText(err) {
 }
 function apply(ctx, rawConfig) {
   const config = { ...DEFAULTS, ...rawConfig ?? {} };
-  if (config.feedUrl !== PACK_FEED_URL) config.feedUrl = PACK_FEED_URL;
+  config.feedUrl = DEFAULTS.feedUrl;
+  config.repository = DEFAULTS.repository;
+  config.routePrefix = DEFAULTS.routePrefix;
   const pack = readPackIdentity();
   const say = (msg) => {
     try {
@@ -982,10 +984,8 @@ function apply(ctx, rawConfig) {
         sendJson(res, 200, {
           plugin: name,
           version: package_default.version,
-          pack,
+          pack: { version: pack.version, hostVersion: pack.hostVersion, candidate: pack.candidate },
           platform: process.platform,
-          // Desktop updates belong to the Desktop host; there is no PX shell bridge in this generation.
-          desktopBridge: false,
           feed: config.feedUrl,
           repository: config.repository
         });
@@ -996,8 +996,7 @@ function apply(ctx, rawConfig) {
       path: `${config.routePrefix}/check`,
       handler: async (req, res) => {
         if (rejectUnauthenticatedRequest(req, res, hostCtx.connection)) return;
-        const outcome = await checkPackUpdates(config);
-        sendJson(res, outcome.error === null ? 200 : 502, outcome);
+        sendJson(res, 200, await checkPackUpdates(config));
       }
     });
     say(`\u5DF2\u6CE8\u518C HTTP \u7AEF\u70B9 ${config.routePrefix}/{status,check}`);

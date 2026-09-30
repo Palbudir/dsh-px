@@ -120,7 +120,7 @@ function DshPxSection({ t }: SlotComponentProps): unknown {
     setChecking(true)
     setCheck(null)
     setCheckError(null)
-    // A failed check (502) throws with the host's specific reason in `error`.
+    // A failed feed check arrives as 200 with `error` set; only transport failures throw here.
     requestJson<CheckPayload>(`${ROUTE_PREFIX}/check`)
       .then(setCheck)
       .catch((err: unknown) => setCheckError(err instanceof Error ? err.message : String(err)))

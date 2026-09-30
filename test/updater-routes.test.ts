@@ -130,8 +130,14 @@ test('the updater host exposes only status and a signed check; no desktop bridge
           }
         })
     },
-    { registerTool: false, feedUrl: 'https://attacker.example/feed.json' }
+    {
+      registerTool: false,
+      feedUrl: 'https://attacker.example/feed.json',
+      routePrefix: '/elsewhere',
+      repository: 'someone/else'
+    }
   )
+  // Feed, repository and route prefix overrides are ignored: the bundled client keeps working.
   assert.deepEqual([...routes.keys()].sort(), ['/dsh-px-updater/check', '/dsh-px-updater/status'])
   async function request(path: string) {
     let status = 0
@@ -151,9 +157,12 @@ test('the updater host exposes only status and a signed check; no desktop bridge
   }
   const status = await request('status')
   assert.equal(status.status, 200)
-  assert.equal(status.body.desktopBridge, false)
+  // /status exposes only what the client shows; no local manifest path.
+  assert.deepEqual(Object.keys(status.body.pack).sort(), ['candidate', 'hostVersion', 'version'])
+  assert.ok(!JSON.stringify(status.body).includes('manifestPath'))
   assert.equal(status.body.version, products.pack.version)
   assert.equal(status.body.feed, PACK_FEED_URL)
+  assert.equal(status.body.repository, 'Palbudir/dsh-px')
   const urls: string[] = []
   t.mock.method(globalThis, 'fetch', async (url: string) => {
     urls.push(String(url))
@@ -162,7 +171,8 @@ test('the updater host exposes only status and a signed check; no desktop bridge
   const check = await request('check')
   // The feed override was ignored, and the test-key signature is not trusted by the shipped keys.
   assert.deepEqual(urls, [PACK_FEED_URL])
-  assert.equal(check.status, 502)
+  // A failed check is a displayable result (200 + error), so the client can show the reason.
+  assert.equal(check.status, 200)
   assert.match(check.body.error, /签名/)
   assert.equal(check.body.updateAvailable, false)
   assert.equal(check.body.latest.pack, null)
@@ -170,7 +180,7 @@ test('the updater host exposes only status and a signed check; no desktop bridge
     throw new Error('offline')
   })
   const offline = await request('check')
-  assert.equal(offline.status, 502)
+  assert.equal(offline.status, 200)
   assert.match(offline.body.error, /无法读取/)
   dispose?.()
   assert.equal(routes.size, 0)

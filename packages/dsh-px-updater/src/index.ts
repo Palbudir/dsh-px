@@ -110,8 +110,11 @@ function errText(err: unknown): string {
 
 export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>): void {
   const config: UpdaterConfig = { ...DEFAULTS, ...(rawConfig ?? {}) }
-  // Only the fixed signed feed is accepted; a profile setting must not point checks elsewhere.
-  if (config.feedUrl !== PACK_FEED_URL) config.feedUrl = PACK_FEED_URL
+  // The signed feed, its release repository and the route the bundled client calls are fixed:
+  // a profile setting must not point checks elsewhere or move routes away from the client.
+  config.feedUrl = DEFAULTS.feedUrl
+  config.repository = DEFAULTS.repository
+  config.routePrefix = DEFAULTS.routePrefix
   const pack = readPackIdentity()
 
   const say = (msg: string): void => {
@@ -143,13 +146,12 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
       path: `${config.routePrefix}/status`,
       handler: (req: HostRequest, res: HostResponse) => {
         if (rejectUntrustedRequest(req, res, hostCtx.connection)) return
+        // Only what the client shows; the manifest path is a local machine path and stays private.
         sendJson(res, 200, {
           plugin: name,
           version: packageInfo.version,
-          pack: pack,
+          pack: { version: pack.version, hostVersion: pack.hostVersion, candidate: pack.candidate },
           platform: process.platform,
-          // Desktop updates belong to the Desktop host; there is no PX shell bridge in this generation.
-          desktopBridge: false,
           feed: config.feedUrl,
           repository: config.repository
         })
@@ -161,8 +163,8 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
       path: `${config.routePrefix}/check`,
       handler: async (req: HostRequest, res: HostResponse) => {
         if (rejectUntrustedRequest(req, res, hostCtx.connection)) return
-        const outcome = await checkPackUpdates(config)
-        sendJson(res, outcome.error === null ? 200 : 502, outcome)
+        // A failed feed check is a normal result the client displays, not a transport failure.
+        sendJson(res, 200, await checkPackUpdates(config))
       }
     })
 

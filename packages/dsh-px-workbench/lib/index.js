@@ -290,31 +290,13 @@ async function readJsonBody(req, limit = 512e3) {
   return value;
 }
 
-// packages/shared/sidebar-terminal-contract.ts
-var SIDEBAR_TERMINAL_PATCH_ID = "dsh-px/sidebar-terminals/1";
-
 // packages/dsh-px-workbench/src/terminal-activity.ts
 function createTerminalActivityReader() {
-  const sidebars = /* @__PURE__ */ new Set();
   const nativeOwners = /* @__PURE__ */ new Map();
-  const read = (owners, sources) => {
+  return (owners, sources) => {
     const result = { known: false, openTerminals: 0 };
     if (!sources) return result;
     try {
-      const sidebar = sources.sidebar();
-      const expected = [...sources.entries()].some(
-        (entry) => entry.options.name === "dsh-better-sidebar" && (!entry.disabled || [1, 2, 5].includes(entry.fiber?.state ?? -1))
-      );
-      if (expected && !sidebar) return result;
-      if (sidebar) sidebars.add(sidebar);
-      for (const service of sidebars) {
-        if (service.version !== 1 || service.patchId !== SIDEBAR_TERMINAL_PATCH_ID) return result;
-        const snapshot = service.snapshot();
-        if (snapshot.known !== true || !Number.isSafeInteger(snapshot.openTerminals) || snapshot.openTerminals < 0 || typeof snapshot.closing !== "boolean")
-          return result;
-        result.openTerminals += snapshot.openTerminals;
-        if (service !== sidebar && snapshot.closing && snapshot.openTerminals === 0) sidebars.delete(service);
-      }
       for (const owner of owners) {
         const registry = sources.native(owner);
         if (registry) {
@@ -339,62 +321,33 @@ function createTerminalActivityReader() {
         if (!registries.size) nativeOwners.delete(owner);
       }
       result.known = Number.isSafeInteger(result.openTerminals) && result.openTerminals >= 0;
-    } catch {
+    } catch (error) {
+      void error;
     }
     return result;
   };
-  return Object.assign(read, {
-    observeSidebar: (service) => {
-      sidebars.add(service);
-    }
-  });
 }
 function registerTerminalActivity(ctx) {
   const read = createTerminalActivityReader();
-  let loader;
-  let sidebar;
   let native;
-  const bind = (name2, set, get) => {
-    ctx.inject([name2], (host) => {
-      const value = host[name2];
-      set(value);
-      host.effect?.(
-        () => () => {
-          if (get() === value) set(void 0);
-        },
-        "workbench: terminal activity source"
-      );
-    });
-  };
-  bind(
-    "loader",
-    (value) => {
-      loader = value;
-    },
-    () => loader
-  );
-  bind(
-    "dshPxSidebarTerminals",
-    (value) => {
-      sidebar = value;
-      if (value) read.observeSidebar(value);
-    },
-    () => sidebar
-  );
-  bind(
-    "terminals",
-    (value) => {
-      native = value;
-    },
-    () => native
-  );
+  let bound = false;
+  ctx.inject(["terminals"], (host) => {
+    const value = host.terminals;
+    native = value;
+    bound = true;
+    host.effect?.(
+      () => () => {
+        if (native === value) {
+          native = void 0;
+          bound = false;
+        }
+      },
+      "workbench: terminal activity source"
+    );
+  });
   return (owners) => read(
     owners,
-    loader ? {
-      entries: () => loader.entries(),
-      sidebar: () => sidebar,
-      native: (owner) => owner.ctx?.get("terminals") ?? native
-    } : void 0
+    bound ? { native: (owner) => owner.ctx?.get("terminals") ?? native } : void 0
   );
 }
 

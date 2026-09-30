@@ -1,8 +1,3 @@
-import {
-  SIDEBAR_TERMINAL_PATCH_ID,
-  type SidebarTerminalService
-} from '../../shared/sidebar-terminal-contract'
-
 export interface TerminalOwner {
   ctx?: { get: (name: string) => unknown }
 }
@@ -11,43 +6,23 @@ export interface NativeTerminalRegistry {
   list: (owner: TerminalOwner) => readonly unknown[]
 }
 export interface TerminalSources {
-  entries: () => Iterable<{ options: { name: string }; disabled: boolean; fiber?: { state: number } }>
-  sidebar: () => SidebarTerminalService | undefined
   native: (owner: TerminalOwner) => NativeTerminalRegistry | undefined
 }
 
-/** Count resources, not guessed foreground command state. Retain closing registries until drained. */
+/**
+ * Count native DSH terminal resources, not guessed foreground command state. Terminals are owned
+ * by the host `terminals` service; the bundled sidebar opens them through that service and has no
+ * terminal registry of its own. Registries that are closing are retained until they drain.
+ */
 export function createTerminalActivityReader() {
-  const sidebars = new Set<SidebarTerminalService>()
   const nativeOwners = new Map<TerminalOwner, Map<object, NativeTerminalRegistry>>()
-  const read = (
+  return (
     owners: readonly TerminalOwner[],
     sources?: TerminalSources
   ): { known: boolean; openTerminals: number } => {
     const result = { known: false, openTerminals: 0 }
     if (!sources) return result
     try {
-      const sidebar = sources.sidebar()
-      const expected = [...sources.entries()].some(
-        (entry) =>
-          entry.options.name === 'dsh-better-sidebar' &&
-          (!entry.disabled || [1, 2, 5].includes(entry.fiber?.state ?? -1))
-      )
-      if (expected && !sidebar) return result
-      if (sidebar) sidebars.add(sidebar)
-      for (const service of sidebars) {
-        if (service.version !== 1 || service.patchId !== SIDEBAR_TERMINAL_PATCH_ID) return result
-        const snapshot = service.snapshot()
-        if (
-          snapshot.known !== true ||
-          !Number.isSafeInteger(snapshot.openTerminals) ||
-          snapshot.openTerminals < 0 ||
-          typeof snapshot.closing !== 'boolean'
-        )
-          return result
-        result.openTerminals += snapshot.openTerminals
-        if (service !== sidebar && snapshot.closing && snapshot.openTerminals === 0) sidebars.delete(service)
-      }
       for (const owner of owners) {
         const registry = sources.native(owner)
         if (registry) {
@@ -77,68 +52,46 @@ export function createTerminalActivityReader() {
         if (!registries.size) nativeOwners.delete(owner)
       }
       result.known = Number.isSafeInteger(result.openTerminals) && result.openTerminals >= 0
-    } catch {
-      // A missing or incompatible contract must never be reported as an idle terminal service.
+    } catch (error) {
+      // An incompatible contract must never be reported as an idle terminal service.
+      void error
     }
     return result
   }
-  return Object.assign(read, {
-    observeSidebar: (service: SidebarTerminalService) => {
-      sidebars.add(service)
-    }
-  })
+}
+
+interface TerminalHost {
+  inject: (names: string[], apply: (host: Record<string, unknown> & TerminalHostEffects) => void) => void
+}
+interface TerminalHostEffects {
+  effect?: (setup: () => () => void, label: string) => void
 }
 
 export function registerTerminalActivity(
-  ctx: any
+  ctx: TerminalHost
 ): (owners: readonly TerminalOwner[]) => { known: boolean; openTerminals: number } {
   const read = createTerminalActivityReader()
-  let loader: { entries: TerminalSources['entries'] } | undefined
-  let sidebar: SidebarTerminalService | undefined
   let native: NativeTerminalRegistry | undefined
-  const bind = (name: string, set: (value: any) => void, get: () => any): void => {
-    ctx.inject([name], (host: any) => {
-      const value = host[name]
-      set(value)
-      host.effect?.(
-        () => () => {
-          if (get() === value) set(undefined)
-        },
-        'workbench: terminal activity source'
-      )
-    })
-  }
-  bind(
-    'loader',
-    (value) => {
-      loader = value
-    },
-    () => loader
-  )
-  bind(
-    'dshPxSidebarTerminals',
-    (value) => {
-      sidebar = value
-      if (value) read.observeSidebar(value)
-    },
-    () => sidebar
-  )
-  bind(
-    'terminals',
-    (value) => {
-      native = value
-    },
-    () => native
-  )
+  let bound = false
+  ctx.inject(['terminals'], (host) => {
+    const value = host.terminals as NativeTerminalRegistry | undefined
+    native = value
+    bound = true
+    host.effect?.(
+      () => () => {
+        if (native === value) {
+          native = undefined
+          bound = false
+        }
+      },
+      'workbench: terminal activity source'
+    )
+  })
   return (owners) =>
     read(
       owners,
-      loader
-        ? {
-            entries: () => loader!.entries(),
-            sidebar: () => sidebar,
-            native: (owner) => (owner.ctx?.get('terminals') as NativeTerminalRegistry | undefined) ?? native
-          }
+      bound
+        ? { native: (owner) => (owner.ctx?.get('terminals') as NativeTerminalRegistry | undefined) ?? native }
         : undefined
     )
 }
