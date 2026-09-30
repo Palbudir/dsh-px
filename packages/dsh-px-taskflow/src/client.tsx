@@ -256,54 +256,45 @@ function SessionTaskPanel({
         <>
           {data.checkpoint ? (
             <section style={card} aria-label="可选工作摘要">
-              {data.checkpoint ? (
-                <>
-                  <strong>{states[data.checkpoint.state]}</strong>
-                  <h4 style={{ margin: '8px 0' }}>{data.checkpoint.goal}</h4>
-                  {data.checkpoint.summary.length > 240 ? (
-                    <details>
-                      <summary style={{ cursor: 'pointer' }}>
-                        {data.checkpoint.summary.slice(0, 240)}…
-                      </summary>
-                      <p>{data.checkpoint.summary}</p>
-                    </details>
-                  ) : (
+              <>
+                <strong>{states[data.checkpoint.state]}</strong>
+                <h4 style={{ margin: '8px 0' }}>{data.checkpoint.goal}</h4>
+                {data.checkpoint.summary.length > 240 ? (
+                  <details>
+                    <summary style={{ cursor: 'pointer' }}>{data.checkpoint.summary.slice(0, 240)}…</summary>
                     <p>{data.checkpoint.summary}</p>
-                  )}
-                  <p>下一步：{data.checkpoint.nextStep || '检查修改与验证结果'}</p>
-                  <small style={{ opacity: 0.65 }}>
-                    Agent 工作摘要 · {new Date(data.checkpoint.time).toLocaleString()}
-                  </small>
-                  {data.checkpointStale ? (
-                    <p role="status">记录之后还有可能影响结论的执行，请核对最新结果。</p>
-                  ) : null}
-                  {data.checkpoint.evidence.length ? (
-                    <details>
-                      <summary>引用的执行证据</summary>
-                      {data.checkpoint.evidence.map((id) => {
-                        const call = data.referencedExecutions.find((c) => c.id === id)
-                        return call ? (
-                          <ExecutionCard
-                            key={id}
-                            call={call}
-                            sessionId={scope.sessionId}
-                            inputContext={inputContext}
-                          />
-                        ) : (
-                          <div key={id}>
-                            此条引用未找到：<code>{id}</code>
-                          </div>
-                        )
-                      })}
-                    </details>
-                  ) : null}
-                </>
-              ) : (
-                <>
-                  <strong>尚无工作记录</strong>
-                  <p>多步骤任务开始后，Agent 可以记录目标和交接点。执行记录自动产生。</p>
-                </>
-              )}
+                  </details>
+                ) : (
+                  <p>{data.checkpoint.summary}</p>
+                )}
+                <p>下一步：{data.checkpoint.nextStep || '检查修改与验证结果'}</p>
+                <small style={{ opacity: 0.65 }}>
+                  Agent 工作摘要 · {new Date(data.checkpoint.time).toLocaleString()}
+                </small>
+                {data.checkpointStale ? (
+                  <p role="status">记录之后还有可能影响结论的执行，请核对最新结果。</p>
+                ) : null}
+                {data.checkpoint.evidence.length ? (
+                  <details>
+                    <summary>引用的执行证据</summary>
+                    {data.checkpoint.evidence.map((id) => {
+                      const call = data.referencedExecutions.find((c) => c.id === id)
+                      return call ? (
+                        <ExecutionCard
+                          key={id}
+                          call={call}
+                          sessionId={scope.sessionId}
+                          inputContext={inputContext}
+                        />
+                      ) : (
+                        <div key={id}>
+                          此条引用未找到：<code>{id}</code>
+                        </div>
+                      )
+                    })}
+                  </details>
+                ) : null}
+              </>
             </section>
           ) : null}
           {data.changedFiles.length ? (

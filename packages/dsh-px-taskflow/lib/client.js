@@ -146,7 +146,7 @@ window.__ModuleLoader__.load({
 		    this.name = "RequestError";
 		  }
 		};
-		async function requestJson(path, init = {}, allowCheckFailure = false) {
+		async function requestJson(path, init = {}) {
 		  const controller = new AbortController();
 		  const caller = init.signal;
 		  const cancel = () => controller.abort(caller?.reason);
@@ -173,7 +173,7 @@ window.__ModuleLoader__.load({
 		        response.status >= 500 || response.ok
 		      );
 		    }
-		    if (!response.ok && !(allowCheckFailure && response.status === 502 && Array.isArray(body?.errors))) {
+		    if (!response.ok) {
 		      throw new RequestError(
 		        typeof body?.error === "string" ? body.error : `HTTP ${response.status}`,
 		        response.status,
@@ -445,7 +445,7 @@ window.__ModuleLoader__.load({
 		        ] }),
 		        !data && !error ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u4EFB\u52A1\u8BB0\u5F55\u2026" }) : null,
 		        data ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
-		          data.checkpoint ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("section", { style: card, "aria-label": "\u53EF\u9009\u5DE5\u4F5C\u6458\u8981", children: data.checkpoint ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+		          data.checkpoint ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("section", { style: card, "aria-label": "\u53EF\u9009\u5DE5\u4F5C\u6458\u8981", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
 		            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("strong", { children: states[data.checkpoint.state] }),
 		            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h4", { style: { margin: "8px 0" }, children: data.checkpoint.goal }),
 		            data.checkpoint.summary.length > 240 ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { children: [
@@ -482,9 +482,6 @@ window.__ModuleLoader__.load({
 		                ] }, id);
 		              })
 		            ] }) : null
-		          ] }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
-		            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("strong", { children: "\u5C1A\u65E0\u5DE5\u4F5C\u8BB0\u5F55" }),
-		            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: "\u591A\u6B65\u9AA4\u4EFB\u52A1\u5F00\u59CB\u540E\uFF0CAgent \u53EF\u4EE5\u8BB0\u5F55\u76EE\u6807\u548C\u4EA4\u63A5\u70B9\u3002\u6267\u884C\u8BB0\u5F55\u81EA\u52A8\u4EA7\u751F\u3002" })
 		          ] }) }) : null,
 		          data.changedFiles.length ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("section", { style: card, children: [
 		            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("strong", { children: [

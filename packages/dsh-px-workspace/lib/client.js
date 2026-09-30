@@ -170,7 +170,7 @@ window.__ModuleLoader__.load({
 		    this.name = "RequestError";
 		  }
 		};
-		async function requestJson(path, init = {}, allowCheckFailure = false) {
+		async function requestJson(path, init = {}) {
 		  const controller = new AbortController();
 		  const caller = init.signal;
 		  const cancel = () => controller.abort(caller?.reason);
@@ -197,7 +197,7 @@ window.__ModuleLoader__.load({
 		        response.status >= 500 || response.ok
 		      );
 		    }
-		    if (!response.ok && !(allowCheckFailure && response.status === 502 && Array.isArray(body?.errors))) {
+		    if (!response.ok) {
 		      throw new RequestError(
 		        typeof body?.error === "string" ? body.error : `HTTP ${response.status}`,
 		        response.status,

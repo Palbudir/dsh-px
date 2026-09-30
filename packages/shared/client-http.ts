@@ -9,12 +9,8 @@ export class RequestError extends Error {
     this.name = 'RequestError'
   }
 }
-/** 保留端点返回的具体错误，不把 409/503 当作安装成功。 */
-export async function requestJson<T>(
-  path: string,
-  init: RequestInit = {},
-  allowCheckFailure = false
-): Promise<T> {
+/** 非 2xx 响应抛出 RequestError，并保留端点返回的具体错误、code 与 retryable。 */
+export async function requestJson<T>(path: string, init: RequestInit = {}): Promise<T> {
   const controller = new AbortController()
   const caller = init.signal
   const cancel = (): void => controller.abort(caller?.reason)
@@ -41,7 +37,7 @@ export async function requestJson<T>(
         response.status >= 500 || response.ok
       )
     }
-    if (!response.ok && !(allowCheckFailure && response.status === 502 && Array.isArray(body?.errors))) {
+    if (!response.ok) {
       throw new RequestError(
         typeof body?.error === 'string' ? body.error : `HTTP ${response.status}`,
         response.status,

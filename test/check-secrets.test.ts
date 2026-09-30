@@ -71,6 +71,18 @@ test('every character any rule matches on the original is masked, even across ov
     assert.deepEqual(rules(maskSecrets(p)), [])
 })
 
+test('a token glued to a fixed-length key is masked too, so masked text rescans clean', () => {
+  const r = (n: number) => 'Kq7Pz3Xw9Lm2Rt5Vb8Nc4Hd6Jf1Gs0Ya'.repeat(3).slice(0, n)
+  const tail = j('gh', 'p_', r(36))
+  for (const head of [j('np', 'm_', r(36)), j('AI', 'za', r(35))]) {
+    const sample = j('x = ', head, tail)
+    const masked = maskSecrets(sample)
+    assert.equal(masked.length, sample.length)
+    assert.ok(!masked.includes(tail.slice(4)), 'the glued token must not survive')
+    assert.deepEqual(rules(masked), [])
+  }
+})
+
 test('masking a path keeps the surrounding syntax parseable', () => {
   const source = j('const p = "C:\\\\Users\\\\', 'alice', '\\\\x"\nexport {}')
   const masked = maskSecrets(source)

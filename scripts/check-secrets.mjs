@@ -118,26 +118,39 @@ export function scanText(path, text, rules = RULES) {
  */
 export function maskSecrets(text, rules = RULES) {
   const lines = text.split(/(\r?\n)/)
-  for (let i = 0; i < lines.length; i += 2) {
-    const line = lines[i]
-    const hidden = new Uint8Array(line.length)
-    let any = false
+  for (let i = 0; i < lines.length; i += 2) lines[i] = maskLine(lines[i], rules)
+  return lines.join('')
+}
+
+/**
+ * Mask one line to a fixed point: masking can create a word boundary that exposes an adjacent
+ * value (e.g. a token glued to the end of a fixed-length key), so repeat until nothing new is
+ * hidden. Each pass only turns characters into `*`, so it stops after at most `length` passes.
+ */
+function maskLine(line, rules) {
+  let current = line
+  for (let pass = 0; pass <= line.length; pass++) {
+    const hidden = new Uint8Array(current.length)
+    let changed = false
     for (const [id, rule, group] of rules) {
       const flags = [...new Set((rule.flags + 'gd').split(''))].join('')
-      for (const match of line.matchAll(new RegExp(rule.source, flags))) {
+      for (const match of current.matchAll(new RegExp(rule.source, flags))) {
         const value = group ? match[group] : undefined
         if (placeholder(id, value)) continue
         const [start, end] = group && match.indices[group] ? match.indices[group] : match.indices[0]
-        hidden.fill(1, start, end)
-        any = true
+        for (let c = start; c < end; c++)
+          if (current[c] !== '*') {
+            hidden[c] = 1
+            changed = true
+          }
       }
     }
-    if (!any) continue
+    if (!changed) return current
     let out = ''
-    for (let c = 0; c < line.length; c++) out += hidden[c] ? '*' : line[c]
-    lines[i] = out
+    for (let c = 0; c < current.length; c++) out += hidden[c] ? '*' : current[c]
+    current = out
   }
-  return lines.join('')
+  return current
 }
 
 function candidateFiles(range) {

@@ -38,13 +38,11 @@
     "@babel/parser": "7.29.9",
     "@types/node": "^26.6.2",
     "@types/semver": "^7.8.0",
+    "electron-updater": "6.8.9",
     "esbuild": "^0.25.12",
     "prettier": "3.9.9",
     "semver": "^7.8.5",
     "typescript": "^7.0.2",
     "yaml": "2.9.1"
-  },
-  "dependencies": {
-    "electron-updater": "^6.8.9"
   }
 }
