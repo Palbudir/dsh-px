@@ -13,7 +13,7 @@ const idleNative: NativeTerminalRegistry = { hasOwnerActivity: () => false, list
 const noShells: BrowserTerminalController = { list: () => [] }
 const owner = (id = 'session-1') => ({ id, ctx: { get: () => undefined } })
 
-test('without both terminal services, terminal activity is unknown rather than idle', () => {
+test('without terminalController, terminal activity is unknown rather than idle', () => {
   assert.equal(createTerminalActivityReader()([]).known, false)
 })
 
@@ -49,27 +49,6 @@ test('real composition: terminalController at host level, terminals only inside 
   // Disposing terminalController makes the count unknown again.
   for (const dispose of effects) dispose()
   assert.equal(read([withoutTerminals]).known, false)
-})
-
-test('an open Agent tool terminal in an isolated preset is never reported as idle', () => {
-  const injected = new Map<string, (host: any) => void>()
-  const read = registerTerminalActivity({ inject: (names, apply) => injected.set(names[0], apply) })
-  injected.get('terminalController')!({ terminalController: { list: () => [] }, effect: () => {} })
-  const agent = { id: 'session-1', ctx: { get: () => undefined } }
-  const terminals: NativeTerminalRegistry = { hasOwnerActivity: () => true, list: () => [{}] }
-  injected.get('agentPresets')!({ agentPresets: { serviceFor: () => terminals }, effect: () => {} })
-  const activity = read([agent])
-  assert.deepEqual(activity, { known: true, openTerminals: 1 })
-  assert.equal(
-    isIdle(
-      activitySnapshot({
-        agents: { list: () => [] },
-        jobs: { list: () => [] },
-        terminalActivity: () => activity
-      })
-    ),
-    false
-  )
 })
 
 test('an open Agent tool terminal in an isolated preset is never reported as idle', () => {

@@ -3,7 +3,7 @@
   "repository": "Palbudir/dsh-px",
   "branch": "master",
   "publisher": "Palbudir",
-  "workerDigest": "647aae11e222d827b236ca7f40569df72b1432e5a1dc6b68e867bc435f717367",
+  "workerDigest": "8d7fba493c1ed9daa12e65d9883e4a5a6fc18c70f9741192643ef841aac6f4c6",
   "reviewAppId": 5097986,
   "maxAgeHours": 168,
   "requiredChecks": ["dsh-px/independent-review", "dsh-px/quality"],
