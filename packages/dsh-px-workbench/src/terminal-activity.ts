@@ -17,10 +17,10 @@ export interface TerminalSources {
 
 /**
  * Count terminal resources, not guessed foreground command state. DSH has two owners of terminals:
- * the `terminals` service (Agent tool terminals) and `terminalController` (interactive shells the
- * user opens in the sidebar, spawned directly through the subprocess service). Both must be
- * available; without either the count is unknown, never idle. Closing native registries are
- * retained until they drain.
+ * the Agent-scoped `terminals` service (Agent tool terminals, read per owner; an Agent without it
+ * has none) and the host `terminalController` (interactive shells the user opens in the sidebar,
+ * spawned directly through the subprocess service). Without `terminalController` the count is
+ * unknown, never idle. Closing native registries are retained until they drain.
  */
 export function createTerminalActivityReader() {
   const nativeOwners = new Map<TerminalOwner, Map<object, NativeTerminalRegistry>>()
@@ -83,19 +83,17 @@ export function registerTerminalActivity(
   ctx: TerminalHost
 ): (owners: readonly TerminalOwner[]) => { known: boolean; openTerminals: number } {
   const read = createTerminalActivityReader()
+  // `terminals` is an Agent-scoped service: presets isolate it inside each Agent's plugin group, so
+  // it is read per owner through `owner.ctx`. A host-level provider is used when one exists, but
+  // its absence does not make the count unknown. The host-level `terminalController` is required.
   let native: NativeTerminalRegistry | undefined
-  let nativeBound = false
   let browser: BrowserTerminalController | undefined
   ctx.inject(['terminals'], (host) => {
     const value = host.terminals as NativeTerminalRegistry | undefined
     native = value
-    nativeBound = true
     host.effect?.(
       () => () => {
-        if (native === value) {
-          native = undefined
-          nativeBound = false
-        }
+        if (native === value) native = undefined
       },
       'workbench: native terminal activity source'
     )
@@ -113,7 +111,7 @@ export function registerTerminalActivity(
   return (owners) =>
     read(
       owners,
-      nativeBound && browser
+      browser
         ? {
             native: (owner) => (owner.ctx?.get('terminals') as NativeTerminalRegistry | undefined) ?? native,
             browser

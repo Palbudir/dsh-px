@@ -334,18 +334,13 @@ function createTerminalActivityReader() {
 function registerTerminalActivity(ctx) {
   const read = createTerminalActivityReader();
   let native;
-  let nativeBound = false;
   let browser;
   ctx.inject(["terminals"], (host) => {
     const value = host.terminals;
     native = value;
-    nativeBound = true;
     host.effect?.(
       () => () => {
-        if (native === value) {
-          native = void 0;
-          nativeBound = false;
-        }
+        if (native === value) native = void 0;
       },
       "workbench: native terminal activity source"
     );
@@ -362,7 +357,7 @@ function registerTerminalActivity(ctx) {
   });
   return (owners) => read(
     owners,
-    nativeBound && browser ? {
+    browser ? {
       native: (owner) => owner.ctx?.get("terminals") ?? native,
       browser
     } : void 0

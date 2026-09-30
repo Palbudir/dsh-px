@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   createTerminalActivityReader,
+  registerTerminalActivity,
   type BrowserTerminalController,
   type NativeTerminalRegistry,
   type TerminalSources
@@ -14,6 +15,36 @@ const owner = (id = 'session-1') => ({ id, ctx: { get: () => undefined } })
 
 test('without both terminal services, terminal activity is unknown rather than idle', () => {
   assert.equal(createTerminalActivityReader()([]).known, false)
+})
+
+test('real composition: terminalController at host level, terminals only inside each Agent', () => {
+  // Official presets isolate `terminals` inside each Agent's plugin group; only
+  // `terminalController` is a host service. Activity must be known in that composition.
+  const effects: Array<() => void> = []
+  const injected = new Map<string, (host: any) => void>()
+  const read = registerTerminalActivity({
+    inject: (names, apply) => injected.set(names[0], apply)
+  })
+  assert.equal(read([owner()]).known, false, 'before terminalController is bound')
+  injected.get('terminalController')!({
+    terminalController: { list: (id: string) => (id === 'session-1' ? [{ id: 'shell' }] : []) },
+    effect: (setup: () => () => void) => effects.push(setup())
+  })
+  const agentTerminals: NativeTerminalRegistry = { hasOwnerActivity: () => true, list: () => [{}, {}] }
+  const withTerminals = {
+    id: 'session-1',
+    ctx: { get: (name: string) => (name === 'terminals' ? agentTerminals : undefined) }
+  }
+  const withoutTerminals = { id: 'session-2', ctx: { get: () => undefined } }
+  assert.deepEqual(read([withTerminals, withoutTerminals]), { known: true, openTerminals: 3 })
+  // An Agent that leaves the list keeps its terminals counted until its registry drains.
+  assert.deepEqual(read([withoutTerminals]), { known: true, openTerminals: 2 })
+  const fresh = registerTerminalActivity({ inject: (names, apply) => injected.set(names[0], apply) })
+  injected.get('terminalController')!({ terminalController: { list: () => [] }, effect: () => {} })
+  assert.deepEqual(fresh([withoutTerminals]), { known: true, openTerminals: 0 })
+  // Disposing terminalController makes the count unknown again.
+  for (const dispose of effects) dispose()
+  assert.equal(read([withoutTerminals]).known, false)
 })
 
 test('no Agent terminal and no open sidebar shell reports a known zero', () => {
