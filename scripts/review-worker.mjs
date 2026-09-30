@@ -30,6 +30,7 @@ import { command, runReviewBatch } from './review-process.mjs'
 import { installedModel, modelIdentity, readApiKey } from './review-model.mjs'
 import { loadUpstreamCatalog, requirePinnedHosts } from './review-upstream.mjs'
 import { maskSecrets, scanText } from './check-secrets.mjs'
+import { ReviewSecretFound } from './review-tools.mjs'
 import { createAppClient } from './review-app.mjs'
 import { PUBLIC_REVIEW_FAILURE, publishReview, publishQuality, settleQuality } from './review-verify.mjs'
 import { findTrustedQuality, qualityChanged } from './review-trusted-ci.mjs'
@@ -356,7 +357,7 @@ export function secretBlockers(findings) {
     .concat(sorted.length > 50 ? [`Secret scan found ${sorted.length - 50} further locations`] : [])
 }
 
-/** Prepare exact Git source and complete bounded context without invoking the model. */
+/** Prepare exact Git change units and the trusted batch headers without invoking the model. */
 export async function prepareReviewSnapshot(config, request, git, options = {}) {
   sha(await git(['rev-parse', request.head + '^{commit}']))
   sha(await git(['rev-parse', request.base + '^{commit}']))
@@ -365,9 +366,16 @@ export async function prepareReviewSnapshot(config, request, git, options = {}) 
     .decode(await git(['diff', '--name-only', '--no-renames', '-z', mergeBase, request.head], true, true))
     .split('\0')
     .filter(Boolean)
+  // Trees are listed once per ref; tools share decoded blob text by oid across the review.
+  const listed = new Map()
   const reader = {
-    list: async (ref) => parseReviewTree(await git(['ls-tree', '-r', '-l', '-z', ref], true, true)),
-    read: (ref, path) => git(['show', `${ref}:${path}`], true, true)
+    list: async (ref) => {
+      if (!listed.has(ref))
+        listed.set(ref, parseReviewTree(await git(['ls-tree', '-r', '-l', '-z', ref], true, true)))
+      return listed.get(ref)
+    },
+    read: (ref, path) => git(['show', `${ref}:${path}`], true, true),
+    textCache: new Map()
   }
   let declaredHosts = []
   if (options.upstream) {
@@ -392,6 +400,7 @@ export async function prepareReviewSnapshot(config, request, git, options = {}) 
     ...snapshot,
     declaredHosts,
     mergeBase,
+    reader,
     tree: sha(await git(['rev-parse', request.head + '^{tree}']))
   }
 }
@@ -403,6 +412,27 @@ export async function workerUpstreamCatalog(config, options = {}) {
     if (typeof http.setGlobalProxyFromEnv === 'function') http.setGlobalProxyFromEnv()
   }
   return loadUpstreamCatalog({ cacheDirectory: join(config.directory, 'upstream-cache'), ...options })
+}
+
+/**
+ * Review bound batches strictly one after another (one model request in flight). A candidate
+ * secret returned by a reviewer tool stops the whole review; only its locations are reported.
+ */
+export async function reviewBatches(config, request, batches, directory, invoke, tools) {
+  const results = []
+  for (const batch of batches) {
+    try {
+      results.push(await invoke(config, request, batch, directory, { tools }))
+    } catch (error) {
+      if (error instanceof ReviewSecretFound) return { secretBlockers: secretBlockers(error.findings) }
+      throw error
+    }
+    writeFileSync(
+      join(directory, 'progress.json'),
+      JSON.stringify({ head: request.head, completed: results.length, total: batches.length })
+    )
+  }
+  return { results }
 }
 
 export async function reviewSnapshot(config, request, directory, invoke = runReviewBatch, options = {}) {
@@ -450,9 +480,11 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
     graphBlockers = [],
     maskedPaths = [],
     declaredHosts,
-    metrics
+    metrics,
+    reader
   } = await prepareReviewSnapshot(config, request, git, { upstream })
-  // The context text contains every CONTEXT UPSTREAM byte, so this digest binds them too.
+  // Trusted headers of every group; upstream bytes reach the model only through read_upstream,
+  // whose results are bound by each batch's evidence digest.
   const contextDigest = sha256(context)
   const filesDigest = sha256(
     canonical(files.map((f) => ({ path: f.path, before: sha256(f.before), after: sha256(f.after) })))
@@ -473,7 +505,11 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
         projections,
         secretFindings: secretFindings.length,
         maskedPaths,
-        batches: batches.map((batch) => ({ id: batch.id, chars: batch.text.length, scope: batch.scope }))
+        batches: batches.map((batch) => ({
+          id: batch.id,
+          chars: batch.text.length,
+          units: batch.scope.length
+        }))
       },
       null,
       2
@@ -499,14 +535,27 @@ export async function reviewSnapshot(config, request, directory, invoke = runRev
       filesDigest
     }
   }
-  const results = []
-  for (const batch of batches) {
-    results.push(await invoke(config, request, batch, directory))
-    writeFileSync(
-      join(directory, 'progress.json'),
-      JSON.stringify({ head: request.head, completed: results.length, total: batches.length })
-    )
+  const settled = await reviewBatches(config, { ...request, mergeBase }, batches, directory, invoke, {
+    reader,
+    scan: options.scan ?? scanText,
+    mask: options.mask ?? maskSecrets,
+    upstream
+  })
+  if (settled.secretBlockers) {
+    const blockers = settled.secretBlockers
+    return {
+      verdict: 'fail',
+      findings: [],
+      blockers,
+      batches: [{ id: 'secret-scan', digest: sha256(canonical(blockers)) }],
+      tree,
+      mergeBase,
+      contextDigest,
+      upstreamLockDigest: upstream.lockDigest,
+      filesDigest
+    }
   }
+  const results = settled.results
   return {
     ...aggregate(request, batches, results),
     tree,

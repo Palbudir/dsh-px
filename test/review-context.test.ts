@@ -7,8 +7,14 @@ import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const { collectReviewContext, collectGroupedReview, reviewModuleReferences, parseReviewTree, splitBatches } =
-  await import(pathToFileURL(resolve('scripts/review-core.mjs')).href)
+const {
+  collectReviewContext,
+  collectGroupedReview,
+  reviewModuleReferences,
+  parseReviewTree,
+  splitBatches,
+  verifyBatchCoverage
+} = await import(pathToFileURL(resolve('scripts/review-core.mjs')).href)
 const { prepareReviewSnapshot } = await import(pathToFileURL(resolve('scripts/review-worker.mjs')).href)
 const head = 'a'.repeat(40),
   base = 'b'.repeat(40),
@@ -54,7 +60,11 @@ const request = (names: string[], refBase = base) => ({
   names
 })
 
-test('contract groups include runtime and updater producers without copying governance into every batch', async () => {
+const header = (text: string) => text.slice(0, text.indexOf('END OF TRUSTED WORKER HEADER'))
+const hintsOf = (text: string) =>
+  JSON.parse(/Related unchanged paths[^:]*: (\{.*\})\n/.exec(text)![1]) as Record<string, string[]>
+
+test('contract groups list runtime and updater producers/consumers as path hints without inlining their bodies', async () => {
   const sources = {
     'README.md': 'Contract fixture',
     'scripts/review-loop.mjs': 'export const loop = 1',
@@ -80,7 +90,12 @@ test('contract groups include runtime and updater producers without copying gove
   ]
   const f = memory({
     [base]: sources,
-    [head]: { ...sources, 'src/shared/runtime-integrity.ts': 'export const schema = 3' }
+    [head]: {
+      ...sources,
+      'scripts/review-loop.mjs': 'export const loop = 2',
+      'src/shared/runtime-integrity.ts': 'export const schema = 3',
+      'packages/dsh-px-updater/src/client.tsx': 'export const page = "consumer 2"'
+    }
   })
   const plan = await collectGroupedReview(request(names), f.reader)
   assert.deepEqual(
@@ -91,23 +106,27 @@ test('contract groups include runtime and updater producers without copying gove
   const updater = plan.batches.filter((batch: any) => batch.group === 'updater')
   assert.ok(runtime.length && updater.length)
   for (const batch of runtime) {
-    assert.ok(batch.text.includes('export const producer = "stage"'))
-    assert.ok(batch.text.includes('export const verifier = "package"'))
-    assert.ok(batch.text.includes('export const consumer = "activation"'))
-    assert.ok(!batch.text.includes('export const loop = 1'))
+    const hints = hintsOf(batch.text)
+    for (const path of ['scripts/stage-runtime.ts', 'scripts/verify-package.ts', 'src/main/index.ts'])
+      assert.deepEqual(hints[path], ['direct consumer in the dependency graph'], path)
+    // Consumer bodies are not inlined: the model reads them with tools when needed.
+    for (const body of ['export const producer = "stage"', 'export const consumer = "activation"'])
+      assert.ok(!batch.text.includes(body), body)
+    assert.ok(!batch.text.includes('export const loop'), 'governance changes stay in their own group')
+    assert.match(batch.text, /-export const schema = 2\n[^]*\+export const schema = 3/)
   }
   for (const batch of updater) {
-    assert.ok(batch.text.includes('export const status = "producer"'))
-    assert.ok(batch.text.includes('export const page = "consumer"'))
+    assert.ok(hintsOf(batch.text)['packages/dsh-px-updater/src/index.ts'])
+    assert.ok(!batch.text.includes('export const status = "producer"'))
   }
   assert.equal(new Set(plan.batches.map((batch: any) => batch.id)).size, plan.batches.length)
   await assert.rejects(collectGroupedReview(request([...names, names[0]]), f.reader), /Duplicate changed/)
 })
 
-test('shared changes retain every byte across consumer groups and oversized contracts fail closed', async () => {
+test('shared changes retain every byte across consumer groups, and a header without room fails closed', async () => {
   const path = 'packages/shared/shared.ts'
-  const before = 'export const shared = "' + 'a'.repeat(12000) + '"'
-  const after = 'export const shared = "' + 'b'.repeat(14000) + '"'
+  const before = 'export const shared = "' + 'Q'.repeat(12000) + '"'
+  const after = 'export const shared = "' + 'Z'.repeat(14000) + '"'
   const consumers: Record<string, string> = { 'src/main/index.ts': "import '../../packages/shared/shared'" }
   for (const name of ['updater', 'workbench', 'workspace', 'taskflow']) {
     consumers[`packages/dsh-px-${name}/package.json`] = JSON.stringify({ name: `dsh-px-${name}` })
@@ -123,46 +142,54 @@ test('shared changes retain every byte across consumer groups and oversized cont
     const chunks = plan.batches.filter((batch: any) => batch.group === group)
     assert.ok(chunks.length > 1)
     assert.ok(chunks.every((batch: any) => batch.text.length <= 5000))
-    assert.ok(chunks.some((batch: any) => batch.text.includes('/' + after.length)))
+    // Each group's batches concatenate to the complete diff and rebuild the head text.
+    assert.equal(verifyBatchCoverage(plan.files, chunks), true)
+    const count = (char: string) =>
+      chunks
+        .map((b: any) => b.text.match(new RegExp(char + '{2,}', 'g'))?.join('').length ?? 0)
+        .reduce((x: number, y: number) => x + y, 0)
+    assert.equal(count('Q'), 12000)
+    assert.equal(count('Z'), 14000)
   }
-  // A required producer larger than the budget is never truncated: the plan fails closed.
-  const big = { 'src/main/big.ts': before }
-  const large = memory({
-    [base]: { ...big, 'src/main/index.ts': "import './big'" },
-    [head]: { ...big, 'src/main/index.ts': "import './big'; export const changed = 1" }
+  // A trusted header that leaves no room for any change unit is never truncated: it fails closed.
+  const many = Array.from({ length: 120 }, (_, i) => `src/main/very-long-module-name-${i}.ts`)
+  const trees = Object.fromEntries(many.map((name) => [name, 'export const x = 1']))
+  const crowded = memory({
+    [base]: trees,
+    [head]: Object.fromEntries(many.map((name) => [name, 'export const x = 2']))
   })
   await assert.rejects(
-    collectGroupedReview(request(['src/main/index.ts']), large.reader, {}, 5000),
-    /context exceeds/
+    collectGroupedReview(request([many[0]]), crowded.reader, {}, 4000),
+    /exceeds batch budget/
   )
 })
 
-test('local import/export/require closure is complete and ref-bound, preserving base/head contracts and leading spaces', async () => {
+test('local import/export/require closure must resolve in each snapshot and is disclosed as hints, with leading spaces preserved', async () => {
   const shared = {
     'README.md': 'project contract',
-    'src/entry.ts': "import { run } from './worker.js'; export { result } from './ leading';\n",
     'src/ leading.ts': "export { value as result } from './contract'",
-    'src/contract.ts': 'export const value = 1'
+    'src/contract.ts': 'export const value = 1',
+    'src/worker.ts': "const c = require('./contract'); export const run = 'NEW'"
   }
   const f = memory({
-    [base]: { ...shared, 'src/worker.ts': "const c = require('./contract'); export const run = 'OLD'" },
-    [head]: { ...shared, 'src/worker.ts': "const c = require('./contract'); export const run = 'NEW'" }
+    [base]: { ...shared, 'src/entry.ts': "import { run } from './worker.js';\n" },
+    [head]: {
+      ...shared,
+      'src/entry.ts': "import { run } from './worker.js'; export { result } from './ leading';\n"
+    }
   })
   const result = await collectReviewContext(request(['src/entry.ts']), f.reader)
-  assert.match(result.context, /'OLD'/)
-  assert.match(result.context, /'NEW'/)
-  assert.ok(result.identities.some((x: any) => x.path === 'src/ leading.ts'))
-  const stable = result.identities.filter((x: any) => x.path === 'src/contract.ts')
-  assert.equal(stable.length, 1, 'same Git blob is included once with all snapshot roles')
-  assert.deepEqual(
-    stable[0].roles.map((x: any) => x.role),
-    ['head', 'base', 'mergeBase']
-  )
-  assert.equal(result.files[0].before, shared['src/entry.ts'])
+  const hints = hintsOf(result.context)
+  assert.deepEqual(hints['src/worker.ts'], ['local dependency of src/entry.ts'])
+  assert.deepEqual(hints['src/ leading.ts'], ['local dependency of src/entry.ts'])
+  assert.ok(!result.context.includes("'NEW'"), 'dependency bodies are not inlined')
+  assert.equal(result.files[0].before, "import { run } from './worker.js';\n")
+  // Only the changed file is read; dependencies are resolved against the tree inventory.
+  assert.deepEqual([...new Set(f.requests.map((row) => row.path))], ['src/entry.ts'])
   assert.ok(f.requests.every((row) => [head, base].includes(row.ref)))
 })
 
-test('policy explicitly referenced sources, installer and actual local updater consumers are supplied', async () => {
+test('changed policy sources, installer and actual local updater consumers are required and hinted', async () => {
   const policy = JSON.stringify({
     trustedQuality: {
       path: '.github/workflows/quality.yml',
@@ -184,24 +211,41 @@ test('policy explicitly referenced sources, installer and actual local updater c
     'packages/dsh-px-updater/src/feed.ts':
       'export const feed = (repo: string) => `https://api.github.com/repos/${repo}/releases/latest`'
   }
-  const f = memory({ [base]: tree, [head]: { ...tree, 'src/unrelated.ts': 'export const other = 1' } })
+  const f = memory({
+    [base]: tree,
+    [head]: {
+      ...tree,
+      'docs/github/review-policy.json': policy + '\n',
+      'src/unrelated.ts': 'export const other = 1'
+    }
+  })
   const result = await collectReviewContext(request(['docs/github/review-policy.json']), f.reader)
-  for (const file of Object.keys(tree)) assert.ok(result.context.includes(file), file)
-  assert.match(result.context, /electron-updater caller/)
-  assert.ok(!result.context.includes('export const other = 1'))
+  const hints = hintsOf(result.context)
+  for (const file of ['.github/workflows/quality.yml', 'scripts/quality.mjs', 'scripts/build.mjs'])
+    assert.ok(
+      hints[file].some((reason) => reason.startsWith('review-policy.json')),
+      file
+    )
+  assert.ok(hints['scripts/review-install.mjs'])
+  assert.deepEqual(hints['src/renamed/updater-client.ts'], ['release updater consumer'])
+  assert.deepEqual(hints['packages/dsh-px-updater/src/feed.ts'], ['release updater consumer'])
+  assert.ok(!result.context.includes('src/unrelated.ts'))
+  assert.ok(!result.context.includes('electron-updater caller'))
 })
 
-test('requested base is distinct from merge base and each changed contract is labelled by its immutable ref', async () => {
+test('requested base is distinct from merge base: the diff is against the merge base and base oids are listed', async () => {
   const f = memory({
-    [mergeBase]: { 'README.md': 'MERGE_CONTRACT' },
-    [base]: { 'README.md': 'BASE_CONTRACT' },
-    [head]: { 'README.md': 'HEAD_CONTRACT' }
+    [mergeBase]: { 'README.md': 'MERGE_CONTRACT\n' },
+    [base]: { 'README.md': 'BASE_CONTRACT\n' },
+    [head]: { 'README.md': 'HEAD_CONTRACT\n' }
   })
   const result = await collectReviewContext({ ...request(['README.md']), mergeBase }, f.reader)
-  for (const value of ['MERGE_CONTRACT', 'BASE_CONTRACT', 'HEAD_CONTRACT'])
-    assert.ok(result.context.includes(value))
-  assert.equal(result.files[0].before, 'MERGE_CONTRACT')
-  assert.equal(result.files[0].after, 'HEAD_CONTRACT')
+  assert.equal(result.files[0].before, 'MERGE_CONTRACT\n')
+  assert.equal(result.files[0].after, 'HEAD_CONTRACT\n')
+  const inventory = JSON.parse(/Group change inventory[^:]*: (\[.*\])\n/.exec(result.context)![1])
+  const baseOid = (await f.reader.list(base)).find((entry: any) => entry.path === 'README.md').oid
+  assert.equal(inventory[0].requestedBaseOid, baseOid)
+  assert.ok(!result.context.includes('BASE_CONTRACT'), 'the requested base is read with tools, not inlined')
 })
 
 test('missing dependencies, escaped paths, links, private paths and invalid bytes block before unsafe reads', async () => {
@@ -211,6 +255,9 @@ test('missing dependencies, escaped paths, links, private paths and invalid byte
     { source: "import '/outside/private.js'", error: /outside the Git snapshot/ },
     { source: "import './node_modules/secret'", error: /Private or generated/ },
     { source: "import './key.pem'", error: /Private or generated/ },
+    { source: "import './.npmrc'", error: /Private or generated/ },
+    { source: "import './id_rsa'", error: /Private or generated/ },
+    { source: "import './app.keystore'", error: /Private or generated/ },
     {
       source: "import './linked'",
       extra: { 'src/linked': { mode: '120000', text: '../../secret' } },
@@ -220,12 +267,11 @@ test('missing dependencies, escaped paths, links, private paths and invalid byte
       source: "import './submodule'",
       extra: { 'src/submodule': { mode: '160000', type: 'commit', text: '' } },
       error: /regular Git blob/
-    },
-    { source: "import './bad'", extra: { 'src/bad.ts': Buffer.from([0xff]) }, error: /encoded data/ }
+    }
   ]
   for (const row of cases) {
     const tree = { 'src/entry.ts': row.source, ...row.extra },
-      f = memory({ [head]: tree, [base]: tree })
+      f = memory({ [head]: tree, [base]: { ...tree, 'src/entry.ts': '' } })
     await assert.rejects(collectReviewContext(request(['src/entry.ts']), f.reader), row.error)
     assert.ok(
       !f.requests.some(
@@ -233,38 +279,33 @@ test('missing dependencies, escaped paths, links, private paths and invalid byte
       )
     )
   }
+  // A changed file with invalid UTF-8 is never decoded into model input.
+  const invalid = memory({ [head]: { 'src/bad.ts': Buffer.from([0xff]) }, [base]: { 'src/bad.ts': 'ok' } })
+  await assert.rejects(collectReviewContext(request(['src/bad.ts']), invalid.reader), /encoded data/)
   const tree = {
     'docs/github/review-policy.json': JSON.stringify({ trustedBuild: { files: { '../outside': 'a' } } })
   }
-  const f = memory({ [base]: tree, [head]: tree })
+  const f = memory({ [base]: { 'docs/github/review-policy.json': '{}' }, [head]: tree })
   await assert.rejects(collectReviewContext(request(['docs/github/review-policy.json']), f.reader), /Unsafe/)
 })
 
-test('bounded context rejects excessive file/byte inventories and missing explicit policy files instead of truncating', async () => {
+test('bounded change sets reject excessive file/byte inventories and missing explicit policy files instead of truncating', async () => {
   const tree = { 'src/entry.ts': "import './other'", 'src/other.ts': 'A'.repeat(8000) },
-    f = memory({ [base]: tree, [head]: tree })
-  await assert.rejects(
-    collectReviewContext(request(['src/entry.ts']), f.reader, { maxPaths: 1 }),
-    /file limit/
-  )
-  await assert.rejects(
-    collectReviewContext(request(['src/entry.ts']), f.reader, { maxBytes: 1000 }),
-    /byte budget/
-  )
-  await assert.rejects(
-    collectReviewContext(request(['src/entry.ts']), f.reader, { maxTreeEntries: 1 }),
-    /entry limit/
-  )
-  await assert.rejects(
-    collectReviewContext(request(['src/entry.ts']), f.reader, { maxBytes: Infinity }),
-    /Invalid bounded/
-  )
+    f = memory({
+      [base]: tree,
+      [head]: { 'src/entry.ts': "import './other'\n", 'src/other.ts': 'B'.repeat(8000) }
+    })
+  const both = request(['src/entry.ts', 'src/other.ts'])
+  await assert.rejects(collectReviewContext(both, f.reader, { maxPaths: 1 }), /file limit/)
+  await assert.rejects(collectReviewContext(both, f.reader, { maxBytes: 1000 }), /byte budget/)
+  await assert.rejects(collectReviewContext(both, f.reader, { maxTreeEntries: 1 }), /entry limit/)
+  await assert.rejects(collectReviewContext(both, f.reader, { maxBytes: Infinity }), /Invalid bounded/)
   const p = {
       'docs/github/review-policy.json': JSON.stringify({
         trustedBuild: { files: { 'scripts/not-present.mjs': 'a' } }
       })
     },
-    bad = memory({ [head]: p, [base]: p })
+    bad = memory({ [head]: p, [base]: { 'docs/github/review-policy.json': '{}' } })
   await assert.rejects(
     collectReviewContext(request(['docs/github/review-policy.json']), bad.reader),
     /Required review source is absent/
@@ -387,7 +428,7 @@ test('AST inventory includes TypeScript import contracts and explicitly records 
   )
 })
 
-test('divergent requested base prints ordinary changed-root bytes from a real three-fork Git history', async (t) => {
+test('divergent requested base is identified in the header and readable from a real three-fork Git history', async (t) => {
   const parent = realpathSync(tmpdir()),
     directory = mkdtempSync(join(parent, 'dshpx-context-forks-'))
   t.after(() => {
@@ -438,16 +479,21 @@ test('divergent requested base prints ordinary changed-root bytes from a real th
   assert.equal(result.mergeBase, initial)
   assert.equal(result.files[0].before, 'export const marker = "MERGE_ONLY"\n')
   assert.equal(result.files[0].after, 'export const marker = "HEAD_ONLY"\n')
-  for (const marker of ['BASE_ONLY', 'MERGE_ONLY', 'HEAD_ONLY'])
-    assert.ok(result.context.includes(marker), marker)
-  assert.ok(
-    result.identities.some(
-      (item: any) =>
-        item.path === 'src/entry.ts' &&
-        item.roles.some((role: any) => role.role === 'base' && role.ref === requestedBase)
-    )
+  // The diff is against the merge base; the divergent requested base is identified by its
+  // blob id in the trusted header and is read with read_file ref "base", never guessed.
+  const text = result.batches.map((batch: any) => batch.text).join('\n')
+  assert.match(text, /-export const marker = "MERGE_ONLY"\n[^]*\+export const marker = "HEAD_ONLY"/)
+  assert.ok(!text.includes('BASE_ONLY'))
+  const baseOid = run(['rev-parse', requestedBase + ':src/entry.ts'])
+    .toString()
+    .trim()
+  assert.ok(result.batches.every((batch: any) => batch.text.includes(`"requestedBaseOid":"${baseOid}"`)))
+  assert.ok(result.batches.every((batch: any) => batch.text.includes('Base: ' + requestedBase)))
+  const reader = result.reader
+  assert.equal(
+    (await reader.read(requestedBase, 'src/entry.ts')).toString(),
+    'export const marker = "BASE_ONLY"\n'
   )
-  assert.ok(result.batches.every((batch: any) => batch.text.includes('BASE_ONLY')))
   assert.ok(!result.context.includes('DIRTY_TREE_MUST_NOT_BE_PARSED'))
   assert.match(readFileSync(join(directory, 'src/entry.ts'), 'utf8'), /DIRTY_TREE_MUST_NOT_BE_PARSED/)
 })
@@ -491,7 +537,9 @@ test('parser provenance projections bind exact JSON pointers to each Git ref wit
   )
   assert.equal(result.files.find((item: any) => item.path === 'package-lock.json').before, oldLock)
   assert.equal(result.files.find((item: any) => item.path === 'package-lock.json').after, newLock)
-  assert.match(result.context, /CONTEXT JSON PROJECTION/)
+  assert.match(result.context, /JSON projections: \[\{"path":"package-lock.json"/)
+  // The changed lockfile itself is reviewed as a diff, not replaced by the projection.
+  assert.ok(result.files.find((item: any) => item.path === 'package-lock.json').status === 'modified')
 })
 
 test('Git tree parsing preserves whitespace names and rejects malformed identity', () => {
@@ -500,24 +548,209 @@ test('Git tree parsing preserves whitespace names and rejects malformed identity
   assert.throws(() => parseReviewTree(Buffer.from('garbage\0')), /Malformed/)
 })
 
-test('complete batch lengths include headers and repeated context, and changed bytes have gap-free coverage', () => {
+const { changeUnits, rebuildAfter, diffHunks } = await import(
+  pathToFileURL(resolve('scripts/review-diff.mjs')).href
+)
+const numberedLines = (n: number) =>
+  Array.from({ length: n }, (_, i) => `guard line ${i + 1}`).join('\n') + '\n'
+/** Deterministic generator so the property test is reproducible. */
+function random(seed: number) {
+  return () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
+}
+
+test('diff units rebuild the head text byte for byte on random and boundary cases', () => {
+  const rnd = random(20260914)
+  const pool = [
+    'a',
+    'b',
+    'c',
+    '',
+    'x\r',
+    '\u240d',
+    'y\u240d\r',
+    '\\',
+    'dup',
+    'dup',
+    '  nested',
+    'function f() {',
+    '}'
+  ]
+  const text = (lines: number) => {
+    let out = Array.from({ length: lines }, () => pool[Math.floor(rnd() * pool.length)]).join('\n')
+    if (lines && rnd() < 0.5) out += '\n'
+    return out
+  }
+  const cases: Array<[string, string]> = [
+    ['', 'only\nadded\n'],
+    ['only\nremoved\n', ''],
+    ['same', 'same\n'],
+    ['same\n', 'same'],
+    ['a\r\nb\r\n', 'a\nb\n'],
+    ['a\nb\n', 'a\r\nb\r\n'],
+    ['dup\ndup\ndup\n', 'dup\ndup\n'],
+    ['x\n'.repeat(3), 'x\n'.repeat(3) + 'y'],
+    [
+      Array.from({ length: 40000 }, (_, i) => `line ${i % 700}`).join('\n'),
+      Array.from({ length: 41000 }, (_, i) => (i % 9 ? `line ${i % 700}` : `edit ${i}`)).join('\n')
+    ]
+  ]
+  for (let i = 0; i < 3000; i++) cases.push([text(Math.floor(rnd() * 14)), text(Math.floor(rnd() * 14))])
+  let checked = 0
+  for (const [before, after] of cases) {
+    if (before === after) continue
+    const file = {
+      path: 'f.ts',
+      before,
+      after,
+      status: before && after ? 'modified' : after ? 'added' : 'deleted'
+    }
+    const units = changeUnits(file)
+    assert.equal(rebuildAfter(before, units), after, JSON.stringify([before, after]).slice(0, 200))
+    // Coverage is checked on the exact batch text: pieces of every unit rebuild the head text.
+    const batches = splitBatches([file], 'header', 4000 + Math.floor(rnd() * 4000))
+    assert.equal(verifyBatchCoverage([file], batches), true)
+    checked++
+  }
+  assert.ok(checked > 2500)
+  // A dropped piece, altered row or reordered hunk is detected rather than silently unreviewed.
+  const before = Array.from({ length: 200 }, (_, i) => `row ${i}`).join('\n') + '\n'
+  const after = before.replace('row 10\n', 'row ten\n').replace('row 150\n', 'row 150b\n')
+  const file = { path: 'g.ts', before, after, status: 'modified' }
+  const batches = splitBatches([file], 'header', 4000)
+  const units = changeUnits(file)
+  assert.equal(units.length, 2)
+  assert.throws(() => rebuildAfter(before, [units[0]]), /incomplete/)
+  assert.notEqual(
+    rebuildAfter(before, [{ ...units[0], body: units[0].body.replace('row ten', 'row TEN') }, units[1]]),
+    after
+  )
+  assert.throws(
+    () => rebuildAfter(before, [{ ...units[0], body: units[0].body.replace(/\n.*-row 10/, '') }, units[1]]),
+    /merge-base|inconsistent|Unparseable/
+  )
+  // A batch whose text and pieces disagree, or a missing batch, is detected.
+  const dropped = batches.map((batch: any) => ({ ...batch, pieces: batch.pieces.slice(1) }))
+  assert.throws(() => verifyBatchCoverage([file], dropped), /text does not match its pieces/)
+  if (batches.length > 1) assert.throws(() => verifyBatchCoverage([file], batches.slice(1)), /do not cover/)
+  else assert.throws(() => verifyBatchCoverage([file], []), /do not cover/)
+})
+
+test('modified files are sent as labelled diff hunks with context, never their complete before/after text', () => {
+  const lines = Array.from({ length: 120 }, (_, i) => `  const value${i} = ${i}`)
+  const before = ['export function outer() {', ...lines, '}', ''].join('\n')
+  const after = before.replace('  const value60 = 60', '  const value60 = 600')
+  const [hunk] = diffHunks('src/outer.ts', before, after)
+  assert.match(hunk.header, /^@@ -57,11 \+57,11 @@ export function outer\(\) \{$/)
+  const batches = splitBatches([{ path: 'src/outer.ts', before, after }], 'header')
+  const text = batches.map((batch: any) => batch.text).join('\n')
+  assert.ok(text.includes('-  const value60 = 60\n') && text.includes('+  const value60 = 600\n'))
+  assert.ok(
+    text.includes('  const value55 = 55') && !text.includes('const value54 = 54'),
+    'five context lines'
+  )
+  assert.ok(!text.includes('const value0 = 0') && !text.includes('const value119 ='))
+  assert.deepEqual(batches[0].scope[0].before, [56, 67, 122])
+})
+
+test('deleted files are sent as their complete numbered old text, split across batches and rebuilt byte for byte', () => {
+  const deleted = [
+    "import { test } from 'node:test'",
+    "test('guards the release', () => { assert.ok(REMOVED_GUARD_BODY) })",
+    "test('second case', () => {})",
+    ''
+  ].join('\n')
+  const file = {
+    path: 'test/old.test.ts',
+    before: deleted,
+    after: '',
+    status: 'deleted',
+    beforeOid: 'd'.repeat(40)
+  }
+  const [unit] = changeUnits(file)
+  assert.equal(unit.kind, 'deleted')
+  assert.match(
+    unit.header,
+    /^deleted file, complete merge-base text removed \(3 lines\) \{"bytes":\d+,"lines":3,"oid":"d{40}"/
+  )
+  assert.equal(
+    unit.body,
+    "1 -import { test } from 'node:test'\n2 -test('guards the release', () => { assert.ok(REMOVED_GUARD_BODY) })\n3 -test('second case', () => {})"
+  )
+  const [batch] = splitBatches([file], 'header')
+  assert.ok(batch.text.includes('REMOVED_GUARD_BODY'), 'the removed test bodies are reviewed')
+  assert.equal(verifyBatchCoverage([file], [batch]), true)
+  // A large removal spans several batches; dropping or altering any piece is detected.
+  const big = { path: 'scripts/old-guard.mjs', before: numberedLines(3000), after: '', status: 'deleted' }
+  const batches = splitBatches([big], 'header', 20000)
+  assert.ok(batches.length > 3 && batches.every((b: any) => b.text.length <= 20000))
+  assert.equal(verifyBatchCoverage([big], batches), true)
+  assert.throws(() => verifyBatchCoverage([big], batches.slice(1)), /do not cover/)
+  const altered = batches.map((b: any, i: number) =>
+    i === 1
+      ? {
+          ...b,
+          pieces: b.pieces.map((p: any) => ({ ...p, text: p.text.replace('-guard line', '-GUARD line') }))
+        }
+      : b
+  )
+  assert.throws(
+    () => verifyBatchCoverage([big], altered),
+    /text does not match|do not cover|rebuild|reproduce/
+  )
+  // Oversized removals fail closed rather than being skipped.
+  assert.throws(
+    () => changeUnits({ path: 'huge.txt', before: 'x\n'.repeat(1_100_000), after: '', status: 'deleted' }),
+    /inline review limit/
+  )
+  const added = splitBatches(
+    [{ path: 'src/new.ts', before: '', after: 'one\ntwo', status: 'added' }],
+    'header'
+  )[0]
+  assert.match(
+    added.text,
+    /added file, complete text \(2 lines\)\n1 one\n2 two\n\\ No newline at end of file\n/
+  )
+})
+
+test('coverage compares the exact batch text with its pieces', () => {
+  const file = { path: 'src/x.ts', before: 'a\n', after: 'b\n' }
+  const [batch] = splitBatches([file], 'header')
+  assert.throws(
+    () => verifyBatchCoverage([file], [{ ...batch, text: batch.text.replace('+b', '+c') }]),
+    /text does not match its pieces/
+  )
+})
+
+test('header names head sources that still reference a deleted path', async () => {
+  const tree = graphTree()
+  tree['scripts/old-guard.mjs'] = 'export const guard = 1\n'
+  tree['scripts/use-guard.mjs'] = "import { guard } from './old-guard.mjs'\nexport const use = guard\n"
+  tree['docs/GUIDE.md'] = 'See [guard](../scripts/old-guard.mjs).\n'
+  const { 'scripts/old-guard.mjs': _removed, ...headTree } = tree
+  const f = memory({ [base]: tree, [head]: headTree })
+  const plan = await collectGroupedReview(request(['scripts/old-guard.mjs']), f.reader)
+  const text = plan.batches.map((b: any) => b.text).join('\n')
+  const named = JSON.parse(/Deleted paths still named by head sources[^:]*: (\{.*\})\n/.exec(text)![1])
+  assert.deepEqual(named, { 'scripts/old-guard.mjs': ['docs/GUIDE.md', 'scripts/use-guard.mjs'] })
+  assert.ok(text.includes('1 -export const guard = 1'))
+})
+test('complete batch lengths include the repeated header, and unit bodies have gap-free coverage', () => {
   const context = 'C'.repeat(5500),
     before = 'A'.repeat(12000),
     after = 'B'.repeat(14500)
-  const batches = splitBatches([{ path: 'src/' + 'x'.repeat(120) + '.ts', before, after }], context, 9000)
+  const file = { path: 'src/' + 'x'.repeat(120) + '.ts', before, after }
+  const batches = splitBatches([file], context, 9000)
   assert.ok(batches.length > 1)
   assert.ok(batches.every((batch: any) => batch.text.length <= 9000 && batch.text.startsWith(context)))
-  const covered = { BEFORE: 0, AFTER: 0 }
+  let at = 0
   for (const batch of batches)
-    for (const match of batch.text.matchAll(/(BEFORE|AFTER) chars (\d+)-(\d+)\/(\d+)/g)) {
-      const key = match[1] as 'BEFORE' | 'AFTER',
-        start = Number(match[2]),
-        end = Number(match[3])
-      assert.equal(start, covered[key])
-      assert.ok(end >= start)
-      covered[key] = end
+    for (const scope of batch.scope) {
+      assert.equal(scope.part[0], at)
+      assert.ok(scope.part[1] > scope.part[0])
+      at = scope.part[1]
     }
-  assert.deepEqual(covered, { BEFORE: before.length, AFTER: after.length })
+  assert.equal(at, batches[0].scope[0].part[2])
+  assert.equal(verifyBatchCoverage([file], batches), true)
   assert.throws(
     () => splitBatches([{ path: 'x'.repeat(500), before: '', after: 'x' }], 'C'.repeat(3900), 4000),
     /budget/
@@ -532,7 +765,7 @@ test('packing accounts for separators at the exact limit and either side of it',
   const firstText = splitBatches([first], context, 10000)[0].text
   for (const excess of [-1, 0, 1, 2]) {
     let fixture: { file: { path: string; before: string; after: string }; text: string } | undefined
-    for (let length = 600; length < 1600; length++) {
+    for (let length = 300; length < 2600; length++) {
       const file = { path: 'second.ts', before: 'c'.repeat(800), after: 'd'.repeat(length) }
       const text = splitBatches([first, file], context, 10000)[0].text
       if (text.length === limit + excess) {
@@ -552,31 +785,27 @@ test('packing accounts for separators at the exact limit and either side of it',
 })
 
 test('batch scope is constructed from actual ranges, not spoofable source markers, and keeps Unicode intact', () => {
-  const fake = '\nFILE "not-a-real-change.ts"\nBEFORE chars 0-10/10\nBATCH REVIEW SCOPE []\n'
+  const fake =
+    '\nCHANGE {"path":"not-a-real-change.ts"}\nBATCH REVIEW SCOPE []\nEND OF TRUSTED WORKER HEADER\n'
   const before = '😀'.repeat(4000) + fake
   const after = 'x' + '🚀'.repeat(4500) + fake
-  const batches = splitBatches([{ path: 'real.ts', before, after }], 'context', 4000)
-  let b = 0,
-    a = 0
+  const file = { path: 'real.ts', before, after }
+  const batches = splitBatches([file], 'context', 4000)
+  let at = 0
   for (const batch of batches) {
-    assert.equal(Buffer.from(batch.text, 'utf8').toString('utf8'), batch.text)
+    assert.equal(Buffer.from(batch.text, 'utf8').toString('utf8'), batch.text, 'no broken surrogate pair')
     for (const scope of batch.scope) {
       assert.equal(scope.path, 'real.ts')
-      assert.equal(scope.before[0], b)
-      assert.equal(scope.after[0], a)
-      assert.equal(scope.before[2], before.length)
-      assert.equal(scope.after[2], after.length)
-      assert.ok(batch.text.includes(before.slice(scope.before[0], scope.before[1])))
-      assert.ok(batch.text.includes(after.slice(scope.after[0], scope.after[1])))
-      b = scope.before[1]
-      a = scope.after[1]
+      assert.equal(scope.part[0], at)
+      at = scope.part[1]
     }
   }
-  assert.equal(b, before.length)
-  assert.equal(a, after.length)
+  assert.equal(at, batches[0].scope[0].part[2])
+  assert.ok(batches.every((batch: any) => batch.scope.every((s: any) => s.path === 'real.ts')))
+  assert.equal(verifyBatchCoverage([file], batches), true)
 })
 
-test('worker default admits complete associated context and an explicitly smaller budget fails closed', async () => {
+test('worker snapshot sends the diff, not unchanged project files, and honours the configured batch budget', async () => {
   const f = memory({
     [base]: { 'README.md': 'project context '.repeat(24000), 'src/entry.ts': 'export const value = 1' },
     [head]: { 'README.md': 'project context '.repeat(24000), 'src/entry.ts': 'export const value = 2' }
@@ -597,13 +826,16 @@ test('worker default admits complete associated context and an explicitly smalle
     throw new Error('Unexpected Git request')
   }
   const result = await prepareReviewSnapshot({ repository: 'fixture/repo' }, { head, base }, git)
-  assert.ok(result.metrics.contextChars > 300000)
-  assert.ok(result.batches.every((batch: any) => batch.text.length <= 500000))
-  assert.ok(result.context.includes('project context '.repeat(24000)))
-  await assert.rejects(
-    prepareReviewSnapshot({ repository: 'fixture/repo', maxBatchChars: 120000 }, { head, base }, git),
-    /context exceeds batch budget/
+  assert.equal(result.batches.length, 1)
+  assert.ok(result.batches[0].text.length < 20000)
+  assert.ok(!result.batches[0].text.includes('project context'))
+  assert.ok(hintsOf(result.batches[0].text)['README.md'])
+  const small = await prepareReviewSnapshot(
+    { repository: 'fixture/repo', maxBatchChars: 4000 },
+    { head, base },
+    git
   )
+  assert.ok(small.batches.every((batch: any) => batch.text.length <= 4000))
 })
 
 const graphTree = (): Record<string, string> => ({
@@ -678,19 +910,30 @@ test('dependency graph owns shared sources by real consumers, routes and declare
   assert.ok(!plan.batches.some((b: any) => b.group === 'other'))
   const runtime = plan.batches.filter((b: any) => b.group === 'runtime')
   assert.ok(
-    runtime.every((b: any) => b.text.includes("owner: 'ACTIVITY_2'")),
-    'route producer is runtime context'
+    runtime.some((b: any) =>
+      b.text.includes("+export const route = { path: '/dsh-px-bench/shutdown', owner: 'ACTIVITY_2' }")
+    ),
+    'the route producer change is reviewed by its runtime caller group'
   )
-  assert.ok(runtime.every((b: any) => b.text.includes('dsh-px-bench/shutdown')))
+  assert.ok(
+    runtime.every((b: any) =>
+      hintsOf(b.text)['src/main/index.ts']?.includes('direct consumer in the dependency graph')
+    ),
+    'the route caller is named as a hint'
+  )
   const panel = plan.batches.filter((b: any) => b.group === 'panel')
   assert.ok(
-    panel.every((b: any) => b.text.includes("import '../../shared/view'")),
-    'consumer is supplied'
+    panel.every((b: any) => hintsOf(b.text)['packages/dsh-px-panel/src/index.ts']),
+    'the consumer is named as a hint'
+  )
+  assert.ok(
+    !panel.some((b: any) => b.text.includes("import '../../shared/view'")),
+    'consumer bodies are read on demand'
   )
   assert.ok(!panel.some((b: any) => b.text.includes('SHARED_RULE')), 'unrelated shared sources stay out')
 })
 
-test('manifest, npm-script and documentation changes carry their declared producers without fanning out', async () => {
+test('manifest, npm-script and documentation changes hint their declared producers without fanning out', async () => {
   const f = graphFixture({
     'package.json': JSON.stringify({
       name: 'fixture',
@@ -702,67 +945,77 @@ test('manifest, npm-script and documentation changes carry their declared produc
     'docs/EDITIONS.md': '# Editions v2\nSee [plugins](PLUGINS.md).'
   })
   const plan = await collectGroupedReview(request(['package.json', 'docs/EDITIONS.md']), f.reader)
-  const text = plan.batches.map((b: any) => b.text).join('\n')
-  assert.ok(text.includes("'VERIFY_CAPABILITIES'"), 'changed npm script target reaches through the runner')
-  assert.ok(!text.includes("'CHECK_PLUGINS'"), 'unchanged npm scripts are not pulled into context')
-  assert.ok(text.includes('Plugin catalog'), 'linked documentation is supplied')
+  const hints = Object.assign({}, ...plan.batches.map((b: any) => hintsOf(b.text)))
+  assert.ok(hints['scripts/verify-capabilities.ts'], 'changed npm script target reaches through the runner')
+  assert.ok(!hints['scripts/check-plugins.mjs'], 'unchanged npm scripts are not hinted')
+  assert.ok(hints['docs/PLUGINS.md'], 'linked documentation is hinted')
+  assert.ok(
+    !plan.batches.some((b: any) => b.text.includes('Plugin catalog')),
+    'hinted bodies are not inlined'
+  )
   // A computed path pattern links the plugin checker to every package manifest.
   const checker = graphFixture({
     'scripts/check-plugins.mjs': "const manifest = `packages/${name}/package.json`; export const check = 'X'"
   })
   const checked = await collectGroupedReview(request(['scripts/check-plugins.mjs']), checker.reader)
-  const all = checked.batches.map((b: any) => b.text).join('\n')
-  for (const name of ['bench', 'panel', 'other']) assert.ok(all.includes(`"name":"dsh-px-${name}"`), name)
+  const all = Object.assign({}, ...checked.batches.map((b: any) => hintsOf(b.text)))
+  for (const name of ['bench', 'panel', 'other']) assert.ok(all[`packages/dsh-px-${name}/package.json`], name)
 })
 
-test('graph grouping splits oversized groups along dependency closure and never truncates', async () => {
+test('graph grouping splits a group whose trusted header leaves no room along dependency closure, never truncating', async () => {
   const tree = graphTree()
-  // Two independent changed files, each with its own large producer: together their context
-  // exceeds one batch, separately each fits.
-  const filler = (tag: string) => `export const ${tag} = '${tag}'\n` + `// ${tag}\n`.repeat(2500)
-  tree['packages/shared/big-a.ts'] = filler('BIGA')
-  tree['packages/shared/big-b.ts'] = filler('BIGB')
-  tree['packages/shared/a.ts'] = "import './big-a'\nexport const a = 1"
-  tree['packages/shared/b.ts'] = "import './big-b'\nexport const b = 1"
-  tree['packages/dsh-px-panel/src/index.ts'] =
-    "import '../../shared/view'\nimport '../../shared/a'\nimport '../../shared/b'"
-  const f = memory({
-    [base]: tree,
-    [head]: {
-      ...tree,
-      'packages/shared/a.ts': "import './big-a'\nexport const a = 2",
-      'packages/shared/b.ts': "import './big-b'\nexport const b = 2"
+  // Two independent import chains of changed files with long names: the group's header
+  // (inventory, hints, map) grows with its files, so only the split halves fit a small budget.
+  const name = (chain: string, i: number) => `packages/shared/${chain}-${'n'.repeat(180)}-${i}.ts`
+  const chains = ['alpha', 'omega']
+  const names: string[] = []
+  const after: Record<string, string> = {}
+  for (const chain of chains)
+    for (let i = 0; i < 8; i++) {
+      const path = name(chain, i)
+      tree[path] = (i ? `import './${chain}-${'n'.repeat(180)}-${i - 1}'\n` : '') + `export const v${i} = 1\n`
+      after[path] = tree[path].replace('= 1', '= 2')
+      names.push(path)
     }
-  })
-  const names = ['packages/shared/a.ts', 'packages/shared/b.ts']
-  const whole = await collectGroupedReview(request(names), f.reader, {}, 200000)
+  tree['packages/dsh-px-panel/src/index.ts'] = chains
+    .map((chain) => `import '../../shared/${chain}-${'n'.repeat(180)}-7'`)
+    .join('\n')
+  const f = memory({ [base]: tree, [head]: { ...tree, ...after } })
+  const whole = await collectGroupedReview(request(names), f.reader, {}, 400000)
   assert.equal(whole.metrics.groups, 1)
-  const single = whole.metrics.groupMetrics[0].contextChars
-  const budget = Math.ceil(single * 0.8)
-  const split = await collectGroupedReview(request(names), f.reader, {}, budget)
+  const header = whole.metrics.groupMetrics[0].contextChars
+  let split: any
+  // The request-wide path list precedes every group header, so search above the group header.
+  for (let budget = header + 8000; budget > header / 2 && !split; budget -= 250) {
+    const plan = await collectGroupedReview(request(names), f.reader, {}, budget).catch(() => undefined)
+    if (plan && plan.metrics.groups === 2) split = { plan, budget }
+  }
+  assert.ok(split, 'a budget between the halves and the whole group splits it')
   assert.deepEqual(
-    split.metrics.groupMetrics.map((g: any) => g.group),
-    ['panel.1', 'panel.2'],
+    split.plan.metrics.groupMetrics.map((g: any) => [g.group, g.changed]),
+    [
+      ['panel.1', 8],
+      ['panel.2', 8]
+    ],
     'split along independent dependency closures'
   )
-  assert.ok(split.batches.every((b: any) => b.text.length <= budget))
-  assert.ok(split.batches.some((b: any) => b.text.includes("'BIGA'") && !b.text.includes("'BIGB'")))
-  assert.ok(split.batches.some((b: any) => b.text.includes("'BIGB'") && !b.text.includes("'BIGA'")))
-  for (const path of names) {
-    const covered = split.batches.flatMap((b: any) => b.scope.filter((s: any) => s.path === path))
+  assert.ok(split.plan.batches.every((b: any) => b.text.length <= split.budget))
+  for (const part of ['panel.1', 'panel.2']) {
+    const batches = split.plan.batches.filter((b: any) => b.id.startsWith(part + '-'))
+    const paths = new Set(batches.flatMap((b: any) => b.scope.map((s: any) => s.path)))
+    assert.equal(paths.size, 8)
+    assert.ok([...paths].every((path) => String(path).includes(part === 'panel.1' ? 'alpha' : 'omega')))
     assert.equal(
-      Math.max(...covered.map((s: any) => s.after[1])),
-      covered[0].after[2],
-      'complete changed file'
+      verifyBatchCoverage(
+        split.plan.files.filter((file: any) => paths.has(file.path)),
+        batches
+      ),
+      true
     )
   }
-  // One file whose own producer exceeds the budget cannot be split further: fail closed.
-  await assert.rejects(
-    collectGroupedReview(request(names), f.reader, {}, Math.ceil(single / 3)),
-    /context exceeds batch budget/
-  )
+  // When even one file's header exceeds the budget, nothing is truncated: the plan fails closed.
+  await assert.rejects(collectGroupedReview(request(names), f.reader, {}, 4000), /exceeds batch budget/)
 })
-
 test('secret scan runs over every review blob before model input and reports locations only', async () => {
   const token = 'gh' + 'p_' + 'Q'.repeat(36)
   const f = graphFixture({

@@ -133,6 +133,8 @@ function fixture(t: TestContext) {
   const trusted = [
     'review-loop.mjs',
     'review-core.mjs',
+    'review-diff.mjs',
+    'review-tools.mjs',
     'review-parser.mjs',
     'review-upstream.mjs',
     'check-secrets.mjs'

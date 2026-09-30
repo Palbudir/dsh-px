@@ -94,6 +94,8 @@ function fixture(t: TestContext) {
   for (const name of [
     'review-worker.mjs',
     'review-core.mjs',
+    'review-diff.mjs',
+    'review-tools.mjs',
     'review-parser.mjs',
     'review-process.mjs',
     'review-model.mjs',

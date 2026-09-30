@@ -12,3 +12,5 @@ export declare function scanText(path: string, text: string, rules?: SecretRule[
 export declare function maskSecrets(text: string, rules?: SecretRule[]): string
 /** Scan tracked + untracked-not-ignored files, or only files changed in a git range. */
 export declare function scanRepository(range?: string): SecretFinding[]
+/** Paths that must never be pushed or read as reviewer input, regardless of content. */
+export declare const FORBIDDEN_PATH: RegExp

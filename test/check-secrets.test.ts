@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { RULES, maskSecrets, scanText } from '../scripts/check-secrets.mjs'
+import { FORBIDDEN_PATH, RULES, maskSecrets, scanText } from '../scripts/check-secrets.mjs'
 
 const rules = (text: string) => scanText('sample/file.ts', text).map((f: { rule: string }) => f.rule)
 // Samples are assembled at runtime so this file itself never contains a matching literal.
@@ -108,4 +108,52 @@ test('declared placeholders by value convention and generic paths are accepted',
   // Code expressions and environment variable *names* are not credential values.
   assert.deepEqual(rules('const requestToken = quoteRequestTokensForSession()[id]?.token'), [])
   assert.deepEqual(rules("apiKeyEnv: 'DSHPX_REVIEW_FIXTURE_KEY_NAME'"), [])
+})
+
+test('a private key is one block: reported once and masked from BEGIN through END, body included', () => {
+  const block = [
+    j('-----BEGIN ', 'RSA PRIVATE KEY-----'),
+    'MIIEowIBAAKCAQEA' + LONG,
+    'SECONDBODYLINE' + LONG,
+    j('-----END ', 'RSA PRIVATE KEY-----')
+  ]
+  const text = ['const before = 1', ...block, 'const after = 2'].join('\r\n')
+  assert.deepEqual(scanText('k.txt', text), [{ path: 'k.txt', line: 2, rule: 'private-key' }])
+  const masked = maskSecrets(text)
+  assert.equal(masked.length, text.length)
+  const lines = masked.split('\r\n')
+  assert.equal(lines[0], 'const before = 1')
+  assert.equal(lines[5], 'const after = 2')
+  for (let i = 1; i <= 4; i++) assert.match(lines[i], /^\*+$/, `line ${i + 1}`)
+  assert.deepEqual(rules(masked), [])
+  // An unterminated block covers its key-shaped lines only; later code is still scanned and kept.
+  const token = j('gh', 'p_', 'Kq7Pz3Xw9Lm2Rt5Vb8Nc4Hd6Jf1Gs0YaQwEr')
+  const openText = [block[0], block[1], '', 'const tail = 1', `t = "${token}"`].join('\n')
+  const open = maskSecrets(openText)
+  assert.ok(!open.includes('MIIE'))
+  assert.ok(open.includes('const tail = 1'))
+  assert.deepEqual(rules(openText), ['private-key', 'github-token'])
+  // A key written on one line ends on that line.
+  const inline = [
+    j('k = "', block[0], 'abc', block[block.length - 1], '"'),
+    'const next = 2',
+    `t = "${token}"`
+  ].join('\n')
+  assert.deepEqual(rules(inline), ['private-key', 'github-token'])
+  assert.ok(maskSecrets(inline).includes('const next = 2'))
+})
+
+test('forbidden paths include credential and keystore files', () => {
+  for (const path of [
+    '.npmrc',
+    'a/.netrc',
+    'id_rsa',
+    'x/id_ed25519.pub',
+    'a.keystore',
+    'b.jks',
+    '.env.local',
+    'build-test/x'
+  ])
+    assert.ok(FORBIDDEN_PATH.test(path), path)
+  for (const path of ['src/app.ts', 'docs/npmrc.md']) assert.ok(!FORBIDDEN_PATH.test(path), path)
 })

@@ -30,7 +30,7 @@
       "scripts/brand-native-installer.mjs": "47aca27d855dcba093c36322a56f8b4fc5107cdc8811e967c8dfca7551e6416c",
       "scripts/brand-installer-images.ps1": "34dd2ca993d80a9c92960033b88b6958564d4127b5acb60f4fed3036ad6c5459",
       "scripts/build-icon.ts": "3d47e2d3d8511af37ddd20f99e4219f4fb951640f43cdc15c67da27859561162",
-      "scripts/check-secrets.mjs": "e4e8f2e4a4b2853724b7d12abfe445d749a06dc21876149d63eda3b399827e57",
+      "scripts/check-secrets.mjs": "fc054a82baf5b0602ab322982ed3e1471c8b47d8d1dc79dcef122c64a1c1d765",
       "scripts/run.mjs": "e95a2c728d278790709ca243f82c7cbaebd15559fbb5d94d9deaf6cb1077b78e"
     }
   },

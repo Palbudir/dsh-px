@@ -98,6 +98,8 @@ function installerCli(t: TestContext) {
     'scripts/review-process.mjs',
     'scripts/review-model.mjs',
     'scripts/review-core.mjs',
+    'scripts/review-diff.mjs',
+    'scripts/review-tools.mjs',
     'scripts/release-quality.mjs',
     'scripts/release-catalog.mjs',
     'scripts/release-package.mjs',

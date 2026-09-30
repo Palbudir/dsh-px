@@ -130,7 +130,8 @@ async function main() {
         keyId,
         workerDigest,
         model,
-        timeoutMs: 900000
+        // Per model request: a 384K-token thinking response can exceed an hour.
+        timeoutMs: 7200000
       },
       null,
       2

@@ -3,6 +3,8 @@ import { inflateRawSync } from 'node:zlib'
 import { posix } from 'node:path'
 import { isBuiltin } from 'node:module'
 import { parseReviewSource } from './review-parser.mjs'
+import { FORBIDDEN_PATH } from './check-secrets.mjs'
+import { changeUnits, DIFF_CONTEXT_LINES, rebuildAfter } from './review-diff.mjs'
 
 export const CHECK_NAME = 'dsh-px/independent-review'
 export const QUALITY_CHECK_NAME = 'dsh-px/quality'
@@ -107,7 +109,12 @@ export function aggregate(request, batches, results) {
         : 'fail',
     findings,
     blockers,
-    batches: batches.map((b) => ({ id: b.id, digest: sha256(b.text) }))
+    // digest binds the exact batch input; evidence binds its sub-batches, rounds and tool calls.
+    batches: batches.map((b, i) => ({
+      id: b.id,
+      digest: sha256(b.text),
+      ...(typeof results[i].evidence === 'string' ? { evidence: results[i].evidence } : {})
+    }))
   }
 }
 export function attest(payload, keyId, privateKey) {
@@ -174,7 +181,14 @@ export function verifyAttestation(report, policy, expected = {}, now = Date.now(
   if (
     !Array.isArray(payload.batches) ||
     !payload.batches.length ||
-    !payload.batches.every((b) => typeof b.id === 'string' && /^[a-f0-9]{64}$/.test(b.digest)) ||
+    !payload.batches.every(
+      (b) =>
+        typeof b.id === 'string' &&
+        /^[a-f0-9]{64}$/.test(b.digest) &&
+        // The signature binds the pinned worker digest, and that worker always writes evidence for
+        // model-reviewed batches; a present value must be a digest.
+        (b.evidence === undefined || /^[a-f0-9]{64}$/.test(b.evidence))
+    ) ||
     !Array.isArray(payload.findings) ||
     !Array.isArray(payload.blockers)
   )
@@ -270,7 +284,9 @@ export function reviewSourcePath(path) {
       .some((part) =>
         ['.git', '.ssh', '.aws', 'node_modules', 'runtime', 'dist', 'build-test'].includes(part)
       ) ||
-    /(?:^|\/)(?:\.?credentials(?:\.|$)|\.env(?:\.|$))|\.(?:pem|key|p12|pfx)$/i.test(path)
+    /(?:^|\/)(?:\.?credentials(?:\.|$)|\.env(?:\.|$))|\.(?:pem|key|p12|pfx)$/i.test(path) ||
+    // The same forbidden-path rule as the pre-push secret scan (.npmrc, .netrc, SSH keys, keystores).
+    FORBIDDEN_PATH.test(path)
   )
     throw new Error(`Private or generated path is not review context: ${JSON.stringify(path)}`)
   return path
@@ -475,6 +491,8 @@ export async function buildReviewGraph(reader, refs, limits = {}) {
     manifests = new Map(),
     unresolved = [],
     unparsed = [],
+    // Repository-looking paths a source names that do not exist in its snapshot (per ref).
+    missing = [],
     cache = new Map()
   let bytes = 0,
     files = 0
@@ -584,8 +602,20 @@ export async function buildReviewGraph(reader, refs, limits = {}) {
       if (path.endsWith('.md')) {
         for (const match of text.matchAll(/\]\(([^)\s#?]+)(?:[#?][^)\s]*)?\)/g)) {
           if (/^[a-z]+:/i.test(match[1])) continue
-          const target = posix.normalize(posix.join(posix.dirname(path), decodeURI(match[1])))
+          const target = posix.normalize(
+            posix.join(
+              posix.dirname(path),
+              (() => {
+                try {
+                  return decodeURI(match[1])
+                } catch {
+                  return match[1]
+                }
+              })()
+            )
+          )
           if (safePath(target) && has(target)) edge(path, target, 'doc')
+          else if (safePath(target) && missing.length < 100000) missing.push({ ref, from: path, target })
         }
         continue
       }
@@ -609,7 +639,13 @@ export async function buildReviewGraph(reader, refs, limits = {}) {
             target = undefined
           }
           if (target) edge(path, target, 'import')
-          else unresolved.push({ ref, path, specifier })
+          else {
+            unresolved.push({ ref, path, specifier })
+            const joined = dependency.repositoryRelative
+              ? specifier
+              : posix.normalize(posix.join(posix.dirname(path), specifier))
+            if (safePath(joined)) missing.push({ ref, from: path, target: joined })
+          }
         } else if (!specifier.startsWith('/') && !isBuiltin(specifier)) {
           const name = /^(@[^/]+\/[^/]+|[^/]+)/.exec(specifier)?.[1]
           if (!externals.has(path)) externals.set(path, new Set())
@@ -624,6 +660,13 @@ export async function buildReviewGraph(reader, refs, limits = {}) {
         // Data/config/doc targets are read as contracts; named code files are mentions only.
         if (value.includes('/') && safePath(value) && has(value))
           edge(path, value, SOURCE_FILE.test(value) ? 'mention' : 'path')
+        else if (
+          value.includes('/') &&
+          safePath(value) &&
+          /\.[a-z0-9]{1,6}$/i.test(value) &&
+          missing.length < 100000
+        )
+          missing.push({ ref, from: path, target: value })
         const route = /^\/?([a-z0-9][\w.-]*)\/([\w./-]+)$/i.exec(value)
         if (route) routeUsers.push({ path, name: route[1], route: route[1] + '/' + route[2] })
         if (
@@ -667,7 +710,18 @@ export async function buildReviewGraph(reader, refs, limits = {}) {
       if (users.size >= 2 && users.size <= 8)
         for (const a of users) for (const b of users) if (a !== b) edge(a, b, 'artifact')
   }
-  return { forward, reverse, paths, externals, releaseReaders, manifests, unresolved, unparsed, scripts }
+  return {
+    forward,
+    reverse,
+    paths,
+    externals,
+    releaseReaders,
+    manifests,
+    unresolved,
+    unparsed,
+    scripts,
+    missing
+  }
 }
 
 /** Files named by npm scripts whose command differs between two refs (added, removed or changed). */
@@ -854,7 +908,34 @@ export function reviewHostServices(text, known) {
   return [...services].sort()
 }
 
-/** Collect only immutable Git blobs, including before/base contracts when they differ from head. */
+/** Default characters per model batch (~80k tokens of diff): the model reads further context with tools. */
+export const REVIEW_BATCH_CHARS = 240000
+/** Trusted header size caps: related-path hints and the changed-directory repository map. */
+export const REVIEW_HINT_PATHS = 300
+export const REVIEW_MAP_CHARS = 12000
+export const TRUSTED_HEADER_END = 'END OF TRUSTED WORKER HEADER'
+export const SCOPE_MARKER = '\n\nBATCH REVIEW SCOPE (unit body UTF-16 offsets, end exclusive): '
+const unitCache = new WeakMap()
+/** Review units of a change record, computed once per record. */
+export function reviewUnits(file) {
+  if (!unitCache.has(file)) unitCache.set(file, changeUnits(file))
+  return unitCache.get(file)
+}
+const fileIdentity = (file) =>
+  canonical({
+    path: file.path,
+    status: file.status ?? null,
+    before: sha256(file.before ?? ''),
+    after: sha256(file.after ?? ''),
+    mode: file.mode ?? null
+  })
+
+/**
+ * Change records for one group: exact merge-base/head blobs of each changed path (never
+ * dependency or consumer bodies). Every read blob is scanned; candidate findings block and
+ * already-merged findings are masked. Local dependencies of changed sources must resolve inside
+ * the same snapshot, and policy-declared files must exist; both are listed as path hints only.
+ */
 export async function collectReviewContext(request, reader, limits = {}, contracts = [], options = {}) {
   const maxPaths = limits.maxPaths ?? 256,
     maxBytes = limits.maxBytes ?? 3000000,
@@ -874,8 +955,7 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
   const trees = new Map(),
     cached = new Map(),
     paths = new Set(),
-    contextPaths = new Set(),
-    reasons = new Map(),
+    hints = new Map(),
     external = new Map(),
     dynamic = [],
     secretFindings = [],
@@ -897,23 +977,20 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
       throw new Error(`Review source is not a regular Git blob: ${path}`)
     if (!Number.isSafeInteger(entry.size) || entry.size < 0) throw new Error(`Invalid Git blob size: ${path}`)
     paths.add(path)
-    if (paths.size > maxPaths) throw new Error('Review dependency closure exceeds file limit')
+    if (paths.size > maxPaths) throw new Error('Review change set exceeds file limit')
     if (!cached.has(entry.oid)) {
       if (bytesRead + entry.size > maxBytes) throw new Error(`Review source exceeds byte budget at ${path}`)
       const bytes = await reader.read(ref, path)
       if (bytes.length !== entry.size) throw new Error(`Git source size changed: ${path}`)
       const text = decodeSource(bytes, path)
-      // Every repository blob that could reach the model is scanned first; only locations are kept.
+      // Every repository blob that reaches the model is scanned first; only locations are kept.
       const findings = options.scan ? options.scan(path, text) : []
       cached.set(entry.oid, { text, findings })
       bytesRead += bytes.length
     }
     const blob = cached.get(entry.oid)
-    // `source` is the exact blob and is only parsed locally (imports, policy JSON); `text` is what
-    // may reach the model. They differ only for masked already-merged content.
+    // `source` is the exact blob, parsed locally only; `text` is what may reach the model.
     if (!blob.findings.length) return { ...entry, source: blob.text, text: blob.text }
-    // Candidate (head) content with a finding blocks the review. Content that exists only on
-    // the already-merged side is masked character-for-character, so it never reaches the model.
     if (ref === request.head || !options.mask) {
       if (!blob.reported) {
         blob.reported = true
@@ -926,106 +1003,63 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
     maskedFindings.add(path)
     return { ...entry, source: blob.text, text: blob.masked, masked: true }
   }
-  const queue = [],
-    queued = new Set()
-  // Leaf contracts (graph consumers) are printed but their own imports are not followed: they
-  // show how the change is used. Traversed sources supply their complete producer closure.
-  const leaves = new Set()
-  const add = (ref, path, reason, required = true, context = true, traverse = true) => {
+  const hint = (path, reason) => {
+    if (request.names.includes(path)) return
+    if (!hints.has(path)) hints.set(path, new Set())
+    hints.get(path).add(reason)
+  }
+  const files = []
+  for (const path of request.names) {
     reviewSourcePath(path)
-    if (!trees.get(ref).has(path)) {
-      if (required) throw new Error(`Required review source is absent at ${ref}: ${path}`)
-      return
+    const before = await read(request.mergeBase, path),
+      after = await read(request.head, path)
+    if (!before && !after) throw new Error(`Changed path is absent from both snapshots: ${path}`)
+    const file = {
+      path,
+      status: before && after ? 'modified' : after ? 'added' : 'deleted',
+      before: before?.text ?? '',
+      after: after?.text ?? '',
+      binary: false,
+      beforeOid: before?.oid ?? null,
+      afterOid: after?.oid ?? null,
+      beforeBytes: before?.size ?? 0,
+      afterBytes: after?.size ?? 0,
+      oldMode: before?.mode ?? null,
+      newMode: after?.mode ?? null
     }
-    if (context) contextPaths.add(path)
-    if (!reasons.has(path)) reasons.set(path, new Set())
-    reasons.get(path).add(reason)
-    for (const snapshot of context ? trees.keys() : [ref]) {
-      if (!trees.get(snapshot).has(path)) continue
-      const key = snapshot + ':' + path
-      if (!queued.has(key)) {
-        queued.add(key)
-        if (!traverse) leaves.add(key)
-        queue.push({ ref: snapshot, path })
-      } else if (traverse && leaves.delete(key)) {
-        // A leaf later required as a producer is scanned for its dependencies after all.
-        queue.push({ ref: snapshot, path })
-      }
-    }
-  }
-  const common = [
-    'README.md',
-    'CONTRIBUTING.md',
-    'docs/ROADMAP.md',
-    'docs/PLUGINS.md',
-    'docs/STATUS.md',
-    'package.json',
-    'config/products.json',
-    'config/plugins.json'
-  ]
-  const governance = request.names.some((path) =>
-    /^(?:scripts\/(?:review|release)-|docs\/github\/|\.github\/workflows\/)/.test(path)
-  )
-  const release = request.names.some((path) =>
-    /^(?:scripts\/release-|test\/release-|docs\/RELEASING\.md$|docs\/github\/review-policy\.json$)/.test(path)
-  )
-  const support = governance
-    ? ['scripts/review-install.mjs', 'docs/github/review-policy.json', '.github/workflows/review-request.yml']
-    : []
-  // Release consumers come from the dependency graph (updater clients and release-feed readers),
-  // never from a fixed list of shell files that may be renamed or removed.
-  const consumers = release
-    ? releaseConsumers(options.graph ?? (await buildReviewGraph(reader, [request.head], limits)))
-    : []
-  for (const [, ref] of roles) {
-    for (const path of request.names) add(ref, path, 'changed source dependency root', false, false)
-    for (const path of common) add(ref, path, 'project contract', false)
-    for (const path of support) add(ref, path, 'review policy and installation contract', false)
-    for (const path of consumers) add(ref, path, 'release updater consumer contract', false)
-    for (const contract of contracts)
-      typeof contract === 'string'
-        ? add(ref, contract, 'producer and consumer contract', false)
-        : add(
-            ref,
-            contract.path,
-            contract.reason ?? 'producer and consumer contract',
-            false,
-            true,
-            contract.traverse !== false
-          )
-  }
-  // Changed roots already provide merge-base/head text in their change records. A divergent
-  // requested base is a separate integration contract and must not remain a read-only hidden blob.
-  if (request.base !== request.mergeBase)
-    for (const path of request.names) add(request.base, path, 'requested-base changed-root contract', false)
-  const resolveDependency = (ref, from, dependency) => {
-    const found = resolveLocalDependency((path) => trees.get(ref).has(path), from, dependency)
-    if (!found)
-      throw new Error(
-        `Unresolved local dependency ${JSON.stringify(dependency.specifier)} from ${from} at ${ref}`
-      )
-    return found
-  }
-  for (let index = 0; index < queue.length; index++) {
-    const { ref, path } = queue[index],
-      entry = await read(ref, path)
-    if (/\.[cm]?[jt]sx?$/.test(path) && !leaves.has(ref + ':' + path)) {
+    // A mode-only change (e.g. gaining the executable bit) has identical text; show it explicitly.
+    if (before && after && before.mode !== after.mode) file.mode = [before.mode, after.mode]
+    files.push(file)
+    // Candidate and merged sources must name dependencies that exist in their own snapshot.
+    if (!SOURCE_FILE.test(path)) continue
+    for (const [ref, entry] of [
+      [request.mergeBase, before],
+      [request.head, after]
+    ]) {
+      if (!entry) continue
       const references = reviewModuleReferences(entry.source, { jsx: /\.[jt]sx$/.test(path), filename: path })
-      // Strings parsed from the exact blob that are printed for the model (external specifiers,
-      // computed-reference prefixes) are masked when the blob itself is masked.
       const shown = (value) => (entry.masked && options.mask ? options.mask(value) : value)
       for (const dependency of references.literals) {
         const specifier = dependency.specifier
         if (dependency.repositoryRelative || specifier.startsWith('.')) {
-          // Candidate code may not depend on a generated or private tree (runtime/, node_modules/,
-          // dist/ ...): that still fails. Already-merged code on the base side can (e.g. a deleted
-          // legacy script); such a target is never in Git, so it is listed as an unverified external.
+          // Candidate code may not depend on a generated or private tree; already-merged code
+          // (e.g. a deleted legacy script) can, and such a target is listed as external.
           const target = dependency.repositoryRelative
             ? specifier
             : posix.normalize(posix.join(posix.dirname(path), specifier))
-          if (ref !== request.head && !target.startsWith('../') && generatedTree(target))
+          if (ref !== request.head && !target.startsWith('../') && generatedTree(target)) {
             external.set(shown(target), true)
-          else add(ref, resolveDependency(ref, path, dependency), `local dependency of ${path}`)
+            continue
+          }
+          const found = resolveLocalDependency((p) => trees.get(ref).has(p), path, dependency)
+          if (!found)
+            throw new Error(
+              `Unresolved local dependency ${JSON.stringify(dependency.specifier)} from ${path} at ${ref}`
+            )
+          const resolved = trees.get(ref).get(found)
+          if (!['100644', '100755'].includes(resolved.mode) || resolved.type !== 'blob')
+            throw new Error(`Review source is not a regular Git blob: ${found}`)
+          hint(found, `local dependency of ${path}`)
         } else if (specifier.startsWith('/') || /^[a-z]:[\\/]/i.test(specifier))
           throw new Error(`Absolute dependency is outside the Git snapshot: ${path}`)
         else if (!isBuiltin(specifier)) external.set(shown(specifier), true)
@@ -1041,7 +1075,44 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
             : {})
         })
     }
-    if (path === 'docs/github/review-policy.json') {
+  }
+  const governance = request.names.some((path) =>
+    /^(?:scripts\/(?:review|release)-|docs\/github\/|\.github\/workflows\/)/.test(path)
+  )
+  const release = request.names.some((path) =>
+    /^(?:scripts\/release-|test\/release-|docs\/RELEASING\.md$|docs\/github\/review-policy\.json$)/.test(path)
+  )
+  for (const path of [
+    'README.md',
+    'CONTRIBUTING.md',
+    'docs/ROADMAP.md',
+    'docs/PLUGINS.md',
+    'package.json',
+    'config/products.json'
+  ])
+    if (trees.get(request.head).has(path)) hint(path, 'project contract')
+  if (governance)
+    for (const path of [
+      'scripts/review-install.mjs',
+      'docs/github/review-policy.json',
+      '.github/workflows/review-request.yml'
+    ])
+      if (trees.get(request.head).has(path)) hint(path, 'review policy and installation contract')
+  if (release)
+    for (const path of releaseConsumers(
+      options.graph ?? (await buildReviewGraph(reader, [request.head], limits))
+    ))
+      hint(path, 'release updater consumer')
+  for (const contract of contracts) {
+    const path = typeof contract === 'string' ? contract : contract.path
+    reviewSourcePath(path)
+    hint(path, (typeof contract === 'string' ? undefined : contract.reason) ?? 'producer or consumer')
+  }
+  // A changed policy names controller sources: each must exist in the same snapshot.
+  if (request.names.includes('docs/github/review-policy.json'))
+    for (const [role, ref] of roles) {
+      const entry = await read(ref, 'docs/github/review-policy.json')
+      if (!entry) continue
       let policy
       try {
         policy = JSON.parse(entry.source)
@@ -1050,17 +1121,21 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
       }
       for (const kind of ['trustedQuality', 'trustedBuild']) {
         const controller = policy[kind]
-        if (controller?.path) add(ref, controller.path, `${path} ${kind}.path`)
         if (controller?.files && (typeof controller.files !== 'object' || Array.isArray(controller.files)))
           throw new Error('Invalid policy source inventory')
-        for (const file of Object.keys(controller?.files ?? {})) add(ref, file, `${path} ${kind}.files`)
+        for (const file of [
+          ...(controller?.path ? [controller.path] : []),
+          ...Object.keys(controller?.files ?? {})
+        ]) {
+          reviewSourcePath(file)
+          if (!trees.get(ref).has(file))
+            throw new Error(`Required review source is absent at ${ref}: ${file}`)
+          hint(file, `review-policy.json ${kind} (${role})`)
+        }
       }
     }
-  }
-  const context = [],
-    identities = [],
-    projections = []
-  if (governance) {
+  const projections = []
+  if (governance)
     for (const [role, ref] of roles) {
       const lock = await read(ref, 'package-lock.json')
       if (!lock) continue
@@ -1070,63 +1145,24 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
       } catch {
         throw new Error(`Invalid parser lockfile source at ${ref}`)
       }
-      const projection = {
+      projections.push({
         path: 'package-lock.json',
         oid: lock.oid,
         role,
         ref,
         sha256: sha256(lock.source),
-        purpose:
-          'Exact parser provenance JSON pointers, not a truncated source file. Full lockfile changes remain in the changed-file records.',
+        purpose: 'Exact parser provenance JSON pointers; read_file returns the complete lockfile.',
         pointers: {
           '/packages//devDependencies/@babel~1parser':
             value.packages?.['']?.devDependencies?.['@babel/parser'] ?? null,
           '/packages/node_modules~1@babel~1parser': value.packages?.['node_modules/@babel/parser'] ?? null
         }
-      }
-      projections.push(projection)
-      context.push(`CONTEXT JSON PROJECTION ${JSON.stringify(projection)}`)
+      })
     }
-  }
-  for (const path of [...contextPaths].sort()) {
-    const variants = new Map()
-    for (const [role, ref] of roles) {
-      const entry = await read(ref, path)
-      if (!entry) continue
-      if (!variants.has(entry.oid)) variants.set(entry.oid, { entry, roles: [] })
-      variants.get(entry.oid).roles.push({ role, ref })
-    }
-    for (const { entry, roles: at } of variants.values()) {
-      const identity = {
-        path,
-        oid: entry.oid,
-        roles: at,
-        // sha256 always describes the exact Git blob; masked text is labelled, not re-hashed.
-        sha256: sha256(entry.source),
-        ...(entry.masked ? { masked: true } : {}),
-        reasons: [...reasons.get(path)]
-      }
-      identities.push(identity)
-      context.push(
-        `CONTEXT SOURCE ${JSON.stringify(identity)}\n${entry.text}\nEND CONTEXT SOURCE ${JSON.stringify(path)}`
-      )
-    }
-  }
-  const files = []
-  for (const path of request.names) {
-    const before = await read(request.mergeBase, path),
-      after = await read(request.head, path)
-    const file = { path, before: before?.text ?? '', after: after?.text ?? '', binary: false }
-    // A mode-only change (e.g. gaining the executable bit) has identical text; show it explicitly.
-    if (before && after && before.mode !== after.mode) file.mode = [before.mode, after.mode]
-    files.push(file)
-  }
-  // Upstream host contracts: selected from the external modules, host services and plugin
-  // manifests that this group actually references; bytes come only from the trusted worker catalog.
-  const upstream = [],
-    projectedPackages = new Set()
-  let unprojectedServices = [],
-    upstreamHosts = []
+  // Upstream host contracts are not inlined: the header names the locked packages this change
+  // references, and read_upstream returns their verified files on demand.
+  let upstreamNote = 'Upstream DSH contracts: no trusted catalog is loaded; read_upstream is unavailable.\n'
+  const suggested = []
   if (options.upstream) {
     const catalog = options.upstream,
       known = new Set(Object.keys(catalog.services)),
@@ -1142,76 +1178,121 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
         /^packages\/[^/]+\/(?:package\.json|cordis\.patch\.ya?ml)$/.test(path)
       )
     })
-    for (const name of selection.packages) projectedPackages.add(name)
-    unprojectedServices = selection.unprojectedServices
-    upstreamHosts = [...catalog.hosts.keys()]
-    for (const file of selection.files) {
-      const identity = {
-        package: file.name,
-        path: file.path,
-        sha256: file.sha256,
-        bytes: file.bytes,
-        license: file.license,
-        hosts: file.hosts,
-        ...(file.slice ? { slice: file.slice } : {})
-      }
-      upstream.push(identity)
-      context.push(
-        `CONTEXT UPSTREAM ${JSON.stringify(identity)}\n${file.text}\nEND CONTEXT UPSTREAM ${JSON.stringify(file.name + '/' + file.path)}`
+    for (const name of selection.packages)
+      suggested.push({
+        package: name,
+        paths: [...new Set(selection.files.filter((f) => f.name === name).map((f) => f.path))]
+      })
+    upstreamNote = `Upstream DSH contracts (read_upstream; trusted worker lock ${catalog.lockDigest}; tarball SRI and full-file sha256 verified for hosts ${JSON.stringify([...catalog.hosts.keys()])}). Locked packages referenced by this group: ${JSON.stringify(suggested)}\nHost services referenced without a locked contract: ${JSON.stringify(selection.unprojectedServices)}\nUnlocked @deepseek-ai modules: ${JSON.stringify(selection.unprojectedModules)}\n`
+  }
+  const inventory = files.map((file) => ({
+    path: file.path,
+    status: file.status,
+    ...(file.mode ? { mode: file.mode } : {}),
+    mergeBaseOid: file.beforeOid,
+    headOid: file.afterOid,
+    ...(request.base === request.mergeBase
+      ? {}
+      : { requestedBaseOid: trees.get(request.base).get(file.path)?.oid ?? null }),
+    units: reviewUnits(file).length
+  }))
+  const repositoryMap = (() => {
+    const directories = [...new Set(request.names.map((path) => posix.dirname(path)))].sort()
+    const lines = []
+    for (const directory of directories) {
+      const children = new Map()
+      for (const [ref, label] of [
+        [request.head, ''],
+        [request.mergeBase, ' (merge base only)']
+      ])
+        for (const path of trees.get(ref).keys()) {
+          if (directory !== '.' && !path.startsWith(directory + '/')) continue
+          const rest = directory === '.' ? path : path.slice(directory.length + 1),
+            slash = rest.indexOf('/'),
+            name = slash < 0 ? rest : rest.slice(0, slash) + '/'
+          if (
+            !safePath(directory === '.' ? name.replace(/\/$/, '') : directory + '/' + name.replace(/\/$/, ''))
+          )
+            continue
+          if (!children.has(name)) children.set(name, label)
+        }
+      lines.push(
+        `${directory === '.' ? '(root)' : directory}/: ${[...children]
+          .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+          .map(([name, label]) => name + label)
+          .join(', ')}`
       )
     }
-  }
-  const unprojected = [...external.keys()]
-    .filter((specifier) => !projectedPackages.has(/^(@[^/]+\/[^/]+)/.exec(specifier)?.[1]))
-    .sort()
-  const upstreamHeader = options.upstream
-    ? `Upstream DSH contracts (CONTEXT UPSTREAM; trusted worker lock ${options.upstream.lockDigest}; tarball SRI and full-file sha256 verified by the worker for hosts ${JSON.stringify(upstreamHosts)}): ${JSON.stringify([...projectedPackages].sort())}\nHost services referenced without an upstream projection: ${JSON.stringify(unprojectedServices)}\n`
-    : 'Upstream DSH contracts: none supplied to this snapshot.\n'
-  const baseRoots =
-    request.base === request.mergeBase
-      ? []
-      : request.names.map((path) => ({
-          path,
-          role: 'base',
-          ref: request.base,
-          oid: trees.get(request.base).get(path)?.oid ?? null
-        }))
+    let text = lines.join('\n')
+    if (text.length > REVIEW_MAP_CHARS)
+      text = text.slice(0, REVIEW_MAP_CHARS) + '\n[repository map truncated; use the list tool]'
+    return text
+  })()
+  // Deleted paths that head sources still name (imports, literal paths, document links).
+  const deleted = new Set(files.filter((file) => file.status === 'deleted').map((file) => file.path))
+  const stillReferenced = {}
+  for (const item of options.graph?.missing ?? [])
+    if (item.ref === request.head && deleted.has(item.target)) {
+      stillReferenced[item.target] ??= []
+      if (!stillReferenced[item.target].includes(item.from) && stillReferenced[item.target].length < 20)
+        stillReferenced[item.target].push(item.from)
+    }
+  for (const referrers of Object.values(stillReferenced)) referrers.sort()
+  const hinted = [...hints.keys()].sort()
+  const hintText = JSON.stringify(
+    Object.fromEntries(hinted.slice(0, REVIEW_HINT_PATHS).map((path) => [path, [...hints.get(path)].sort()]))
+  )
   const maskedNote = maskedFindings.size
     ? `Masked already-merged sources: ${JSON.stringify([...maskedFindings].sort())}. In these files only, runs of * replace secret-shaped values or personal path segments that already exist on the merged side; length and syntax are unchanged. Treat each run as an opaque placeholder, not as a code defect. Candidate (head) content is never masked: a finding there blocks the review before any model call.\n`
     : ''
-  const header = `Repository: ${request.repository}\nBase: ${request.base}\nMerge base: ${request.mergeBase}\nHead: ${request.head}\nGroup change inventory (not per-batch scope): ${JSON.stringify(request.names)}\nRequested-base changed roots (null oid means absent): ${JSON.stringify(baseRoots)}\n${maskedNote}Context contract: selected source sections are complete immutable Git blobs except the masked sources listed above. Any JSON-pointer projection is explicitly labelled; all batches together supply the complete changed files; this batch supplies only its explicit ranges. Source roles are explicit; identical blobs are printed once. External packages and computed references are not silently treated as reviewed implementations.\n${upstreamHeader}External module references without upstream projection (use package.json versions; external code is not supplied): ${JSON.stringify(unprojected)}\nComputed module references (assess whether their targets need additional context): ${JSON.stringify(dynamic)}\n`
-  const text = header + context.join('\n\n')
+  const header =
+    `Repository: ${request.repository}\nBase: ${request.base}\nMerge base: ${request.mergeBase}\nHead: ${request.head}\n` +
+    `Reviewer input contract: modified files are unified diff hunks against the merge base (DIFF_CONTEXT_LINES=${DIFF_CONTEXT_LINES} context lines, old/new line numbers, enclosing declaration label); added files are complete numbered text; deleted files are their complete numbered merge-base text marked removed. Nothing else is inlined. Use read_file/search/list on head, base or mergeBase and read_upstream for any other source.\n` +
+    `Group change inventory (every unit of these files is reviewed by this group across its batches): ${JSON.stringify(inventory)}\n` +
+    maskedNote +
+    `Related unchanged paths (dependency graph and policy hints; not supplied, read them when needed)${hinted.length > REVIEW_HINT_PATHS ? ` (first ${REVIEW_HINT_PATHS} of ${hinted.length})` : ''}: ${hintText}\n` +
+    (deleted.size
+      ? `Deleted paths still named by head sources (verify each reference is intended; empty means none found): ${JSON.stringify(stillReferenced)}\n`
+      : '') +
+    upstreamNote +
+    `External module references (use package.json versions; external code is not supplied): ${JSON.stringify([...external.keys()].sort())}\n` +
+    `Computed module references (assess whether their targets need reading): ${JSON.stringify(dynamic)}\n` +
+    (projections.length ? `JSON projections: ${JSON.stringify(projections)}\n` : '') +
+    `Repository map of changed directories (head; entries only at the merge base are marked):\n${repositoryMap}\n` +
+    TRUSTED_HEADER_END +
+    '\n'
   return {
     files,
-    context: text,
-    identities,
+    context: header,
+    identities: files.map((file) => ({
+      path: file.path,
+      status: file.status,
+      mergeBaseOid: file.beforeOid,
+      headOid: file.afterOid
+    })),
     projections,
-    upstream,
+    upstream: suggested,
+    hints: hinted,
     secretFindings,
-    // Paths whose already-merged content was masked before model input (locations only).
     maskedPaths: [...maskedFindings].sort(),
     metrics: {
       paths: paths.size,
       blobs: cached.size,
       bytesRead,
-      contextChars: text.length,
+      contextChars: header.length,
+      hintPaths: hinted.length,
       externalReferences: external.size,
-      upstreamFiles: upstream.length,
+      upstreamPackages: suggested.length,
       computedReferences: dynamic.length
     }
   }
 }
+
 /**
  * Group changed files by the dependency graph: each group is a component (plugin package, runtime,
- * governance) that executes or consumes the change, with its unchanged direct producers and
- * consumers as context. A group whose complete context exceeds the budget is split along its
- * dependency closure; context is never truncated.
+ * governance) that executes or consumes the change. The graph decides grouping and the related-path
+ * hints; the model input is the change units of the group's files, split into batches.
  */
-/**
- * Default characters per model batch. DeepSeek Flash accepts 1M tokens; 900k characters of mostly
- * ASCII source stays well inside it and keeps producer/consumer closures in one batch.
- */
-export const REVIEW_BATCH_CHARS = 900000
 export async function collectGroupedReview(
   request,
   reader,
@@ -1224,6 +1305,24 @@ export async function collectGroupedReview(
   if (!request.names.length) throw new Error('No reviewable changes')
   const graph = options.graph ?? (await buildReviewGraph(reader, [request.head, request.mergeBase], limits))
   graph.changedScripts ??= changedScriptTargets(graph, request.mergeBase, request.head)
+  // Every changed path with its status, so a batch can tell a deleted path from one still at head.
+  const [headPaths, basePaths] = await Promise.all(
+    [request.head, request.mergeBase].map(
+      async (ref) => new Set((await reader.list(ref)).map((entry) => entry.path))
+    )
+  )
+  const changedStatus = Object.fromEntries(
+    request.names.map((path) => [
+      path,
+      headPaths.has(path)
+        ? basePaths.has(path)
+          ? 'modified'
+          : 'added'
+        : basePaths.has(path)
+          ? 'deleted'
+          : 'absent'
+    ])
+  )
   const groups = new Map()
   for (const path of request.names)
     for (const group of reviewOwners(graph, path)) {
@@ -1234,10 +1333,6 @@ export async function collectGroupedReview(
     files = new Map(),
     batches = []
   const collect = async (group, names) => {
-    // Producers (what the change calls) keep their full import closure; consumers (what calls the
-    // change) are supplied as complete files without pulling in their unrelated dependencies.
-    const changed = new Set(names)
-    // Only code the change executes is a producer; shared artifact names and mentions are peers.
     const producer = (path) =>
       names.some((name) =>
         [...(graph.forward.get(name)?.get(path) ?? [])].some((kind) => EXECUTABLE_EDGES.has(kind))
@@ -1246,31 +1341,29 @@ export async function collectGroupedReview(
       path,
       reason: producer(path)
         ? 'direct producer in the dependency graph'
-        : 'direct consumer in the dependency graph',
-      traverse: producer(path) || changed.has(path)
+        : 'direct consumer in the dependency graph'
     }))
     const snapshot = await collectReviewContext({ ...request, names }, reader, limits, contracts, {
       ...options,
       graph
     })
     const context =
-      `Review contract group: ${group}\nAll changed paths in this request: ${JSON.stringify(request.names)}\nThis group inventory is for navigation, not per-batch approval scope. Do not assume another batch approved a missing dependency.\n` +
+      `Review contract group: ${group}\nAll changed paths in this request, with status at head versus the merge base: ${JSON.stringify(changedStatus)}\nThis request inventory is navigation, not per-batch approval scope; other groups review paths outside this group's inventory.\n` +
       snapshot.context
     return { snapshot, context }
   }
-  // Connected components of the changed files inside one group, over direct graph edges.
   const components = (names) => {
     const set = new Set(names),
       seen = new Set(),
       parts = []
     for (const start of names) {
       if (seen.has(start)) continue
-      const part = [],
+      const part = new Set(),
         queue = [start]
       seen.add(start)
       while (queue.length) {
         const current = queue.shift()
-        part.push(current)
+        part.add(current)
         for (const map of [graph.forward.get(current), graph.reverse.get(current)])
           for (const [next] of map ?? EMPTY)
             if (set.has(next) && !seen.has(next)) {
@@ -1278,16 +1371,17 @@ export async function collectGroupedReview(
               queue.push(next)
             }
       }
-      parts.push(names.filter((path) => part.includes(path)))
+      parts.push(names.filter((path) => part.has(path)))
     }
     return parts
   }
+  // Only a trusted header that leaves no room for change units splits a group.
   const plan = async (group, names, depth = 0) => {
     const attempt = await collect(group, names)
     try {
-      // Admission is decided by the real batch splitter, so the threshold is exact.
-      splitBatches(attempt.snapshot.files, attempt.context, maxChars)
-      return [{ group, names, ...attempt }]
+      return [
+        { group, names, ...attempt, batches: splitBatches(attempt.snapshot.files, attempt.context, maxChars) }
+      ]
     } catch (error) {
       if (!/budget/.test(String(error?.message))) throw error
     }
@@ -1300,7 +1394,7 @@ export async function collectGroupedReview(
           : null
     if (!split || depth > 12)
       throw new Error(
-        `Review context exceeds batch budget for group ${group}: ${JSON.stringify(names.slice(0, 5))} needs ${attempt.context.length} context characters`
+        `Review context exceeds batch budget for group ${group}: ${JSON.stringify(names.slice(0, 5))} needs ${attempt.context.length} header characters`
       )
     const result = []
     for (const part of split) result.push(...(await plan(group, part, depth + 1)))
@@ -1312,26 +1406,21 @@ export async function collectGroupedReview(
       const id = planned.length > 1 ? `${group}.${index + 1}` : group
       for (const file of item.snapshot.files) {
         const previous = files.get(file.path)
-        if (previous && canonical(previous) !== canonical(file))
+        if (previous && fileIdentity(previous) !== fileIdentity(file))
           throw new Error('Changed source differs between groups')
         files.set(file.path, file)
       }
-      batches.push(
-        ...splitBatches(item.snapshot.files, item.context, maxChars).map((batch) => ({
-          ...batch,
-          id: `${id}-${batch.id}`,
-          group
-        }))
-      )
-      snapshots.push({ ...item.snapshot, group: id, context: item.context })
+      // Every unit of every file of this part is covered by its own batches.
+      verifyBatchCoverage(item.snapshot.files, item.batches)
+      batches.push(...item.batches.map((batch) => ({ ...batch, id: `${id}-${batch.id}`, group })))
+      snapshots.push({ ...item.snapshot, group: id, context: item.context, batchCount: item.batches.length })
     })
   }
   if (files.size !== request.names.length || request.names.some((path) => !files.has(path)))
     throw new Error('Review groups do not cover every changed file')
   const collected = snapshots.flatMap((snapshot) => snapshot.secretFindings)
   // Final gate over the exact model input: any secret-shaped text that reached a batch through
-  // any path (source text, header fields, projections) blocks the review before a model call.
-  // It only adds findings when no source finding already blocks, so reported locations stay exact.
+  // any path (units, header fields, repository map) blocks the review before a model call.
   if (options.scan && !collected.length)
     for (const batch of batches)
       for (const finding of options.scan(`<batch ${batch.id}>`, batch.text))
@@ -1348,11 +1437,10 @@ export async function collectGroupedReview(
       snapshot.projections.map((projection) => ({ ...projection, group: snapshot.group }))
     ),
     upstream: snapshots.flatMap((snapshot) =>
-      snapshot.upstream.map((identity) => ({ ...identity, group: snapshot.group }))
+      snapshot.upstream.map((item) => ({ ...item, group: snapshot.group }))
     ),
     secretFindings,
     maskedPaths: [...new Set(snapshots.flatMap((snapshot) => snapshot.maskedPaths ?? []))].sort(),
-    // Source files whose dependency edges could not be read: their consumers are unknown.
     graphBlockers: [...new Map(graph.unparsed.map((u) => [u.path, u])).values()]
       .sort((a, b) => a.path.localeCompare(b.path))
       .map(
@@ -1361,17 +1449,75 @@ export async function collectGroupedReview(
       ),
     metrics: {
       groups: snapshots.length,
+      batches: batches.length,
+      batchChars: batches.reduce((sum, batch) => sum + batch.text.length, 0),
       contextChars: snapshots.reduce((sum, s) => sum + s.context.length, 0),
       graphUnresolved: graph.unresolved.length,
       groupMetrics: snapshots.map((snapshot) => ({
         group: snapshot.group,
         changed: snapshot.files.length,
+        batches: snapshot.batchCount,
         ...snapshot.metrics
       }))
     }
   }
 }
-/** Complete source ranges are retained; Unicode pairs are never broken between model inputs. */
+
+const renderBatch = (context, pieces) =>
+  context +
+  '\n\n' +
+  pieces.map((piece) => piece.text).join('\n\n') +
+  SCOPE_MARKER +
+  JSON.stringify(pieces.map((piece) => piece.scope))
+const bindBatch = (id, context, pieces) => {
+  const text = renderBatch(context, pieces)
+  return {
+    id: `${id}-${sha256(text).slice(0, 12)}`,
+    text,
+    scope: pieces.map((p) => p.scope),
+    context,
+    pieces
+  }
+}
+/** Unit bodies are split at line boundaries when possible; UTF-16 pairs are never broken. */
+function cut(body, start, size) {
+  let end = Math.min(body.length, start + size)
+  if (end < body.length) {
+    const newline = body.lastIndexOf('\n', end - 1)
+    if (newline >= start + Math.floor(size / 4)) end = newline + 1
+    else if (end - start > 2 && body[end] !== '\n' && body[end + 1] === '\n') end--
+    if (end > start && /[\uD800-\uDBFF]/.test(body[end - 1]) && /[\uDC00-\uDFFF]/.test(body[end])) end++
+  }
+  return end
+}
+function piece(unit, start, end) {
+  const scope = {
+    path: unit.path,
+    kind: unit.kind,
+    unit: unit.index,
+    units: unit.count,
+    before: unit.before,
+    after: unit.after,
+    part: [start, end, unit.body.length]
+  }
+  const label = {
+    path: unit.path,
+    unit: `${unit.index + 1}/${unit.count}`,
+    kind: unit.kind,
+    mergeBaseLines: unit.before,
+    headLines: unit.after,
+    ...(start > 0 || end < unit.body.length ? { part: scope.part } : {})
+  }
+  return {
+    scope,
+    text: `CHANGE ${JSON.stringify(label)}\n${unit.header}\n${unit.body.slice(start, end)}\nEND CHANGE ${JSON.stringify(unit.path)}`
+  }
+}
+
+/**
+ * Split change units into bound batches: each batch is the trusted header, complete or part unit
+ * bodies and the scope list derived from the actual ranges (never from source markers).
+ */
 export function splitBatches(files, context, maxChars = 90000) {
   if (
     !Number.isSafeInteger(maxChars) ||
@@ -1380,76 +1526,127 @@ export function splitBatches(files, context, maxChars = 90000) {
     context.length >= maxChars
   )
     throw new Error('Review context exceeds batch budget')
-  const endAt = (text, start, size) => {
-    let end = Math.min(text.length, start + size)
-    if (
-      end < text.length &&
-      end > start &&
-      /[\uD800-\uDBFF]/.test(text[end - 1]) &&
-      /[\uDC00-\uDFFF]/.test(text[end])
-    )
-      end++
-    return end
-  }
-  const render = (chunks) =>
-    context +
-    '\n\n' +
-    chunks.map((chunk) => chunk.text).join('\n\n') +
-    '\n\nBATCH REVIEW SCOPE (UTF-16 offsets, end exclusive): ' +
-    JSON.stringify(chunks.map((chunk) => chunk.scope))
-  const chunks = []
-  for (const file of files) {
-    if (file.binary) throw new Error(`Binary change requires a separate verified review: ${file.path}`)
-    const before = file.before ?? '',
-      after = file.after ?? ''
-    if (before.includes('\0') || after.includes('\0'))
-      throw new Error(`Binary change requires a separate verified review: ${file.path}`)
-    let b = 0,
-      a = 0,
-      first = true
-    while (first || b < before.length || a < after.length) {
-      first = false
-      let size = Math.max(
-        1,
-        Math.floor((maxChars - context.length - JSON.stringify(file.path).length * 2 - 512) / 2)
-      )
-      const make = () => {
-        const be = endAt(before, b, size),
-          ae = endAt(after, a, size)
-        return {
-          scope: { path: file.path, before: [b, be, before.length], after: [a, ae, after.length] },
-          text: `FILE ${JSON.stringify(file.path)}\n${file.mode ? `MODE CHANGE ${file.mode[0]} -> ${file.mode[1]}\n` : ''}BEFORE chars ${b}-${be}/${before.length}\n${before.slice(b, be)}\nAFTER chars ${a}-${ae}/${after.length}\n${after.slice(a, ae)}`
+  const pieces = []
+  for (const file of files)
+    for (const unit of reviewUnits(file)) {
+      let start = 0,
+        first = true
+      while (first || start < unit.body.length) {
+        first = false
+        let size = Math.max(
+          1,
+          maxChars - context.length - JSON.stringify(unit.path).length * 3 - unit.header.length - 700
+        )
+        let end = cut(unit.body, start, size),
+          next = piece(unit, start, end)
+        while (renderBatch(context, [next]).length > maxChars && size > 1) {
+          size = Math.floor(size / 2)
+          end = cut(unit.body, start, size)
+          next = piece(unit, start, end)
         }
+        if (renderBatch(context, [next]).length > maxChars || (end === start && unit.body.length))
+          throw new Error('Review context leaves no complete change chunk within batch budget')
+        pieces.push(next)
+        start = end
       }
-      let chunk = make()
-      while (render([chunk]).length > maxChars && size > 1) {
-        size = Math.floor(size / 2)
-        chunk = make()
-      }
-      if (render([chunk]).length > maxChars)
-        throw new Error('Review context leaves no complete change chunk within batch budget')
-      chunks.push(chunk)
-      b = chunk.scope.before[1]
-      a = chunk.scope.after[1]
     }
-  }
-  if (!chunks.length) throw new Error('No reviewable changes')
+  if (!pieces.length) throw new Error('No reviewable changes')
   const batches = []
   let pending = []
   const emit = () => {
-    const text = render(pending)
-    if (text.length > maxChars) throw new Error('Review batch exceeds its complete output budget')
-    batches.push({
-      id: `batch-${batches.length + 1}-${sha256(text).slice(0, 12)}`,
-      text,
-      scope: pending.map((chunk) => chunk.scope)
-    })
+    const batch = bindBatch(`batch-${batches.length + 1}`, context, pending)
+    if (batch.text.length > maxChars) throw new Error('Review batch exceeds its complete output budget')
+    batches.push(batch)
     pending = []
   }
-  for (const chunk of chunks) {
-    if (pending.length && render([...pending, chunk]).length > maxChars) emit()
-    pending.push(chunk)
+  for (const next of pieces) {
+    if (pending.length && renderBatch(context, [...pending, next]).length > maxChars) emit()
+    pending.push(next)
   }
   if (pending.length) emit()
   return batches
+}
+
+/**
+ * Coverage over the exact model input: for every file, the pieces of all batches concatenate to
+ * each unit body exactly once, in order, and those bodies rebuild the head text from the
+ * merge-base text byte for byte (deleted files: the rows reproduce the complete merge-base text).
+ */
+export function verifyBatchCoverage(files, batches) {
+  const parts = new Map()
+  // The pieces checked below are exactly the model input: every batch text is re-rendered.
+  for (const batch of batches)
+    if (!batch.pieces?.length || renderBatch(batch.context, batch.pieces) !== batch.text)
+      throw new Error(`Review batch ${JSON.stringify(batch.id)} text does not match its pieces`)
+  for (const batch of batches)
+    for (const item of batch.pieces ?? []) {
+      const key = item.scope.path + '\0' + item.scope.unit
+      if (!parts.has(key)) parts.set(key, [])
+      parts.get(key).push(item)
+    }
+  for (const file of files) {
+    const units = reviewUnits(file),
+      shown = []
+    for (const unit of units) {
+      const items = (parts.get(file.path + '\0' + unit.index) ?? []).sort(
+        (a, b) => a.scope.part[0] - b.scope.part[0]
+      )
+      let at = 0,
+        body = ''
+      for (const item of items) {
+        if (
+          item.scope.part[0] !== at ||
+          item.scope.kind !== unit.kind ||
+          item.scope.part[2] !== unit.body.length
+        )
+          throw new Error(`Review batches do not cover ${JSON.stringify(file.path)} exactly`)
+        const first = item.text.indexOf('\n'),
+          second = item.text.indexOf('\n', first + 1)
+        if (item.text.slice(first + 1, second) !== unit.header)
+          throw new Error(`Review batches do not cover ${JSON.stringify(file.path)} exactly`)
+        const text = item.text.slice(second + 1, item.text.lastIndexOf('\nEND CHANGE '))
+        body += text
+        at = item.scope.part[1]
+      }
+      if (at !== unit.body.length || body !== unit.body)
+        throw new Error(`Review batches do not cover ${JSON.stringify(file.path)} exactly`)
+      shown.push({ ...unit, body })
+    }
+    // Deleted files: the rows must reproduce the merge-base text and the head side is empty.
+    if (rebuildAfter(file.before ?? '', shown) !== (file.after ?? ''))
+      throw new Error(`Review units do not rebuild ${JSON.stringify(file.path)}`)
+  }
+  return true
+}
+
+/** Halve an output-truncated batch: whole pieces first, then one piece at a line boundary. */
+export function splitReviewBatch(batch) {
+  if (!batch.pieces?.length || renderBatch(batch.context, batch.pieces) !== batch.text)
+    throw new Error('Review batch cannot be split: pieces do not match its text')
+  let halves
+  if (batch.pieces.length > 1) {
+    const middle = Math.ceil(batch.pieces.length / 2)
+    halves = [batch.pieces.slice(0, middle), batch.pieces.slice(middle)]
+  } else {
+    const [only] = batch.pieces,
+      [start, end, total] = only.scope.part
+    const header = only.text.slice(0, only.text.indexOf('\n', only.text.indexOf('\n') + 1) + 1)
+    const body = only.text.slice(header.length, only.text.lastIndexOf('\nEND CHANGE '))
+    if (body.length < 2) return null
+    const unit = {
+      path: only.scope.path,
+      kind: only.scope.kind,
+      index: only.scope.unit,
+      count: only.scope.units,
+      before: only.scope.before,
+      after: only.scope.after,
+      header: header.slice(header.indexOf('\n') + 1, -1),
+      // Offsets are relative to the complete unit body; only this piece's range is used.
+      body: ' '.repeat(start) + body + ' '.repeat(total - end)
+    }
+    const middle = cut(unit.body, start, Math.ceil(body.length / 2))
+    if (middle <= start || middle >= end) return null
+    halves = [[piece(unit, start, middle)], [piece(unit, middle, end)]]
+  }
+  return halves.map((pieces, index) => bindBatch(`${batch.id}.${index + 1}`, batch.context, pieces))
 }

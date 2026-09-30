@@ -1,20 +1,38 @@
-import { writeFileSync } from 'node:fs'
+import { appendFileSync, writeFileSync } from 'node:fs'
 import { reviewSchema } from './review-core.mjs'
+import { ToolBudgetExceeded } from './review-tools.mjs'
 
-/** Direct DeepSeek Chat Completions reviewer: plain text in, JSON out, never any tools. */
+/**
+ * Direct DeepSeek Chat Completions reviewer: diff text in, JSON out. The only tools are the
+ * worker's read-only reviewer tools; any other tool call fails closed.
+ */
 export const MODEL_PROVIDER = 'deepseek'
 export const DEFAULT_MODEL = 'deepseek-flash'
 export const DEFAULT_BASE_URL = 'https://api.deepseek.com'
 export const DEFAULT_API_KEY_ENV = 'DEEPSEEK_API_KEY'
 export const MODEL_MAX_ATTEMPTS = 4
-// Thinking mode is on by default; its default output budget (64K) would cut long review JSON.
-export const MODEL_MAX_TOKENS = 131072
+/** Documented Chat Completions maximum (384K = 393216); thinking plus review JSON share it. */
+export const MODEL_MAX_TOKENS = 393216
+export const MODEL_REASONING_EFFORT = 'high'
+/** Per-request timeout when the installed config has none: 384K output tokens can take over an hour. */
+export const MODEL_REQUEST_TIMEOUT_MS = 2 * 3600000
 const RETRY_BASE_MS = 2000,
   RETRY_CAP_MS = 60000,
   ERROR_TEXT_LIMIT = 300
-/** Upper bound for one model response body; larger bodies fail closed. */
-export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+/**
+ * Upper bound for one model response body; larger bodies fail closed. 393216 tokens of reasoning
+ * and content is roughly 1.5 MB of text, and JSON escaping of non-ASCII (\\uXXXX, 6 bytes per
+ * character) can grow it to about 12 MB; 32 MiB keeps a wide margin while bounding memory.
+ */
+export const MAX_RESPONSE_BYTES = 32 * 1024 * 1024
 class ResponseTooLarge extends Error {}
+/** finish_reason=length: the batch is too large for one answer and may be split and retried. */
+export class OutputTruncated extends Error {}
+/** The batch wall-clock deadline (options.deadline) passed; the batch fails closed. */
+export class ReviewDeadlineExceeded extends Error {}
+/** After the tool budget is spent the model gets one final turn without tools. */
+export const FINALIZE_PROMPT =
+  'The read-only tool budget for this batch is exhausted. Do not call tools. Based only on what you have read, return the final review JSON now. Put any essential context you could not obtain into blockers, naming the exact source and why it is needed.'
 
 /** Read a response body without buffering more than `limit` bytes. */
 async function boundedText(response, limit) {
@@ -174,8 +192,13 @@ const retryAfter = (response) => {
 }
 
 /**
- * One reviewer invocation. Returns the parsed schema-valid object and appends every attempt
- * (response or error, never the key or request headers) to `traceFile` with mode 0600.
+ * One reviewer invocation, possibly several rounds when read-only tools are supplied. Returns the
+ * parsed schema-valid object. Every response, tool call (name, arguments, returned bytes and
+ * sha256) and error is appended to `traceFile` (mode 0600), never the key or request headers.
+ *
+ * options.tools = { definitions, execute(call) -> { content, record } }: the worker's read-only
+ * tools. In thinking mode with tools, DeepSeek requires the reasoning_content of every earlier
+ * assistant turn to be passed back, so each assistant message is returned verbatim with it.
  */
 export async function callReviewModel(config, messages, options = {}) {
   const settings = installedModel(config)
@@ -185,95 +208,187 @@ export async function callReviewModel(config, messages, options = {}) {
   if (!options.fetch) await ensureEnvironmentProxy(env)
   const sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)))
   const now = options.now ?? Date.now
-  const deadline = now() + (config.timeoutMs ?? 900000)
+  const timeoutMs = config.timeoutMs ?? MODEL_REQUEST_TIMEOUT_MS
   const maxAttempts = options.maxAttempts ?? MODEL_MAX_ATTEMPTS
-  const body = JSON.stringify({
-    model: settings.model,
-    messages,
-    thinking: { type: 'enabled' },
-    response_format: { type: 'json_object' },
-    max_tokens: MODEL_MAX_TOKENS,
-    stream: false
-  })
-  const trace = []
+  const tools = options.tools
+  const conversation = [...messages]
+  const maxRounds = (options.maxRounds ?? 64) + 1
+  let traced = 0
   const record = (entry) => {
     // Defence in depth: a provider echoing the key back must not persist it.
-    trace.push(
-      JSON.stringify({ at: new Date(now()).toISOString(), ...entry })
-        .split(apiKey)
-        .join('[redacted]')
-    )
-    if (options.traceFile) writeFileSync(options.traceFile, trace.join('\n') + '\n', { mode: 0o600 })
-  }
-  let lastError
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    const remaining = deadline - now()
-    if (remaining <= 0) break
-    try {
-      let response
-      try {
-        response = await fetcher(settings.baseUrl + '/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'application/json',
-            Authorization: `Bearer ${apiKey}`
-          },
-          body,
-          // A redirect would re-send the prompt to another location.
-          redirect: 'error',
-          signal: AbortSignal.timeout(remaining)
-        })
-      } catch (error) {
-        if (error?.name === 'TimeoutError') throw new Error('Review model request timed out')
-        throw new RetryableError(`Review model network error: ${redact(error?.message, apiKey)}`)
-      }
-      let text
-      try {
-        text = await boundedText(response, MAX_RESPONSE_BYTES)
-      } catch (error) {
-        if (error instanceof ResponseTooLarge) throw new Error(error.message)
-        if (error?.name === 'TimeoutError') throw new Error('Review model request timed out')
-        throw new RetryableError(`Review model response read failed: ${redact(error?.message, apiKey)}`)
-      }
-      record({ attempt, status: response.status, body: text })
-      if (response.status === 429 || response.status >= 500)
-        throw new RetryableError(`Review model HTTP ${response.status}`, retryAfter(response))
-      if (!response.ok)
-        throw new Error(`Review model request failed (HTTP ${response.status}): ${redact(text, apiKey)}`)
-      let completion
-      try {
-        completion = JSON.parse(text)
-      } catch {
-        throw new Error('Review model returned a non-JSON API response')
-      }
-      const choice = completion?.choices?.[0]
-      if (!choice?.message || completion.choices.length !== 1)
-        throw new Error('Review model response has no single choice')
-      if (choice.message.tool_calls?.length)
-        throw new Error('Reviewer attempted a forbidden capability: tool_calls')
-      if (choice.finish_reason !== 'stop')
-        throw new Error(`Review model did not complete (finish_reason=${String(choice.finish_reason)})`)
-      if (typeof choice.message.content !== 'string' || !choice.message.content.trim())
-        throw new Error('Review model returned empty content')
-      let value
-      try {
-        value = JSON.parse(choice.message.content)
-      } catch {
-        throw new Error('Reviewer output is not valid JSON')
-      }
-      return assertSchema(value)
-    } catch (error) {
-      record({ attempt, error: redact(error.message, apiKey) })
-      if (!(error instanceof RetryableError)) throw error
-      lastError = error
-      if (attempt === maxAttempts) break
-      const delay = error.retryAfterMs ?? Math.min(RETRY_BASE_MS * 2 ** (attempt - 1), RETRY_CAP_MS)
-      if (now() + delay >= deadline) break
-      await sleep(delay)
+    const line = JSON.stringify({ at: new Date(now()).toISOString(), ...entry })
+      .split(apiKey)
+      .join('[redacted]')
+    if (options.traceFile) {
+      if (!traced) writeFileSync(options.traceFile, '', { mode: 0o600 })
+      appendFileSync(options.traceFile, line + '\n')
     }
+    traced++
   }
-  throw new Error(
-    lastError ? `Review model failed after retries: ${lastError.message}` : 'Review model request timed out'
-  )
+  /** One HTTP request with bounded retries; each request has its own timeout window. */
+  const request = async (round, toolChoice) => {
+    if (options.deadline !== undefined && now() >= options.deadline)
+      throw new ReviewDeadlineExceeded('Review batch wall-clock deadline exceeded')
+    const body = JSON.stringify({
+      model: settings.model,
+      messages: conversation,
+      thinking: { type: 'enabled' },
+      reasoning_effort: MODEL_REASONING_EFFORT,
+      response_format: { type: 'json_object' },
+      max_tokens: MODEL_MAX_TOKENS,
+      stream: false,
+      // Tools stay defined on the final turn so the reasoning_content pass-back rule is unchanged.
+      ...(tools ? { tools: tools.definitions } : {}),
+      ...(toolChoice ? { tool_choice: toolChoice } : {})
+    })
+    const byBatch = options.deadline !== undefined && options.deadline < now() + timeoutMs
+    const deadline = byBatch ? options.deadline : now() + timeoutMs
+    const timedOut = () =>
+      byBatch
+        ? new ReviewDeadlineExceeded('Review batch wall-clock deadline exceeded')
+        : new Error('Review model request timed out')
+    let lastError
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const remaining = deadline - now()
+      if (remaining <= 0) break
+      try {
+        let response
+        try {
+          response = await fetcher(settings.baseUrl + '/chat/completions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Accept: 'application/json',
+              Authorization: `Bearer ${apiKey}`
+            },
+            body,
+            // A redirect would re-send the prompt to another location.
+            redirect: 'error',
+            signal: AbortSignal.timeout(remaining)
+          })
+        } catch (error) {
+          if (error?.name === 'TimeoutError') throw timedOut()
+          throw new RetryableError(`Review model network error: ${redact(error?.message, apiKey)}`)
+        }
+        let text
+        try {
+          text = await boundedText(response, MAX_RESPONSE_BYTES)
+        } catch (error) {
+          if (error instanceof ResponseTooLarge) throw new Error(error.message)
+          if (error?.name === 'TimeoutError') throw timedOut()
+          throw new RetryableError(`Review model response read failed: ${redact(error?.message, apiKey)}`)
+        }
+        record({ round, attempt, status: response.status, body: text })
+        if (response.status === 429 || response.status >= 500)
+          throw new RetryableError(`Review model HTTP ${response.status}`, retryAfter(response))
+        if (!response.ok)
+          throw new Error(`Review model request failed (HTTP ${response.status}): ${redact(text, apiKey)}`)
+        let completion
+        try {
+          completion = JSON.parse(text)
+        } catch {
+          throw new Error('Review model returned a non-JSON API response')
+        }
+        const choice = completion?.choices?.[0]
+        if (!choice?.message || completion.choices.length !== 1)
+          throw new Error('Review model response has no single choice')
+        return { choice, usage: completion.usage ?? null }
+      } catch (error) {
+        record({ round, attempt, error: redact(error.message, apiKey) })
+        if (!(error instanceof RetryableError)) throw error
+        lastError = error
+        if (attempt === maxAttempts) break
+        const delay = error.retryAfterMs ?? Math.min(RETRY_BASE_MS * 2 ** (attempt - 1), RETRY_CAP_MS)
+        if (now() + delay >= deadline) break
+        await sleep(delay)
+      }
+    }
+    if (!lastError) throw timedOut()
+    throw new Error(`Review model failed after retries: ${lastError.message}`)
+  }
+  let finalizing = false
+  /** Spent budget: answer every requested call without executing it, then ask for the verdict. */
+  const finalize = (pending, reason) => {
+    for (const call of pending) {
+      const skipped = tools.skip(call)
+      record({ tool: skipped })
+      conversation.push({
+        role: 'tool',
+        tool_call_id: call.id,
+        content: `NOT EXECUTED: ${reason}. No further tool calls are available.`
+      })
+    }
+    conversation.push({ role: 'user', content: FINALIZE_PROMPT })
+    finalizing = true
+    options.onFinalize?.(reason)
+    record({ finalize: reason })
+  }
+  for (let round = 1; ; round++) {
+    const { choice, usage } = await request(round, finalizing ? 'none' : undefined)
+    const message = choice.message
+    options.onRound?.({ round, finishReason: choice.finish_reason ?? null, usage, final: finalizing })
+    if (message.tool_calls?.length) {
+      if (!tools) throw new Error('Reviewer attempted a forbidden capability: tool_calls')
+      if (finalizing) throw new Error('Reviewer requested tools after its tool budget was exhausted')
+      if (choice.finish_reason !== 'tool_calls')
+        throw new Error(`Review model did not complete (finish_reason=${String(choice.finish_reason)})`)
+      if (
+        !Array.isArray(message.tool_calls) ||
+        message.tool_calls.some(
+          (call) =>
+            call?.type !== 'function' ||
+            typeof call.id !== 'string' ||
+            typeof call.function?.name !== 'string'
+        )
+      )
+        throw new Error('Review model returned malformed tool_calls')
+      // Pass the complete assistant turn back, including reasoning_content (thinking + tools).
+      conversation.push({
+        role: 'assistant',
+        content: typeof message.content === 'string' ? message.content : '',
+        ...(typeof message.reasoning_content === 'string'
+          ? { reasoning_content: message.reasoning_content }
+          : {}),
+        tool_calls: message.tool_calls
+      })
+      if (round >= maxRounds) {
+        finalize(message.tool_calls, `tool round limit reached (${maxRounds - 1} rounds)`)
+        continue
+      }
+      for (let index = 0; index < message.tool_calls.length; index++) {
+        const call = message.tool_calls[index]
+        let result
+        try {
+          result = await tools.execute(call, round)
+        } catch (error) {
+          const last = tools.records?.at(-1)
+          if (last) record({ round, tool: { ...last, round } })
+          if (!(error instanceof ToolBudgetExceeded)) throw error
+          conversation.push({
+            role: 'tool',
+            tool_call_id: call.id,
+            content: `NOT RETURNED: ${error.message}. No further tool calls are available.`
+          })
+          finalize(message.tool_calls.slice(index + 1), error.message)
+          break
+        }
+        record({ round, tool: { ...tools.records.at(-1), round } })
+        conversation.push({ role: 'tool', tool_call_id: call.id, content: result.content })
+      }
+      continue
+    }
+    if (choice.finish_reason === 'length')
+      throw new OutputTruncated('Review model did not complete (finish_reason=length)')
+    if (choice.finish_reason !== 'stop')
+      throw new Error(`Review model did not complete (finish_reason=${String(choice.finish_reason)})`)
+    if (typeof message.content !== 'string' || !message.content.trim())
+      throw new Error('Review model returned empty content')
+    let value
+    try {
+      value = JSON.parse(message.content)
+    } catch {
+      throw new Error('Reviewer output is not valid JSON')
+    }
+    return assertSchema(value)
+  }
 }

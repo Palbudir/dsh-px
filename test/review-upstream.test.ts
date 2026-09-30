@@ -362,7 +362,7 @@ test('real pinned tarballs match the installed DSH 0.1.5-rc.2 runtime byte for b
   assert.ok(compared > 40, `compared ${compared} files`)
 })
 
-test('group selection projects referenced modules, host services and loader contracts once per identical file', async () => {
+test('group selection names referenced modules, host services and loader contracts once per identical file', async () => {
   const file = (text: string, host: string) => ({
     path: 'lib/types/index.d.ts',
     sha256: createHash('sha256').update(text).digest('hex'),
@@ -466,17 +466,23 @@ test('group selection projects referenced modules, host services and loader cont
     [],
     { upstream: catalog }
   )
-  assert.match(result.context, /CONTEXT UPSTREAM \{"package":"@deepseek-ai\/dsh-client-connection"/)
-  assert.match(result.context, /SLOTS_SHARED/)
-  assert.match(result.context, /LOADER_0\.2\.0-rc\.1/)
-  assert.match(result.context, /trusted worker lock f{64}/)
-  assert.ok(
-    result.upstream.every((identity: any) => /^[a-f0-9]{64}$/.test(identity.sha256) && identity.hosts.length)
+  // Upstream files are named in the header and read on demand with read_upstream, not inlined.
+  assert.deepEqual(
+    result.upstream.map((item: any) => item.package),
+    [
+      '@deepseek-ai/dsh-client-connection',
+      '@deepseek-ai/dsh-client-modules',
+      '@deepseek-ai/dsh-client-ui-slots'
+    ]
   )
+  assert.ok(result.upstream.every((item: any) => item.paths.includes('lib/types/index.d.ts')))
+  assert.match(result.context, /read_upstream; trusted worker lock f{64}/)
+  for (const text of ['SLOTS_SHARED', 'LOADER_0.2.0-rc.1', 'CONNECTION_'])
+    assert.ok(!result.context.includes(text), text)
   const without = await collectReviewContext(
     { repository: 'fixture/repo', head, base, mergeBase: base, names: ['packages/dsh-px-a/src/index.ts'] },
     reader
   )
-  assert.doesNotMatch(without.context, /CONTEXT UPSTREAM/)
-  assert.match(without.context, /without upstream projection.*@deepseek-ai\/dsh-client-ui-slots/)
+  assert.match(without.context, /read_upstream is unavailable/)
+  assert.match(without.context, /External module references[^\n]*@deepseek-ai\/dsh-client-ui-slots/)
 })

@@ -81,8 +81,8 @@ const BINARY_RULES = new Set([
   'slack-token',
   'google-api-key'
 ])
-/** Paths that must never be pushed regardless of content. */
-const FORBIDDEN_PATH =
+/** Paths that must never be pushed regardless of content (also refused as reviewer input). */
+export const FORBIDDEN_PATH =
   /(?:^|\/)(?:\.env(?:\.[^/]*)?|\.?credentials(?:\.[^/]*)?|id_(?:rsa|ed25519|ecdsa)(?:\.pub)?|\.npmrc|\.netrc)$|\.(?:pem|key|p12|pfx|keystore|jks)$|(?:^|\/)build-test\//i
 const MAX_TEXT_BYTES = 16 * 1024 * 1024
 
@@ -93,11 +93,47 @@ function placeholder(id, value) {
   return PLACEHOLDER_VALUE.test(value)
 }
 
-/** Scan one text blob; findings never include the matched value. */
+/**
+ * A private key is a block: its BEGIN line through its END line. A key written on one line ends
+ * there. Without an END line the block covers only the key-shaped lines that follow (base64 and
+ * PEM header rows), so the rest of the file is still scanned by every rule.
+ */
+const KEY_END = re(['-----END (?:[A-Z0-9]+ )*PRIV', 'ATE KEY-----'])
+const KEY_BODY = /^\s*(?:[A-Za-z0-9+/=]{16,}|[A-Za-z0-9-]+: .*)\s*$/
+function privateKeyBlocks(lines, rules) {
+  const begin = rules.find(([id]) => id === 'private-key')?.[1]
+  const inside = new Uint8Array(lines.length)
+  if (!begin) return inside
+  const opening = new RegExp(begin.source, begin.flags.replace('g', ''))
+  for (let i = 0; i < lines.length; i++) {
+    if (!opening.test(lines[i])) continue
+    inside[i] = 1
+    if (KEY_END.test(lines[i])) continue
+    let end = -1
+    for (let j = i + 1; j < lines.length && j <= i + 200; j++)
+      if (KEY_END.test(lines[j])) {
+        end = j
+        break
+      }
+    if (end >= 0) {
+      for (let j = i + 1; j <= end; j++) inside[j] = 2
+      i = end
+      continue
+    }
+    let j = i + 1
+    for (; j < lines.length && KEY_BODY.test(lines[j]); j++) inside[j] = 2
+    i = j - 1
+  }
+  return inside
+}
+
+/** Scan one text blob; findings never include the matched value. A key block is reported once. */
 export function scanText(path, text, rules = RULES) {
   const findings = []
   const lines = text.split(/\r?\n/)
-  for (let i = 0; i < lines.length; i++)
+  const blocks = privateKeyBlocks(lines, rules)
+  for (let i = 0; i < lines.length; i++) {
+    if (blocks[i] === 2) continue
     for (const [id, rule, group] of rules) {
       const flags = rule.flags.includes('g') ? rule.flags : rule.flags + 'g'
       for (const match of lines[i].matchAll(new RegExp(rule.source, flags))) {
@@ -106,6 +142,7 @@ export function scanText(path, text, rules = RULES) {
         break
       }
     }
+  }
   return findings
 }
 
@@ -119,7 +156,13 @@ export function scanText(path, text, rules = RULES) {
  */
 export function maskSecrets(text, rules = RULES) {
   const lines = text.split(/(\r?\n)/)
-  for (let i = 0; i < lines.length; i += 2) lines[i] = maskLine(lines[i], rules)
+  const blocks = privateKeyBlocks(
+    lines.filter((_, i) => i % 2 === 0),
+    rules
+  )
+  // Every line of a private key block, including its body, is masked completely.
+  for (let i = 0; i < lines.length; i += 2)
+    lines[i] = blocks[i / 2] ? '*'.repeat(lines[i].length) : maskLine(lines[i], rules)
   return lines.join('')
 }
 

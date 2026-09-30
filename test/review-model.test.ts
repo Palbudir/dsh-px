@@ -93,7 +93,7 @@ test('review-model is part of the installed worker script set and its digest', (
   assert.ok(INSTALLED_SCRIPT.test('review-model.mjs'))
 })
 
-test('request uses the configured model, JSON output, thinking and no tools; key only in the header', async (t) => {
+test('without a tool context the request uses the configured model, JSON output, high-effort thinking, the documented max_tokens and no tools; key only in the header', async (t) => {
   const w = workspace(t)
   const api = scripted([reply(200, completion(verdict()))])
   const value = await runReviewBatch(config, request, batch, w.directory, options(api.fetch))
@@ -107,6 +107,9 @@ test('request uses the configured model, JSON output, thinking and no tools; key
   assert.equal(body.model, 'deepseek-flash')
   assert.deepEqual(body.response_format, { type: 'json_object' })
   assert.deepEqual(body.thinking, { type: 'enabled' })
+  assert.equal(body.reasoning_effort, 'high')
+  assert.equal(body.max_tokens, 393216)
+  assert.equal(model.MODEL_MAX_TOKENS, 393216)
   assert.equal(body.stream, false)
   for (const forbidden of ['tools', 'tool_choice', 'functions', 'function_call'])
     assert.equal(forbidden in body, false, forbidden)
@@ -242,7 +245,7 @@ test('other 4xx responses fail immediately and never leak the key into errors or
   assert.ok(!w.traces().includes(SECRET))
 })
 
-test('non-JSON, schema violations, identity mismatch, truncation and tool calls fail closed', async (t) => {
+test('non-JSON, schema violations, identity mismatch, incomplete finishes and tool calls without a tool context fail closed', async (t) => {
   const w = workspace(t)
   const cases: Array<[string, RegExp]> = [
     ['<html>gateway</html>', /non-JSON API response/],
@@ -259,7 +262,8 @@ test('non-JSON, schema violations, identity mismatch, truncation and tool calls 
     [completion(verdict({ head: 'c'.repeat(40) })), /mismatched commit identity/],
     [completion(verdict({ base: 'c'.repeat(40) })), /mismatched commit identity/],
     [completion(verdict({ batchId: 'other' })), /mismatched commit identity/],
-    [completion(verdict(), { finish_reason: 'length' }), /did not complete/],
+    [completion(verdict(), { finish_reason: 'content_filter' }), /did not complete/],
+    [completion(verdict(), { finish_reason: 'insufficient_system_resource' }), /did not complete/],
     [
       completion(verdict(), {
         message: {
