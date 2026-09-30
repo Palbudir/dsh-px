@@ -23,12 +23,13 @@ import {
   validateRequest,
   verifyAttestation,
   collectGroupedReview,
-  parseReviewTree
+  parseReviewTree,
+  REVIEW_BATCH_CHARS
 } from './review-core.mjs'
 import { command, runReviewBatch } from './review-process.mjs'
 import { installedModel, modelIdentity, readApiKey } from './review-model.mjs'
 import { loadUpstreamCatalog, requirePinnedHosts } from './review-upstream.mjs'
-import { scanText } from './check-secrets.mjs'
+import { maskSecrets, scanText } from './check-secrets.mjs'
 import { createAppClient } from './review-app.mjs'
 import { PUBLIC_REVIEW_FAILURE, publishReview, publishQuality, settleQuality } from './review-verify.mjs'
 import { findTrustedQuality, qualityChanged } from './review-trusted-ci.mjs'
@@ -384,8 +385,8 @@ export async function prepareReviewSnapshot(config, request, git, options = {}) 
     { ...request, repository: config.repository, mergeBase, names },
     reader,
     config.contextLimits,
-    config.maxBatchChars ?? 500000,
-    { upstream: options.upstream, scan: options.scan ?? scanText }
+    config.maxBatchChars ?? REVIEW_BATCH_CHARS,
+    { upstream: options.upstream, scan: options.scan ?? scanText, mask: options.mask ?? maskSecrets }
   )
   return {
     ...snapshot,

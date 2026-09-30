@@ -800,6 +800,63 @@ test('a source the dependency graph cannot parse becomes a blocker instead of si
   assert.deepEqual(clean.graphBlockers, [])
 })
 
+test('already-merged content with a secret-shaped match is masked; candidate content still blocks', async () => {
+  const { scanText, maskSecrets } = await import(pathToFileURL(resolve('scripts/check-secrets.mjs')).href)
+  const personal = 'C:\\\\Users\\\\' + 'alice' + '\\\\AppData\\\\x'
+  const tree = graphTree()
+  const legacy = `export const example = '${personal}'\nexport const kept = 1`
+  // The candidate deletes a file whose merged version contains a personal path.
+  const deleted = memory({ [base]: { ...tree, 'packages/shared/legacy.ts': legacy }, [head]: tree })
+  const plan = await collectGroupedReview(
+    request(['packages/shared/legacy.ts']),
+    deleted.reader,
+    {},
+    500000,
+    {
+      scan: scanText,
+      mask: maskSecrets
+    }
+  )
+  assert.deepEqual(plan.secretFindings, [])
+  assert.deepEqual(plan.maskedPaths, ['packages/shared/legacy.ts'])
+  const text = plan.batches.map((b: any) => b.text).join('\n')
+  assert.ok(!text.includes('alice'))
+  // Masking keeps every length, so scope offsets still describe the original file.
+  const file = plan.files.find((f: any) => f.path === 'packages/shared/legacy.ts')
+  assert.equal(file.before.length, legacy.length)
+  assert.ok(file.before.endsWith('export const kept = 1'))
+  // The same content on the candidate side is new content and blocks before any model call.
+  const added = memory({ [base]: tree, [head]: { ...tree, 'packages/shared/legacy.ts': legacy } })
+  const blocked = await collectGroupedReview(
+    request(['packages/shared/legacy.ts']),
+    added.reader,
+    {},
+    500000,
+    {
+      scan: scanText,
+      mask: maskSecrets
+    }
+  )
+  assert.deepEqual(
+    blocked.secretFindings.map((f: any) => [f.path, f.rule]),
+    [['packages/shared/legacy.ts', 'windows-user-path']]
+  )
+})
+
+test('a deleted merged file importing a generated tree is reviewable; candidate code still may not', async () => {
+  const tree = graphTree()
+  const script = "await import('../runtime/dsh/node_modules/pkg/lib/index.js')\nexport {}"
+  const f = memory({ [base]: { ...tree, 'scripts/old-probe.mjs': script }, [head]: tree })
+  const plan = await collectGroupedReview(request(['scripts/old-probe.mjs']), f.reader)
+  assert.ok(plan.files.some((x: any) => x.path === 'scripts/old-probe.mjs' && x.after === ''))
+  assert.ok(!plan.context.includes('CONTEXT SOURCE {"path":"runtime/'))
+  const added = memory({ [base]: tree, [head]: { ...tree, 'scripts/old-probe.mjs': script } })
+  await assert.rejects(
+    collectGroupedReview(request(['scripts/old-probe.mjs']), added.reader),
+    /Private or generated/
+  )
+})
+
 test('a mode-only change is shown to the model even when the text is identical', async () => {
   const tree = graphTree()
   const f = memory({

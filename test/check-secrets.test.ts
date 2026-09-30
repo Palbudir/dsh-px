@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { scanText } from '../scripts/check-secrets.mjs'
+import { maskSecrets, scanText } from '../scripts/check-secrets.mjs'
 
 const rules = (text: string) => scanText('sample/file.ts', text).map((f: { rule: string }) => f.rule)
 // Samples are assembled at runtime so this file itself never contains a matching literal.
@@ -27,6 +27,17 @@ test('unquoted, shell and PowerShell assignments are caught', () => {
 test('non-ASCII and WSL user paths are caught', () => {
   assert.deepEqual(rules(j('C:\\Users\\', '张三', '\\Desktop\\a.txt')), ['windows-user-path'])
   assert.deepEqual(rules(j('/mnt/c/Users/', 'alice', '/repo')), ['windows-user-path'])
+  assert.deepEqual(rules(j('cd /c/Users/', 'alice', '/repo')), ['windows-user-path'])
+})
+
+test('masking keeps length and line breaks and removes every match', () => {
+  const sample = j('a\r\nkey = "C:\\\\Users\\\\', 'alice', '\\\\x"\nb')
+  const masked = maskSecrets(sample)
+  assert.equal(masked.length, sample.length)
+  assert.ok(!masked.includes('alice') && masked.startsWith('a\r\n') && masked.endsWith('\nb'))
+  assert.deepEqual(rules(masked), [])
+  // Declared placeholders are left as they are.
+  assert.equal(maskSecrets('C:\\Users\\Public\\x'), 'C:\\Users\\Public\\x')
 })
 
 test('nearby placeholder words no longer excuse a real-looking value', () => {

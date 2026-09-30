@@ -65,7 +65,15 @@ export function command(exe, args, options = {}) {
 export function downloadCommand(exe, args, file, options = {}) {
   return new Promise((resolve, reject) => {
     const stream = createWriteStream(file, { mode: 0o600 })
-    const child = spawn(exe, args, { shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(exe, args, {
+      shell: false,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: childEnvironment(
+        options.env ?? process.env,
+        options.blockedEnv ?? process.env.DSHPX_REVIEW_KEY_ENV?.split(',') ?? []
+      )
+    })
     let bytes = 0,
       code = null,
       ended = false,

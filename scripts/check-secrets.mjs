@@ -48,7 +48,13 @@ export const RULES = [
   // Any user name, including non-ASCII (e.g. Chinese) names, on Windows and WSL paths.
   [
     'windows-user-path',
-    re(['(?:\\b[A-Za-z]:|/mnt/[a-z])[\\\\/]+Users[\\\\/]+([^\\\\/\\s"\'`<>|:*?]+)[\\\\/]'], 'i'),
+    // Drive letter (C:\Users), WSL (/mnt/c/Users) and Git Bash / MSYS (/c/Users) forms.
+    re(
+      [
+        '(?:\\b[A-Za-z]:|/mnt/[a-z]|(?:^|[\\s"\'(=])/[a-z])[\\\\/]+Users[\\\\/]+([^\\\\/\\s"\'`<>|:*?]+)[\\\\/]'
+      ],
+      'i'
+    ),
     1
   ],
   ['posix-home-path', re(['(?:^|[\\s"\'(=])/(?:home|Users)/([^/\\s"\'`<>]+)/'], 'i'), 1]
@@ -98,6 +104,27 @@ export function scanText(path, text, rules = RULES) {
       }
     }
   return findings
+}
+
+/**
+ * Same rules as scanText, but replace every matched character with `*`. Length and line breaks
+ * are kept, so offsets computed on the masked text still describe the original file.
+ */
+export function maskSecrets(text, rules = RULES) {
+  const lines = text.split(/(\r?\n)/)
+  for (let i = 0; i < lines.length; i += 2) {
+    let line = lines[i]
+    for (const [id, rule, group] of rules) {
+      const flags = rule.flags.includes('g') ? rule.flags : rule.flags + 'g'
+      line = line.replace(new RegExp(rule.source, flags), (...args) => {
+        const match = args[0]
+        const value = group ? args[group] : undefined
+        return placeholder(id, value) ? match : '*'.repeat(match.length)
+      })
+    }
+    lines[i] = line
+  }
+  return lines.join('')
 }
 
 function candidateFiles(range) {

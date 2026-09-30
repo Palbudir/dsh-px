@@ -439,6 +439,9 @@ export const RELEASE_PATH =
 const EXECUTABLE_EDGES = new Set(['import', 'route', 'npm-script', 'manifest'])
 const SOURCE_FILE = /\.[cm]?[jt]sx?$/
 const GENERATED_BUNDLE = /(?:^|\/)lib\//
+/** Build and dependency outputs that are never tracked; secrets paths still fail in reviewSourcePath. */
+const GENERATED_TREES = new Set(['node_modules', 'runtime', 'dist', 'build-test'])
+const generatedTree = (path) => path.split('/').some((part) => GENERATED_TREES.has(part))
 const safePath = (path) => {
   try {
     reviewSourcePath(path)
@@ -875,7 +878,8 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
     reasons = new Map(),
     external = new Map(),
     dynamic = [],
-    secretFindings = []
+    secretFindings = [],
+    maskedFindings = new Set()
   let bytesRead = 0
   for (const [, ref] of roles)
     if (!trees.has(ref)) {
@@ -900,13 +904,25 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
       if (bytes.length !== entry.size) throw new Error(`Git source size changed: ${path}`)
       const text = decodeSource(bytes, path)
       // Every repository blob that could reach the model is scanned first; only locations are kept.
-      if (options.scan)
-        for (const finding of options.scan(path, text))
-          secretFindings.push({ path, line: finding.line, rule: finding.rule })
-      cached.set(entry.oid, text)
+      const findings = options.scan ? options.scan(path, text) : []
+      cached.set(entry.oid, { text, findings })
       bytesRead += bytes.length
     }
-    return { ...entry, text: cached.get(entry.oid) }
+    const blob = cached.get(entry.oid)
+    if (!blob.findings.length) return { ...entry, text: blob.text }
+    // Candidate (head) content with a finding blocks the review. Content that exists only on
+    // the already-merged side is masked character-for-character, so it never reaches the model.
+    if (ref === request.head || !options.mask) {
+      if (!blob.reported) {
+        blob.reported = true
+        for (const finding of blob.findings)
+          secretFindings.push({ path, line: finding.line, rule: finding.rule })
+      }
+      return { ...entry, text: blob.text }
+    }
+    blob.masked ??= options.mask(blob.text)
+    maskedFindings.add(path)
+    return { ...entry, text: blob.masked }
   }
   const queue = [],
     queued = new Set()
@@ -995,9 +1011,17 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
       const references = reviewModuleReferences(entry.text, { jsx: /\.[jt]sx$/.test(path), filename: path })
       for (const dependency of references.literals) {
         const specifier = dependency.specifier
-        if (dependency.repositoryRelative || specifier.startsWith('.'))
-          add(ref, resolveDependency(ref, path, dependency), `local dependency of ${path}`)
-        else if (specifier.startsWith('/') || /^[a-z]:[\\/]/i.test(specifier))
+        if (dependency.repositoryRelative || specifier.startsWith('.')) {
+          // Candidate code may not depend on a generated or private tree (runtime/, node_modules/,
+          // dist/ ...): that still fails. Already-merged code on the base side can (e.g. a deleted
+          // legacy script); such a target is never in Git, so it is listed as an unverified external.
+          const target = dependency.repositoryRelative
+            ? specifier
+            : posix.normalize(posix.join(posix.dirname(path), specifier))
+          if (ref !== request.head && !target.startsWith('../') && generatedTree(target))
+            external.set(target, true)
+          else add(ref, resolveDependency(ref, path, dependency), `local dependency of ${path}`)
+        } else if (specifier.startsWith('/') || /^[a-z]:[\\/]/i.test(specifier))
           throw new Error(`Absolute dependency is outside the Git snapshot: ${path}`)
         else if (!isBuiltin(specifier)) external.set(specifier, true)
       }
@@ -1152,6 +1176,8 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
     projections,
     upstream,
     secretFindings,
+    // Paths whose already-merged content was masked before model input (locations only).
+    maskedPaths: [...maskedFindings].sort(),
     metrics: {
       paths: paths.size,
       blobs: cached.size,
@@ -1169,7 +1195,18 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
  * consumers as context. A group whose complete context exceeds the budget is split along its
  * dependency closure; context is never truncated.
  */
-export async function collectGroupedReview(request, reader, limits = {}, maxChars = 500000, options = {}) {
+/**
+ * Default characters per model batch. DeepSeek Flash accepts 1M tokens; 900k characters of mostly
+ * ASCII source stays well inside it and keeps producer/consumer closures in one batch.
+ */
+export const REVIEW_BATCH_CHARS = 900000
+export async function collectGroupedReview(
+  request,
+  reader,
+  limits = {},
+  maxChars = REVIEW_BATCH_CHARS,
+  options = {}
+) {
   if (new Set(request.names).size !== request.names.length) throw new Error('Duplicate changed paths')
   for (const path of request.names) reviewSourcePath(path)
   if (!request.names.length) throw new Error('No reviewable changes')
@@ -1298,6 +1335,7 @@ export async function collectGroupedReview(request, reader, limits = {}, maxChar
       snapshot.upstream.map((identity) => ({ ...identity, group: snapshot.group }))
     ),
     secretFindings,
+    maskedPaths: [...new Set(snapshots.flatMap((snapshot) => snapshot.maskedPaths ?? []))].sort(),
     // Source files whose dependency edges could not be read: their consumers are unknown.
     graphBlockers: [...new Map(graph.unparsed.map((u) => [u.path, u])).values()]
       .sort((a, b) => a.path.localeCompare(b.path))
