@@ -251,6 +251,7 @@ test('non-JSON, schema violations, identity mismatch, incomplete finishes and to
     ['<html>gateway</html>', /non-JSON API response/],
     [completion('not json at all'), /not valid JSON/],
     [completion(''), /empty content/],
+    // Only empty undeclared keys are dropped (see review-tools.test.ts); one with content is refused.
     [completion(verdict({ extra: true })), /does not match the review schema/],
     [completion(verdict({ verdict: 'approved' })), /does not match the review schema/],
     [completion(verdict({ findings: [{ priority: '1' }] })), /does not match the review schema/],

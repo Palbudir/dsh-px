@@ -136,7 +136,7 @@ export function assertSchema(value, schema = reviewSchema, path = 'result') {
       if (!value || typeof value !== 'object' || Array.isArray(value)) fail()
       for (const key of schema.required ?? []) if (!Object.hasOwn(value, key)) fail()
       for (const [key, child] of Object.entries(value)) {
-        const nested = schema.properties?.[key]
+        const nested = Object.hasOwn(schema.properties ?? {}, key) ? schema.properties[key] : undefined
         if (!nested) {
           if (schema.additionalProperties === false) fail()
           continue
@@ -389,6 +389,38 @@ export async function callReviewModel(config, messages, options = {}) {
     } catch {
       throw new Error('Reviewer output is not valid JSON')
     }
-    return assertSchema(value)
+    return assertSchema(pruneUnknownKeys(value))
   }
+}
+
+const emptyValue = (value) =>
+  value === null ||
+  value === '' ||
+  (Array.isArray(value) && value.length === 0) ||
+  (typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 0)
+/**
+ * Drop empty properties the review schema does not declare (a model sometimes adds an empty
+ * helper field such as `"detail_note": ""`). An undeclared property with content is kept, so
+ * assertSchema still rejects it; every declared field is checked strictly afterwards.
+ * @param value - parsed model answer.
+ * @param schema - schema node for `value`.
+ * @returns a copy without empty undeclared properties.
+ */
+export function pruneUnknownKeys(value, schema = reviewSchema) {
+  if (schema?.type === 'array' && Array.isArray(value))
+    return value.map((item) => pruneUnknownKeys(item, schema.items))
+  if (schema?.type !== 'object' || !value || typeof value !== 'object' || Array.isArray(value)) return value
+  const result = {}
+  for (const [key, child] of Object.entries(value)) {
+    const declared = Object.hasOwn(schema.properties ?? {}, key)
+    if (!declared && emptyValue(child)) continue
+    // Defined as an own data property so a "__proto__" key can never become a prototype.
+    Object.defineProperty(result, key, {
+      value: declared ? pruneUnknownKeys(child, schema.properties[key]) : child,
+      enumerable: true,
+      writable: true,
+      configurable: true
+    })
+  }
+  return result
 }
