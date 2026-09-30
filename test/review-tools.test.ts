@@ -895,6 +895,59 @@ test('a model that declares missing context within the budget fails through bloc
   assert.equal(core.aggregate(request, [batch], [result]).verdict, 'fail')
 })
 
+test('over-long prose is clipped, never turned into a failed review or a pass', async (t) => {
+  // A real answer: correct identity and verdict, but a 4546-character summary.
+  const w = workspace(t)
+  const [batch] = batchOf([{ path: 'src/a.ts', before: 'a\n', after: 'b\n' }])
+  const long = 'x'.repeat(4546)
+  const passing = scripted([
+    completion({
+      content: verdict(batch.id, {
+        summary: long,
+        findings: [
+          { priority: 3, path: 'src/a.ts', line: 1, title: 't'.repeat(5000), detail: 'd'.repeat(5000) }
+        ]
+      })
+    })
+  ])
+  const ok = await runReviewBatch(config, request, batch, w.directory, options(passing.fetch))
+  assert.equal(ok.verdict, 'pass')
+  assert.ok(ok.summary.length <= core.REVIEW_TEXT_LIMIT && ok.summary.endsWith('[…truncated by worker]'))
+  assert.ok(ok.findings[0].title.length <= core.REVIEW_TEXT_LIMIT)
+  assert.ok(ok.findings[0].detail.length <= core.REVIEW_TEXT_LIMIT)
+  assert.equal(core.aggregate(request, [batch], [ok]).verdict, 'pass')
+  assert.equal(JSON.parse(w.read('.evidence.json')[0]).attempts[0].textClipped, true)
+  // An over-long blocker is shortened but still blocks.
+  const blocking = scripted([
+    completion({ content: verdict(batch.id, { verdict: 'blocked', blockers: ['b'.repeat(3000)] }) })
+  ])
+  const blocked = await runReviewBatch(config, request, batch, w.directory, options(blocking.fetch))
+  assert.equal(blocked.verdict, 'blocked')
+  assert.equal(blocked.blockers.length, 1)
+  assert.ok(blocked.blockers[0].length > 0 && blocked.blockers[0].length <= core.REVIEW_BLOCKER_LIMIT)
+  assert.equal(core.aggregate(request, [batch], [blocked]).verdict, 'fail')
+  // A clipped high-priority finding still fails the review.
+  const serious = scripted([
+    completion({
+      content: verdict(batch.id, {
+        verdict: 'fail',
+        findings: [
+          { priority: 1, path: 'src/a.ts', line: 1, title: 'p1 '.repeat(3000), detail: 'x'.repeat(9000) }
+        ]
+      })
+    })
+  ])
+  const failing = await runReviewBatch(config, request, batch, w.directory, options(serious.fetch))
+  assert.equal(failing.findings[0].priority, 1)
+  assert.equal(core.aggregate(request, [batch], [failing]).verdict, 'fail')
+  // Identity is still exact: a wrong head is rejected, not normalized.
+  const forged = scripted([completion({ content: verdict(batch.id, { head: 'f'.repeat(40) }) })])
+  await assert.rejects(
+    runReviewBatch(config, request, batch, w.directory, options(forged.fetch)),
+    /mismatched commit identity/
+  )
+})
+
 test('tool calls with a forged batch, malformed calls or no tool context fail closed', async (t) => {
   const w = workspace(t)
   const [batch] = batchOf([{ path: 'src/a.ts', before: 'a\n', after: 'b\n' }])

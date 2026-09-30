@@ -46,6 +46,8 @@ export function prepareNativeProfileDefaults(profile: string, documentsDirectory
   const document = readPatch(patch)
   // Cordis config patches replace whole config blocks, so a row with any `config` owns that plugin's settings.
   // A port-only patch would lose the required host; our default therefore always carries both.
+  // Patch rows merge key by key (cordis-plugin-include applyEntryPatches: `target[key] = value` for each key a
+  // row sets), so an appended config-only row never clears an earlier `disabled: true`: a user's disable stays.
   const defaults = [
     { id: 'webserver', config: { host: '127.0.0.1', port: 0 } },
     { id: 'workspace-controller', config: { documentsDirectory } }

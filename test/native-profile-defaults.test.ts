@@ -68,6 +68,30 @@ test('native defaults fill only missing rows and keep user-owned values and comm
   }
 })
 
+/** The native include merge (applyEntryPatches): each non-insert row assigns only the keys it sets. */
+function merged(file: string): Record<string, Record<string, unknown>> {
+  const rows = parseDocument(readFileSync(file, 'utf8'), yamlOptions).toJS() as Record<string, unknown>[]
+  const result: Record<string, Record<string, unknown>> = {}
+  for (const { id, insert, ...keys } of rows)
+    if (typeof id === 'string' && insert === undefined) result[id] = { ...result[id], ...keys }
+  return result
+}
+
+test('a user disable without config stays disabled after the default config row is appended', () => {
+  const profile = mkdtempSync(join(tmpdir(), 'px-native-defaults-'))
+  try {
+    const file = join(profile, 'cordis.patch.yml')
+    writeFileSync(file, '- id: webserver\n  disabled: true\n- id: workspace-controller\n  disabled: true\n')
+    prepareNativeProfileDefaults(profile, join(profile, 'documents'))
+    const result = merged(file)
+    assert.equal(result.webserver.disabled, true)
+    assert.equal(result['workspace-controller'].disabled, true)
+    assert.deepEqual(result.webserver.config, { host: '127.0.0.1', port: 0 })
+  } finally {
+    rmSync(profile, { recursive: true, force: true })
+  }
+})
+
 test('defaults are restored after native disable-all recovery moved the patch away', () => {
   const profile = mkdtempSync(join(tmpdir(), 'px-native-recovery-'))
   try {

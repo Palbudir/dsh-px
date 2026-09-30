@@ -1,6 +1,6 @@
 /** Prepare an isolated branded overlay over verified official build outputs. */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { resolve, join } from 'node:path'
+import { basename, dirname, resolve, join } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -59,6 +59,28 @@ if (
     packManifest.dshPx?.sourceCommit !== ownHead)
 )
   throw Error('Release Desktop requires clean same-commit release Pack')
+if (!candidate) {
+  // A release embeds exactly the Pack its quality gate recorded: the artifact.json written next to
+  // the archive by build-native-pack must describe these bytes.
+  const recordPath = join(dirname(packArchive), 'artifact.json')
+  let record
+  try {
+    record = JSON.parse(readFileSync(recordPath, 'utf8'))
+  } catch {
+    throw Error('Release Desktop requires the Pack artifact.json next to the archive')
+  }
+  if (
+    record.artifact !== basename(packArchive) ||
+    record.version !== products.pack.version ||
+    record.candidate !== false ||
+    record.sourceDirty !== false ||
+    record.sourceCommit !== ownHead ||
+    record.size !== packBytes.length ||
+    record.sha256 !== packSha256 ||
+    record.sha512 !== createHash('sha512').update(packBytes).digest('base64')
+  )
+    throw Error('Pack archive does not match its release artifact record')
+}
 function replaceOnce(text, from, to) {
   if (text.split(from).length !== 2) throw Error('Upstream patch anchor changed: ' + from)
   return text.replace(from, to)
@@ -218,6 +240,7 @@ writeFileSync(
       sourceDirty: ownDirty,
       originalMainSha256: createHash('sha256').update(original).digest('hex'),
       mainSha256: createHash('sha256').update(main).digest('hex'),
+      packSha256,
       version: products.desktop.version,
       config: join(output, 'builder.mjs')
     },

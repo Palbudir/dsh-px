@@ -309,10 +309,11 @@ async function main() {
         )
     }
     draft = await api(`repos/${policy.repository}/releases/${draft.id}`)
+    // Throws for any name that is not publishable (as for the pre-existing assets above).
+    for (const asset of draft.assets) assertPublishableAssetName(asset.name)
     if (
       !draft.draft ||
       draft.assets.length !== files.length ||
-      draft.assets.some((asset) => !assertPublishableAssetName(asset.name)) ||
       files.some(
         (file) =>
           !draft.assets.some(

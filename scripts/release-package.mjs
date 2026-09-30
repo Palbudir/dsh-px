@@ -129,7 +129,8 @@ export function desktopArtifact({ installer, overlay, products, nativeDesktop, h
     overlay.sourceCommit !== head ||
     overlay.sourceDirty !== false ||
     overlay.upstream !== nativeDesktop.commit ||
-    overlay.version !== products.desktop.version
+    overlay.version !== products.desktop.version ||
+    !/^[a-f0-9]{64}$/.test(overlay.packSha256 ?? '')
   )
     throw new Error('Desktop overlay does not describe this clean release commit')
   if (!['NotSigned', 'Valid'].includes(authenticode))
@@ -149,6 +150,7 @@ export function desktopArtifact({ installer, overlay, products, nativeDesktop, h
     sourceDirty: false,
     originalMainSha256: overlay.originalMainSha256,
     mainSha256: overlay.mainSha256,
+    packSha256: overlay.packSha256,
     authenticode
   }
 }

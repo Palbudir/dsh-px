@@ -249,7 +249,8 @@ test('Desktop inspection accepts exactly one full installer and a clean overlay 
     sourceDirty: false,
     version,
     originalMainSha256: 'c'.repeat(64),
-    mainSha256: 'd'.repeat(64)
+    mainSha256: 'd'.repeat(64),
+    packSha256: 'f'.repeat(64)
   }
   const input = {
     installer: join(root, exe),
@@ -263,6 +264,12 @@ test('Desktop inspection accepts exactly one full installer and a clean overlay 
   assert.equal(artifact.file, exe)
   assert.equal(artifact.upstreamCommit, nativeDesktop.commit)
   assert.equal(artifact.sha512.length, 88)
+  // The Desktop record names the exact embedded Pack bytes.
+  assert.equal(artifact.packSha256, 'f'.repeat(64))
+  assert.throws(
+    () => desktopArtifact({ ...input, overlay: { ...overlay, packSha256: undefined } }),
+    /clean release/
+  )
   assert.throws(
     () => desktopArtifact({ ...input, overlay: { ...overlay, sourceDirty: true } }),
     /clean release/

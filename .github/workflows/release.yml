@@ -207,6 +207,10 @@ jobs:
           $env:DSH_PX_SHARP_DIR = (Resolve-Path ../upstream/apps/desktop/node_modules/sharp).Path
           npm run icon
           if ($LASTEXITCODE -ne 0) { throw 'icon build failed' }
+          # The generator also rewrites the tracked tray icons and icon metadata. The pinned sharp
+          # must reproduce them byte for byte; say so here rather than as a later clean-checkout error.
+          git diff --exit-code -- build
+          if ($LASTEXITCODE -ne 0) { throw 'Regenerated tracked icon assets differ from the committed files; regenerate them with the pinned upstream sharp and commit them' }
       - name: Generate PX overlay from the release Pack
         working-directory: candidate
         run: |

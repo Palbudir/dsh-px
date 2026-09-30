@@ -46,8 +46,8 @@ export const reviewSchema = {
     base: { type: 'string' },
     batchId: { type: 'string' },
     verdict: { type: 'string', enum: ['pass', 'fail', 'blocked'] },
-    summary: { type: 'string' },
-    blockers: { type: 'array', items: { type: 'string' } },
+    summary: { type: 'string', maxLength: 4000, description: 'At most 4000 characters.' },
+    blockers: { type: 'array', items: { type: 'string', maxLength: 2000 } },
     findings: {
       type: 'array',
       items: {
@@ -58,11 +58,43 @@ export const reviewSchema = {
           priority: { type: 'integer', minimum: 0, maximum: 3 },
           path: { type: 'string' },
           line: { type: 'integer', minimum: 1 },
-          title: { type: 'string' },
-          detail: { type: 'string' }
+          title: { type: 'string', maxLength: 4000 },
+          detail: { type: 'string', maxLength: 4000 }
         }
       }
     }
+  }
+}
+/** Longest summary and finding title/detail kept in a signed review result; blockers keep 2000. */
+export const REVIEW_TEXT_LIMIT = 4000
+export const REVIEW_BLOCKER_LIMIT = 2000
+const clip = (value, limit = REVIEW_TEXT_LIMIT) => {
+  if (typeof value !== 'string' || value.length <= limit) return value
+  let end = limit - 24
+  // Never keep half of a surrogate pair.
+  if (end > 0 && value.charCodeAt(end - 1) >= 0xd800 && value.charCodeAt(end - 1) <= 0xdbff) end--
+  return value.slice(0, end) + ' […truncated by worker]'
+}
+/**
+ * Bound the free-text fields of a model answer before validation. The verdict is derived from
+ * findings and blockers, never from their text, so shortening prose cannot turn a failing answer
+ * into a pass; identity fields, counts and types are left for validateResult to check exactly.
+ */
+export function normalizeResult(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  return {
+    ...value,
+    summary: clip(value.summary),
+    blockers: Array.isArray(value.blockers)
+      ? value.blockers.map((blocker) => clip(blocker, REVIEW_BLOCKER_LIMIT))
+      : value.blockers,
+    findings: Array.isArray(value.findings)
+      ? value.findings.map((finding) =>
+          finding && typeof finding === 'object'
+            ? { ...finding, title: clip(finding.title), detail: clip(finding.detail) }
+            : finding
+        )
+      : value.findings
   }
 }
 export function validateResult(value, request, batchId) {
@@ -73,11 +105,11 @@ export function validateResult(value, request, batchId) {
     value.batchId !== batchId ||
     !['pass', 'fail', 'blocked'].includes(value.verdict) ||
     typeof value.summary !== 'string' ||
-    value.summary.length > 4000 ||
+    value.summary.length > REVIEW_TEXT_LIMIT ||
     !Array.isArray(value.findings) ||
     value.findings.length > 100 ||
     !Array.isArray(value.blockers) ||
-    !value.blockers.every((v) => typeof v === 'string' && v.length <= 2000)
+    !value.blockers.every((v) => typeof v === 'string' && v.length <= REVIEW_BLOCKER_LIMIT)
   )
     throw new Error('Invalid reviewer result or mismatched commit identity')
   for (const finding of value.findings) {
@@ -88,7 +120,8 @@ export function validateResult(value, request, batchId) {
       !Number.isSafeInteger(finding.line) ||
       finding.line < 1 ||
       !['path', 'title', 'detail'].every(
-        (k) => typeof finding[k] === 'string' && finding[k].length > 0 && finding[k].length <= 4000
+        (k) =>
+          typeof finding[k] === 'string' && finding[k].length > 0 && finding[k].length <= REVIEW_TEXT_LIMIT
       )
     )
       throw new Error('Invalid finding')
