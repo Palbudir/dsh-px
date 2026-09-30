@@ -1,18 +1,26 @@
 export interface TerminalOwner {
+  id?: string
   ctx?: { get: (name: string) => unknown }
 }
 export interface NativeTerminalRegistry {
   hasOwnerActivity: (owner: TerminalOwner) => boolean
   list: (owner: TerminalOwner) => readonly unknown[]
 }
+/** DSH `terminalController`: interactive browser/sidebar shells, retained per Session id. */
+export interface BrowserTerminalController {
+  list: (sessionId: string) => readonly unknown[]
+}
 export interface TerminalSources {
   native: (owner: TerminalOwner) => NativeTerminalRegistry | undefined
+  browser: BrowserTerminalController
 }
 
 /**
- * Count native DSH terminal resources, not guessed foreground command state. Terminals are owned
- * by the host `terminals` service; the bundled sidebar opens them through that service and has no
- * terminal registry of its own. Registries that are closing are retained until they drain.
+ * Count terminal resources, not guessed foreground command state. DSH has two owners of terminals:
+ * the `terminals` service (Agent tool terminals) and `terminalController` (interactive shells the
+ * user opens in the sidebar, spawned directly through the subprocess service). Both must be
+ * available; without either the count is unknown, never idle. Closing native registries are
+ * retained until they drain.
  */
 export function createTerminalActivityReader() {
   const nativeOwners = new Map<TerminalOwner, Map<object, NativeTerminalRegistry>>()
@@ -35,6 +43,10 @@ export function createTerminalActivityReader() {
           ]
           registries.set(original ?? registry, registry)
         }
+        if (typeof owner.id !== 'string') return result
+        const shells = sources.browser.list(owner.id)
+        if (!Array.isArray(shells)) return result
+        result.openTerminals += shells.length
       }
       for (const [owner, registries] of nativeOwners) {
         for (const [identity, registry] of registries) {
@@ -72,26 +84,40 @@ export function registerTerminalActivity(
 ): (owners: readonly TerminalOwner[]) => { known: boolean; openTerminals: number } {
   const read = createTerminalActivityReader()
   let native: NativeTerminalRegistry | undefined
-  let bound = false
+  let nativeBound = false
+  let browser: BrowserTerminalController | undefined
   ctx.inject(['terminals'], (host) => {
     const value = host.terminals as NativeTerminalRegistry | undefined
     native = value
-    bound = true
+    nativeBound = true
     host.effect?.(
       () => () => {
         if (native === value) {
           native = undefined
-          bound = false
+          nativeBound = false
         }
       },
-      'workbench: terminal activity source'
+      'workbench: native terminal activity source'
+    )
+  })
+  ctx.inject(['terminalController'], (host) => {
+    const value = host.terminalController as BrowserTerminalController | undefined
+    browser = value
+    host.effect?.(
+      () => () => {
+        if (browser === value) browser = undefined
+      },
+      'workbench: browser terminal activity source'
     )
   })
   return (owners) =>
     read(
       owners,
-      bound
-        ? { native: (owner) => (owner.ctx?.get('terminals') as NativeTerminalRegistry | undefined) ?? native }
+      nativeBound && browser
+        ? {
+            native: (owner) => (owner.ctx?.get('terminals') as NativeTerminalRegistry | undefined) ?? native,
+            browser
+          }
         : undefined
     )
 }

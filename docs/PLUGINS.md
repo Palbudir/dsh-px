@@ -44,4 +44,4 @@
 
 随附的 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 0.24.1 使用其 MIT 许可。其 HTTP 接口原本只做本机来源检查；构建器对固定 SRI 的原始归档应用一个补丁，使接口改用原生 Connection 认证。来源 SRI、原始与结果 SHA-256 定义于 [sidebar-auth-compatibility.ts](../src/shared/sidebar-auth-compatibility.ts)，补丁只作用于构建目录中的私有拷贝。
 
-该版本不提供旧补丁的终端资源计数服务；workbench 因此将终端状态报告为未知，不把它当作空闲。
+该版本没有自己的终端注册表，不需要旧补丁的终端计数服务。workbench 的终端资源数合计两类原生资源：Agent 工具终端（`terminals` 服务）和用户在侧栏打开的交互 shell（`terminalController`）。任一服务缺失或接口不兼容时报告为未知，不把它当作空闲。

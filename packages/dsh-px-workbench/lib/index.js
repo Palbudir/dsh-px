@@ -305,6 +305,10 @@ function createTerminalActivityReader() {
           const original = registry[Symbol.for("cordis.original")];
           registries.set(original ?? registry, registry);
         }
+        if (typeof owner.id !== "string") return result;
+        const shells = sources.browser.list(owner.id);
+        if (!Array.isArray(shells)) return result;
+        result.openTerminals += shells.length;
       }
       for (const [owner, registries] of nativeOwners) {
         for (const [identity, registry] of registries) {
@@ -330,24 +334,38 @@ function createTerminalActivityReader() {
 function registerTerminalActivity(ctx) {
   const read = createTerminalActivityReader();
   let native;
-  let bound = false;
+  let nativeBound = false;
+  let browser;
   ctx.inject(["terminals"], (host) => {
     const value = host.terminals;
     native = value;
-    bound = true;
+    nativeBound = true;
     host.effect?.(
       () => () => {
         if (native === value) {
           native = void 0;
-          bound = false;
+          nativeBound = false;
         }
       },
-      "workbench: terminal activity source"
+      "workbench: native terminal activity source"
+    );
+  });
+  ctx.inject(["terminalController"], (host) => {
+    const value = host.terminalController;
+    browser = value;
+    host.effect?.(
+      () => () => {
+        if (browser === value) browser = void 0;
+      },
+      "workbench: browser terminal activity source"
     );
   });
   return (owners) => read(
     owners,
-    bound ? { native: (owner) => owner.ctx?.get("terminals") ?? native } : void 0
+    nativeBound && browser ? {
+      native: (owner) => owner.ctx?.get("terminals") ?? native,
+      browser
+    } : void 0
   );
 }
 
