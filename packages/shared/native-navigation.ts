@@ -1,4 +1,10 @@
-/** Public DSH file-resource grammar: path segments are escaped, Windows drive colons remain literal. */
+/**
+ * Public DSH file-resource grammar, encoded exactly like the official `sessionFileAddress` in
+ * @deepseek-ai/dsh-util-workspace-path: backslashes become `/`, leading `./` is dropped, each segment
+ * is percent-encoded with `:` kept literal. An absolute POSIX path keeps its leading `/`, so
+ * `/tmp/a.txt` gives `session/<id>//tmp/a.txt`; `parseFileAddress` joins the segments back to `/tmp/a.txt`.
+ * Unlike the official helper, an empty Session id or path, or a CR, LF or NUL in the path, is refused.
+ */
 export function nativeFileAddress(sessionId: string, path: string): string {
   if (!sessionId || !path || /[\r\n\0]/.test(path)) throw new Error('文件地址无效')
   const encode = (segment: string): string => encodeURIComponent(segment).replace(/%3A/gi, ':')

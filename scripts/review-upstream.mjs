@@ -307,7 +307,8 @@ export const UPSTREAM_LOCK = deepFreeze({
     slots: ['@deepseek-ai/dsh-client-ui-renderer', '@deepseek-ai/dsh-client-ui-slots'],
     layout: ['@deepseek-ai/dsh-client-ui-layout'],
     sidebar: ['@deepseek-ai/dsh-client-ui-sidebar'],
-    sidebarRight: ['@deepseek-ai/dsh-client-ui-sidebar-right'],
+    // util-workspace-path defines the dsh-resource://file/ grammar that openResourceIn receives.
+    sidebarRight: ['@deepseek-ai/dsh-client-ui-sidebar-right', '@deepseek-ai/dsh-util-workspace-path'],
     sidebarRightTabs: [
       '@deepseek-ai/dsh-client-ui-sidebar-right',
       '@deepseek-ai/dsh-client-ui-sidebar-files'
