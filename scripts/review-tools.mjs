@@ -252,7 +252,10 @@ export function createReviewTools({ request, reader, scan, mask, upstream, limit
         role: at,
         text: result.text,
         masked: visible.masked,
-        sources: [{ path: file, oid: entry.oid }]
+        // The exact lines delivered (after the per-call byte cut), for citation checks.
+        sources: [
+          { path: file, oid: entry.oid, ref: at, lines: all.length ? [start, result.last ?? 0] : [0, 0] }
+        ]
       }
     },
     async search(args) {
@@ -391,7 +394,18 @@ export function createReviewTools({ request, reader, scan, mask, upstream, limit
             : row.replace(/^(\d+)/, (n) => String(Number(n) + from - 1))
         )
         .join('\n')
-      return { role: 'upstream', text, masked: visible.masked, sources: [{ upstream: identity }] }
+      return {
+        role: 'upstream',
+        text,
+        masked: visible.masked,
+        // Delivered lines in the complete upstream file's numbering, for citation checks.
+        sources: [
+          {
+            upstream: identity,
+            lines: rows.last >= start ? [start + from - 1, rows.last + from - 1] : [0, 0]
+          }
+        ]
+      }
     }
   }
 
@@ -439,12 +453,20 @@ export function createReviewTools({ request, reader, scan, mask, upstream, limit
       if (record.outcome === 'ok') record.outcome = 'masked'
     }
     const room = limits.maxCallBytes - 120
-    if (Buffer.byteLength(content) > room)
+    if (Buffer.byteLength(content) > room) {
       content =
         Buffer.from(content)
           .subarray(0, room)
           .toString('utf8')
           .replace(/\uFFFD$/, '') + '\n[result truncated at per-call limit]'
+      // A cut result delivered fewer lines than it planned: record only the last complete row.
+      const rows = content.split('\n').slice(1, -1)
+      const complete = rows.slice(0, -1).filter((row) => /^\d+ /.test(row))
+      const last = complete.length ? Number(complete.at(-1).match(/^(\d+)/)[1]) : 0
+      for (const source of result.sources ?? [])
+        if (Array.isArray(source.lines))
+          source.lines = last >= source.lines[0] ? [source.lines[0], last] : [0, 0]
+    }
     // The remaining budget is part of the exact content the model sees, so it is covered by the
     // recorded byte count and sha256; "bytes left" already subtracts this whole result.
     const body = Buffer.byteLength(content) + 1

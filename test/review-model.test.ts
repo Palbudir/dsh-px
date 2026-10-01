@@ -295,7 +295,11 @@ test('invalid JSON gets one tool-free formatting turn; the re-emitted answer is 
     reply(200, completion(broken)),
     reply(200, completion(verdict({ blockers: ['needs x'] })))
   ])
-  const value = await runReviewBatch(config, request, batch, w.directory, options(repaired.fetch))
+  // This test covers the formatting turn only; adjudication of the blocker is tested separately.
+  const value = await runReviewBatch(config, request, batch, w.directory, {
+    ...options(repaired.fetch),
+    adjudicate: false
+  })
   assert.deepEqual(value.blockers, ['needs x'])
   assert.equal(repaired.calls.length, 2)
   const second = JSON.parse(repaired.calls[1].init.body)

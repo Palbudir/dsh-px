@@ -112,11 +112,13 @@ export function readApiKey(settings, env = process.env) {
   return value.trim()
 }
 
-export function reviewMessages(prompt, identity, source) {
+const REVIEW_EXAMPLE =
+  '{"head":"<IDENTITY.head>","base":"<IDENTITY.base>","batchId":"<IDENTITY.batchId>","verdict":"fail","summary":"...","findings":[{"priority":1,"path":"src/file.ts","line":12,"title":"...","detail":"..."}],"blockers":[]}'
+export function reviewMessages(prompt, identity, source, schema = reviewSchema, example = REVIEW_EXAMPLE) {
   return [
     {
       role: 'system',
-      content: `${prompt}\n\nOUTPUT FORMAT: respond with exactly one json object and nothing else. It must strictly conform to this JSON Schema (no extra properties, all required fields present):\n${JSON.stringify(reviewSchema)}\nExample json: {"head":"<IDENTITY.head>","base":"<IDENTITY.base>","batchId":"<IDENTITY.batchId>","verdict":"fail","summary":"...","findings":[{"priority":1,"path":"src/file.ts","line":12,"title":"...","detail":"..."}],"blockers":[]}`
+      content: `${prompt}\n\nOUTPUT FORMAT: respond with exactly one json object and nothing else. It must strictly conform to this JSON Schema (no extra properties, all required fields present):\n${JSON.stringify(schema)}\nExample json: ${example}`
     },
     {
       role: 'user',
@@ -392,7 +394,8 @@ export async function callReviewModel(config, messages, options = {}) {
       } catch {
         throw new Error('Reviewer output is not valid JSON')
       }
-      return assertSchema(pruneUnknownKeys(value))
+      const schema = options.schema ?? reviewSchema
+      return assertSchema(pruneUnknownKeys(value, schema), schema)
     } catch (error) {
       // One formatting turn, without tools, for an answer that does not parse or does not match the
       // schema (real answers had a stray bracket and a missing `blockers`). The re-emitted answer
@@ -406,7 +409,7 @@ export async function callReviewModel(config, messages, options = {}) {
           ? { reasoning_content: message.reasoning_content }
           : {})
       })
-      conversation.push({ role: 'user', content: formatRepairPrompt(error) })
+      conversation.push({ role: 'user', content: formatRepairPrompt(error, options.schema ?? reviewSchema) })
       options.onFormatRepair?.(String(error?.message ?? error).slice(0, 300))
       record({ formatRepair: String(error?.message ?? error).slice(0, 300) })
       finalizing = true
@@ -415,9 +418,12 @@ export async function callReviewModel(config, messages, options = {}) {
   }
 }
 
-/** Asks for the same review re-emitted as one schema-conforming JSON object; never a new review. */
-export function formatRepairPrompt(error) {
-  return `Your previous answer was rejected: ${String(error?.message ?? error).slice(0, 300)}. Do not call tools and do not change your review. Re-emit exactly the same review as one valid JSON object that conforms to the schema, with every required field present (use [] for an empty list). If your answer put findings or blockers in undeclared fields, move them into "findings" or "blockers"; never drop them.`
+/** Asks for the same answer re-emitted as one schema-conforming JSON object; never a new answer. */
+export function formatRepairPrompt(error, schema = reviewSchema) {
+  const reason = String(error?.message ?? error).slice(0, 300)
+  if (schema !== reviewSchema)
+    return `Your previous answer was rejected: ${reason}. Do not call tools and do not change your answer. Re-emit exactly the same answer as one valid JSON object that conforms to the schema, with every required field present.`
+  return `Your previous answer was rejected: ${reason}. Do not call tools and do not change your review. Re-emit exactly the same review as one valid JSON object that conforms to the schema, with every required field present (use [] for an empty list). If your answer put findings or blockers in undeclared fields, move them into "findings" or "blockers"; never drop them.`
 }
 
 const emptyValue = (value) =>

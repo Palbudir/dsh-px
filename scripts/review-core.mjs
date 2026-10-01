@@ -91,7 +91,16 @@ export function normalizeResult(value) {
     findings: Array.isArray(value.findings)
       ? value.findings.map((finding) =>
           finding && typeof finding === 'object'
-            ? { ...finding, title: clip(finding.title), detail: clip(finding.detail) }
+            ? {
+                ...finding,
+                // "[refuted Px]" marks only the worker's adjudication; a model cannot pre-mark a finding.
+                title: clip(
+                  typeof finding.title === 'string'
+                    ? finding.title.replace(/^(?:[\s\u200b-\u200d\ufeff]*\[refuted[^\]]*\])+\s*/i, '')
+                    : finding.title
+                ),
+                detail: clip(finding.detail)
+              }
             : finding
         )
       : value.findings

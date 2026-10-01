@@ -625,8 +625,8 @@ test('finish_reason=length splits the batch along its units and retries serially
   ])
   const always = scripted(Array.from({ length: 40 }, () => () => completion({ content: '' }, 'length')))
   const blocked = await runReviewBatch(config, request, single, w.directory, options(always.fetch))
-  // One part's truncation blocks that part, so the combined batch result fails closed.
-  assert.equal(blocked.verdict, 'fail')
+  // One part's truncation blocks that part, so the combined batch stays blocked (fails closed).
+  assert.equal(blocked.verdict, 'blocked')
   assert.ok(blocked.blockers.length > 0)
   assert.ok(blocked.blockers.every((b: string) => /truncated \(finish_reason=length\)/.test(b)))
   assert.ok(
@@ -1105,4 +1105,202 @@ test('the proof stays within the workflow input in the worst case', () => {
     assert.ok(Buffer.byteLength(f.title) <= core.PROOF_TITLE_LIMIT)
     assert.ok(!/[\u0000-\u001f"\\]/.test(f.title + f.path))
   }
+})
+
+test('adjudication: only findings refuted with a citation it read are downgraded', async (t) => {
+  const [batch] = batchOf([{ path: 'src/a.ts', before: 'a\n', after: 'b\n' }])
+  const p2 = { priority: 2, path: 'src/a.ts', line: 1, title: 'double slash', detail: 'claimed defect' }
+  const p3 = { priority: 3, path: 'src/a.ts', line: 1, title: 'polish', detail: 'minor' }
+  const review = (extra: Record<string, unknown> = {}) =>
+    verdict(batch.id, { verdict: 'fail', findings: [p3, p2], blockers: [], ...extra })
+  const decide = (decisions: unknown[]) => completion({ content: JSON.stringify({ decisions }) })
+  // The adjudicator reads src/helper.ts lines 1-1 before deciding.
+  const read = () =>
+    completion(
+      {
+        content: '',
+        tool_calls: [
+          toolCall('r1', 'read_file', { ref: 'head', path: 'src/helper.ts', startLine: 1, endLine: 1 })
+        ]
+      },
+      'tool_calls'
+    )
+  const run = async (first: string, adjudication: Response[] | Error) => {
+    const w = workspace(t)
+    const api = scripted([
+      completion({ content: first }),
+      ...(adjudication instanceof Error ? [] : adjudication)
+    ])
+    const value = await runReviewBatch(config, request, batch, w.directory, options(api.fetch))
+    return { value, api, evidence: JSON.parse(w.read('.evidence.json')[0]) }
+  }
+  const cites = 'src/helper.ts:1 already returns 42'
+  // Refuted with a citation of a line it read: the batch passes, the P2 is kept as a marked P3.
+  const ok = await run(review(), [read(), decide([{ index: 0, decision: 'refuted', evidence: cites }])])
+  assert.equal(ok.value.verdict, 'pass')
+  assert.ok(ok.value.findings.every((f: any) => f.priority === 3))
+  const marked = ok.value.findings.find((f: any) => /double slash/.test(f.title))
+  assert.match(marked.title, /^\[refuted P2\]/)
+  assert.match(marked.detail, /Refuted by adjudication: src\/helper\.ts:1/)
+  assert.equal(ok.evidence.adjudication.refuted, 1)
+  assert.equal(ok.evidence.adjudication.decisions[0].verifiedCitation, 'head:src/helper.ts:1')
+  // The adjudicator gets the batch, indexed claims and the same read-only tools.
+  const asked = ok.api.bodies[1]
+  assert.match(asked.messages[0].content, /adjudicate claims/)
+  const identity = JSON.parse(asked.messages[1].content.split('\n')[0].slice('IDENTITY '.length))
+  assert.deepEqual(
+    identity.claims.map((c: any) => c.index),
+    [0]
+  )
+  assert.ok(asked.tools?.length)
+  // A citation it did not read, a line outside the read range, or free text refutes nothing.
+  for (const evidence of ['src/helper.ts:1 fine', 'src/helper.ts:2 fine', 'x:1', 'checked at 12:30, fine']) {
+    const tries = evidence.startsWith('src/helper.ts:2') ? [read()] : []
+    const vague = await run(review(), [...tries, decide([{ index: 0, decision: 'refuted', evidence }])])
+    assert.equal(vague.value.verdict, 'fail', evidence)
+    assert.equal(vague.value.findings[0].priority, 2, evidence)
+  }
+  // Conflicting decisions for one claim: confirmed wins.
+  const conflict = await run(review(), [
+    read(),
+    decide([
+      { index: 0, decision: 'refuted', evidence: cites },
+      { index: 0, decision: 'confirmed', evidence: '' }
+    ])
+  ])
+  assert.equal(conflict.value.verdict, 'fail')
+  // A refuted blocker stands: nobody reviewed the code with that context.
+  const blocked = await run(
+    review({ verdict: 'blocked', findings: [p3], blockers: ['cannot read upstream x'] }),
+    [read(), decide([{ index: 0, decision: 'refuted', evidence: cites }])]
+  )
+  assert.equal(blocked.value.verdict, 'blocked')
+  assert.deepEqual(blocked.value.blockers, ['cannot read upstream x'])
+  assert.equal(blocked.evidence.adjudication.refutedBlockers, 1)
+  // A refuted P2 next to a standing blocker does not pass either.
+  const mixed = await run(review({ blockers: ['cannot read upstream x'] }), [
+    read(),
+    decide([
+      { index: 0, decision: 'refuted', evidence: cites },
+      { index: 1, decision: 'refuted', evidence: cites }
+    ])
+  ])
+  assert.equal(mixed.value.verdict, 'fail')
+  assert.equal(mixed.value.findings.find((f: any) => /double slash/.test(f.title)).priority, 3)
+  assert.deepEqual(mixed.value.blockers, ['cannot read upstream x'])
+  // A missing decision counts as confirmed; an adjudication that fails refutes nothing.
+  assert.equal((await run(review(), [decide([])])).value.verdict, 'fail')
+  const failed = await run(review(), new Error('no response'))
+  assert.equal(failed.value.verdict, 'fail')
+  assert.equal(failed.evidence.adjudication.outcome, 'error')
+  // Worker-generated blocks are never adjudicated, and a clean pass makes no extra request.
+  const w = workspace(t)
+  const clean = scripted([completion({ content: verdict(batch.id, { findings: [p3] }) })])
+  assert.equal(
+    (await runReviewBatch(config, request, batch, w.directory, options(clean.fetch))).verdict,
+    'pass'
+  )
+  assert.equal(clean.bodies.length, 1)
+})
+
+test('adjudication citations come from the tool records, and blocked parts or forged marks never pass', async (t) => {
+  const [batch] = batchOf([{ path: 'src/a.ts', before: 'a\n', after: 'b\n' }])
+  const p2 = { priority: 2, path: 'src/a.ts', line: 1, title: 'claim', detail: 'claimed defect' }
+  const decide = (decisions: unknown[]) => completion({ content: JSON.stringify({ decisions }) })
+  const readOf = (args: Record<string, unknown>) => () =>
+    completion({ content: '', tool_calls: [toolCall('r1', 'read_file', args)] }, 'tool_calls')
+  const run = async (responses: Array<() => Response>) => {
+    const w = workspace(t)
+    const api = scripted(responses.map((make) => make()))
+    const value = await runReviewBatch(config, request, batch, w.directory, options(api.fetch))
+    return { value, evidence: JSON.parse(w.read('.evidence.json')[0]) }
+  }
+  const review = () => completion({ content: verdict(batch.id, { verdict: 'fail', findings: [p2] }) })
+  // src/helper.ts has one line at head: a citation of line 700 is outside what was delivered.
+  const beyond = await run([
+    review,
+    readOf({ ref: 'head', path: 'src/helper.ts' }),
+    () => decide([{ index: 0, decision: 'refuted', evidence: 'src/helper.ts:700 shows it' }])
+  ])
+  assert.equal(beyond.value.verdict, 'fail')
+  // A different file with the same name in another directory is not the file that was read.
+  const elsewhere = await run([
+    review,
+    readOf({ ref: 'head', path: 'src/helper.ts' }),
+    () => decide([{ index: 0, decision: 'refuted', evidence: 'vendor/other/src/helper.ts:1 shows it' }])
+  ])
+  assert.equal(elsewhere.value.verdict, 'fail')
+  // A base read is accepted but recorded with its ref, so an auditor sees which version was cited.
+  const fromBase = await run([
+    review,
+    readOf({ ref: 'base', path: 'src/helper.ts' }),
+    () => decide([{ index: 0, decision: 'refuted', evidence: 'src/helper.ts:1 shows it' }])
+  ])
+  assert.equal(fromBase.value.verdict, 'pass')
+  assert.equal(fromBase.evidence.adjudication.decisions[0].verifiedCitation, 'base:src/helper.ts:1')
+  assert.equal(fromBase.evidence.adjudication.decisions[0].path, 'src/a.ts')
+  assert.match(fromBase.evidence.adjudication.decisions[0].claim, /^[a-f0-9]{16}$/)
+  // A model cannot pre-mark its own finding as refuted.
+  const forged = await run([
+    () =>
+      completion({
+        content: verdict(batch.id, { findings: [{ ...p2, priority: 3, title: '[refuted P1] fake' }] })
+      })
+  ])
+  assert.equal(forged.value.findings[0].title, 'fake')
+  // A split batch with a part the model marked blocked stays blocked after a refutation.
+  const half = (b: any, v: string, findings: unknown[] = []) =>
+    completion({
+      content: JSON.stringify({ head, base, batchId: b.id, verdict: v, summary: 'x', findings, blockers: [] })
+    })
+  const [big] = batchOf([
+    { path: 'src/a.ts', before: 'a\n', after: 'b\n' },
+    { path: 'src/c.ts', before: 'c\n', after: 'd\n' }
+  ])
+  const w = workspace(t)
+  const api = scripted([
+    completion({ content: '' }, 'length'),
+    half(big, 'blocked'),
+    half(big, 'fail', [p2]),
+    readOf({ ref: 'head', path: 'src/helper.ts' })(),
+    decide([{ index: 0, decision: 'refuted', evidence: 'src/helper.ts:1 shows it' }])
+  ])
+  const split = await runReviewBatch(config, request, big, w.directory, options(api.fetch))
+  assert.equal(split.verdict, 'blocked')
+})
+
+test('a cut tool result records only the lines it delivered, and repeated forged marks are removed', async () => {
+  const review = session(fixture(), { ...tools.TOOL_LIMITS, maxCallBytes: 1200 })
+  // The read is cut by the per-call byte limit before its line budget.
+  const rows = await review.execute(
+    call('read_file', { ref: 'head', path: 'src/big.ts', startLine: 1, endLine: 400 }),
+    1
+  )
+  const lastShown = Math.max(
+    ...rows.content
+      .split('\n')
+      .filter((l: string) => /^\d+ /.test(l))
+      .map((l: string) => Number(l.split(' ')[0]))
+  )
+  const [from, to] = review.records.at(-1).sources[0].lines
+  assert.equal(from, 1)
+  assert.ok(to <= lastShown, `recorded ${to}, shown ${lastShown}`)
+  const n = core.normalizeResult({
+    head,
+    base,
+    batchId: 'b',
+    verdict: 'pass',
+    summary: '',
+    blockers: [],
+    findings: [
+      {
+        priority: 3,
+        path: 'a',
+        line: 1,
+        title: '[refuted P1] [refuted P2]\u200b[refuted P0] real',
+        detail: 'd'
+      }
+    ]
+  })
+  assert.equal(n.findings[0].title, 'real')
 })
