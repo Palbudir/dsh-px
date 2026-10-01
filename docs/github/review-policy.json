@@ -26,7 +26,7 @@
       "scripts/release-quality.mjs": "f0faef04f20f6afc226597616c9dd4b1791a5ce049ad99782bab96795181d01d",
       "scripts/release-catalog.mjs": "a3187d9c3dd0fb64e9007946218c42dc536ede16b66a85962c29bf938deb518c",
       "scripts/build-native-pack.ts": "c2bcd9e39f4703947f4ed1be2d3195573efc6fc0ed0a1052905f5a45ef401619",
-      "scripts/prepare-native-desktop.mjs": "85e3aee0b12d7ba28c3f90382dab5c06db7d557e6c1282780d57e32e13f9537e",
+      "scripts/prepare-native-desktop.mjs": "44dff704872f60ded34703df4ae1defe8a1d3dac7ca83afc9018044f2ce4fdf9",
       "scripts/verify-native-pack-install.mjs": "bb963622ff8de267ff313ee733b641810aad539e141c3ea8b1e9ed8c2b5d5691",
       "scripts/brand-native-installer.mjs": "47aca27d855dcba093c36322a56f8b4fc5107cdc8811e967c8dfca7551e6416c",
       "scripts/brand-installer-images.ps1": "34dd2ca993d80a9c92960033b88b6958564d4127b5acb60f4fed3036ad6c5459",

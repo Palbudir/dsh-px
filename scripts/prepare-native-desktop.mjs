@@ -301,4 +301,13 @@ writeFileSync(
     2
   )
 )
+// Every file written above lies under paths the pinned upstream ignores (`lib/` and
+// `apps/desktop/.desktop-build/`), so the tree stays clean for brand-native-installer, which
+// requires `git status --porcelain` to be empty. A changed ignore rule fails here, not later.
+const leftover = execFileSync('git', ['status', '--porcelain', '--untracked-files=all'], {
+  cwd: upstream,
+  encoding: 'utf8'
+}).trim()
+if (leftover)
+  throw Error('Overlay output is not ignored by the pinned upstream tree:\n' + leftover.slice(0, 2000))
 console.log('Prepared native Desktop overlay: ' + join(output, 'builder.mjs'))

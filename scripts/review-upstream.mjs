@@ -312,7 +312,12 @@ export const UPSTREAM_LOCK = deepFreeze({
       '@deepseek-ai/dsh-client-ui-sidebar-right',
       '@deepseek-ai/dsh-client-ui-sidebar-files'
     ],
-    sessions: ['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-api-session-controller'],
+    // ui-session declares the `mainView` retention source the Session list is read through.
+    sessions: [
+      '@deepseek-ai/dsh-session',
+      '@deepseek-ai/dsh-api-session-controller',
+      '@deepseek-ai/dsh-client-ui-session'
+    ],
     sessionController: ['@deepseek-ai/dsh-api-session-controller'],
     sessionPersistence: ['@deepseek-ai/dsh-session-persistence'],
     conversation: ['@deepseek-ai/dsh-client-ui-conversation'],

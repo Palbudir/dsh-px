@@ -22,7 +22,10 @@ export function closeLastSession(ctx: {
   else ctx.sessions.clear?.()
 }
 
-/** 0.2 selects its conversation through the public mainView retention source. */
+/**
+ * 0.2 selects its conversation through the public `mainView` retention source, which @deepseek-ai/dsh-client-ui-session
+ * declares as a SessionReferenceSourceMap extension (lib/types/client/index.d.ts); 0.1.5 keeps `current`.
+ */
 export function selectedSession(
   list: {
     current?: string
