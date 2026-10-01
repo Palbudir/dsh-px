@@ -940,12 +940,11 @@ test('over-long prose is clipped, never turned into a failed review or a pass', 
   const failing = await runReviewBatch(config, request, batch, w.directory, options(serious.fetch))
   assert.equal(failing.findings[0].priority, 1)
   assert.equal(core.aggregate(request, [batch], [failing]).verdict, 'fail')
-  // Identity is still exact: a wrong head is rejected, not normalized.
+  // Identity is the worker's: a wrong head echo is replaced, and the verdict is unchanged.
   const forged = scripted([completion({ content: verdict(batch.id, { head: 'f'.repeat(40) }) })])
-  await assert.rejects(
-    runReviewBatch(config, request, batch, w.directory, options(forged.fetch)),
-    /mismatched commit identity/
-  )
+  const corrected = await runReviewBatch(config, request, batch, w.directory, options(forged.fetch))
+  assert.equal(corrected.head, request.head)
+  assert.equal(corrected.verdict, 'pass')
 })
 
 test('undeclared keys in an answer are dropped; declared fields stay strictly validated', async (t) => {

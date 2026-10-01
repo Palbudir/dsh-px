@@ -260,9 +260,7 @@ test('non-JSON, schema violations, identity mismatch, incomplete finishes and to
       /does not match the review schema/
     ],
     [completion({ ...verdict(), blockers: undefined }), /does not match the review schema/],
-    [completion(verdict({ head: 'c'.repeat(40) })), /mismatched commit identity/],
-    [completion(verdict({ base: 'c'.repeat(40) })), /mismatched commit identity/],
-    [completion(verdict({ batchId: 'other' })), /mismatched commit identity/],
+    // A mistyped head/base/batchId echo is corrected by the worker (see the identity test below).
     [completion(verdict(), { finish_reason: 'content_filter' }), /did not complete/],
     [completion(verdict(), { finish_reason: 'insufficient_system_resource' }), /did not complete/],
     [
@@ -286,6 +284,32 @@ test('non-JSON, schema violations, identity mismatch, incomplete finishes and to
     )
     assert.equal(api.calls.length, 1, 'invalid output is never retried into a pass')
   }
+})
+
+test('the worker, not the model, owns the commit and batch identity of an answer', async (t) => {
+  const w = workspace(t)
+  // A real answer once copied the base SHA with two characters wrong.
+  const typo = 'b'.repeat(13) + 'db' + 'b'.repeat(25)
+  for (const extra of [{ head: 'c'.repeat(40) }, { base: typo }, { batchId: 'other' }]) {
+    const api = scripted([reply(200, completion(verdict(extra)))])
+    const value = await runReviewBatch(config, request, batch, w.directory, options(api.fetch))
+    assert.equal(value.head, request.head)
+    assert.equal(value.base, request.base)
+    assert.equal(value.batchId, batch.id)
+    const evidence = JSON.parse(readFileSync(join(w.directory, `${batch.id}.evidence.json`), 'utf8'))
+    assert.deepEqual(evidence.attempts.at(-1).identityCorrected, Object.keys(extra))
+  }
+  // A non-string identity is still a schema violation, and the verdict stays the model's.
+  const wrongType = scripted([reply(200, completion(verdict({ head: 1 })))])
+  await assert.rejects(
+    runReviewBatch(config, request, batch, w.directory, options(wrongType.fetch)),
+    /does not match the review schema/
+  )
+  const failing = scripted([reply(200, completion(verdict({ base: typo, verdict: 'fail' })))])
+  assert.equal(
+    (await runReviewBatch(config, request, batch, w.directory, options(failing.fetch))).verdict,
+    'fail'
+  )
 })
 
 test('only https base URLs and normalized installed model records are accepted', () => {

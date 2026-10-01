@@ -292,8 +292,16 @@ export async function runReviewBatch(config, request, batch, directory, options 
         traceFile: join(directory, record.trace)
       })
       record.outcome = 'answered'
-      const normalized = normalizeResult(value)
-      if (normalized !== value && canonical(normalized) !== canonical(value)) record.textClipped = true
+      // The worker, not the model, is the authority for which commit and batch this answer belongs
+      // to: the request is bound to exactly this input. A mistyped echo (a real answer once copied
+      // the base SHA with two transposed characters) is corrected and recorded, never trusted.
+      const identity = { head: request.head, base: request.base, batchId: batch.id }
+      const corrected = Object.keys(identity).filter((key) => value?.[key] !== identity[key])
+      if (corrected.length) record.identityCorrected = corrected
+      const normalized = normalizeResult(
+        value && typeof value === 'object' && !Array.isArray(value) ? { ...value, ...identity } : value
+      )
+      if (canonical(normalized) !== canonical({ ...value, ...identity })) record.textClipped = true
       return [validateResult(normalized, request, batch.id)]
     } catch (error) {
       if (error instanceof OutputTruncated) {

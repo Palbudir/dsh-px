@@ -30,6 +30,15 @@ function lastRow(document: Document, id: string): number {
   return -1
 }
 
+/** Whether any non-insert row for `id` sets `config` (key-by-key merge keeps it unless a later row replaces it). */
+function configuredBy(document: Document, id: string): boolean {
+  const items = isSeq(document.contents) ? document.contents.items : []
+  return items.some(
+    (item, index) =>
+      isMap(item) && document.getIn([index, 'id']) === id && !item.has('insert') && item.has('config')
+  )
+}
+
 /**
  * Isolated defaults for the native Desktop profile: loopback webserver on a free port and a PX-owned documents path.
  * Each default is added only when no user row configures it, so a profile whose patch was moved away by native
@@ -55,8 +64,9 @@ export function prepareNativeProfileDefaults(profile: string, documentsDirectory
   ]
   let changed = false
   for (const row of defaults) {
-    const index = lastRow(document, row.id)
-    if (index >= 0 && document.hasIn([index, 'config'])) continue
+    // Any row that sets `config` owns it: a later row without `config` leaves that block in force,
+    // so checking only the last row would let an appended default replace a user's earlier config.
+    if (configuredBy(document, row.id)) continue
     document.add(row)
     changed = true
   }

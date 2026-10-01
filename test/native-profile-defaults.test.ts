@@ -92,6 +92,24 @@ test('a user disable without config stays disabled after the default config row 
   }
 })
 
+test('a user config in an earlier row is kept when a later row for the same id has no config', () => {
+  const profile = mkdtempSync(join(tmpdir(), 'px-native-defaults-'))
+  try {
+    const file = join(profile, 'cordis.patch.yml')
+    const original =
+      '- id: webserver\n  config:\n    host: 0.0.0.0\n    port: 3080\n- id: webserver\n  disabled: false\n' +
+      '- id: workspace-controller\n  config:\n    documentsDirectory: D:\\Docs\n- id: workspace-controller\n  disabled: false\n'
+    writeFileSync(file, original)
+    assert.equal(prepareNativeProfileDefaults(profile, join(profile, 'documents')), false)
+    assert.equal(readFileSync(file, 'utf8'), original, 'the patch is not rewritten')
+    const result = merged(file)
+    assert.deepEqual(result.webserver.config, { host: '0.0.0.0', port: 3080 })
+    assert.deepEqual(result['workspace-controller'].config, { documentsDirectory: 'D:\\Docs' })
+  } finally {
+    rmSync(profile, { recursive: true, force: true })
+  }
+})
+
 test('defaults are restored after native disable-all recovery moved the patch away', () => {
   const profile = mkdtempSync(join(tmpdir(), 'px-native-recovery-'))
   try {
