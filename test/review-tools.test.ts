@@ -956,44 +956,54 @@ test('undeclared keys in an answer are dropped; declared fields stay strictly va
   const ok = await runReviewBatch(config, request, batch, w.directory, options(extra.fetch))
   assert.equal(ok.verdict, 'pass')
   assert.deepEqual(Object.keys(ok.findings[0]).sort(), ['detail', 'line', 'path', 'priority', 'title'])
+  // A schema-invalid answer gets one formatting turn; repeating it there fails closed.
+  const twice = (content: string) => scripted([completion({ content }), completion({ content })])
   // An undeclared key with content is still refused: a hidden list must never be dropped silently.
-  const hidden = scripted([
-    completion({
-      content: verdict(batch.id, {
-        extraFindings: [{ priority: 1, path: 'src/a.ts', line: 1, title: 'x', detail: 'y' }]
-      })
+  const hidden = twice(
+    verdict(batch.id, {
+      extraFindings: [{ priority: 1, path: 'src/a.ts', line: 1, title: 'x', detail: 'y' }]
     })
-  ])
+  )
   await assert.rejects(
     runReviewBatch(config, request, batch, w.directory, options(hidden.fetch)),
     /does not match the review schema/
   )
   // A "__proto__" key is data, never a prototype.
-  const proto = scripted([
-    completion({
-      content: verdict(batch.id).replace('"blockers":[]', '"blockers":[],"__proto__":{"polluted":1}')
-    })
-  ])
+  const proto = twice(verdict(batch.id).replace('"blockers":[]', '"blockers":[],"__proto__":{"polluted":1}'))
   await assert.rejects(
     runReviewBatch(config, request, batch, w.directory, options(proto.fetch)),
     /does not match the review schema/
   )
   assert.equal(({} as Record<string, unknown>).polluted, undefined)
   // A declared field with the wrong type still fails.
-  const wrong = scripted([
-    completion({ content: verdict(batch.id, { findings: [{ ...finding, priority: 'high' }] }) })
-  ])
+  const wrong = twice(verdict(batch.id, { findings: [{ ...finding, priority: 'high' }] }))
   await assert.rejects(
     runReviewBatch(config, request, batch, w.directory, options(wrong.fetch)),
     /does not match the review schema/
   )
   // A missing required field still fails.
   const { detail: _omitted, ...incomplete } = finding
-  const missing = scripted([completion({ content: verdict(batch.id, { findings: [incomplete] }) })])
+  const missing = twice(verdict(batch.id, { findings: [incomplete] }))
   await assert.rejects(
     runReviewBatch(config, request, batch, w.directory, options(missing.fetch)),
     /does not match the review schema/
   )
+})
+
+test('an answer missing a required list is re-emitted once and then accepted', async (t) => {
+  // A real answer: complete and passing, but it left out "blockers".
+  const w = workspace(t)
+  const [batch] = batchOf([{ path: 'src/a.ts', before: 'a\n', after: 'b\n' }])
+  const { blockers: _dropped, ...withoutBlockers } = JSON.parse(verdict(batch.id))
+  const api = scripted([
+    completion({ content: JSON.stringify(withoutBlockers) }),
+    completion({ content: verdict(batch.id) })
+  ])
+  const value = await runReviewBatch(config, request, batch, w.directory, options(api.fetch))
+  assert.deepEqual(value.blockers, [])
+  assert.equal(api.bodies.length, 2)
+  assert.match(api.bodies[1].messages.at(-1).content, /does not match the review schema at result/)
+  assert.equal(JSON.parse(w.read('.evidence.json')[0]).attempts[0].formatRepaired, true)
 })
 
 test('tool calls with a forged batch, malformed calls or no tool context fail closed', async (t) => {

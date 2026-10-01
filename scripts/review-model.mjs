@@ -387,11 +387,17 @@ export async function callReviewModel(config, messages, options = {}) {
       throw new Error('Review model returned empty content')
     let value
     try {
-      value = JSON.parse(message.content)
+      try {
+        value = JSON.parse(message.content)
+      } catch {
+        throw new Error('Reviewer output is not valid JSON')
+      }
+      return assertSchema(pruneUnknownKeys(value))
     } catch (error) {
-      // One formatting turn, without tools: a complete answer once had a single stray bracket.
-      // The re-emitted answer passes the same strict parse, schema and validation as any other.
-      if (repairing) throw new Error('Reviewer output is not valid JSON')
+      // One formatting turn, without tools, for an answer that does not parse or does not match the
+      // schema (real answers had a stray bracket and a missing `blockers`). The re-emitted answer
+      // passes the same strict parse, schema and validation as any other; a second failure is final.
+      if (repairing) throw error
       repairing = true
       conversation.push({
         role: 'assistant',
@@ -406,13 +412,12 @@ export async function callReviewModel(config, messages, options = {}) {
       finalizing = true
       continue
     }
-    return assertSchema(pruneUnknownKeys(value))
   }
 }
 
-/** Asks for the same review re-emitted as one valid JSON object; it never invites a new review. */
+/** Asks for the same review re-emitted as one schema-conforming JSON object; never a new review. */
 export function formatRepairPrompt(error) {
-  return `Your previous answer is not valid JSON (${String(error?.message ?? error).slice(0, 300)}). Do not call tools and do not change your review. Re-emit exactly the same review as one valid JSON object that conforms to the schema.`
+  return `Your previous answer was rejected: ${String(error?.message ?? error).slice(0, 300)}. Do not call tools and do not change your review. Re-emit exactly the same review as one valid JSON object that conforms to the schema, with every required field present (use [] for an empty list).`
 }
 
 const emptyValue = (value) =>

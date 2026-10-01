@@ -275,13 +275,15 @@ test('non-JSON, schema violations, identity mismatch, incomplete finishes and to
     [JSON.stringify({ choices: [] }), /no single choice/]
   ]
   for (const [body, expected] of cases) {
-    const api = scripted([reply(200, body)])
+    // A schema-violating answer gets one formatting turn; repeating the same answer fails closed.
+    const schema = String(expected) === String(/does not match the review schema/)
+    const api = scripted(schema ? [reply(200, body), reply(200, body)] : [reply(200, body)])
     await assert.rejects(
       runReviewBatch(config, request, batch, w.directory, options(api.fetch)),
       expected,
       body.slice(0, 80)
     )
-    assert.equal(api.calls.length, 1, 'invalid output is never retried into a pass')
+    assert.equal(api.calls.length, schema ? 2 : 1, 'invalid output is never retried into a pass')
   }
 })
 
@@ -355,7 +357,10 @@ test('the worker, not the model, owns the commit and batch identity of an answer
     assert.deepEqual(evidence.attempts.at(-1).identityCorrected, Object.keys(extra))
   }
   // A non-string identity is still a schema violation, and the verdict stays the model's.
-  const wrongType = scripted([reply(200, completion(verdict({ head: 1 })))])
+  const wrongType = scripted([
+    reply(200, completion(verdict({ head: 1 }))),
+    reply(200, completion(verdict({ head: 1 })))
+  ])
   await assert.rejects(
     runReviewBatch(config, request, batch, w.directory, options(wrongType.fetch)),
     /does not match the review schema/
