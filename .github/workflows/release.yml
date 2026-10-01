@@ -222,6 +222,10 @@ jobs:
           if ($pack.Count -ne 1) { throw 'Expected one release Pack archive' }
           node scripts/prepare-native-desktop.mjs ../upstream "--pack=$($pack[0].FullName)"
           if ($LASTEXITCODE -ne 0) { throw 'prepare-native-desktop failed' }
+          # First-start provisioning, run here: the packaged plugin manager and pnpm install the
+          # release Pack into a fresh profile and every bundled member must resolve.
+          node scripts/verify-native-pack-install.mjs ../upstream "--pack=$($pack[0].FullName)"
+          if ($LASTEXITCODE -ne 0) { throw 'Pack install check failed' }
           node scripts/brand-native-installer.mjs ../upstream --icon=build/icon.png
           if ($LASTEXITCODE -ne 0) { throw 'installer branding failed' }
       - name: electron-builder NSIS (unsigned, full installer only)

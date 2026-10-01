@@ -249,7 +249,6 @@ test('non-JSON, schema violations, identity mismatch, incomplete finishes and to
   const w = workspace(t)
   const cases: Array<[string, RegExp]> = [
     ['<html>gateway</html>', /non-JSON API response/],
-    [completion('not json at all'), /not valid JSON/],
     [completion(''), /empty content/],
     // Only empty undeclared keys are dropped (see review-tools.test.ts); one with content is refused.
     [completion(verdict({ extra: true })), /does not match the review schema/],
@@ -284,6 +283,62 @@ test('non-JSON, schema violations, identity mismatch, incomplete finishes and to
     )
     assert.equal(api.calls.length, 1, 'invalid output is never retried into a pass')
   }
+})
+
+test('invalid JSON gets one tool-free formatting turn; the re-emitted answer is validated as usual', async (t) => {
+  const w = workspace(t)
+  // A real answer closed its string array with '}' instead of ']'.
+  const broken = JSON.stringify(verdict({ blockers: ['needs x'] })).replace('"needs x"]', '"needs x"}]')
+  const repaired = scripted([
+    reply(200, completion(broken)),
+    reply(200, completion(verdict({ blockers: ['needs x'] })))
+  ])
+  const value = await runReviewBatch(config, request, batch, w.directory, options(repaired.fetch))
+  assert.deepEqual(value.blockers, ['needs x'])
+  assert.equal(repaired.calls.length, 2)
+  const second = JSON.parse(repaired.calls[1].init.body)
+  assert.match(
+    second.messages.at(-1).content,
+    /not valid JSON.*Do not call tools and do not change your review/s
+  )
+  assert.equal(second.messages.at(-2).content, broken, 'the malformed answer is shown back verbatim')
+  const evidence = JSON.parse(readFileSync(join(w.directory, `${batch.id}.evidence.json`), 'utf8'))
+  assert.equal(evidence.attempts.at(-1).formatRepaired, true)
+  // Still invalid after the one formatting turn: fail closed, no third request.
+  const hopeless = scripted([
+    reply(200, completion('not json at all')),
+    reply(200, completion('still not json'))
+  ])
+  await assert.rejects(
+    runReviewBatch(config, request, batch, w.directory, options(hopeless.fetch)),
+    /not valid JSON/
+  )
+  assert.equal(hopeless.calls.length, 2)
+  // The formatting turn cannot be used to reach tools.
+  const sneaky = scripted([
+    reply(200, completion('{')),
+    reply(
+      200,
+      completion(verdict(), {
+        finish_reason: 'tool_calls',
+        message: {
+          role: 'assistant',
+          content: '',
+          tool_calls: [{ id: '1', type: 'function', function: { name: 'list', arguments: '{}' } }]
+        }
+      })
+    )
+  ])
+  await assert.rejects(runReviewBatch(config, request, batch, w.directory, options(sneaky.fetch)))
+  // A schema-invalid re-emission is still rejected.
+  const invalid = scripted([
+    reply(200, completion('{')),
+    reply(200, completion(verdict({ verdict: 'approved' })))
+  ])
+  await assert.rejects(
+    runReviewBatch(config, request, batch, w.directory, options(invalid.fetch)),
+    /does not match the review schema/
+  )
 })
 
 test('the worker, not the model, owns the commit and batch identity of an answer', async (t) => {

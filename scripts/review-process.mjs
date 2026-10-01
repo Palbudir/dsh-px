@@ -289,6 +289,10 @@ export async function runReviewBatch(config, request, batch, directory, options 
           record.finalizedAfterBudget = true
           record.finalizeReason = reason
         },
+        onFormatRepair: (reason) => {
+          record.formatRepaired = true
+          record.formatRepairReason = reason
+        },
         traceFile: join(directory, record.trace)
       })
       record.outcome = 'answered'

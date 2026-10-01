@@ -239,7 +239,8 @@ export async function callReviewModel(config, messages, options = {}) {
       stream: false,
       // Tools stay defined on the final turn so the reasoning_content pass-back rule is unchanged.
       ...(tools ? { tools: tools.definitions } : {}),
-      ...(toolChoice ? { tool_choice: toolChoice } : {})
+      // tool_choice only accompanies tool definitions; a tool-free request leaves it out.
+      ...(tools && toolChoice ? { tool_choice: toolChoice } : {})
     })
     const byBatch = options.deadline !== undefined && options.deadline < now() + timeoutMs
     const deadline = byBatch ? options.deadline : now() + timeoutMs
@@ -306,7 +307,8 @@ export async function callReviewModel(config, messages, options = {}) {
     if (!lastError) throw timedOut()
     throw new Error(`Review model failed after retries: ${lastError.message}`)
   }
-  let finalizing = false
+  let finalizing = false,
+    repairing = false
   /** Spent budget: answer every requested call without executing it, then ask for the verdict. */
   const finalize = (pending, reason) => {
     for (const call of pending) {
@@ -386,11 +388,31 @@ export async function callReviewModel(config, messages, options = {}) {
     let value
     try {
       value = JSON.parse(message.content)
-    } catch {
-      throw new Error('Reviewer output is not valid JSON')
+    } catch (error) {
+      // One formatting turn, without tools: a complete answer once had a single stray bracket.
+      // The re-emitted answer passes the same strict parse, schema and validation as any other.
+      if (repairing) throw new Error('Reviewer output is not valid JSON')
+      repairing = true
+      conversation.push({
+        role: 'assistant',
+        content: message.content,
+        ...(typeof message.reasoning_content === 'string'
+          ? { reasoning_content: message.reasoning_content }
+          : {})
+      })
+      conversation.push({ role: 'user', content: formatRepairPrompt(error) })
+      options.onFormatRepair?.(String(error?.message ?? error).slice(0, 300))
+      record({ formatRepair: String(error?.message ?? error).slice(0, 300) })
+      finalizing = true
+      continue
     }
     return assertSchema(pruneUnknownKeys(value))
   }
+}
+
+/** Asks for the same review re-emitted as one valid JSON object; it never invites a new review. */
+export function formatRepairPrompt(error) {
+  return `Your previous answer is not valid JSON (${String(error?.message ?? error).slice(0, 300)}). Do not call tools and do not change your review. Re-emit exactly the same review as one valid JSON object that conforms to the schema.`
 }
 
 const emptyValue = (value) =>

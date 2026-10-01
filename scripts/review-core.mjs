@@ -305,7 +305,9 @@ export function reviewSourcePath(path) {
     typeof path !== 'string' ||
     !path ||
     path.includes('\\') ||
-    path.includes('\0') ||
+    // Control characters (including NUL, CR and LF) never belong in a reviewed path; a newline in a
+    // name could otherwise forge lines inside the worker-trusted batch header.
+    /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/.test(path) ||
     posix.isAbsolute(path) ||
     /^[a-z]:/i.test(path) ||
     path.split('/').some((part) => part === '..' || part === '.' || !part)
@@ -1249,10 +1251,11 @@ export async function collectReviewContext(request, reader, limits = {}, contrac
             continue
           if (!children.has(name)) children.set(name, label)
         }
+      // Names are JSON-encoded: candidate text in the trusted header is always quoted data.
       lines.push(
-        `${directory === '.' ? '(root)' : directory}/: ${[...children]
+        `${JSON.stringify(directory === '.' ? '(root)' : directory + '/')}: ${[...children]
           .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-          .map(([name, label]) => name + label)
+          .map(([name, label]) => JSON.stringify(name) + label)
           .join(', ')}`
       )
     }
@@ -1381,7 +1384,7 @@ export async function collectGroupedReview(
       graph
     })
     const context =
-      `Review contract group: ${group}\nAll changed paths in this request, with status at head versus the merge base: ${JSON.stringify(changedStatus)}\nThis request inventory is navigation, not per-batch approval scope; other groups review paths outside this group's inventory.\n` +
+      `Review contract group: ${JSON.stringify(group)}\nAll changed paths in this request, with status at head versus the merge base: ${JSON.stringify(changedStatus)}\nThis request inventory is navigation, not per-batch approval scope; other groups review paths outside this group's inventory.\n` +
       snapshot.context
     return { snapshot, context }
   }

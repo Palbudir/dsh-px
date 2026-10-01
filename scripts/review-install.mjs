@@ -173,6 +173,7 @@ async function main() {
           // executed code is that the candidate must be that independently reviewed master head.
           'scripts/build-native-pack.ts',
           'scripts/prepare-native-desktop.mjs',
+          'scripts/verify-native-pack-install.mjs',
           'scripts/brand-native-installer.mjs',
           'scripts/brand-installer-images.ps1',
           'scripts/build-icon.ts',

@@ -163,6 +163,17 @@ main = replaceOnce(
   'analyticsEnabled = false;'
 )
 main = replaceOnce(main, 'analyticsEnabled = enabled;', 'analyticsEnabled = false;')
+// Assumptions of the splices above, checked on the pinned bundle: the protocol is fully renamed, and
+// the profile lock holds across the awaited Pack provisioning (withLock awaits its operation before
+// releasing the lock in `finally`).
+if (/["'`]dsh:\/\//.test(main) || (main.match(/"dsh-px:\/\/open\/?"/g) ?? []).length !== 2)
+  throw Error('Patched Desktop main still contains the official dsh:// protocol')
+if (
+  !/async withLock\(operation\) \{[\s\S]*?try \{[\s\S]*?return await operation\(\);\s*\} finally \{[\s\S]*?unlinkSync\(lockPath\);/.test(
+    main
+  )
+)
+  throw Error('Upstream withLock no longer holds the profile lock across an awaited operation')
 writeFileSync(
   join(lib, 'px-main.mjs'),
   'import { configurePxUpdates, preparePxDefaults, preparePxPack } from "./px-updates.mjs";\n' + main
