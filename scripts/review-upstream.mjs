@@ -182,6 +182,33 @@ export const UPSTREAM_LOCK = deepFreeze({
       },
       files: ['package.json', 'LICENSE', 'lib/types/client/navigation.d.ts']
     },
+    '@deepseek-ai/dsh-client-ui-session': {
+      integrity: {
+        '0.1.5-rc.2':
+          'sha512-EGCG4Ik95obEM1MA3ZVSsPuK7nknQyhfV/qgNg035jn6gtZJxAguuck9qBNuSOC0upx1xTbh+gSJ6bAmS4ugcQ==',
+        '0.2.0-rc.1':
+          'sha512-eNFVTb0GwNxI0Q7ZlzjHsIXvFYw4NCApMcdw0DnxYw6tsAc2oLFkYFUx/PACigYvWhPiGLw4xZtOEkW5/Iekfw=='
+      },
+      files: ['package.json', 'LICENSE', 'lib/types/client/index.d.ts']
+    },
+    '@deepseek-ai/dsh-client-ui-sidebar-files': {
+      integrity: {
+        '0.1.5-rc.2':
+          'sha512-ZJCpQNruk1Sm29wce30+ATjFkvnuhd55yB3wb+9WpeN+hW6jPmBnAmvUGbS4JsWqpimHLL4y8xYUd5AzAe7+sQ==',
+        '0.2.0-rc.1':
+          'sha512-5Ie/q64XxEQ6paS8Jf2mkK3xhb+gkA+fyYCqBwwrMOXwDdwkHtIzrAZ/tSbu7b/UlugnoiHhxWqxIey0dlENtg=='
+      },
+      files: ['package.json', 'LICENSE', 'lib/types/client/definition.d.ts', 'lib/types/client/index.d.ts']
+    },
+    '@deepseek-ai/dsh-util-workspace-path': {
+      integrity: {
+        '0.1.5-rc.2':
+          'sha512-RCBz+6BpdPDNsRk2ukIdIIuLdf6u+cS8sLiViFg/8/x/kxc+LEXRKJMy2xv+YA9hYOGFK109rjUFgx9JVtZf2w==',
+        '0.2.0-rc.1':
+          'sha512-8pNpCCgByrlYtxXqDLuIz/77rJg4p+bdQs/IotRppM7ahfIQtY/u3qkcbniCTQo4FUfoC3F2p6Lw/fHdLhcgqQ=='
+      },
+      files: ['package.json', 'LICENSE', 'lib/types/file-address.d.ts', 'lib/index.js']
+    },
     '@deepseek-ai/dsh-client-ui-renderer': {
       integrity: {
         '0.1.5-rc.2':
@@ -281,7 +308,10 @@ export const UPSTREAM_LOCK = deepFreeze({
     layout: ['@deepseek-ai/dsh-client-ui-layout'],
     sidebar: ['@deepseek-ai/dsh-client-ui-sidebar'],
     sidebarRight: ['@deepseek-ai/dsh-client-ui-sidebar-right'],
-    sidebarRightTabs: ['@deepseek-ai/dsh-client-ui-sidebar-right'],
+    sidebarRightTabs: [
+      '@deepseek-ai/dsh-client-ui-sidebar-right',
+      '@deepseek-ai/dsh-client-ui-sidebar-files'
+    ],
     sessions: ['@deepseek-ai/dsh-session', '@deepseek-ai/dsh-api-session-controller'],
     sessionController: ['@deepseek-ai/dsh-api-session-controller'],
     sessionPersistence: ['@deepseek-ai/dsh-session-persistence'],
@@ -453,6 +483,34 @@ function privateRegularFile(path) {
     throw new Error('Upstream cache entry is not a private regular file')
 }
 
+/**
+ * Read a response body, aborting as soon as it exceeds `limit` bytes. The declared length is
+ * checked first, but a chunked or understated response is still bounded while it is read.
+ */
+export async function boundedBody(response, limit) {
+  const tooLarge = () => new Error('Upstream tarball exceeds size limit')
+  if (Number(response.headers?.get?.('content-length') ?? 0) > limit) throw tooLarge()
+  if (!response.body?.getReader) {
+    const bytes = Buffer.from(await response.arrayBuffer())
+    if (bytes.length > limit) throw tooLarge()
+    return bytes
+  }
+  const reader = response.body.getReader(),
+    chunks = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > limit) {
+      await reader.cancel().catch(() => {})
+      throw tooLarge()
+    }
+    chunks.push(Buffer.from(value))
+  }
+  return Buffer.concat(chunks, size)
+}
+
 /** Download or reuse a cached tarball. The cache is re-verified on every read and never trusted by name. */
 export async function fetchTarball(name, version, integrity, options = {}) {
   const { cacheDirectory, fetch: fetcher = globalThis.fetch, timeoutMs = 60000 } = options
@@ -477,10 +535,7 @@ export async function fetchTarball(name, version, integrity, options = {}) {
     headers: { accept: 'application/octet-stream' }
   })
   if (!response.ok) throw new Error(`Registry returned ${response.status} for ${name}@${version}`)
-  const declared = Number(response.headers?.get?.('content-length') ?? 0)
-  if (declared > LIMITS.tarball) throw new Error('Upstream tarball exceeds size limit')
-  const bytes = Buffer.from(await response.arrayBuffer())
-  if (bytes.length > LIMITS.tarball) throw new Error('Upstream tarball exceeds size limit')
+  const bytes = await boundedBody(response, LIMITS.tarball)
   verifySri(bytes, integrity)
   const temporary = file + '.' + randomUUID() + '.tmp'
   try {

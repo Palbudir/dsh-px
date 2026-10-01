@@ -41,8 +41,9 @@ test('real composition: terminalController at host level, terminals only inside 
     effect: () => {}
   })
   assert.deepEqual(read([withTerminals, withoutTerminals]), { known: true, openTerminals: 3 })
-  // An Agent that leaves the list keeps its terminals counted until its registry drains.
-  assert.deepEqual(read([withoutTerminals]), { known: true, openTerminals: 2 })
+  // An Agent that leaves the list keeps its terminals counted until its registry drains, and its
+  // still-open sidebar shell stays counted too (2 Agent terminals + 1 shell).
+  assert.deepEqual(read([withoutTerminals]), { known: true, openTerminals: 3 })
   const fresh = registerTerminalActivity({ inject: (names, apply) => injected.set(names[0], apply) })
   injected.get('terminalController')!({ terminalController: { list: () => [] }, effect: () => {} })
   assert.deepEqual(fresh([withoutTerminals]), { known: true, openTerminals: 0 })
@@ -99,6 +100,33 @@ test('an open sidebar shell (terminalController) is counted, so the service neve
     ),
     false
   )
+})
+
+test('a sidebar shell that outlives its Agent stays counted until the shell is gone', () => {
+  // terminalController releases a Session's shells only after the Agent context is disposed and
+  // cleanup succeeds, which can finish after the Agent has already left the list.
+  let open = [{ id: 'shell-a' }]
+  const shells: BrowserTerminalController = { list: (sessionId) => (sessionId === 'session-1' ? open : []) }
+  const read = createTerminalActivityReader()
+  const sources: TerminalSources = { native: () => idleNative, browser: shells }
+  assert.deepEqual(read([owner('session-1')], sources), { known: true, openTerminals: 1 })
+  // The Agent left the list (session closed) while its shell is still running.
+  assert.deepEqual(read([], sources), { known: true, openTerminals: 1 })
+  assert.equal(
+    isIdle(
+      activitySnapshot({
+        agents: { list: () => [] },
+        jobs: { list: () => [] },
+        terminalActivity: () => read([], sources)
+      })
+    ),
+    false
+  )
+  // Once the shell exits the Session is forgotten and the service is idle again.
+  open = []
+  assert.deepEqual(read([], sources), { known: true, openTerminals: 0 })
+  open = [{ id: 'shell-late' }]
+  assert.deepEqual(read([], sources), { known: true, openTerminals: 0 }, 'forgotten Sessions are not polled')
 })
 
 test('an incompatible native registry or shell list is unknown, never idle', () => {

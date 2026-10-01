@@ -293,6 +293,7 @@ async function readJsonBody(req, limit = 512e3) {
 // packages/dsh-px-workbench/src/terminal-activity.ts
 function createTerminalActivityReader() {
   const nativeOwners = /* @__PURE__ */ new Map();
+  const browserSessions = /* @__PURE__ */ new Set();
   return (owners, sources) => {
     const result = { known: false, openTerminals: 0 };
     if (!sources) return result;
@@ -306,8 +307,13 @@ function createTerminalActivityReader() {
           registries.set(original ?? registry, registry);
         }
         if (typeof owner.id !== "string") return result;
-        const shells = sources.browser.list(owner.id);
+        browserSessions.add(owner.id);
+      }
+      for (const sessionId of browserSessions) {
+        const shells = sources.browser.list(sessionId);
         if (!Array.isArray(shells)) return result;
+        if (!shells.length && !owners.some((owner) => owner.id === sessionId))
+          browserSessions.delete(sessionId);
         result.openTerminals += shells.length;
       }
       for (const [owner, registries] of nativeOwners) {

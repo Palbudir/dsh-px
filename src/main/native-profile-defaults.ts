@@ -34,7 +34,8 @@ function lastRow(document: Document, id: string): number {
  * Isolated defaults for the native Desktop profile: loopback webserver on a free port and a PX-owned documents path.
  * Each default is added only when no user row configures it, so a profile whose patch was moved away by native
  * "disable all plugins" recovery regains them while user-set values stay untouched.
- * Call inside the native Desktop profile lock, before createPluginProfile.
+ * Call inside the native Desktop profile lock, before createPluginProfile. The native lock creates the
+ * profile directory before running its operation, so the patch file can be written here.
  * @param profile - absolute native Desktop profile directory.
  * @param documentsDirectory - absolute documents directory for the workspace controller.
  * @returns whether the patch file changed.

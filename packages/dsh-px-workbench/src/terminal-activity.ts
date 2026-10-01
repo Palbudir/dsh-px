@@ -20,10 +20,14 @@ export interface TerminalSources {
  * the Agent-scoped `terminals` service (Agent tool terminals, read per owner; an Agent without it
  * has none) and the host `terminalController` (interactive shells the user opens in the sidebar,
  * spawned directly through the subprocess service). Without `terminalController` the count is
- * unknown, never idle. Closing native registries are retained until they drain.
+ * unknown, never idle. Closing native registries are retained until they drain. Browser shells are
+ * released only when their Agent's context is disposed and cleanup succeeds, which can finish after
+ * the Agent has left the list (or never, when cleanup fails); every Session id seen as an owner is
+ * therefore counted until its shells are gone.
  */
 export function createTerminalActivityReader() {
   const nativeOwners = new Map<TerminalOwner, Map<object, NativeTerminalRegistry>>()
+  const browserSessions = new Set<string>()
   return (
     owners: readonly TerminalOwner[],
     sources?: TerminalSources
@@ -44,8 +48,14 @@ export function createTerminalActivityReader() {
           registries.set(original ?? registry, registry)
         }
         if (typeof owner.id !== 'string') return result
-        const shells = sources.browser.list(owner.id)
+        browserSessions.add(owner.id)
+      }
+      for (const sessionId of browserSessions) {
+        const shells = sources.browser.list(sessionId)
         if (!Array.isArray(shells)) return result
+        // A Session that has left the Agent list is dropped only once its shells are gone.
+        if (!shells.length && !owners.some((owner) => owner.id === sessionId))
+          browserSessions.delete(sessionId)
         result.openTerminals += shells.length
       }
       for (const [owner, registries] of nativeOwners) {

@@ -27,7 +27,7 @@ const {
   assertNotLegacyClientTag,
   assertPublishableAssetName
 } = versionModule
-const { writeReleaseDirectory, selectInstaller, desktopArtifact, releaseIdentity } =
+const { writeReleaseDirectory, selectInstaller, desktopArtifact, releaseIdentity, packArtifact } =
   await load('release-package.mjs')
 const { verifyReleaseFiles, releaseCreateBody, releasePublishBody } = await load('release-controller.mjs')
 const { verifyPackOutput } = await load('release-quality.mjs')
@@ -276,4 +276,29 @@ test('Desktop inspection accepts exactly one full installer and a clean overlay 
   )
   assert.throws(() => desktopArtifact({ ...input, overlay: { ...overlay, sourceCommit: 'e'.repeat(40) } }))
   assert.throws(() => desktopArtifact({ ...input, authenticode: 'HashMismatch' }), /Authenticode/)
+})
+
+test('a build-metadata version uses one encoded asset name for builder, selection and records', (t) => {
+  const version = '1.2.3+build.1',
+    encoded = releaseAssetNames('desktop', version).installer
+  assert.equal(encoded, 'DSH-PX-Desktop-1.2.3_build.1-win-x64.exe')
+  // The generated electron-builder config names the installer with the same helper.
+  const source = readFileSync('scripts/prepare-native-desktop.mjs', 'utf8')
+  assert.match(
+    source,
+    /config\.artifactName=\$\{JSON\.stringify\(releaseAssetNames\('desktop', products\.desktop\.version\)\.installer\)\}/
+  )
+  const root = mkdtempSync(join(tmpdir(), 'px-meta-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  writeFileSync(join(root, encoded), Buffer.from([0x4d, 0x5a]))
+  assert.equal(selectInstaller(root, version), join(root, encoded))
+  // The Pack record names the published file, not the raw build output.
+  const pack = join(root, 'dsh-px-pack-1.2.3+build.1.tgz')
+  writeFileSync(pack, 'pack')
+  const record = packArtifact(
+    { file: 'dsh-px-pack-1.2.3+build.1.tgz', path: pack, manifest: { dshPx: { sourceCommit: head } } },
+    { pack: { version }, protocolGeneration: 2 },
+    { hostVersion: '0.2.0-rc.1', upstreamCommit: 'c'.repeat(40) }
+  )
+  assert.equal(record.file, releaseAssetNames('pack', version).pack)
 })

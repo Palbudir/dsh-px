@@ -98,7 +98,8 @@ export function packArtifact(verified, products, nativePack) {
     schemaVersion: 1,
     product: 'pack',
     version: products.pack.version,
-    file: verified.file,
+    // The published name ('+' encoded as '_'), which is the name writeReleaseDirectory writes.
+    file: releaseAssetNames('pack', products.pack.version).pack,
     ...digests(readFileSync(verified.path)),
     candidate: false,
     sourceCommit: verified.manifest.dshPx.sourceCommit,

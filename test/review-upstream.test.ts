@@ -333,6 +333,33 @@ test('candidate hosts must be pinned; unknown or malformed product contracts blo
   )
 })
 
+test('a streamed body without a declared length stops at the tarball limit', async () => {
+  const { boundedBody } = await import(pathToFileURL(resolve('scripts/review-upstream.mjs')).href)
+  let delivered = 0,
+    cancelled = false
+  const chunk = new Uint8Array(1024 * 1024)
+  // Chunked transfer: no content-length, and far more data than the limit if read to the end.
+  const response = {
+    headers: new Map(),
+    body: new ReadableStream({
+      pull(controller) {
+        delivered++
+        if (delivered > 64) controller.close()
+        else controller.enqueue(chunk)
+      },
+      cancel() {
+        cancelled = true
+      }
+    })
+  }
+  await assert.rejects(boundedBody(response, 8 * 1024 * 1024), /exceeds size limit/)
+  assert.ok(cancelled, 'the stream is cancelled at the limit')
+  assert.ok(delivered <= 10, `read stops near the limit, read ${delivered} MiB`)
+  // Within the limit the exact bytes are returned.
+  const small = { headers: new Map(), body: new Response(new Uint8Array([1, 2, 3])).body }
+  assert.deepEqual([...(await boundedBody(small, 8))], [1, 2, 3])
+})
+
 test('real pinned tarballs match the installed DSH 0.1.5-rc.2 runtime byte for byte', async (t) => {
   const cache = resolve('build-test', 'review-upstream-cache')
   const runtime = resolve('runtime/dsh/node_modules')

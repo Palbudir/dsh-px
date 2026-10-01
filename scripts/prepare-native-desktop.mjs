@@ -5,6 +5,7 @@ import { pathToFileURL, fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { build } from 'esbuild'
+import { releaseAssetNames } from './release-version.mjs'
 const root = fileURLToPath(new URL('../', import.meta.url))
 if (!process.argv[2] || process.argv[2].startsWith('--'))
   throw Error(
@@ -166,6 +167,13 @@ writeFileSync(
   join(lib, 'px-main.mjs'),
   'import { configurePxUpdates, preparePxDefaults, preparePxPack } from "./px-updates.mjs";\n' + main
 )
+// The patched entry is text surgery on the pinned bundle; parse it now (including every injected
+// `await`, which is only valid inside an async scope) so a bad splice fails the build, not the app.
+try {
+  execFileSync(process.execPath, ['--check', join(lib, 'px-main.mjs')], { stdio: 'pipe', windowsHide: true })
+} catch (error) {
+  throw Error('Patched Desktop main does not parse: ' + String(error.stderr ?? error.message).slice(0, 2000))
+}
 await build({
   stdin: {
     contents: `import {configureSignedUpdates} from ${JSON.stringify(join(root, 'src/main/signed-update-provider.ts'))};
@@ -248,7 +256,7 @@ config.extraMetadata={...config.extraMetadata,name:'dsh-px-desktop',version:${JS
 config.files=config.files.filter(f=>f!=='lib/main.js');config.files.push('lib/px-main.mjs','lib/px-bootstrap.cjs','lib/px-updates.mjs',${brandedPreloads.map((n) => JSON.stringify('lib/px-' + n)).join(',')});
 config.win.icon=${JSON.stringify(join(root, 'build/icon.png'))};config.extraResources=config.extraResources.map(r=>r.to==='icon.png'?{...r,from:${JSON.stringify(join(root, 'build/icon.png'))}}:r);
 config.extraResources.push({from:${JSON.stringify(packArchive)},to:'px-pack.tgz'});
-config.directories.output=${JSON.stringify(join(output, 'dist'))};config.artifactName='DSH-PX-Desktop-\${version}-win-x64.\${ext}';config.nsis.differentialPackage=false;
+config.directories.output=${JSON.stringify(join(output, 'dist'))};config.artifactName=${JSON.stringify(releaseAssetNames('desktop', products.desktop.version).installer)};config.nsis.differentialPackage=false;
 config.publish=[{provider:'generic',url:'https://raw.githubusercontent.com/Palbudir/dsh-px/updates/',channel:'preview',updaterCacheDirName:'dsh-px-desktop-updater'}];
 if(process.env.DSH_PX_DIRECTORY_PROBE==='1'){if(!process.argv.includes('--dir'))throw Error('Directory probe cannot build installer');config.beforeBuild=()=>true;}
 export default config;

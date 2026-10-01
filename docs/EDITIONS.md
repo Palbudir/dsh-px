@@ -22,7 +22,7 @@ DSH-PX 使用同一套插件提供 Agent 工作能力。Pack 是原生 DSH 插�
 
 同一数据目录由一个 DSH 服务负责管理；桌面和浏览器可以同时连接它。不同服务实例使用独立目录，避免重复调度任务、并发迁移和配置覆盖。
 
-Desktop 使用独立应用身份 `com.palbudir.dshpx.desktop`、外部协议 `dsh-px` 和数据目录 `%USERPROFILE%\.dsh-px`，与官方客户端及旧 DSH-PX 并行安装、互不覆盖。首次启动在原生 profile 创建之后、宿主启动之前写入默认配置并预装 Pack；已有配置、用户自定义的插件声明与明确禁用项不被覆盖。卸载始终保留 `%USERPROFILE%\.dsh-px`。
+Desktop 使用独立应用身份 `com.palbudir.dshpx.desktop`、外部协议 `dsh-px` 和数据目录 `%USERPROFILE%\.dsh-px`，与官方客户端及旧 DSH-PX 并行安装、互不覆盖。首次启动在宿主启动之前、原生 profile 锁内（profile 目录已创建）先写入默认配置，再由原生流程补齐 profile，然后预装 Pack；已有配置、用户自定义的插件声明与明确禁用项不被覆盖。卸载始终保留 `%USERPROFILE%\.dsh-px`。
 
 ## 宿主职责
 
