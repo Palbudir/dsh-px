@@ -128,10 +128,43 @@ export function validateResult(value, request, batchId) {
   }
   return value
 }
+export const PROOF_TITLE_LIMIT = 160,
+  PROOF_P3_LIMIT = 40
+/** Keep at most `limit` UTF-8 bytes, never splitting a character. */
+function clipBytes(value, limit) {
+  if (typeof value !== 'string') return value
+  // Characters JSON escapes to six bytes are replaced, so the encoded size stays near `limit`.
+  value = value.replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029"\\]/g, ' ')
+  if (Buffer.byteLength(value) <= limit) return value
+  let out = ''
+  for (const char of value) {
+    if (Buffer.byteLength(out + char) > limit - 3) break
+    out += char
+  }
+  return out + '…'
+}
+/** A finding as carried in the signed proof: bounded bytes, plus a digest of its (clipped) text. */
+export function compactFinding(finding) {
+  return {
+    priority: finding.priority,
+    path: clipBytes(finding.path, PROOF_TITLE_LIMIT),
+    line: finding.line,
+    title: clipBytes(finding.title, PROOF_TITLE_LIMIT),
+    digest: sha256(canonical({ title: finding.title, detail: finding.detail }))
+  }
+}
 export function aggregate(request, batches, results) {
   if (!batches.length || results.length !== batches.length) throw new Error('Incomplete review coverage')
   const verified = results.map((r, i) => validateResult(r, request, batches[i].id))
-  const findings = verified.flatMap((r) => r.findings)
+  // The signed proof travels in a bounded workflow input, so each finding is a bounded summary
+  // (priority, location, short title, digest of the clipped title and detail). Every P0-P2 finding is
+  // kept; P3 findings beyond PROOF_P3_LIMIT are counted, not listed. The full text is only in the
+  // local trace; verification reads the priorities, which compaction never drops.
+  const all = verified.flatMap((r) => r.findings).map(compactFinding)
+  const serious = all.filter((f) => f.priority <= 2),
+    minor = all.filter((f) => f.priority > 2)
+  const findings = [...serious, ...minor.slice(0, PROOF_P3_LIMIT)]
+  const omittedFindings = minor.length - Math.min(minor.length, PROOF_P3_LIMIT)
   const blockers = verified.flatMap((r) => r.blockers)
   return {
     verdict:
@@ -141,6 +174,7 @@ export function aggregate(request, batches, results) {
         ? 'pass'
         : 'fail',
     findings,
+    ...(omittedFindings ? { omittedFindings } : {}),
     blockers,
     // digest binds the exact batch input; evidence binds its sub-batches, rounds and tool calls.
     batches: batches.map((b, i) => ({

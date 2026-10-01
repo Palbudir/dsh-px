@@ -42,7 +42,7 @@ export class SignedUpdateProvider extends Provider<UpdateInfo> {
       target: Object.freeze({ ...configuration.target })
     }
   }
-  async getLatestVersion(): Promise<UpdateInfo> {
+  override async getLatestVersion(): Promise<UpdateInfo> {
     const raw = await this.httpRequest(new URL(this.configuration.url))
     if (!raw) throw new Error('更新服务器没有返回签名清单')
     const manifest = verifySignedRelease(raw, this.configuration.keys, this.configuration.target)
@@ -57,7 +57,7 @@ export class SignedUpdateProvider extends Provider<UpdateInfo> {
     this.manifests.set(info, manifest)
     return info
   }
-  resolveFiles(info: UpdateInfo): ResolvedUpdateFileInfo[] {
+  override resolveFiles(info: UpdateInfo): ResolvedUpdateFileInfo[] {
     const manifest = this.manifests.get(info)
     if (!manifest || info.version !== manifest.version) throw new Error('更新文件缺少对应的签名清单')
     const installer = manifest.files.find((file) => file.role === 'installer')!

@@ -6,7 +6,7 @@ import { Icon } from '../../../shared/ui'
 import { useSessionLayout } from './layout'
 import { attachToolbarLayout, isTypingTarget } from './host-layout'
 import { panelAvailability, usePanelCapabilities } from './panel-availability'
-import { selectedSession } from '../../../shared/native-navigation'
+import { closeLastSession, selectedSession } from '../../../shared/native-navigation'
 
 const panels = [
   ['editor', '文件', 'file'],
@@ -100,8 +100,7 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
     setTabs(result.tabs)
     if (id === ordinaryCurrent) {
       if (result.next) open(result.next)
-      else if (ctx.layout) ctx.layout.selectPanel('px-session-home')
-      else ctx.sessions.clear?.()
+      else closeLastSession(ctx)
     }
   }
   const reopen = (): void => {

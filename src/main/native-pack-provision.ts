@@ -6,6 +6,26 @@ import { assertRegularOrAbsent, isAtomicTemporary, renameWithRetry, writeAtomic 
 
 export { writeAtomic } from './native-atomic'
 
+/** The dependency files of a profile as they were before an install; `null` means absent. */
+type ProfileSnapshot = ReadonlyArray<{ path: string; bytes: Buffer | null }>
+const PROFILE_FILES = ['package.json', 'pnpm-lock.yaml']
+function snapshotProfile(profile: string): ProfileSnapshot {
+  return PROFILE_FILES.map((name) => {
+    const path = join(profile, name)
+    assertRegularOrAbsent(path, `Profile ${name}`)
+    return { path, bytes: existsSync(path) ? readFileSync(path) : null }
+  })
+}
+/** Put back the dependency files so the next Host start sees the previous Pack selection. */
+function restoreProfile(profile: string, snapshot: ProfileSnapshot): void {
+  for (const { path, bytes } of snapshot) {
+    const current = existsSync(path) ? readFileSync(path) : null
+    if (bytes === null ? current === null : current !== null && current.equals(bytes)) continue
+    if (bytes === null) rmSync(path, { force: true })
+    else writeAtomic(path, bytes)
+  }
+}
+
 /**
  * Durable provisioning record in `<profile>/.dsh-px/pack-state.json`.
  * - `pending`: an install of `targetSpec` started; `previousSpec` is the dependency it replaces.
@@ -203,6 +223,7 @@ export async function provisionNativePack(options: NativePackProvision): Promise
   const directory = join(options.profile, '.dsh-px')
   let file: string | undefined
   let failure: ProvisionState | undefined
+  let snapshot: ProfileSnapshot | undefined
   try {
     if (!existsSync(directory)) mkdirSync(directory)
     if (!lstatSync(directory).isDirectory() || lstatSync(directory).isSymbolicLink())
@@ -276,12 +297,17 @@ export async function provisionNativePack(options: NativePackProvision): Promise
     failure = pending
     writeCache(cached, verifiedBundle(options), options.sha256)
     saveState(file, pending)
+    // The native manager restores the profile manifest only for a compatibility denial; a failed pnpm
+    // run can leave package.json naming the new Pack. Keep the files to put them back on failure.
+    snapshot = snapshotProfile(options.profile)
     await options.install(cached)
     if (
       !sameSpec(dependency(options.profile), targetSpec, options.profile) ||
       !installed(options.profile, options.version)
     )
       throw new Error('Native Pack install did not produce the expected dependency; retry required')
+    // The install is verified: a later failure (state write, cache pruning) must not roll it back.
+    snapshot = undefined
     saveState(file, {
       schemaVersion: 1,
       phase: 'installed',
@@ -295,6 +321,13 @@ export async function provisionNativePack(options: NativePackProvision): Promise
     return 'installed'
   } catch (error) {
     const message = redact(error, options.profile)
+    if (snapshot) {
+      try {
+        restoreProfile(options.profile, snapshot)
+      } catch (restoreError) {
+        log(`[dsh-px] Profile manifest could not be restored: ${redact(restoreError, options.profile)}`)
+      }
+    }
     log(`[dsh-px] Pack provisioning failed; the Host starts with the previous Pack state: ${message}`)
     if (file && failure) {
       try {

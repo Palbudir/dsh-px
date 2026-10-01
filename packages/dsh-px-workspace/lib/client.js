@@ -36,6 +36,10 @@ window.__ModuleLoader__.load({
 		  const encode = (segment) => encodeURIComponent(segment).replace(/%3A/gi, ":");
 		  return `dsh-resource://file/session/${encode(sessionId)}/${path.replaceAll("\\", "/").replace(/^(?:\.\/)+/, "").split("/").map(encode).join("/")}`;
 		}
+		function closeLastSession(ctx) {
+		  if (ctx.layout?.panelInfo) ctx.layout.selectPanel("px-session-home");
+		  else ctx.sessions.clear?.();
+		}
 		function selectedSession(list, panel) {
 		  if (panel === "px-session-home") return void 0;
 		  return list.current ?? Object.values(list.byId).find((row) => (row.retainedBy?.mainView ?? 0) > 0)?.id;
@@ -818,8 +822,7 @@ window.__ModuleLoader__.load({
 		    setTabs(result.tabs);
 		    if (id === ordinaryCurrent) {
 		      if (result.next) open(result.next);
-		      else if (ctx.layout) ctx.layout.selectPanel("px-session-home");
-		      else ctx.sessions.clear?.();
+		      else closeLastSession(ctx);
 		    }
 		  };
 		  const reopen = () => {

@@ -10,6 +10,18 @@ export function nativeFileAddress(sessionId: string, path: string): string {
     .join('/')}`
 }
 
+/**
+ * Leave the last Session. The PX home panel is selected only where PX can read the selection back
+ * (0.2 publishes layout.panelInfo); a 0.1.5 host has no panelInfo, so its Session list is cleared.
+ */
+export function closeLastSession(ctx: {
+  layout?: { panelInfo?: unknown; selectPanel: (id: string) => void }
+  sessions: { clear?: () => void }
+}): void {
+  if (ctx.layout?.panelInfo) ctx.layout.selectPanel('px-session-home')
+  else ctx.sessions.clear?.()
+}
+
 /** 0.2 selects its conversation through the public mainView retention source. */
 export function selectedSession(
   list: {

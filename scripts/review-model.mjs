@@ -417,7 +417,7 @@ export async function callReviewModel(config, messages, options = {}) {
 
 /** Asks for the same review re-emitted as one schema-conforming JSON object; never a new review. */
 export function formatRepairPrompt(error) {
-  return `Your previous answer was rejected: ${String(error?.message ?? error).slice(0, 300)}. Do not call tools and do not change your review. Re-emit exactly the same review as one valid JSON object that conforms to the schema, with every required field present (use [] for an empty list).`
+  return `Your previous answer was rejected: ${String(error?.message ?? error).slice(0, 300)}. Do not call tools and do not change your review. Re-emit exactly the same review as one valid JSON object that conforms to the schema, with every required field present (use [] for an empty list). If your answer put findings or blockers in undeclared fields, move them into "findings" or "blockers"; never drop them.`
 }
 
 const emptyValue = (value) =>

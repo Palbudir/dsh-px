@@ -42,7 +42,10 @@ export interface PanelCapabilities {
 }
 export interface Client {
   sessions: { list: Snapshot<SessionList>; scope: (id: string) => any; clear?: () => void }
-  layout?: { panelInfo: Snapshot<{ activePanelId: string | null }>; selectPanel: (id: string | null) => void }
+  layout?: {
+    panelInfo?: Snapshot<{ activePanelId: string | null }>
+    selectPanel: (id: string | null) => void
+  }
   uiWorkspace: { openSession: (id: string) => void; startSession: () => void }
   conversation: {
     input: {

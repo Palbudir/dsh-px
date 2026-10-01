@@ -61,6 +61,32 @@ function digests(bytes) {
   }
 }
 
+/**
+ * File paths inside an Electron asar archive, read from its header: a pickle whose payload holds the
+ * JSON directory tree (size words, then a length-prefixed UTF-8 string).
+ * @param {string} archive - path to app.asar.
+ * @returns {Set<string>} '/'-separated file paths.
+ */
+export function asarEntries(archive) {
+  const bytes = readFileSync(archive)
+  if (bytes.length < 16) throw new Error('app.asar is too short')
+  const headerSize = bytes.readUInt32LE(4)
+  const length = bytes.readUInt32LE(12)
+  if (16 + length > 8 + headerSize || 8 + headerSize > bytes.length)
+    throw new Error('app.asar header is malformed')
+  const tree = JSON.parse(bytes.subarray(16, 16 + length).toString('utf8'))
+  const paths = new Set()
+  const walk = (node, prefix) => {
+    for (const [name, child] of Object.entries(node.files ?? {})) {
+      const path = prefix ? prefix + '/' + name : name
+      if (child.files) walk(child, path)
+      else paths.add(path)
+    }
+  }
+  walk(tree, '')
+  return paths
+}
+
 /** Write the flat publishable directory and its manifest. Existing output is never overwritten. */
 export function writeReleaseDirectory(output, { product, version, head, controllerSha, primary, artifact }) {
   sha(head, 'candidate')
@@ -216,6 +242,10 @@ function main() {
     for (const path of ['runtime/pnpm/bin/pnpm.mjs', 'runtime/bin', 'px-pack.tgz'])
       if (!existsSync(join(resources, path)))
         throw new Error(`Packaged Desktop lacks resources/${path} required for Pack provisioning`)
+    // The signed update provider imports electron-updater from the app at first start; a missing
+    // module would abort every launch, so the packaged app.asar must contain it.
+    if (!asarEntries(join(resources, 'app.asar')).has('node_modules/electron-updater/package.json'))
+      throw new Error('Packaged app.asar lacks node_modules/electron-updater required by the update provider')
     const overlay = readJson(join(px, 'overlay.json'))
     const bundled = createHash('sha256')
       .update(regularFile(join(resources, 'px-pack.tgz')))

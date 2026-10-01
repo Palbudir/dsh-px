@@ -146,6 +146,78 @@ test('failed v2 upgrade keeps v1 dependency and cache usable, then a retry upgra
   }
 })
 
+test('an install that fails after rewriting package.json leaves the previous selection in place', async () => {
+  const f = fixture()
+  try {
+    const v1 = f.pack('0.1.0')
+    const v2 = f.pack('0.2.0')
+    assert.equal(await provisionNativePack(v1), 'installed')
+    const v1Manifest = readFileSync(join(f.root, 'package.json'))
+    writeFileSync(join(f.root, 'pnpm-lock.yaml'), 'lock v1\n')
+    // A failed pnpm run that already wrote the new dependency and lockfile (no native rollback).
+    const partial: NativePackProvision = {
+      ...v2,
+      install: async (path: string) => {
+        const manifest = readJson(join(f.root, 'package.json'))
+        manifest.dependencies['dsh-px-pack'] = 'file:' + path.replaceAll('\\', '/')
+        writeFileSync(join(f.root, 'package.json'), JSON.stringify(manifest))
+        writeFileSync(join(f.root, 'pnpm-lock.yaml'), 'lock v2 partial\n')
+        throw Error('pnpm exited with code 1')
+      }
+    }
+    assert.equal(await provisionNativePack(partial), 'failed')
+    assert.deepEqual(readFileSync(join(f.root, 'package.json')), v1Manifest, 'package.json is restored')
+    assert.equal(readFileSync(join(f.root, 'pnpm-lock.yaml'), 'utf8'), 'lock v1\n', 'lockfile is restored')
+    assert.equal(f.state().phase, 'failed')
+    // A first install that fails removes a lockfile it created instead of leaving it behind.
+    const g = fixture()
+    try {
+      const original = readFileSync(join(g.root, 'package.json'))
+      const first: NativePackProvision = {
+        ...g.options,
+        install: async (path: string) => {
+          const manifest = readJson(join(g.root, 'package.json'))
+          manifest.dependencies['dsh-px-pack'] = 'file:' + path.replaceAll('\\', '/')
+          writeFileSync(join(g.root, 'package.json'), JSON.stringify(manifest))
+          writeFileSync(join(g.root, 'pnpm-lock.yaml'), 'lock partial\n')
+          throw Error('pnpm exited with code 1')
+        }
+      }
+      assert.equal(await provisionNativePack(first), 'failed')
+      assert.deepEqual(readFileSync(join(g.root, 'package.json')), original)
+      assert.ok(!existsSync(join(g.root, 'pnpm-lock.yaml')), 'a lockfile the failed run created is removed')
+    } finally {
+      g.cleanup()
+    }
+    // The next start still upgrades normally.
+    assert.equal(await provisionNativePack(v2), 'installed')
+    assert.equal(readJson(join(f.root, 'node_modules/dsh-px-pack/package.json')).version, '0.2.0')
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('a failure after a verified install never rolls the install back', async () => {
+  const f = fixture()
+  try {
+    const v1 = f.pack('0.1.0')
+    const v2 = f.pack('0.2.0')
+    assert.equal(await provisionNativePack(v1), 'installed')
+    // A directory in place of a cache file makes pruning after the v2 install fail.
+    mkdirSync(join(f.root, '.dsh-px', `pack-${'f'.repeat(64)}.tgz`))
+    const pinned = join(f.root, '.dsh-px', `pack-${'f'.repeat(64)}.tgz`, 'held')
+    writeFileSync(pinned, 'x')
+    const result = await provisionNativePack(v2)
+    // Whatever pruning reports, the verified v2 dependency stays and the profile stays PX-managed.
+    assert.ok(result === 'installed' || result === 'failed')
+    assert.equal(readJson(join(f.root, 'node_modules/dsh-px-pack/package.json')).version, '0.2.0')
+    assert.equal(f.dependency(), 'file:' + f.cache(v2).replaceAll('\\', '/'))
+    assert.notEqual(await provisionNativePack(v2), 'user-managed')
+  } finally {
+    f.cleanup()
+  }
+})
+
 test('bad bundled archives and invalid dependency declarations do not throw or install', async () => {
   const f = fixture()
   try {

@@ -45,12 +45,16 @@ try {
     {
       execution: 'service',
       command: process.execPath,
-      args: [pnpm],
+      args: ['--expose-internals', pnpm],
       outputBytes: 16384,
       idleTimeoutMs: 120000,
       // The same bound as first-start provisioning, so a slower install than the app allows fails here.
       signal: AbortSignal.timeout(300000),
-      env: { DSH_DESKTOP_NODE_EXECUTABLE: process.execPath, PATH: bin + delimiter + (process.env.PATH || '') }
+      env: {
+        ELECTRON_RUN_AS_NODE: '1',
+        DSH_DESKTOP_NODE_EXECUTABLE: process.execPath,
+        PATH: bin + delimiter + (process.env.PATH || '')
+      }
     }
   )
   if (result.exitCode !== 0 || result.timedOut)

@@ -233,6 +233,17 @@ export async function preparePxPack(profile,runtimeDir){
   external: ['electron', 'electron-updater'],
   legalComments: 'none'
 })
+// The signed provider subclasses electron-updater's Provider, so it must resolve the very module the
+// official main uses for its updater: both import it as an external app dependency, never inlined.
+const updaterImport = /^import \w+ from "electron-updater";$/m
+const providerImport = /^import \{ Provider \} from "electron-updater";$/m
+if (
+  !updaterImport.test(original) ||
+  !providerImport.test(readFileSync(join(lib, 'px-updates.mjs'), 'utf8')) ||
+  typeof JSON.parse(readFileSync(join(app, 'package.json'), 'utf8')).dependencies?.['electron-updater'] !==
+    'string'
+)
+  throw Error('Desktop main and the signed update provider no longer share the packaged electron-updater')
 // DSH_HOME stays outside Electron userData: the official NSIS uninstaller deletes %APPDATA%\<app>.
 const bootstrap = `const {app,dialog}=require('electron');const {join,isAbsolute}=require('node:path');const {pathToFileURL}=require('node:url');
 const {mkdirSync}=require('node:fs');app.setName('DSH-PX Desktop');const override=process.env.DSH_PX_USER_DATA_DIR;if(override&&!isAbsolute(override))throw Error('Absolute data path required');const userData=override||join(app.getPath('appData'),'dsh-px-desktop');mkdirSync(userData,{recursive:true});app.setPath('userData',userData);process.env.DSH_HOME=override?join(userData,'dsh-home'):join(require('node:os').homedir(),'.dsh-px');process.env.DSH_PX_DOCUMENTS_DIRECTORY=override?join(userData,'documents'):join(app.getPath('documents'),'DSH-PX');

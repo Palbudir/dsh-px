@@ -1030,3 +1030,79 @@ test('tool calls with a forged batch, malformed calls or no tool context fail cl
   )
   assert.ok(!('tools' in noTools.bodies[0]))
 })
+
+test('a passing proof with many long P3 findings still fits the workflow input', () => {
+  // A real passing review carried 33 findings whose full text alone was 46 KB.
+  const batches = Array.from({ length: 16 }, (_, i) => ({ id: `group-batch-${i}`, text: `batch ${i}` }))
+  const results = batches.map((b) => ({
+    head,
+    base,
+    batchId: b.id,
+    verdict: 'pass',
+    summary: 's'.repeat(core.REVIEW_TEXT_LIMIT),
+    findings: Array.from({ length: 6 }, (_, n) => ({
+      priority: 3,
+      path: `packages/some-long-package-name/src/deeply/nested/module-${n}.ts`,
+      line: 100 + n,
+      title: 't'.repeat(core.REVIEW_TEXT_LIMIT),
+      detail: 'd'.repeat(core.REVIEW_TEXT_LIMIT)
+    })),
+    blockers: [],
+    evidence: 'e'.repeat(64)
+  }))
+  const aggregated = core.aggregate(request, batches, results)
+  assert.equal(aggregated.verdict, 'pass')
+  assert.equal(aggregated.findings.length, core.PROOF_P3_LIMIT)
+  assert.equal(aggregated.omittedFindings, 96 - core.PROOF_P3_LIMIT)
+  const first = aggregated.findings[0]
+  assert.deepEqual(Object.keys(first).sort(), ['digest', 'line', 'path', 'priority', 'title'])
+  assert.ok(first.title.length <= core.PROOF_TITLE_LIMIT)
+  assert.match(first.digest, /^[a-f0-9]{64}$/)
+  const report = {
+    payload: { ...aggregated, head, base, padding: 'x'.repeat(2000) },
+    keyId: 'k',
+    signature: 's'.repeat(88)
+  }
+  assert.ok(core.encodeReport(report).length <= 58000)
+  // A blocking priority is still visible to the verifier after compaction.
+  const failing = core.aggregate(
+    request,
+    batches,
+    results.map((r, i) => (i ? r : { ...r, findings: [{ ...r.findings[0], priority: 2 }] }))
+  )
+  assert.equal(failing.verdict, 'fail')
+  assert.equal(failing.findings[0].priority, 2)
+})
+
+test('the proof stays within the workflow input in the worst case', () => {
+  // 16 batches of 100 P3 findings whose path and title are CJK, quotes and control characters.
+  const nasty = '审查\u0001"\\'.repeat(400)
+  const batches = Array.from({ length: 16 }, (_, i) => ({ id: `b-${i}`, text: `batch ${i}` }))
+  const results = batches.map((b) => ({
+    head,
+    base,
+    batchId: b.id,
+    verdict: 'pass',
+    summary: '',
+    findings: Array.from({ length: 100 }, (_, n) => ({
+      priority: 3,
+      path: nasty,
+      line: n + 1,
+      title: nasty,
+      detail: nasty
+    })),
+    blockers: [],
+    evidence: 'e'.repeat(64)
+  }))
+  const aggregated = core.aggregate(request, batches, results)
+  const report = {
+    payload: { ...aggregated, head, base, padding: 'x'.repeat(2000) },
+    keyId: 'k',
+    signature: 's'.repeat(88)
+  }
+  assert.ok(core.encodeReport(report).length <= 58000)
+  for (const f of aggregated.findings) {
+    assert.ok(Buffer.byteLength(f.title) <= core.PROOF_TITLE_LIMIT)
+    assert.ok(!/[\u0000-\u001f"\\]/.test(f.title + f.path))
+  }
+})

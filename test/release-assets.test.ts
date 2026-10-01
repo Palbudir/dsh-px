@@ -27,8 +27,14 @@ const {
   assertNotLegacyClientTag,
   assertPublishableAssetName
 } = versionModule
-const { writeReleaseDirectory, selectInstaller, desktopArtifact, releaseIdentity, packArtifact } =
-  await load('release-package.mjs')
+const {
+  writeReleaseDirectory,
+  selectInstaller,
+  desktopArtifact,
+  releaseIdentity,
+  packArtifact,
+  asarEntries
+} = await load('release-package.mjs')
 const { verifyReleaseFiles, releaseCreateBody, releasePublishBody } = await load('release-controller.mjs')
 const { verifyPackOutput } = await load('release-quality.mjs')
 const head = 'a'.repeat(40),
@@ -301,4 +307,32 @@ test('a build-metadata version uses one encoded asset name for builder, selectio
     { hostVersion: '0.2.0-rc.1', upstreamCommit: 'c'.repeat(40) }
   )
   assert.equal(record.file, releaseAssetNames('pack', version).pack)
+})
+
+test('the packaged app.asar inventory is read from its header', (t) => {
+  // An asar archive: a pickle of the size words, then the length-prefixed JSON directory tree.
+  const tree = {
+    files: {
+      lib: { files: { 'px-updates.mjs': { size: 1, offset: '0' } } },
+      node_modules: { files: { 'electron-updater': { files: { 'package.json': { size: 2, offset: '1' } } } } }
+    }
+  }
+  const json = Buffer.from(JSON.stringify(tree))
+  const padded = Math.ceil(json.length / 4) * 4
+  const header = Buffer.alloc(16 + padded)
+  header.writeUInt32LE(4, 0)
+  header.writeUInt32LE(8 + padded, 4)
+  header.writeUInt32LE(4 + padded, 8)
+  header.writeUInt32LE(json.length, 12)
+  json.copy(header, 16)
+  const root = mkdtempSync(join(tmpdir(), 'px-asar-'))
+  t.after(() => rmSync(root, { recursive: true, force: true }))
+  const archive = join(root, 'app.asar')
+  writeFileSync(archive, Buffer.concat([header, Buffer.from('xyz')]))
+  assert.deepEqual([...asarEntries(archive)].sort(), [
+    'lib/px-updates.mjs',
+    'node_modules/electron-updater/package.json'
+  ])
+  writeFileSync(archive, Buffer.alloc(8))
+  assert.throws(() => asarEntries(archive), /too short/)
 })
