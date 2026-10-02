@@ -1197,17 +1197,25 @@ test('candidate file names cannot forge trusted header lines', async () => {
 test('bb118989 regression: real Git groups include runtime producers and keep shared frontend in its consumers', async (t) => {
   const headSha = 'bb118989098f9b6ca3276af67fb86b411ded1c62',
     mergeSha = '82623e4135b6dfda87610e27a86da5a9100b3c86'
+  const fixtureRef = 'refs/tags/fixtures/review-context-bb118989'
   const git = (args: string[]) => execFileSync('git', args, { maxBuffer: 256e6, windowsHide: true })
   try {
+    git(['cat-file', '-e', fixtureRef + '^{commit}'])
     git(['cat-file', '-e', headSha + '^{commit}'])
     git(['cat-file', '-e', mergeSha + '^{commit}'])
   } catch {
     // CI checkouts fetch full history, so a missing commit there is a gate misconfiguration and
     // must fail rather than let this regression pass unchecked. Local shallow clones may skip.
     if (process.env.CI)
-      throw new Error('Regression fixture commits are missing; CI needs a full-history checkout')
+      throw new Error('Regression fixture tag/history is missing; CI needs a full-history checkout with tags')
     return t.skip('fixture commits are not present in this clone')
   }
+  assert.equal(
+    git(['rev-parse', fixtureRef + '^{commit}'])
+      .toString()
+      .trim(),
+    headSha
+  )
   const { buildReviewGraph, reviewOwners, reviewContracts, changedScriptTargets } = await import(
     pathToFileURL(resolve('scripts/review-core.mjs')).href
   )

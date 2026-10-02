@@ -184,7 +184,15 @@ function profileDirectory(home, running) {
   }
   return names.length === 1 ? join2(profiles, names[0]) : null;
 }
-function localStatus(activity = { known: false, runningAgents: 0, queuedInputs: 0, runningJobs: 0, openTerminals: 0 }, running) {
+function localStatus(activity = {
+  known: false,
+  observedKnown: false,
+  scope: "observed-sessions",
+  runningAgents: 0,
+  queuedInputs: 0,
+  runningJobs: 0,
+  openTerminals: 0
+}, running) {
   const home = process.env.DSH_HOME ?? null;
   const profile = home ? profileDirectory(home, running) : null;
   const plugins = [];
@@ -295,7 +303,12 @@ function createTerminalActivityReader() {
   const nativeOwners = /* @__PURE__ */ new Map();
   const browserSessions = /* @__PURE__ */ new Set();
   return (owners, sources) => {
-    const result = { known: false, openTerminals: 0 };
+    const result = {
+      known: false,
+      observedKnown: false,
+      scope: "observed-sessions",
+      openTerminals: 0
+    };
     if (!sources) return result;
     try {
       for (const owner of owners) {
@@ -330,7 +343,7 @@ function createTerminalActivityReader() {
         }
         if (!registries.size) nativeOwners.delete(owner);
       }
-      result.known = Number.isSafeInteger(result.openTerminals) && result.openTerminals >= 0;
+      result.observedKnown = Number.isSafeInteger(result.openTerminals) && result.openTerminals >= 0;
     } catch (error) {
       void error;
     }
@@ -383,7 +396,15 @@ function registerTerminalActivity(ctx) {
 
 // packages/dsh-px-workbench/src/activity.ts
 function activitySnapshot(services) {
-  const result = { known: false, runningAgents: 0, queuedInputs: 0, runningJobs: 0, openTerminals: 0 };
+  const result = {
+    known: false,
+    observedKnown: false,
+    scope: "observed-sessions",
+    runningAgents: 0,
+    queuedInputs: 0,
+    runningJobs: 0,
+    openTerminals: 0
+  };
   if (!services) return result;
   try {
     const agents = services.agents.list();
@@ -400,7 +421,7 @@ function activitySnapshot(services) {
     ).length;
     const terminals = services.terminalActivity(agents);
     result.openTerminals = terminals.openTerminals;
-    result.known = terminals.known === true && [result.runningAgents, result.queuedInputs, result.runningJobs, result.openTerminals].every(
+    result.observedKnown = terminals.observedKnown === true && [result.runningAgents, result.queuedInputs, result.runningJobs, result.openTerminals].every(
       (value) => Number.isSafeInteger(value) && value >= 0
     );
   } catch {

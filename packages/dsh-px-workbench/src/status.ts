@@ -62,7 +62,15 @@ function profileDirectory(home: string, running: RunningProfile | undefined): st
 }
 
 export function localStatus(
-  activity: Activity = { known: false, runningAgents: 0, queuedInputs: 0, runningJobs: 0, openTerminals: 0 },
+  activity: Activity = {
+    known: false,
+    observedKnown: false,
+    scope: 'observed-sessions',
+    runningAgents: 0,
+    queuedInputs: 0,
+    runningJobs: 0,
+    openTerminals: 0
+  },
   running?: RunningProfile
 ): LocalStatus {
   const home = process.env.DSH_HOME ?? null

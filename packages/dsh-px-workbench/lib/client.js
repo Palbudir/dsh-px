@@ -285,17 +285,17 @@ window.__ModuleLoader__.load({
 		          ] }),
 		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { fontSize: 13, opacity: 0.75 }, children: "\u6B64\u670D\u52A1\u7531\u539F\u751F\u5BBF\u4E3B\uFF08\u684C\u9762\u5BA2\u6237\u7AEF\u6216 dsh web\uFF09\u6301\u6709\u3002\u91CD\u542F\u3001\u9000\u51FA\u4E0E\u5BA2\u6237\u7AEF\u66F4\u65B0\u8BF7\u4F7F\u7528\u5BBF\u4E3B\u81EA\u8EAB\u7684\u5165\u53E3\uFF1B\u672C\u6574\u5408\u5305\u4E0D\u63A7\u5236\u8FD9\u4E9B\u64CD\u4F5C\uFF0C\u4E5F\u4E0D\u636E\u6B64\u5224\u65AD\u5BBF\u4E3B\u72B6\u6001\u3002" }),
 		          /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { fontSize: 12, opacity: 0.65 }, children: "\u4F1A\u8BDD\u6807\u7B7E\u968F\u5F53\u524D\u670D\u52A1\u4FDD\u5B58\uFF1B\u672A\u4FDD\u5B58\u7684\u6279\u6CE8\u548C\u5B9A\u65F6\u8349\u7A3F\u53EA\u4FDD\u7559\u5728\u5F53\u524D\u7A97\u53E3\uFF0C\u5173\u95ED\u524D\u8BF7\u4FDD\u5B58\u3002" }),
-		          data?.activity.known ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
-		            "\u6D3B\u52A8\uFF1A",
+		          data?.activity.observedKnown ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { children: [
+		            "\u5F53\u524D\u53EF\u89C1\u6D3B\u52A8\uFF1A",
 		            data.activity.runningAgents,
-		            " \u4E2A Agent \xB7 ",
+		            " \u4E2A\u8FD0\u884C\u4E2D\u7684 Agent \xB7 ",
 		            data.activity.runningJobs,
-		            " \u4E2A\u540E\u53F0\u4EFB\u52A1 \xB7",
 		            " ",
+		            "\u4E2A\u540E\u53F0\u4EFB\u52A1 \xB7 ",
 		            data.activity.queuedInputs,
-		            " \u6761\u6392\u961F\u8F93\u5165 \xB7 ",
-		            data.activity.openTerminals,
-		            " \u9879\u6253\u5F00\u7684\u7EC8\u7AEF\u8D44\u6E90"
+		            " \u6761\u6392\u961F\u8F93\u5165\u3002",
+		            data.activity.openTerminals > 0 ? `\u5DF2\u68C0\u6D4B\u5230\u81F3\u5C11 ${data.activity.openTerminals} \u9879\u7EC8\u7AEF\u8D44\u6E90\u3002` : "",
+		            "\u7EC8\u7AEF\u53CA\u540E\u53F0\u4EFB\u52A1\u7684\u5B8C\u6574\u603B\u6570\u65E0\u6CD5\u786E\u8BA4\uFF0C\u8BF7\u5728\u5404\u4F1A\u8BDD\u4FA7\u680F\u67E5\u770B\uFF1B\u4E0D\u80FD\u636E\u6B64\u5224\u65AD\u670D\u52A1\u7A7A\u95F2\u3002"
 		          ] }) : /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: "\u4EFB\u52A1\u6216\u7EC8\u7AEF\u72B6\u6001\u5C1A\u672A\u786E\u8BA4\uFF1B\u8BF7\u68C0\u67E5\u8FD0\u884C\u8BCA\u65AD\u53CA\u4FA7\u680F\u517C\u5BB9\u6027\uFF0C\u4E0D\u80FD\u636E\u6B64\u5224\u65AD\u670D\u52A1\u7A7A\u95F2\u3002" })
 		        ] }),
 		        /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("details", { style: card, open: data ? !data.credentialsFile : false, children: [

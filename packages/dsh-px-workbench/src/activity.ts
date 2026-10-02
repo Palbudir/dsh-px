@@ -1,9 +1,11 @@
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { rejectUnauthenticatedRequest as rejectUntrustedRequest } from '../../shared/request-trust'
-import { registerTerminalActivity, type TerminalOwner } from './terminal-activity'
+import { registerTerminalActivity, type TerminalActivity, type TerminalOwner } from './terminal-activity'
 
 export interface Activity {
   known: boolean
+  observedKnown: boolean
+  scope: 'observed-sessions'
   runningAgents: number
   queuedInputs: number
   runningJobs: number
@@ -17,10 +19,18 @@ interface Agent extends TerminalOwner {
 interface Services {
   agents: { list: () => Agent[] }
   jobs: { list: (sessionId?: string) => { id: string; status: string }[] }
-  terminalActivity: (owners: readonly Agent[]) => { known: boolean; openTerminals: number }
+  terminalActivity: (owners: readonly Agent[]) => TerminalActivity
 }
 export function activitySnapshot(services?: Services): Activity {
-  const result = { known: false, runningAgents: 0, queuedInputs: 0, runningJobs: 0, openTerminals: 0 }
+  const result: Activity = {
+    known: false,
+    observedKnown: false,
+    scope: 'observed-sessions',
+    runningAgents: 0,
+    queuedInputs: 0,
+    runningJobs: 0,
+    openTerminals: 0
+  }
   if (!services) return result
   try {
     const agents = services.agents.list()
@@ -42,8 +52,10 @@ export function activitySnapshot(services?: Services): Activity {
     ).length
     const terminals = services.terminalActivity(agents)
     result.openTerminals = terminals.openTerminals
-    result.known =
-      terminals.known === true &&
+    // Native jobs are scoped to live Agents plus unowned jobs; terminals have no global enumeration.
+    // Successful reads give observed counts, not proof that the entire Host is idle.
+    result.observedKnown =
+      terminals.observedKnown === true &&
       [result.runningAgents, result.queuedInputs, result.runningJobs, result.openTerminals].every(
         (value) => Number.isSafeInteger(value) && value >= 0
       )
@@ -53,6 +65,7 @@ export function activitySnapshot(services?: Services): Activity {
   return result
 }
 export const isIdle = (activity: Activity): boolean =>
+  activity.scope !== 'observed-sessions' &&
   activity.known === true &&
   [activity.runningAgents, activity.queuedInputs, activity.runningJobs, activity.openTerminals].every(
     (value) => Number.isSafeInteger(value) && value === 0

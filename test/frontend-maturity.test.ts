@@ -181,20 +181,27 @@ test('page carrier never infers Electron from the desktop service behind a brows
   assert.equal(pageCarrier({ protocolVersion: 0 }), 'browser')
   assert.equal(pageCarrier({ protocolVersion: 1 }), 'desktop')
 })
-test('activity counts all owners once and never equates missing native services with idle', () => {
+test('activity counts observed owners once and never equates observations with Host idle', () => {
   const a = { id: 'a', status: 'running' as const, inbox: { nextTurn: ['queued'], nextStep: ['steer'] } }
   const b = { id: 'b', status: 'idle' as const, inbox: { nextTurn: [], nextStep: [] } }
   const shared = { id: 'unowned', status: 'running' }
   const value = activitySnapshot({
     agents: { list: () => [a, b] },
-    terminalActivity: () => ({ known: true, openTerminals: 0 }),
+    terminalActivity: () => ({
+      known: false,
+      observedKnown: true,
+      scope: 'observed-sessions',
+      openTerminals: 0
+    }),
     jobs: {
       list: (owner) =>
         owner ? [shared, { id: owner, status: owner === 'a' ? 'stopping' : 'completed' }] : [shared]
     }
   })
   assert.deepEqual(value, {
-    known: true,
+    known: false,
+    observedKnown: true,
+    scope: 'observed-sessions',
     runningAgents: 1,
     queuedInputs: 2,
     runningJobs: 2,
@@ -207,10 +214,15 @@ test('activity counts all owners once and never equates missing native services 
       activitySnapshot({
         agents: { list: () => [] },
         jobs: { list: () => [] },
-        terminalActivity: () => ({ known: true, openTerminals: 0 })
+        terminalActivity: () => ({
+          known: false,
+          observedKnown: true,
+          scope: 'observed-sessions',
+          openTerminals: 0
+        })
       })
     ),
-    true
+    false
   )
 })
 
@@ -226,7 +238,12 @@ test('an idle Agent with a session-owned background job is not reported as idle'
         return sessionId === agent.id ? [{ id: 'pwsh-1', status: 'running' }] : []
       }
     },
-    terminalActivity: () => ({ known: true, openTerminals: 0 })
+    terminalActivity: () => ({
+      known: false,
+      observedKnown: true,
+      scope: 'observed-sessions',
+      openTerminals: 0
+    })
   })
   assert.deepEqual(calls, [undefined, agent.id])
   assert.equal(value.runningAgents, 0)

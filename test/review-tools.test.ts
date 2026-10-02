@@ -635,6 +635,44 @@ test('finish_reason=length splits the batch along its units and retries serially
   )
 })
 
+test('truncated tool arguments use bounded split recovery without executing partial calls', async (t) => {
+  const w = workspace(t)
+  const [batch] = batchOf([
+    { path: 'src/a.ts', before: 'a\n', after: 'b\n' },
+    { path: 'src/c.ts', before: 'c\n', after: 'd\n' }
+  ])
+  const truncated = () =>
+    completion(
+      {
+        content: '',
+        tool_calls: [
+          { id: 'partial', type: 'function', function: { name: 'read_file', arguments: '{"ref":"head"' } }
+        ]
+      },
+      'length'
+    )
+  const api = scripted([
+    truncated(),
+    completion({ content: verdict(batch.id) }),
+    completion({ content: verdict(batch.id) })
+  ])
+  const result = await runReviewBatch(config, request, batch, w.directory, options(api.fetch))
+  assert.equal(result.verdict, 'pass')
+  const evidence = JSON.parse(w.read('.evidence.json')[0])
+  assert.equal(evidence.attempts[0].outcome, 'output-truncated')
+  assert.ok(evidence.attempts.every((attempt: any) => attempt.toolCalls.length === 0))
+  const [small] = batchOf([{ path: 'src/a.ts', before: 'a\n', after: 'b\n' }])
+  const always = scripted(Array.from({ length: 40 }, () => truncated))
+  const blocked = await runReviewBatch(config, request, small, w.directory, options(always.fetch))
+  assert.equal(blocked.verdict, 'blocked')
+  assert.ok(always.bodies.length <= 15)
+  const forbidden = scripted([truncated()])
+  await assert.rejects(
+    runReviewBatch(config, request, small, w.directory, { ...options(forbidden.fetch), tools: undefined }),
+    /forbidden capability/
+  )
+})
+
 test('a head secret from a tool stops the whole review; merged secrets are masked', async (t) => {
   const w = workspace(t)
   const batches = batchOf(

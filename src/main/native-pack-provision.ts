@@ -54,7 +54,7 @@ export interface NativePackProvision {
   version: string
   sha256: string
   /** Native runPluginCommand, using its own package lock, compatibility checks and reconciliation. */
-  install: (archive: string) => Promise<void>
+  install: (archive: string, options?: { repair: boolean }) => Promise<void>
   /** Diagnostic sink; defaults to console.error so the native Desktop log captures it. */
   log?: (message: string) => void
 }
@@ -75,9 +75,12 @@ function dependency(profile: string): string | null {
 }
 function installed(profile: string, version: string): boolean {
   const file = join(profile, 'node_modules/dsh-px-pack/package.json')
-  if (!existsSync(file)) return false
-  const manifest = JSON.parse(readFileSync(file, 'utf8'))
-  return manifest.name === 'dsh-px-pack' && manifest.version === version
+  try {
+    const manifest = JSON.parse(readFileSync(file, 'utf8'))
+    return manifest.name === 'dsh-px-pack' && manifest.version === version
+  } catch {
+    return false
+  }
 }
 function validState(state: unknown): state is ProvisionState {
   if (typeof state !== 'object' || state === null) return false
@@ -200,14 +203,22 @@ function verifiedBundle(options: NativePackProvision): Buffer {
 function writeCache(cached: string, bytes: Buffer, sha256: string): boolean {
   assertRegularOrAbsent(cached, 'Pack cache')
   if (existsSync(cached)) {
-    if (hash(readFileSync(cached)) === sha256) return false
+    try {
+      if (hash(readFileSync(cached)) === sha256) return false
+    } catch {
+      // Only this owned cache is replaced; no ACL or external package is changed.
+    }
     quarantine(cached)
   }
   writeAtomic(cached, bytes)
   return true
 }
 function cacheValid(cached: string, sha256: string): boolean {
-  return existsSync(cached) && lstatSync(cached).isFile() && hash(readFileSync(cached)) === sha256
+  try {
+    return lstatSync(cached).isFile() && hash(readFileSync(cached)) === sha256
+  } catch {
+    return false
+  }
 }
 
 /**
@@ -259,16 +270,31 @@ export async function provisionNativePack(options: NativePackProvision): Promise
       })
       return 'user-managed'
     }
+    const retry = state !== undefined && state.phase !== 'installed' ? state : undefined
+    const pending: ProvisionState = {
+      schemaVersion: 1,
+      phase: 'pending',
+      version: options.version,
+      sha256: options.sha256,
+      previousSpec:
+        retry && sameSpec(current, retry.targetSpec, options.profile) ? retry.previousSpec : current,
+      targetSpec,
+      attempts: (retry?.sha256 === options.sha256 ? (retry.attempts ?? 0) : 0) + 1
+    }
+    // Cache verification can also fail; establish durable failure information before that branch.
+    failure = pending
+    const manifestMatches = installed(options.profile, options.version)
+    const repair = sameSpec(current, targetSpec, options.profile) && !manifestMatches
     if (
       state?.phase === 'installed' &&
       state.sha256 === options.sha256 &&
       state.version === options.version &&
       sameSpec(state.targetSpec, targetSpec, options.profile) &&
-      installed(options.profile, options.version)
+      manifestMatches
     ) {
       let result: NativePackProvisionResult = 'unchanged'
       if (!cacheValid(cached, options.sha256)) {
-        // The installed bytes are already verified; restoring the file dependency needs no reinstall.
+        // The installed package identity matches; restoring the file dependency needs no reinstall.
         writeCache(cached, verifiedBundle(options), options.sha256)
         log('[dsh-px] Restored missing or damaged Pack cache from the bundled archive')
         result = 'repaired'
@@ -282,25 +308,12 @@ export async function provisionNativePack(options: NativePackProvision): Promise
       log(
         '[dsh-px] Managed Pack dependency points outside this profile; reinstalling from this profile cache'
       )
-    const retry = state !== undefined && state.phase !== 'installed' ? state : undefined
-    const pending: ProvisionState = {
-      schemaVersion: 1,
-      phase: 'pending',
-      version: options.version,
-      sha256: options.sha256,
-      // A half-applied retry keeps the dependency that was active before the first attempt.
-      previousSpec:
-        retry && sameSpec(current, retry.targetSpec, options.profile) ? retry.previousSpec : current,
-      targetSpec,
-      attempts: (retry?.sha256 === options.sha256 ? (retry.attempts ?? 0) : 0) + 1
-    }
-    failure = pending
     writeCache(cached, verifiedBundle(options), options.sha256)
     saveState(file, pending)
     // The native manager restores the profile manifest only for a compatibility denial; a failed pnpm
     // run can leave package.json naming the new Pack. Keep the files to put them back on failure.
     snapshot = snapshotProfile(options.profile)
-    await options.install(cached)
+    await options.install(cached, { repair })
     if (
       !sameSpec(dependency(options.profile), targetSpec, options.profile) ||
       !installed(options.profile, options.version)

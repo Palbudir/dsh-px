@@ -334,6 +334,8 @@ export async function callReviewModel(config, messages, options = {}) {
     if (message.tool_calls?.length) {
       if (!tools) throw new Error('Reviewer attempted a forbidden capability: tool_calls')
       if (finalizing) throw new Error('Reviewer requested tools after its tool budget was exhausted')
+      if (choice.finish_reason === 'length')
+        throw new OutputTruncated('Review model did not complete (finish_reason=length)')
       if (choice.finish_reason !== 'tool_calls')
         throw new Error(`Review model did not complete (finish_reason=${String(choice.finish_reason)})`)
       if (

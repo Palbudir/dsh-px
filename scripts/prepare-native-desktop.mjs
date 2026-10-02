@@ -211,8 +211,8 @@ export async function preparePxPack(profile,runtimeDir){
     const require=createRequire(join(runtimeDir,'package.json'));
     ({runPluginCommand}=await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-plugin-manager/operations')).href));
   }catch(error){console.error('[dsh-px] Native plugin operations unavailable; Pack provisioning skipped',error);return 'failed'}
-  const result=await provisionNativePack({profile,archive,version:${JSON.stringify(products.pack.version)},sha256:${JSON.stringify(packSha256)},install:async archive=>{
-    const result=await runPluginCommand({profile:'desktop',dir:profile,installAnchor:join(runtimeDir,'node_modules/@deepseek-ai/dsh/package.json'),cwd:profile},['add',archive.replaceAll('\\\\','/')],{
+  const result=await provisionNativePack({profile,archive,version:${JSON.stringify(products.pack.version)},sha256:${JSON.stringify(packSha256)},install:async (archive,mode)=>{
+    const result=await runPluginCommand({profile:'desktop',dir:profile,installAnchor:join(runtimeDir,'node_modules/@deepseek-ai/dsh/package.json'),cwd:profile},['add',...(mode?.repair?['--force']:[]),archive.replaceAll('\\\\','/')],{
       execution:'service',command:process.execPath,args:['--expose-internals',join(process.resourcesPath,'runtime/pnpm/bin/pnpm.mjs')],outputBytes:16384,idleTimeoutMs:120000,signal:AbortSignal.timeout(300000),
       env:{ELECTRON_RUN_AS_NODE:'1',DSH_DESKTOP_NODE_EXECUTABLE:process.execPath,PATH:join(process.resourcesPath,'runtime/bin')+delimiter+(process.env.PATH||'')}
     });if(result.exitCode!==0||result.timedOut)throw Error('Native Pack installation failed; see '+result.logPath);

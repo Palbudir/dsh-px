@@ -126,10 +126,14 @@ function Workbench({ capabilities }: { capabilities: CapabilityStore }): unknown
         <p style={{ fontSize: 12, opacity: 0.65 }}>
           会话标签随当前服务保存；未保存的批注和定时草稿只保留在当前窗口，关闭前请保存。
         </p>
-        {data?.activity.known ? (
+        {data?.activity.observedKnown ? (
           <p>
-            活动：{data.activity.runningAgents} 个 Agent · {data.activity.runningJobs} 个后台任务 ·{' '}
-            {data.activity.queuedInputs} 条排队输入 · {data.activity.openTerminals} 项打开的终端资源
+            当前可见活动：{data.activity.runningAgents} 个运行中的 Agent · {data.activity.runningJobs}{' '}
+            个后台任务 · {data.activity.queuedInputs} 条排队输入。
+            {data.activity.openTerminals > 0
+              ? `已检测到至少 ${data.activity.openTerminals} 项终端资源。`
+              : ''}
+            终端及后台任务的完整总数无法确认，请在各会话侧栏查看；不能据此判断服务空闲。
           </p>
         ) : (
           <p>任务或终端状态尚未确认；请检查运行诊断及侧栏兼容性，不能据此判断服务空闲。</p>

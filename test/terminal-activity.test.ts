@@ -5,16 +5,23 @@ import {
   registerTerminalActivity,
   type BrowserTerminalController,
   type NativeTerminalRegistry,
-  type TerminalSources
+  type TerminalSources,
+  type TerminalActivity
 } from '../packages/dsh-px-workbench/src/terminal-activity'
 import { activitySnapshot, isIdle } from '../packages/dsh-px-workbench/src/activity'
 
 const idleNative: NativeTerminalRegistry = { hasOwnerActivity: () => false, list: () => [] }
 const noShells: BrowserTerminalController = { list: () => [] }
 const owner = (id = 'session-1') => ({ id, ctx: { get: () => undefined } })
+const observed = (openTerminals: number): TerminalActivity => ({
+  known: false,
+  observedKnown: true,
+  scope: 'observed-sessions',
+  openTerminals
+})
 
 test('without terminalController, terminal activity is unknown rather than idle', () => {
-  assert.equal(createTerminalActivityReader()([]).known, false)
+  assert.equal(createTerminalActivityReader()([]).observedKnown, false)
 })
 
 test('real composition: terminalController at host level, terminals only inside each Agent preset', () => {
@@ -25,7 +32,7 @@ test('real composition: terminalController at host level, terminals only inside 
   const read = registerTerminalActivity({
     inject: (names, apply) => injected.set(names[0], apply)
   })
-  assert.equal(read([owner()]).known, false, 'before terminalController is bound')
+  assert.equal(read([owner()]).observedKnown, false, 'before terminalController is bound')
   injected.get('terminalController')!({
     terminalController: { list: (id: string) => (id === 'session-1' ? [{ id: 'shell' }] : []) },
     effect: (setup: () => () => void) => effects.push(setup())
@@ -40,16 +47,16 @@ test('real composition: terminalController at host level, terminals only inside 
     },
     effect: () => {}
   })
-  assert.deepEqual(read([withTerminals, withoutTerminals]), { known: true, openTerminals: 3 })
+  assert.deepEqual(read([withTerminals, withoutTerminals]), observed(3))
   // An Agent that leaves the list keeps its terminals counted until its registry drains, and its
   // still-open sidebar shell stays counted too (2 Agent terminals + 1 shell).
-  assert.deepEqual(read([withoutTerminals]), { known: true, openTerminals: 3 })
+  assert.deepEqual(read([withoutTerminals]), observed(3))
   const fresh = registerTerminalActivity({ inject: (names, apply) => injected.set(names[0], apply) })
   injected.get('terminalController')!({ terminalController: { list: () => [] }, effect: () => {} })
-  assert.deepEqual(fresh([withoutTerminals]), { known: true, openTerminals: 0 })
+  assert.deepEqual(fresh([withoutTerminals]), observed(0))
   // Disposing terminalController makes the count unknown again.
   for (const dispose of effects) dispose()
-  assert.equal(read([withoutTerminals]).known, false)
+  assert.equal(read([withoutTerminals]).observedKnown, false)
 })
 
 test('an open Agent tool terminal in an isolated preset is never reported as idle', () => {
@@ -60,7 +67,7 @@ test('an open Agent tool terminal in an isolated preset is never reported as idl
   const terminals: NativeTerminalRegistry = { hasOwnerActivity: () => true, list: () => [{}] }
   injected.get('agentPresets')!({ agentPresets: { serviceFor: () => terminals }, effect: () => {} })
   const activity = read([agent])
-  assert.deepEqual(activity, { known: true, openTerminals: 1 })
+  assert.deepEqual(activity, observed(1))
   assert.equal(
     isIdle(
       activitySnapshot({
@@ -73,10 +80,10 @@ test('an open Agent tool terminal in an isolated preset is never reported as idl
   )
 })
 
-test('no Agent terminal and no open sidebar shell reports a known zero', () => {
+test('no observed terminal does not establish a complete Host inventory', () => {
   assert.deepEqual(
     createTerminalActivityReader()([owner()], { native: () => idleNative, browser: noShells }),
-    { known: true, openTerminals: 0 }
+    observed(0)
   )
 })
 
@@ -86,10 +93,7 @@ test('an open sidebar shell (terminalController) is counted, so the service neve
   }
   const read = createTerminalActivityReader()
   const sources: TerminalSources = { native: () => idleNative, browser: shells }
-  assert.deepEqual(read([owner('session-1'), owner('session-2')], sources), {
-    known: true,
-    openTerminals: 2
-  })
+  assert.deepEqual(read([owner('session-1'), owner('session-2')], sources), observed(2))
   assert.equal(
     isIdle(
       activitySnapshot({
@@ -109,9 +113,9 @@ test('a sidebar shell that outlives its Agent stays counted until the shell is g
   const shells: BrowserTerminalController = { list: (sessionId) => (sessionId === 'session-1' ? open : []) }
   const read = createTerminalActivityReader()
   const sources: TerminalSources = { native: () => idleNative, browser: shells }
-  assert.deepEqual(read([owner('session-1')], sources), { known: true, openTerminals: 1 })
+  assert.deepEqual(read([owner('session-1')], sources), observed(1))
   // The Agent left the list (session closed) while its shell is still running.
-  assert.deepEqual(read([], sources), { known: true, openTerminals: 1 })
+  assert.deepEqual(read([], sources), observed(1))
   assert.equal(
     isIdle(
       activitySnapshot({
@@ -122,17 +126,17 @@ test('a sidebar shell that outlives its Agent stays counted until the shell is g
     ),
     false
   )
-  // Once the shell exits the Session is forgotten and the service is idle again.
+  // Once the shell exits the Session is forgotten; this still says nothing about unobserved owners.
   open = []
-  assert.deepEqual(read([], sources), { known: true, openTerminals: 0 })
+  assert.deepEqual(read([], sources), observed(0))
   open = [{ id: 'shell-late' }]
-  assert.deepEqual(read([], sources), { known: true, openTerminals: 0 }, 'forgotten Sessions are not polled')
+  assert.deepEqual(read([], sources), observed(0), 'forgotten Sessions are not polled')
 })
 
 test('an incompatible native registry or shell list is unknown, never idle', () => {
   const broken = { hasOwnerActivity: () => 'yes', list: () => [] } as unknown as NativeTerminalRegistry
   assert.equal(
-    createTerminalActivityReader()([owner()], { native: () => broken, browser: noShells }).known,
+    createTerminalActivityReader()([owner()], { native: () => broken, browser: noShells }).observedKnown,
     false
   )
   const throwing: NativeTerminalRegistry = {
@@ -142,12 +146,12 @@ test('an incompatible native registry or shell list is unknown, never idle', () 
     list: () => []
   }
   assert.equal(
-    createTerminalActivityReader()([owner()], { native: () => throwing, browser: noShells }).known,
+    createTerminalActivityReader()([owner()], { native: () => throwing, browser: noShells }).observedKnown,
     false
   )
   const badShells = { list: () => 'x' } as unknown as BrowserTerminalController
   assert.equal(
-    createTerminalActivityReader()([owner()], { native: () => idleNative, browser: badShells }).known,
+    createTerminalActivityReader()([owner()], { native: () => idleNative, browser: badShells }).observedKnown,
     false
   )
   // An owner without a Session id cannot be matched to its sidebar shells.
@@ -155,7 +159,7 @@ test('an incompatible native registry or shell list is unknown, never idle', () 
     createTerminalActivityReader()([{ ctx: { get: () => undefined } }], {
       native: () => idleNative,
       browser: noShells
-    }).known,
+    }).observedKnown,
     false
   )
 })
@@ -190,20 +194,41 @@ test('native terminal pending spawns and removed owners are retained through nat
 
 test('workbench does not report idle for open, invalid or unavailable terminal resources', () => {
   for (const terminal of [
-    { known: true, openTerminals: 1 },
-    { known: true, openTerminals: NaN },
-    { known: false, openTerminals: 0 },
-    { known: 'false' as any, openTerminals: 0 }
+    observed(1),
+    observed(NaN),
+    { ...observed(0), observedKnown: false },
+    { ...observed(0), observedKnown: 'false' as any }
   ]) {
+    const snapshot = activitySnapshot({
+      agents: { list: () => [] },
+      jobs: { list: () => [] },
+      terminalActivity: () => terminal
+    })
     assert.equal(
-      isIdle(
-        activitySnapshot({
-          agents: { list: () => [] },
-          jobs: { list: () => [] },
-          terminalActivity: () => terminal
-        })
-      ),
-      false
+      snapshot.observedKnown,
+      terminal.observedKnown === true && Number.isSafeInteger(terminal.openTerminals)
     )
+    assert.equal(isIdle(snapshot), false)
   }
+})
+
+test('a shell whose Agent was never observed cannot produce a globally known zero or idle verdict', () => {
+  const sources: TerminalSources = {
+    native: () => idleNative,
+    browser: { list: (id) => (id === 'detached' ? [{}] : []) }
+  }
+  const read = createTerminalActivityReader()
+  const terminals = read([], sources)
+  assert.equal(terminals.known, false)
+  assert.equal(terminals.scope, 'observed-sessions')
+  assert.equal(terminals.observedKnown, true)
+  assert.equal(terminals.openTerminals, 0, 'no global terminal enumeration is available')
+  const snapshot = activitySnapshot({
+    agents: { list: () => [] },
+    jobs: { list: () => [] },
+    terminalActivity: () => terminals
+  })
+  assert.equal(snapshot.known, false)
+  assert.equal(snapshot.observedKnown, true)
+  assert.equal(isIdle(snapshot), false)
 })

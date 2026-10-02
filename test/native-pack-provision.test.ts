@@ -83,6 +83,59 @@ test('partial owned archive cache is repaired from verified bundled bytes on ret
   }
 })
 
+test('a damaged managed manifest enters explicit repair and records failed attempts', async () => {
+  const f = fixture()
+  try {
+    assert.equal(await provisionNativePack(f.options), 'installed')
+    const manifest = join(f.root, 'node_modules/dsh-px-pack/package.json')
+    writeFileSync(manifest, '{')
+    const modes: boolean[] = []
+    assert.equal(
+      await provisionNativePack({
+        ...f.options,
+        install: async (_path, mode) => {
+          modes.push(mode?.repair === true)
+          throw Error('fixture locked package')
+        }
+      }),
+      'failed'
+    )
+    assert.equal(f.state().phase, 'failed')
+    assert.match(f.state().lastError, /fixture locked package/)
+    assert.equal(
+      await provisionNativePack({
+        ...f.options,
+        install: async (path, mode) => {
+          modes.push(mode?.repair === true)
+          await f.options.install(path, mode)
+        }
+      }),
+      'installed'
+    )
+    assert.deepEqual(modes, [true, true])
+    assert.equal(readJson(manifest).version, f.options.version)
+    assert.equal(f.state().phase, 'installed')
+    assert.deepEqual(readJson(join(f.root, 'package.json')).dsh.profile.bundles, ['core'])
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('an unverifiable cache records failure and preserves an unexpected directory', async () => {
+  const f = fixture()
+  try {
+    assert.equal(await provisionNativePack(f.options), 'installed')
+    const cached = f.cache(f.options)
+    rmSync(cached)
+    mkdirSync(cached)
+    assert.equal(await provisionNativePack(f.options), 'failed')
+    assert.equal(f.state().phase, 'failed')
+    assert.ok(existsSync(cached))
+  } finally {
+    f.cleanup()
+  }
+})
+
 test('managed Pack installs once and respects subsequent removal', async () => {
   const f = fixture()
   try {

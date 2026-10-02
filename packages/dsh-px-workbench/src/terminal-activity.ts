@@ -14,6 +14,12 @@ export interface TerminalSources {
   native: (owner: TerminalOwner) => NativeTerminalRegistry | undefined
   browser: BrowserTerminalController
 }
+export interface TerminalActivity {
+  known: boolean
+  observedKnown: boolean
+  scope: 'observed-sessions'
+  openTerminals: number
+}
 
 /**
  * Count terminal resources, not guessed foreground command state. DSH has two owners of terminals:
@@ -23,16 +29,20 @@ export interface TerminalSources {
  * unknown, never idle. Closing native registries are retained until they drain. Browser shells are
  * released only when their Agent's context is disposed and cleanup succeeds, which can finish after
  * the Agent has left the list (or never, when cleanup fails); every Session id seen as an owner is
- * therefore counted until its shells are gone.
+ * therefore counted until its shells are gone. The public controller cannot enumerate all Session
+ * owners: a shell can outlive an Agent that no poll observed. Counts are observations only, never a
+ * complete Host inventory. `known` stays false even when `observedKnown` confirms a successful read.
  */
 export function createTerminalActivityReader() {
   const nativeOwners = new Map<TerminalOwner, Map<object, NativeTerminalRegistry>>()
   const browserSessions = new Set<string>()
-  return (
-    owners: readonly TerminalOwner[],
-    sources?: TerminalSources
-  ): { known: boolean; openTerminals: number } => {
-    const result = { known: false, openTerminals: 0 }
+  return (owners: readonly TerminalOwner[], sources?: TerminalSources): TerminalActivity => {
+    const result: TerminalActivity = {
+      known: false,
+      observedKnown: false,
+      scope: 'observed-sessions',
+      openTerminals: 0
+    }
     if (!sources) return result
     try {
       for (const owner of owners) {
@@ -73,7 +83,7 @@ export function createTerminalActivityReader() {
         }
         if (!registries.size) nativeOwners.delete(owner)
       }
-      result.known = Number.isSafeInteger(result.openTerminals) && result.openTerminals >= 0
+      result.observedKnown = Number.isSafeInteger(result.openTerminals) && result.openTerminals >= 0
     } catch (error) {
       // An incompatible contract must never be reported as an idle terminal service.
       void error
@@ -95,7 +105,7 @@ interface AgentPresetLookup {
 
 export function registerTerminalActivity(
   ctx: TerminalHost
-): (owners: readonly TerminalOwner[]) => { known: boolean; openTerminals: number } {
+): (owners: readonly TerminalOwner[]) => TerminalActivity {
   const read = createTerminalActivityReader()
   // `terminals` is an Agent-scoped service. Official presets mount it inside an isolated preset
   // group that is not under the Agent's own fiber, so `agent.ctx.get('terminals')` cannot see it;

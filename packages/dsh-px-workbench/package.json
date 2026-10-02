@@ -3,7 +3,7 @@
   "version": "0.2.0-alpha.1",
   "private": true,
   "type": "module",
-  "description": "DSH-PX 本机工作台：运行检查、插件清单与服务恢复",
+  "description": "DSH-PX 本机工作台：运行检查、插件清单与活动快照",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
