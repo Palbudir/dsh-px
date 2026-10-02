@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -9,6 +10,7 @@ import {
   renameSync,
   rmSync,
   symlinkSync,
+  utimesSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -265,6 +267,62 @@ test('an unverifiable cache records failure and preserves an unexpected director
     assert.ok(existsSync(cached))
   } finally {
     f.cleanup()
+  }
+})
+
+test('repeated partial repairs retain at most three owned copies without following junctions', async () => {
+  const f = fixture()
+  const other = fixture()
+  try {
+    assert.equal(await provisionNativePack(f.options), 'installed')
+    const directory = join(f.root, '.dsh-px')
+    const pack = join(f.root, 'node_modules/dsh-px-pack')
+    const manifest = join(pack, 'package.json')
+    const sentinel = join(other.root, 'keep.txt')
+    writeFileSync(sentinel, 'outside recovery storage')
+    const linkType = process.platform === 'win32' ? 'junction' : 'dir'
+    symlinkSync(other.root, join(pack, 'external'), linkType)
+    const foreign = `recovery-pack-${randomUUID()}`
+    symlinkSync(other.root, join(directory, foreign), linkType)
+    mkdirSync(join(directory, 'recovery-pack-user-notes'))
+    writeFileSync(join(directory, 'recovery-pack-user-notes/keep.txt'), 'unrelated')
+    let firstCopy = ''
+    for (let index = 0; index < 5; index++) {
+      writeFileSync(manifest, `broken-${index}`)
+      // Make the final newly preserved copy look old: retention must protect its identity, not mtime.
+      const time = new Date(index === 4 ? 0 : (index + 1) * 100000)
+      utimesSync(pack, time, time)
+      assert.equal(
+        await provisionNativePack({
+          ...f.options,
+          install: async () => {
+            mkdirSync(pack, { recursive: true })
+            writeFileSync(manifest, `partial-${index}`)
+            throw Error('partial native install')
+          }
+        }),
+        'failed'
+      )
+      const copies = readdirSync(directory).filter(
+        (name) => name.startsWith('recovery-pack-') && name !== foreign && name !== 'recovery-pack-user-notes'
+      )
+      if (index === 0) firstCopy = join(directory, copies[0])
+      assert.equal(copies.length, Math.min(index + 1, 3))
+      assert.ok(
+        copies.some(
+          (name) => readFileSync(join(directory, name, 'package.json'), 'utf8') === `broken-${index}`
+        )
+      )
+    }
+    assert.equal(existsSync(firstCopy), false, 'old copy containing a nested junction was pruned')
+    assert.equal(readFileSync(sentinel, 'utf8'), 'outside recovery storage')
+    assert.ok(lstatSync(join(directory, foreign)).isSymbolicLink(), 'top-level junction was not removed')
+    assert.equal(readFileSync(join(directory, 'recovery-pack-user-notes/keep.txt'), 'utf8'), 'unrelated')
+    assert.equal(await provisionNativePack(f.options), 'installed')
+    assert.equal(await provisionNativePack(f.options), 'unchanged')
+  } finally {
+    f.cleanup()
+    other.cleanup()
   }
 })
 

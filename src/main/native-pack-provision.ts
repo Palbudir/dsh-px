@@ -1,5 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs'
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync
+} from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { assertRegularOrAbsent, isAtomicTemporary, renameWithRetry, writeAtomic } from './native-atomic'
@@ -64,6 +73,8 @@ const CACHE_PATTERN = /^pack-[a-f0-9]{64}\.tgz$/
 const CORRUPT_MARKER = '.corrupt-'
 /** Quarantined files kept for diagnosis; older ones are removed. */
 const CORRUPT_RETAINED = 3
+const RECOVERY_RETAINED = 3
+const RECOVERY_PATTERN = /^recovery-pack-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 const ERROR_LIMIT = 500
 
 const hash = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
@@ -184,6 +195,43 @@ function pruneCorrupt(directory: string): void {
     .sort((a, b) => b.time - a.time)
   for (const { name } of corrupt.slice(CORRUPT_RETAINED)) rmSync(join(directory, name), { force: true })
 }
+/** Best-effort retention of PX-owned package evidence; never follow links or block a repaired Host. */
+function pruneRecovery(directory: string, log: (message: string) => void, keep?: string): void {
+  try {
+    const rootEntry = lstatSync(directory)
+    if (!rootEntry.isDirectory() || rootEntry.isSymbolicLink()) return
+    const root = realpathSync(directory)
+    const profile = realpathSync(dirname(directory))
+    if (dirname(root) !== profile || !inside(profile, root)) return
+    const entries = readdirSync(directory)
+      .filter((name) => RECOVERY_PATTERN.test(name))
+      .flatMap((name) => {
+        const path = join(directory, name)
+        const stat = lstatSync(path)
+        return stat.isDirectory() && !stat.isSymbolicLink() ? [{ path, time: stat.mtimeMs }] : []
+      })
+      .sort(
+        (a, b) =>
+          Number(b.path === keep) - Number(a.path === keep) || b.time - a.time || a.path.localeCompare(b.path)
+      )
+    for (const entry of entries.slice(RECOVERY_RETAINED)) {
+      try {
+        const stat = lstatSync(entry.path)
+        if (!stat.isDirectory() || stat.isSymbolicLink()) continue
+        const target = realpathSync(entry.path)
+        if (dirname(target) !== root || !inside(root, target)) continue
+        // Node removes nested symlinks/junctions themselves; their targets are never traversed.
+        rmSync(target, { recursive: true, force: true })
+      } catch (error) {
+        log(
+          `[dsh-px] Recovery retention will retry on a later start (${(error as NodeJS.ErrnoException)?.code ?? 'unknown'})`
+        )
+      }
+    }
+  } catch (error) {
+    log(`[dsh-px] Recovery retention unavailable (${(error as NodeJS.ErrnoException)?.code ?? 'unknown'})`)
+  }
+}
 /** Keep only the current cache and the archive the current dependency points to. */
 function pruneCaches(directory: string, keep: readonly (string | undefined)[]): void {
   for (const name of readdirSync(directory)) {
@@ -251,6 +299,8 @@ function preserveDamagedHoistedPack(
     throw new Error('Pack recovery path is outside the profile')
   renameWithRetry(pack, target)
   log(`[dsh-px] Preserved damaged managed Pack at ${target}; reinstalling through the native manager`)
+  // Explicitly keep this copy: a rename need not update the original package directory's mtime.
+  pruneRecovery(directory, log, target)
 }
 
 /**
@@ -277,6 +327,7 @@ export async function provisionNativePack(options: NativePackProvision): Promise
     file = join(directory, STATE_FILE)
     const state = loadState(file, log)
     pruneCorrupt(directory)
+    pruneRecovery(directory, log)
     const current = dependency(options.profile)
     // pnpm's durable file dependency must survive later Desktop resource replacement.
     const cached = join(directory, `pack-${options.sha256}.tgz`)
