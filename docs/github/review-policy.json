@@ -3,7 +3,7 @@
   "repository": "Palbudir/dsh-px",
   "branch": "master",
   "publisher": "Palbudir",
-  "workerDigest": "8b9178965eee33583a6edce9a12ce17b7b7c80a9bc2c0869613527fbcfff20fc",
+  "workerDigest": "020069bafafc931a8013e4fa8b92b9bd3940b1520b1e6c80150786c5bba1de6a",
   "reviewAppId": 5097986,
   "maxAgeHours": 168,
   "requiredChecks": ["dsh-px/independent-review", "dsh-px/quality"],
@@ -28,12 +28,12 @@
       "scripts/build-native-pack.ts": "c2bcd9e39f4703947f4ed1be2d3195573efc6fc0ed0a1052905f5a45ef401619",
       "scripts/prepare-native-desktop.mjs": "44dff704872f60ded34703df4ae1defe8a1d3dac7ca83afc9018044f2ce4fdf9",
       "scripts/verify-native-pack-install.mjs": "830f1ad733084580b2c3fda89de2eeecd557c899c577182b5a778bc8b979aef2",
+      "scripts/native-pack-spec.mjs": "30540bde9ffb086f608353f5b652f13cd4285539351fe390ea7956cae2624acb",
       "scripts/brand-native-installer.mjs": "47aca27d855dcba093c36322a56f8b4fc5107cdc8811e967c8dfca7551e6416c",
       "scripts/brand-installer-images.ps1": "34dd2ca993d80a9c92960033b88b6958564d4127b5acb60f4fed3036ad6c5459",
       "scripts/build-icon.ts": "3d47e2d3d8511af37ddd20f99e4219f4fb951640f43cdc15c67da27859561162",
       "scripts/check-secrets.mjs": "fc054a82baf5b0602ab322982ed3e1471c8b47d8d1dc79dcef122c64a1c1d765",
-      "scripts/run.mjs": "e95a2c728d278790709ca243f82c7cbaebd15559fbb5d94d9deaf6cb1077b78e",
-      "scripts/native-pack-spec.mjs": "30540bde9ffb086f608353f5b652f13cd4285539351fe390ea7956cae2624acb"
+      "scripts/run.mjs": "e95a2c728d278790709ca243f82c7cbaebd15559fbb5d94d9deaf6cb1077b78e"
     }
   },
   "keys": {
