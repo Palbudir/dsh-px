@@ -975,7 +975,7 @@ window.__ModuleLoader__.load({
 		        },
 		        type
 		      )),
-		      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "px-status", children: current ? row?.origin === "subagent" ? "\u6B63\u5728\u67E5\u770B\u5B50 Agent \xB7 \u8FD4\u56DE\u4E0A\u7EA7\u53EF\u7EE7\u7EED\u4EFB\u52A1" : row?.running ? "Agent \u6267\u884C\u4E2D" : "\u5C31\u7EEA" : "\u9009\u62E9\u6216\u65B0\u5EFA\u4F1A\u8BDD\u5F00\u59CB" })
+		      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("span", { className: "px-status", children: current ? row?.origin === "subagent" ? "\u6B63\u5728\u67E5\u770B\u5B50 Agent \xB7 \u8FD4\u56DE\u4E0A\u7EA7\u53EF\u7EE7\u7EED\u4EFB\u52A1" : row?.running ? "Agent \u6267\u884C\u4E2D" : "\u53EF\u7EE7\u7EED\u5BF9\u8BDD" : "\u9009\u62E9\u6216\u65B0\u5EFA\u4F1A\u8BDD\u5F00\u59CB" })
 		    ] }),
 		    missingPanels.length ? /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { role: "status", className: "px-dependency-warning", children: [
 		      "\u6682\u4E0D\u53EF\u7528\u7684\u9762\u677F\uFF1A",

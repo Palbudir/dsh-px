@@ -265,7 +265,7 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
               ? '正在查看子 Agent · 返回上级可继续任务'
               : row?.running
                 ? 'Agent 执行中'
-                : '就绪'
+                : '可继续对话'
             : '选择或新建会话开始'}
         </span>
       </div>

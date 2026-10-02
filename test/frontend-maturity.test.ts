@@ -190,7 +190,7 @@ test('activity counts all owners once and never equates missing native services 
     terminalActivity: () => ({ known: true, openTerminals: 0 }),
     jobs: {
       list: (owner) =>
-        owner ? [shared, { id: owner.id, status: owner.id === 'a' ? 'stopping' : 'completed' }] : [shared]
+        owner ? [shared, { id: owner, status: owner === 'a' ? 'stopping' : 'completed' }] : [shared]
     }
   })
   assert.deepEqual(value, {
@@ -212,6 +212,26 @@ test('activity counts all owners once and never equates missing native services 
     ),
     true
   )
+})
+
+test('an idle Agent with a session-owned background job is not reported as idle', () => {
+  const agent = { id: 'session-background', status: 'idle' as const, inbox: { nextTurn: [], nextStep: [] } }
+  const calls: Array<string | undefined> = []
+  const value = activitySnapshot({
+    agents: { list: () => [agent] },
+    jobs: {
+      list: (sessionId) => {
+        calls.push(sessionId)
+        // Matches the native registry's strict comparison of job.owner.id to caller.
+        return sessionId === agent.id ? [{ id: 'pwsh-1', status: 'running' }] : []
+      }
+    },
+    terminalActivity: () => ({ known: true, openTerminals: 0 })
+  })
+  assert.deepEqual(calls, [undefined, agent.id])
+  assert.equal(value.runningAgents, 0)
+  assert.equal(value.runningJobs, 1)
+  assert.equal(isIdle(value), false)
 })
 test('activity is a read-only authenticated snapshot; the Pack exposes no shutdown route', () => {
   const disposers: Array<() => void> = []

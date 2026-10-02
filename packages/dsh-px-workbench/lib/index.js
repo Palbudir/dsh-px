@@ -393,7 +393,7 @@ function activitySnapshot(services) {
         return result;
       result.runningAgents += Number(agent.status === "running");
       result.queuedInputs += agent.inbox.nextTurn.length + agent.inbox.nextStep.length;
-      for (const job of services.jobs.list(agent)) jobs.set(job.id, job);
+      for (const job of services.jobs.list(agent.id)) jobs.set(job.id, job);
     }
     result.runningJobs = [...jobs.values()].filter(
       (job) => job.status === "running" || job.status === "stopping"

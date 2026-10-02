@@ -16,7 +16,7 @@ interface Agent extends TerminalOwner {
 }
 interface Services {
   agents: { list: () => Agent[] }
-  jobs: { list: (owner?: Agent) => { id: string; status: string }[] }
+  jobs: { list: (sessionId?: string) => { id: string; status: string }[] }
   terminalActivity: (owners: readonly Agent[]) => { known: boolean; openTerminals: number }
 }
 export function activitySnapshot(services?: Services): Activity {
@@ -34,7 +34,8 @@ export function activitySnapshot(services?: Services): Activity {
         return result
       result.runningAgents += Number(agent.status === 'running')
       result.queuedInputs += agent.inbox.nextTurn.length + agent.inbox.nextStep.length
-      for (const job of services.jobs.list(agent)) jobs.set(job.id, job)
+      // Native JobRegistry.list is fenced by SessionId, not by the Agent object.
+      for (const job of services.jobs.list(agent.id)) jobs.set(job.id, job)
     }
     result.runningJobs = [...jobs.values()].filter(
       (job) => job.status === 'running' || job.status === 'stopping'
