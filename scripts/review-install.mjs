@@ -174,6 +174,7 @@ async function main() {
           'scripts/build-native-pack.ts',
           'scripts/prepare-native-desktop.mjs',
           'scripts/verify-native-pack-install.mjs',
+          'scripts/native-pack-spec.mjs',
           'scripts/brand-native-installer.mjs',
           'scripts/brand-installer-images.ps1',
           'scripts/build-icon.ts',

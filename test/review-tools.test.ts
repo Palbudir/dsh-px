@@ -1107,7 +1107,24 @@ test('the proof stays within the workflow input in the worst case', () => {
   }
 })
 
-test('adjudication: only findings refuted with a citation it read are downgraded', async (t) => {
+test('serious findings do not trigger another model conversation by default', async (t) => {
+  const [batch] = batchOf([{ path: 'src/a.ts', before: 'a\n', after: 'b\n' }])
+  const w = workspace(t)
+  const api = scripted([
+    completion({
+      content: verdict(batch.id, {
+        verdict: 'fail',
+        findings: [{ priority: 2, path: 'src/a.ts', line: 1, title: 'defect', detail: 'evidence' }]
+      })
+    })
+  ])
+  const result = await runReviewBatch(config, request, batch, w.directory, options(api.fetch))
+  assert.equal(result.verdict, 'fail')
+  assert.equal(result.findings[0].priority, 2)
+  assert.equal(api.bodies.length, 1)
+})
+
+test('adjudication: refutations are evidence only and never downgrade serious findings', async (t) => {
   const [batch] = batchOf([{ path: 'src/a.ts', before: 'a\n', after: 'b\n' }])
   const p2 = { priority: 2, path: 'src/a.ts', line: 1, title: 'double slash', detail: 'claimed defect' }
   const p3 = { priority: 3, path: 'src/a.ts', line: 1, title: 'polish', detail: 'minor' }
@@ -1131,17 +1148,20 @@ test('adjudication: only findings refuted with a citation it read are downgraded
       completion({ content: first }),
       ...(adjudication instanceof Error ? [] : adjudication)
     ])
-    const value = await runReviewBatch(config, request, batch, w.directory, options(api.fetch))
+    const value = await runReviewBatch(config, request, batch, w.directory, {
+      ...options(api.fetch),
+      adjudicate: true
+    })
     return { value, api, evidence: JSON.parse(w.read('.evidence.json')[0]) }
   }
   const cites = 'src/helper.ts:1 already returns 42'
-  // Refuted with a citation of a line it read: the batch passes, the P2 is kept as a marked P3.
+  // A supported refutation is preserved as evidence; the original P2 still fails the batch.
   const ok = await run(review(), [read(), decide([{ index: 0, decision: 'refuted', evidence: cites }])])
-  assert.equal(ok.value.verdict, 'pass')
-  assert.ok(ok.value.findings.every((f: any) => f.priority === 3))
+  assert.equal(ok.value.verdict, 'fail')
+  assert.equal(ok.value.findings[0].priority, 2)
   const marked = ok.value.findings.find((f: any) => /double slash/.test(f.title))
-  assert.match(marked.title, /^\[refuted P2\]/)
-  assert.match(marked.detail, /Refuted by adjudication: src\/helper\.ts:1/)
+  assert.equal(marked.title, p2.title)
+  assert.equal(marked.detail, p2.detail)
   assert.equal(ok.evidence.adjudication.refuted, 1)
   assert.equal(ok.evidence.adjudication.decisions[0].verifiedCitation, 'head:src/helper.ts:1')
   // The adjudicator gets the batch, indexed claims and the same read-only tools.
@@ -1186,7 +1206,7 @@ test('adjudication: only findings refuted with a citation it read are downgraded
     ])
   ])
   assert.equal(mixed.value.verdict, 'fail')
-  assert.equal(mixed.value.findings.find((f: any) => /double slash/.test(f.title)).priority, 3)
+  assert.equal(mixed.value.findings.find((f: any) => /double slash/.test(f.title)).priority, 2)
   assert.deepEqual(mixed.value.blockers, ['cannot read upstream x'])
   // A missing decision counts as confirmed; an adjudication that fails refutes nothing.
   assert.equal((await run(review(), [decide([])])).value.verdict, 'fail')
@@ -1212,7 +1232,10 @@ test('adjudication citations come from the tool records, and blocked parts or fo
   const run = async (responses: Array<() => Response>) => {
     const w = workspace(t)
     const api = scripted(responses.map((make) => make()))
-    const value = await runReviewBatch(config, request, batch, w.directory, options(api.fetch))
+    const value = await runReviewBatch(config, request, batch, w.directory, {
+      ...options(api.fetch),
+      adjudicate: true
+    })
     return { value, evidence: JSON.parse(w.read('.evidence.json')[0]) }
   }
   const review = () => completion({ content: verdict(batch.id, { verdict: 'fail', findings: [p2] }) })
@@ -1236,7 +1259,7 @@ test('adjudication citations come from the tool records, and blocked parts or fo
     readOf({ ref: 'base', path: 'src/helper.ts' }),
     () => decide([{ index: 0, decision: 'refuted', evidence: 'src/helper.ts:1 shows it' }])
   ])
-  assert.equal(fromBase.value.verdict, 'pass')
+  assert.equal(fromBase.value.verdict, 'fail')
   assert.equal(fromBase.evidence.adjudication.decisions[0].verifiedCitation, 'base:src/helper.ts:1')
   assert.equal(fromBase.evidence.adjudication.decisions[0].path, 'src/a.ts')
   assert.match(fromBase.evidence.adjudication.decisions[0].claim, /^[a-f0-9]{16}$/)
@@ -1265,7 +1288,10 @@ test('adjudication citations come from the tool records, and blocked parts or fo
     readOf({ ref: 'head', path: 'src/helper.ts' })(),
     decide([{ index: 0, decision: 'refuted', evidence: 'src/helper.ts:1 shows it' }])
   ])
-  const split = await runReviewBatch(config, request, big, w.directory, options(api.fetch))
+  const split = await runReviewBatch(config, request, big, w.directory, {
+    ...options(api.fetch),
+    adjudicate: true
+  })
   assert.equal(split.verdict, 'blocked')
 })
 

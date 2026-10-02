@@ -33,3 +33,23 @@ jobs:
         run: npm ci
       - name: Shared quality gates
         run: node scripts/release-quality.mjs
+      - name: Determine whether upstream contracts need verification
+        if: matrix.os == 'ubuntu-latest'
+        id: upstream
+        shell: bash
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.sha }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          needed=true
+          if [[ "$EVENT" != workflow_dispatch && "$BASE" =~ ^[a-f0-9]{40}$ ]] && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
+            changes=$(git diff --name-only "$BASE" "$HEAD")
+            if ! printf '%s\n' "$changes" | grep -E '^(config/|scripts/(review-upstream|verify-upstream-lock|prepare-native-desktop|build-native-pack)|test/review-upstream|packages/shared/native-|\.github/workflows/)' >/dev/null; then
+              needed=false
+            fi
+          fi
+          echo "needed=$needed" >> "$GITHUB_OUTPUT"
+      - name: Pinned upstream contracts match their SRI
+        if: matrix.os == 'ubuntu-latest' && steps.upstream.outputs.needed == 'true'
+        run: node scripts/verify-upstream-lock.mjs

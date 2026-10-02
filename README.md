@@ -9,7 +9,7 @@ DSH-PX 是面向 Windows 本机工作的 Agent 工作能力，基于 DeepSeek Ha
 
 ## 使用
 
-从 [GitHub Releases](https://github.com/Palbudir/dsh-px/releases) 获取已发布的预览版本：`desktop-v<版本>` 为 Desktop 安装程序，`pack-v<版本>` 为 Pack 归档。模型访问需要自行配置提供商和凭据，具体项目仍可能需要 Git、包管理器或语言运行环境。
+原生 Pack/Desktop 的首个预览版本尚未发布；当前 [GitHub Releases](https://github.com/Palbudir/dsh-px/releases) 中的 `v0.1.0-beta.re.*` 为旧客户端。新产品发布后，`desktop-v<版本>` 为 Desktop 安装程序，`pack-v<版本>` 为 Pack 归档。模型访问需要自行配置提供商和凭据，具体项目仍可能需要 Git、包管理器或语言运行环境。
 
 1. 安装并打开 DSH-PX Desktop，按欢迎页配置模型提供商。
 2. 添加本机项目文件夹，新建会话并描述任务。

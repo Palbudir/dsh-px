@@ -360,21 +360,30 @@ test('a streamed body without a declared length stops at the tarball limit', asy
   assert.deepEqual([...(await boundedBody(small, 8))], [1, 2, 3])
 })
 
-test('real pinned tarballs match the installed DSH 0.1.5-rc.2 runtime byte for byte', async (t) => {
+// A local check only: CI verifies every pinned tarball against its SRI with
+// scripts/verify-upstream-lock.mjs, which needs no staged runtime.
+test('real pinned tarballs match a staged DSH runtime byte for byte', async (t) => {
   const cache = resolve('build-test', 'review-upstream-cache')
-  const runtime = resolve('runtime/dsh/node_modules')
-  if (!existsSync(runtime)) return t.skip('pinned runtime is not staged')
-  let catalog
-  try {
-    catalog = await loadUpstreamCatalog({
-      cacheDirectory: cache,
-      offline: !process.env.DSH_PX_UPSTREAM_ONLINE
-    })
-  } catch (error) {
-    return t.skip('upstream cache unavailable offline: ' + String((error as Error).message).slice(0, 120))
-  }
+  const staged = resolve(process.env.DSH_PX_STAGED_DSH ?? 'runtime/dsh')
+  const runtime = join(staged, 'node_modules')
+  if (!existsSync(runtime)) return t.skip('no DSH runtime is staged under runtime/dsh')
+  // The host to compare is the one the staged runtime itself is.
+  const rootManifest = JSON.parse(readFileSync(join(staged, 'package.json'), 'utf8'))
+  const cli =
+    rootManifest.name === '@deepseek-ai/dsh'
+      ? rootManifest
+      : JSON.parse(readFileSync(join(runtime, '@deepseek-ai/dsh/package.json'), 'utf8'))
+  assert.equal(cli.name, '@deepseek-ai/dsh')
+  const version = cli.version
+  // A staged runtime with an unverifiable lock fails; it is never reported as a skip.
+  const catalog = await loadUpstreamCatalog({
+    cacheDirectory: cache,
+    offline: !process.env.DSH_PX_UPSTREAM_ONLINE
+  })
+  const host = catalog.hosts.get(version)
+  assert.ok(host, `staged runtime ${version} is not a pinned host (${[...catalog.hosts.keys()].join(', ')})`)
   let compared = 0
-  for (const [name, projected] of catalog.hosts.get('0.1.5-rc.2')) {
+  for (const [name, projected] of host) {
     for (const file of projected.files) {
       const local = join(runtime, name, file.path)
       if (!existsSync(local)) continue

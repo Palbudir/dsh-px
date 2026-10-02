@@ -1,7 +1,8 @@
 /**
  * Release gate for Desktop first-start provisioning: install the bundled Pack into a fresh profile
  * through the packaged dsh plugin manager and the packaged pnpm, exactly as the overlay does at
- * first start, and require every Pack member to resolve inside the installed Pack.
+ * first start, and require the profile to record that archive as its dsh-px-pack dependency (the
+ * check first start applies) and every Pack member to resolve inside the installed Pack.
  *
  * Usage: node scripts/verify-native-pack-install.mjs <prepared upstream checkout> --pack=<tgz>
  */
@@ -9,6 +10,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { sameArchiveSpec } from './native-pack-spec.mjs'
 
 const upstream = process.argv[2] && !process.argv[2].startsWith('--') ? resolve(process.argv[2]) : ''
 const packOption = process.argv.find((arg) => arg.startsWith('--pack='))
@@ -61,6 +63,11 @@ try {
     throw Error(
       `Pack install through the packaged plugin manager failed (exit ${result.exitCode}):\n${result.output ?? ''}`
     )
+  // First start then requires the profile to name exactly this archive (provisionNativePack's
+  // sameSpec); a manager that records another spec form would leave the Desktop without its Pack.
+  const spec = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8')).dependencies?.['dsh-px-pack']
+  if (!sameArchiveSpec(spec, archive, profile))
+    throw Error(`Installed profile records dsh-px-pack as ${JSON.stringify(spec)}, not the installed archive`)
   const installed = join(profile, 'node_modules/dsh-px-pack')
   const pack = JSON.parse(readFileSync(join(installed, 'package.json'), 'utf8'))
   const members = pack.bundledDependencies ?? pack.bundleDependencies ?? []
