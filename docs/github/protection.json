@@ -2,8 +2,14 @@
   "required_status_checks": {
     "strict": true,
     "checks": [
-      { "context": "dsh-px/independent-review", "app_id": 5097986 },
-      { "context": "dsh-px/quality", "app_id": 5097986 }
+      {
+        "context": "quality (windows-latest)",
+        "app_id": 15368
+      },
+      {
+        "context": "quality (ubuntu-latest)",
+        "app_id": 15368
+      }
     ]
   },
   "enforce_admins": true,

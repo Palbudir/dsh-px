@@ -9,19 +9,19 @@ Pack 与 Desktop 独立发布，版本来源分别为 [products.json](../config/
 | Desktop | `desktop-v<版本>` | `DSH-PX-Desktop-<版本>-win-x64.exe`、`artifact.json` |
 | Pack    | `pack-v<版本>`    | `dsh-px-pack-<版本>.tgz`、`artifact.json`            |
 
-每个产品在自己的标签前缀内按 SemVer 完整预发布段严格递增；历史 `v*` 标签属于已退役的旧外壳，不参与比较。发布器拒绝任何 `v*` 标签：旧客户端的更新器会把这类标签当作自己的更新。版本的 `+` 在资产名中表示为 `_`。
+每个产品在自己的标签前缀内按 SemVer 完整预发布段严格递增；历史 `v*` 标签属于已退役的旧外壳，不参与比较。不要使用任何 `v*` 标签：旧客户端的更新器会把这类标签当作自己的更新。版本的 `+` 在资产名中表示为 `_`。
 
 所有新发布均为 GitHub prerelease 并设置 `make_latest: false`，首发通道为 preview。GitHub Latest 必须保持为 `v0.1.0-beta.re.0.11`：发布前后都会核对，不一致即停止。不上传任何 `*.yml` 更新索引或 `*.blockmap` 差分文件；更新只通过签名清单进行。不要改写已发布 tag 或删除历史资产。
 
-发布提交必须在受保护主分支中，并有对应提交的质量检查与独立审查。新 push 使旧 SHA 的审查失效；审查失败、超时、缺失或未处理 P0/P1/P2 发现均阻止合并和发布。规则与执行器见 [GitHub 维护说明](github/README.md)。
+发布提交必须是受保护主分支的当前提交，通过普通 CI，并完成独立 DeepSeek Flash 审查。审查针对当前 PR 增量；改动后复核受影响部分，记录最终 SHA。确认的使用缺陷须修复，纯维护建议另行排期。当前流程不要求旧专用 App 的检查或证明，见 [GitHub 维护说明](github/README.md)。
 
 ## 发布前
 
 1. 明确范围及正常、失败、并发、恢复和数据保留的验收条件。
 2. 完成源码、锁文件、插件产物和用户文档；运行共享质量门禁 `node scripts/release-quality.mjs`。
 3. 在隔离数据目录验证 Desktop 窗口和连接同一服务的浏览器。核对安装程序、Pack 与清单摘要，不能误用旧构建。
-4. 覆盖常规任务、长任务、后台工作、重复操作、断连、关闭与安装边界；明确测试限制。
-5. 独立 reviewer 检查当前提交。修复后重跑相关检查并重新审查。
+4. 按本次改动选择关键使用、失败恢复和升级保留场景；已有有效证据不重复跑，明确测试限制。
+5. 独立 DS Flash reviewer 检查当前提交；修复后只复核相关增量。
 
 ## 可信构建
 
@@ -34,13 +34,12 @@ Pack 与 Desktop 独立发布，版本来源分别为 [products.json](../config/
 
 ## 发布
 
-使用仓库外已审查的本机发布控制器：
+使用维护者现有 GitHub 身份和常规 Release 流程，不再调用旧专用发布控制器。
 
-```powershell
-node (Join-Path $reviewWorker 'release-controller.mjs') --head=完整SHA --product=desktop --version=完整版本 --build-run=构建运行ID
-```
-
-默认只准备可检查的 `release-plan.json`。控制器核对受保护 master、专用 App check、签名、最新可信质量运行、同一产品标签的可信构建、版本顺序、GitHub Latest 与资产摘要，不执行候选提交中的发布脚本。完成验收并得到本次发版确认后加 `--publish`：先创建草稿并上传资产，复核远端摘要和门禁，再公开为 prerelease，最后确认 Latest 未变化。
+1. 核对当前主分支 SHA、普通 CI、独立审查结论与本机验收。构建运行必须来自该 SHA 的 `release.yml`，run-name 对应同一产品标签。
+2. 下载该运行的 Actions artifact；检查其中 `release-manifest.json` 的来源 SHA、产品、版本、文件名、大小和 SHA-256，并核对主资产 `artifact.json` 的 SHA-256/SHA-512。不要用本地候选包代替正式构建。
+3. 使用精确 SHA 创建产品 tag 和 draft Release；只上传主资产及 `artifact.json`，核对远端摘要。历史 tag 和资产不得改写，版本必须在自己的产品前缀内递增。
+4. 最终安装验收通过后，公开为 prerelease，明确 `make_latest: false`；核对 GitHub Latest 仍为旧客户端版本。可用 `gh release` 或 GitHub API 完成这些常规操作。
 
 公开后在本机离线签名更新清单：
 
