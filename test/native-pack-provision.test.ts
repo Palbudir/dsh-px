@@ -149,6 +149,62 @@ test('a failed bundled integrity check leaves the damaged installed Pack in plac
   }
 })
 
+test('a damaged old hoisted Pack is preserved before upgrading to a different archive', async () => {
+  const f = fixture()
+  try {
+    assert.equal(await provisionNativePack(f.options), 'installed')
+    const next = f.pack('0.2.1')
+    const manifest = join(f.root, 'node_modules/dsh-px-pack/package.json')
+    writeFileSync(manifest, '{')
+    assert.equal(
+      await provisionNativePack({
+        ...next,
+        install: async (path, mode) => {
+          assert.equal(mode?.repair, false, 'a different archive uses normal native add')
+          assert.equal(existsSync(manifest), false, 'bad old manifest must not block native upgrade')
+          await next.install(path, mode)
+        }
+      }),
+      'installed'
+    )
+    assert.equal(readJson(manifest).version, '0.2.1')
+    const recovery = readdirSync(join(f.root, '.dsh-px')).filter((name) => name.startsWith('recovery-pack-'))
+    assert.equal(recovery.length, 1)
+    assert.equal(readFileSync(join(f.root, '.dsh-px', recovery[0], 'package.json'), 'utf8'), '{')
+    assert.equal(await provisionNativePack(next), 'unchanged')
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('a readable old version upgrades without preserving its directory or forcing dependencies', async () => {
+  const f = fixture()
+  try {
+    assert.equal(await provisionNativePack(f.options), 'installed')
+    const next = f.pack('0.2.1')
+    assert.equal(
+      await provisionNativePack({
+        ...next,
+        install: async (path, mode) => {
+          assert.equal(mode?.repair, false)
+          assert.equal(
+            readJson(join(f.root, 'node_modules/dsh-px-pack/package.json')).version,
+            f.options.version
+          )
+          await next.install(path, mode)
+        }
+      }),
+      'installed'
+    )
+    assert.equal(
+      readdirSync(join(f.root, '.dsh-px')).some((name) => name.startsWith('recovery-pack-')),
+      false
+    )
+  } finally {
+    f.cleanup()
+  }
+})
+
 test('repair never moves a linked package target or follows a node_modules junction', async () => {
   const f = fixture()
   const other = fixture()
@@ -181,6 +237,16 @@ test('repair never moves a linked package target or follows a node_modules junct
     assert.equal(await provisionNativePack(failedNative), 'failed')
     assert.equal(nativeCalls, 1, 'external node_modules must not be mutated')
     assert.equal(readFileSync(join(other.root, 'dsh-px-pack/package.json'), 'utf8'), '{')
+    // A valid old version requires no preservation; keep normal native upgrades of linked layouts.
+    writeFileSync(
+      join(other.root, 'dsh-px-pack/package.json'),
+      JSON.stringify({ name: 'dsh-px-pack', version: '0.2.0' })
+    )
+    const next = f.pack('0.2.1')
+    assert.equal(await provisionNativePack({ ...next, install: failedNative.install }), 'failed')
+    assert.equal(nativeCalls, 2, 'normal upgrade reaches the native manager without moving the junction')
+    assert.match(f.state().lastError, /native failed/)
+    assert.equal(readJson(join(other.root, 'dsh-px-pack/package.json')).version, '0.2.0')
   } finally {
     f.cleanup()
     other.cleanup()

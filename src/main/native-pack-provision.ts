@@ -228,22 +228,24 @@ function preserveDamagedHoistedPack(
   log: (message: string) => void
 ): void {
   const modules = join(profile, 'node_modules')
+  const pack = join(modules, 'dsh-px-pack')
+  try {
+    const manifest = JSON.parse(readFileSync(join(pack, 'package.json'), 'utf8'))
+    // A readable old version needs only a normal upgrade, including user-configured linked layouts.
+    if (typeof manifest?.name === 'string' && typeof manifest?.version === 'string') return
+  } catch {
+    // Keep the corrupt bytes intact, including hardlinks; renaming the directory changes no file content.
+  }
+  // Physical ownership checks apply only when preservation may move the damaged package.
   if (!existsSync(modules)) return
   const parent = lstatSync(modules)
   if (!parent.isDirectory() || parent.isSymbolicLink())
     throw new Error('Pack repair requires a profile-owned node_modules directory')
-  const pack = join(modules, 'dsh-px-pack')
   if (!existsSync(pack)) return
   const entry = lstatSync(pack)
   // Isolated pnpm uses a link into its store. Native --force repairs that layout; never move its target.
   if (entry.isSymbolicLink()) return
   if (!entry.isDirectory()) throw new Error('Pack repair requires an installed package directory')
-  try {
-    const manifest = JSON.parse(readFileSync(join(pack, 'package.json'), 'utf8'))
-    if (typeof manifest?.name === 'string' && typeof manifest?.version === 'string') return
-  } catch {
-    // Keep the corrupt bytes intact, including hardlinks; renaming the directory changes no file content.
-  }
   const target = join(directory, `recovery-pack-${randomUUID()}`)
   if (!inside(resolve(profile), resolve(pack)) || !inside(resolve(profile), resolve(target)))
     throw new Error('Pack recovery path is outside the profile')
@@ -343,7 +345,9 @@ export async function provisionNativePack(options: NativePackProvision): Promise
     // The native manager restores the profile manifest only for a compatibility denial; a failed pnpm
     // run can leave package.json naming the new Pack. Keep the files to put them back on failure.
     snapshot = snapshotProfile(options.profile)
-    if (repair) preserveDamagedHoistedPack(options.profile, directory, log)
+    // A different archive/version still cannot replace a hoisted package with an unreadable manifest.
+    // Keep --force limited to same-spec repairs; normal upgrades use native add after preservation.
+    if (!manifestMatches) preserveDamagedHoistedPack(options.profile, directory, log)
     await options.install(cached, { repair })
     if (
       !sameSpec(dependency(options.profile), targetSpec, options.profile) ||
