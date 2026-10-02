@@ -8,6 +8,7 @@ import {
   readdirSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -95,6 +96,7 @@ test('a damaged managed manifest enters explicit repair and records failed attem
         ...f.options,
         install: async (_path, mode) => {
           modes.push(mode?.repair === true)
+          assert.equal(existsSync(manifest), false, 'hoisted pnpm cannot read the corrupt old manifest')
           throw Error('fixture locked package')
         }
       }),
@@ -102,6 +104,9 @@ test('a damaged managed manifest enters explicit repair and records failed attem
     )
     assert.equal(f.state().phase, 'failed')
     assert.match(f.state().lastError, /fixture locked package/)
+    const recovery = readdirSync(join(f.root, '.dsh-px')).filter((name) => name.startsWith('recovery-pack-'))
+    assert.equal(recovery.length, 1)
+    assert.equal(readFileSync(join(f.root, '.dsh-px', recovery[0], 'package.json'), 'utf8'), '{')
     assert.equal(
       await provisionNativePack({
         ...f.options,
@@ -116,8 +121,69 @@ test('a damaged managed manifest enters explicit repair and records failed attem
     assert.equal(readJson(manifest).version, f.options.version)
     assert.equal(f.state().phase, 'installed')
     assert.deepEqual(readJson(join(f.root, 'package.json')).dsh.profile.bundles, ['core'])
+    assert.equal(
+      readdirSync(join(f.root, '.dsh-px')).filter((name) => name.startsWith('recovery-pack-')).length,
+      1
+    )
   } finally {
     f.cleanup()
+  }
+})
+
+test('a failed bundled integrity check leaves the damaged installed Pack in place', async () => {
+  const f = fixture()
+  try {
+    assert.equal(await provisionNativePack(f.options), 'installed')
+    const manifest = join(f.root, 'node_modules/dsh-px-pack/package.json')
+    writeFileSync(manifest, '{')
+    writeFileSync(f.options.archive, 'tampered archive')
+    assert.equal(await provisionNativePack(f.options), 'failed')
+    assert.equal(readFileSync(manifest, 'utf8'), '{')
+    assert.equal(f.runs(), 1)
+    assert.equal(
+      readdirSync(join(f.root, '.dsh-px')).some((name) => name.startsWith('recovery-pack-')),
+      false
+    )
+  } finally {
+    f.cleanup()
+  }
+})
+
+test('repair never moves a linked package target or follows a node_modules junction', async () => {
+  const f = fixture()
+  const other = fixture()
+  try {
+    assert.equal(await provisionNativePack(f.options), 'installed')
+    const pack = join(f.root, 'node_modules/dsh-px-pack')
+    const store = join(f.root, 'store-pack')
+    renameSync(pack, store)
+    writeFileSync(join(store, 'package.json'), '{')
+    symlinkSync(store, pack, process.platform === 'win32' ? 'junction' : 'dir')
+    let nativeCalls = 0
+    const failedNative = {
+      ...f.options,
+      install: async () => {
+        nativeCalls++
+        throw Error('native failed')
+      }
+    }
+    assert.equal(await provisionNativePack(failedNative), 'failed')
+    assert.equal(nativeCalls, 1, 'linked layout remains the native manager responsibility')
+    assert.equal(readFileSync(join(store, 'package.json'), 'utf8'), '{')
+    assert.equal(
+      readdirSync(join(f.root, '.dsh-px')).some((name) => name.startsWith('recovery-pack-')),
+      false
+    )
+    renameSync(join(f.root, 'node_modules'), join(f.root, 'original-node_modules'))
+    mkdirSync(join(other.root, 'dsh-px-pack'))
+    writeFileSync(join(other.root, 'dsh-px-pack/package.json'), '{')
+    symlinkSync(other.root, join(f.root, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
+    assert.equal(await provisionNativePack(failedNative), 'failed')
+    assert.equal(nativeCalls, 1, 'external node_modules must not be mutated')
+    assert.equal(readFileSync(join(other.root, 'dsh-px-pack/package.json'), 'utf8'), '{')
+  } finally {
+    f.cleanup()
+    other.cleanup()
   }
 })
 

@@ -221,6 +221,36 @@ function cacheValid(cached: string, sha256: string): boolean {
   }
 }
 
+/** Hoisted pnpm reads the old manifest even with --force. Preserve an unreadable owned package first. */
+function preserveDamagedHoistedPack(
+  profile: string,
+  directory: string,
+  log: (message: string) => void
+): void {
+  const modules = join(profile, 'node_modules')
+  if (!existsSync(modules)) return
+  const parent = lstatSync(modules)
+  if (!parent.isDirectory() || parent.isSymbolicLink())
+    throw new Error('Pack repair requires a profile-owned node_modules directory')
+  const pack = join(modules, 'dsh-px-pack')
+  if (!existsSync(pack)) return
+  const entry = lstatSync(pack)
+  // Isolated pnpm uses a link into its store. Native --force repairs that layout; never move its target.
+  if (entry.isSymbolicLink()) return
+  if (!entry.isDirectory()) throw new Error('Pack repair requires an installed package directory')
+  try {
+    const manifest = JSON.parse(readFileSync(join(pack, 'package.json'), 'utf8'))
+    if (typeof manifest?.name === 'string' && typeof manifest?.version === 'string') return
+  } catch {
+    // Keep the corrupt bytes intact, including hardlinks; renaming the directory changes no file content.
+  }
+  const target = join(directory, `recovery-pack-${randomUUID()}`)
+  if (!inside(resolve(profile), resolve(pack)) || !inside(resolve(profile), resolve(target)))
+    throw new Error('Pack recovery path is outside the profile')
+  renameWithRetry(pack, target)
+  log(`[dsh-px] Preserved damaged managed Pack at ${target}; reinstalling through the native manager`)
+}
+
 /**
  * Provision the bundled Pack into a native Desktop profile before the Host starts.
  * Never throws: every failure is logged and, once an install was decided, recorded as `failed`, so the
@@ -313,6 +343,7 @@ export async function provisionNativePack(options: NativePackProvision): Promise
     // The native manager restores the profile manifest only for a compatibility denial; a failed pnpm
     // run can leave package.json naming the new Pack. Keep the files to put them back on failure.
     snapshot = snapshotProfile(options.profile)
+    if (repair) preserveDamagedHoistedPack(options.profile, directory, log)
     await options.install(cached, { repair })
     if (
       !sameSpec(dependency(options.profile), targetSpec, options.profile) ||
