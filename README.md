@@ -1,9 +1,9 @@
 # DSH-PX
 
-DSH-PX 是面向 Windows 本机工作的 Agent 工作能力，基于 DeepSeek Harness（DSH）的原生插件架构。它由两个独立发布的产品组成：
+DSH-PX 是面向 Windows 本机工作的 Agent 插件整合包，基于 DeepSeek Harness（DSH）的原生插件架构。多个自制与社区插件组成一套工作能力，通过两种形式发行：
 
-- **DSH-PX Pack**：原生 DSH 插件整合包，提供会话标签、执行记录、产物、批注、定时任务和运行诊断，可在 `dsh web` 与 PX Desktop 中使用。
-- **DSH-PX Desktop**：以锁定版本的官方 Desktop 源码为基础构建的 Windows 客户端，首次启动自动安装同版本 Pack。
+- **DSH-PX Pack**：原生 DSH 插件整合包，提供执行记录、产物、批注、定时任务和运行诊断，可在 `dsh web` 与 PX Desktop 中使用。
+- **DSH-PX Desktop**：以锁定版本的官方 Desktop 源码为基础构建的 Windows 客户端，首次启动自动安装锁定版本 Pack。
 
 > 本项目为第三方客户端，与深度求索（DeepSeek）无从属、合作或授权关系。品牌与依赖说明见 [NOTICE.md](NOTICE.md)。
 
@@ -17,9 +17,13 @@ DSH-PX 是面向 Windows 本机工作的 Agent 工作能力，基于 DeepSeek Ha
 
 Pack 也可以通过原生插件管理器安装到 `dsh web`。**设置 → 运行与帮助**显示当前连接、依赖和网页读取诊断；**设置 → DSH-PX 版本**显示 Pack 版本并检查签名更新清单。
 
+Desktop 0.2.1-alpha.1 提供 **应用 → 在浏览器中打开**，浏览器连接当前服务，使用同一份历史和插件数据。需要命令行时，在 **应用 → 管理 dsh 命令**中安装或修复入口，再打开新终端运行 `dsh --version`。该命令使用 Desktop 随附运行时，默认数据目录也是 `.dsh-px`，显式 `DSH_HOME` 仍优先。管理桌面插件使用 `dsh plugin --profile desktop ...`；如需独立启动 `dsh web`，应指定另一个数据目录并安装 Pack，不与正在运行的 Desktop 共写数据。
+
 ## 与旧客户端的关系
 
-旧版 DSH-PX（`v0.1.0-beta.re.*`）是另一套已停止开发的 Electron 外壳，继续按原方式使用，不会收到新产品的更新。新 Desktop 使用独立的应用身份、安装目录和数据目录（`%USERPROFILE%\.dsh-px`），两者可以并行安装。历史版本与资产保持不变。
+旧版 DSH-PX（`v0.1.0-beta.re.*`）是另一套已停止开发的 Electron 外壳，继续按原方式使用，不会收到新产品的更新。新 Desktop 使用独立的应用身份、安装目录和数据目录（`%USERPROFILE%\.dsh-px`），两者可以并行安装。历史版本与资产保持不变。旧会话副本导入步骤见 [数据导入](docs/IMPORTING.md)。
+
+确认新版可用后，可在 Windows“已安装的应用”卸载旧 **DSH-PX**，保留 **DSH-PX Desktop**。退出前先结束旧版任务，备份 `%APPDATA%\dsh-px`；旧卸载器询问是否删除本地数据时选择“否”。旧会话和配置不会因安装新版而自动导入，不要直接覆盖新版数据目录。
 
 ## 更新与数据
 

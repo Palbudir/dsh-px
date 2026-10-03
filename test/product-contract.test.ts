@@ -27,13 +27,13 @@ test('independent patches and prereleases retain the same generation', () => {
   validateProductCatalog(next)
 })
 
-test('the active products are official-derived on the pinned 0.2.0-rc.1 host', () => {
+test('the active products are official-derived on the pinned 0.2.0-rc.2 host', () => {
   validateProductCatalog(products)
   assert.equal(products.desktop.architecture, 'official-derived')
-  assert.equal(products.desktop.hostVersion, '0.2.0-rc.1')
-  assert.deepEqual(products.pack.hostVersions, ['0.2.0-rc.1'])
-  // Not claimed until the unmodified official Desktop is verified with the same Pack.
-  assert.equal(products.pack.surfaces.includes('official-desktop'), false)
+  assert.equal(products.desktop.hostVersion, '0.2.0-rc.2')
+  assert.deepEqual(products.pack.hostVersions, ['0.2.0-rc.2'])
+  // The same Pack is qualified against the pinned official Windows installer.
+  assert.equal(products.pack.surfaces.includes('official-desktop'), true)
   assertNativeHostPins(products, { pack: nativePack, desktop: nativeDesktop })
 })
 
@@ -48,7 +48,7 @@ test('the retired legacy shell and unknown architectures are rejected', () => {
 test('native Pack, native Desktop and products must pin one host version and commit', () => {
   const pins = () => ({ pack: structuredClone(nativePack), desktop: structuredClone(nativeDesktop) })
   const wrongDesktop = pins()
-  wrongDesktop.desktop.version = '0.2.0-rc.2'
+  wrongDesktop.desktop.version = '0.2.0-rc.9'
   assert.throws(() => assertNativeHostPins(products, wrongDesktop), /different host versions/)
   const wrongCommit = pins()
   wrongCommit.pack.upstreamCommit = 'f'.repeat(40)
@@ -57,11 +57,11 @@ test('native Pack, native Desktop and products must pin one host version and com
   shortCommit.pack.upstreamCommit = shortCommit.desktop.commit = '4878cdab'
   assert.throws(() => assertNativeHostPins(products, shortCommit), /exact upstream commits/)
   const drifted = structuredClone(products)
-  drifted.desktop.hostVersion = '0.2.0-rc.2'
-  drifted.pack.hostVersions = ['0.2.0-rc.2']
+  drifted.desktop.hostVersion = '0.2.0-rc.9'
+  drifted.pack.hostVersions = ['0.2.0-rc.9']
   assert.throws(() => assertNativeHostPins(drifted, pins()), /pinned native Desktop/)
   const packOnly = structuredClone(products)
-  packOnly.pack.hostVersions = ['0.2.0-rc.1', '0.2.0-rc.2']
+  packOnly.pack.hostVersions = ['0.2.0-rc.2', '0.2.0-rc.9']
   assertNativeHostPins(packOnly, pins())
 })
 

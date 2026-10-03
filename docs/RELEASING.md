@@ -2,7 +2,7 @@
 
 ## 产品、版本与标签
 
-Pack 与 Desktop 独立发布，版本来源分别为 [products.json](../config/products.json) 的 `pack.version` 与 `desktop.version`；根 `package.json` 的版本与 Desktop 一致，四个受管插件与 Pack 一致。
+Pack 与 Desktop 独立发布，版本来源分别为 [products.json](../config/products.json) 的 `pack.version` 与 `desktop.version`；根 `package.json` 的版本与 Desktop 一致，受管插件与 Pack 一致。
 
 | 产品    | 标签              | 资产                                                 |
 | ------- | ----------------- | ---------------------------------------------------- |
@@ -35,6 +35,8 @@ Pack 与 Desktop 独立发布，版本来源分别为 [products.json](../config/
 ## 发布
 
 使用维护者现有 GitHub 身份和常规 Release 流程，不再调用旧专用发布控制器。
+
+维护工具、注释与文档的清理不改变产品版本，也不重发同版本资产。只有需要交付产品行为或安装更新变化时，才提升对应版本并执行下面的产品发布流程。
 
 1. 核对当前主分支 SHA、普通 CI、独立审查结论与本机验收。构建运行必须来自该 SHA 的 `release.yml`，run-name 对应同一产品标签。
 2. 下载该运行的 Actions artifact；检查其中 `release-manifest.json` 的来源 SHA、产品、版本、文件名、大小和 SHA-256，并核对主资产 `artifact.json` 的 SHA-256/SHA-512。不要用本地候选包代替正式构建。

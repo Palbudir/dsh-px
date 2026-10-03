@@ -10,12 +10,12 @@
 
 ## 构建与发布
 
-`verify.yml` 执行普通 CI。`release.yml` 由维护者针对受保护主分支的精确 SHA 和产品标签手动触发，只构建和上传 Actions 产物，不发布、不读取签名密钥。
+`verify.yml` 在 PR、主分支 push 或手动触发时执行普通 CI；同一 PR 的新提交会取消过时检查，避免分支 push 与 PR 重复运行。`release.yml` 由维护者针对受保护主分支的精确 SHA 和产品标签手动触发，只构建和上传 Actions 产物，不发布、不读取签名密钥。
 
 核对独立审查、CI、资产摘要与实际安装后，使用正常 GitHub Release 发布预览版。产品更新清单仍在本机离线签名；旧客户端的 Latest 和历史资产不改变。具体步骤见 [RELEASING.md](../RELEASING.md)。
 
-## 停用的重复链路
+## 维护范围
 
-`review-request.yml` 和 `trusted-quality.yml` 已停用，不作为当前门禁。仓库外旧 review worker 的自动启动应关闭。原专用 App 检查、证明和历史失败记录保留，不伪造成功，也不作为当前发布条件。
+仓库只维护普通 CI、产品构建、资产校验和离线更新签名。独立审查记录保存在仓库外或忽略目录，注明候选提交、范围、模型、结论与未解决问题；不将密钥、原始模型对话或本机验收数据提交到仓库。
 
-旧 `review-*` 和专用 `release-controller.mjs` 脚本不再是推荐维护入口；其历史实现与测试暂保留，避免把一次发布收尾扩大成审查框架重写。无需重新部署 worker、修改 App 权限或创建另一套签名审查系统。
+旧专用 App 的串行审查与重复质量工作流已移除，不应重新部署旧 worker。历史检查和发行资产保持原样。发布资产校验保存在 `scripts/release-assets.mjs`，上游合约校验保存在 `scripts/upstream-contracts.mjs`，两者均不依赖审查执行器。

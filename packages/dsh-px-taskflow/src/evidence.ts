@@ -245,7 +245,9 @@ export class EvidenceIndex {
       if (event.type === 'tool/result' || event.type === 'tool/ptc-dispatch') {
         const blocks =
           event.type === 'tool/result'
-            ? (data.message?.content ?? []).filter((b: any) => b.type === 'tool-result')
+            ? data.message?.role === 'tool' && typeof data.message.toolCallId === 'string'
+              ? [data.message]
+              : (data.message?.content ?? []).filter((b: any) => b.type === 'tool-result')
             : [data]
         for (const block of blocks) {
           const call = calls.get(block.toolCallId ?? data.subCallId)

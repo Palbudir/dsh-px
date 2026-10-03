@@ -5,15 +5,5 @@
     "jsxImportSource": "react",
     "noEmit": true
   },
-  "include": [
-    "packages/dsh-px-updater/src/host-modules.d.ts",
-    "packages/dsh-px-updater/src/**/*.ts",
-    "packages/dsh-px-updater/src/**/*.tsx",
-    "packages/dsh-px-workbench/src/**/*.ts",
-    "packages/dsh-px-workbench/src/**/*.tsx",
-    "packages/dsh-px-taskflow/src/**/*.ts",
-    "packages/dsh-px-taskflow/src/**/*.tsx",
-    "packages/dsh-px-workspace/src/**/*.ts",
-    "packages/dsh-px-workspace/src/**/*.tsx"
-  ]
+  "include": ["packages/**/*.ts", "packages/**/*.tsx"]
 }

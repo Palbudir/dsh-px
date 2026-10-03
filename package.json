@@ -1,6 +1,6 @@
 {
   "name": "dsh-px",
-  "version": "0.2.0-alpha.1",
+  "version": "0.2.1-alpha.1",
   "private": true,
   "description": "DSH-PX: a native DeepSeek Harness plugin Pack and an official-source derived Windows Desktop.",
   "license": "MIT",
@@ -28,14 +28,10 @@
     "check:repo": "npm run check:plugins && npm run check:docs && npm run check:secrets && npm run format:check",
     "check:secrets": "node scripts/check-secrets.mjs",
     "check:docs": "node scripts/check-docs.mjs",
-    "review:install": "node scripts/review-install.mjs",
-    "review:worker": "node scripts/review-worker.mjs",
     "quality": "node scripts/release-quality.mjs",
-    "check:catalog": "node scripts/release-catalog.mjs",
-    "review:smoke": "node scripts/review-smoke.mjs"
+    "check:catalog": "node scripts/release-catalog.mjs"
   },
   "devDependencies": {
-    "@babel/parser": "7.29.9",
     "@types/node": "^26.6.2",
     "@types/semver": "^7.8.0",
     "electron-updater": "6.8.9",

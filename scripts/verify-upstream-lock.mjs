@@ -6,7 +6,7 @@
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadUpstreamCatalog, UPSTREAM_LOCK } from './review-upstream.mjs'
+import { loadUpstreamCatalog, UPSTREAM_LOCK } from './upstream-contracts.mjs'
 
 const cache = mkdtempSync(join(tmpdir(), 'dsh-px-upstream-lock-'))
 try {

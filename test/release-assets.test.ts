@@ -35,7 +35,7 @@ const {
   packArtifact,
   asarEntries
 } = await load('release-package.mjs')
-const { verifyReleaseFiles, releaseCreateBody, releasePublishBody } = await load('release-controller.mjs')
+const { verifyReleaseFiles, releaseCreateBody, releasePublishBody } = await load('release-assets.mjs')
 const { verifyPackOutput } = await load('release-quality.mjs')
 const head = 'a'.repeat(40),
   controllerSha = 'b'.repeat(40)
@@ -168,7 +168,7 @@ test('Pack verification binds artifact.json, archive bytes and the embedded mani
   const cases: Array<[string, (m: any, a: any) => void, RegExp]> = [
     ['wrong digest', (_m, a) => (a.sha256 = '0'.repeat(64)), /artifact\.json/],
     ['absolute path', (_m, a) => (a.artifact = 'C:\\build\\pack.tgz'), /artifact\.json/],
-    ['wrong host', (m) => (m.dshPx.hostVersion = '0.2.0-rc.2'), /product contract/],
+    ['wrong host', (m) => (m.dshPx.hostVersion = '0.2.0-rc.9'), /product contract/],
     ['wrong upstream', (m) => (m.dshPx.upstreamCommit = 'f'.repeat(40)), /product contract/],
     ['missing member', (m) => m.bundledDependencies.push('absent'), /bundled member/],
     [

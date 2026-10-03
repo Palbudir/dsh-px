@@ -1,14 +1,14 @@
 # Pack 与 Desktop
 
-DSH-PX 使用同一套插件提供 Agent 工作能力。Pack 是原生 DSH 插件整合包，Desktop 是以官方 Desktop 源码为基础、首次启动预装 Pack 的 Windows 客户端。浏览器连接同一 DSH 服务时使用同一套插件与会话，不是另一份产品实现。
+DSH-PX 使用同一套插件整合包提供 Agent 工作能力。Pack 是统一安装入口，内部保留各插件的职责与生命周期，不要求合并成一个插件。Pack 是原生 DSH 插件整合包，Desktop 是以官方 Desktop 源码为基础、首次启动预装 Pack 的 Windows 客户端。浏览器连接同一 DSH 服务时使用同一套插件与会话，不是另一份产品实现。
 
 ## 当前状态
 
-两个产品都基于锁定的官方宿主 DSH 0.2.0-rc.1（上游提交见 [native-desktop.json](../config/native-desktop.json)）。旧的 Electron 外壳已经退役：源码、装配与发布流程已从仓库移除，已发布的旧版本及其资产保持原样，旧客户端不会收到新产品的更新。
+两个产品都基于锁定的官方宿主 DSH 0.2.0-rc.2（上游提交见 [native-desktop.json](../config/native-desktop.json)）。旧的 Electron 外壳已经退役：源码、装配与发布流程已从仓库移除，已发布的旧版本及其资产保持原样，旧客户端不会收到新产品的更新。
 
 [产品清单](../config/products.json) 记录 Pack、Desktop、接口代际、宿主范围和已验证的入口；`desktop.architecture` 只接受 `official-derived`。[native-pack.json](../config/native-pack.json) 与 [native-desktop.json](../config/native-desktop.json) 是宿主版本与上游提交的唯一来源，`npm run check:plugins` 交叉校验三者的版本与提交一致。[插件清单](../config/plugins.json) 记录自制插件与待迁移的社区插件。
 
-支持的入口为 `web` 与 `px-desktop`。未修改的官方 Desktop 安装版加载同一 Pack 尚未完成验收，暂不声明 `official-desktop`。
+支持的入口为 `web`、`px-desktop` 与锁定版本的 `official-desktop`。官方 Windows Desktop 0.2.0-rc.2 安装版通过原生插件管理器安装同一 Pack；这不代表所有后续官方版本均兼容，也不代表两个独立服务可以共写数据。
 
 ## 版本规则
 
