@@ -81,7 +81,8 @@ test('legacy managed bundle migrates without duplicate registration or dropping 
   assert.equal(f.manifest().dependencies['dsh-px-pack'], undefined)
   assert.ok(!f.manifest().dsh.profile.bundles.includes('dsh-px-pack'))
   assert.match(readFileSync(join(f.profile, 'cordis.patch.yml'), 'utf8'), /name: dsh-px-annotations/)
-  assert.match(readFileSync(join(f.profile, 'cordis.patch.yml'), 'utf8'), /disabled: true/)
+  assert.ok(!f.manifest().dsh.profile.bundles.includes('dsh-px-annotations'))
+  assert.doesNotMatch(readFileSync(join(f.profile, 'cordis.patch.yml'), 'utf8'), /disabled: true/)
 })
 test('failed install restores the old profile, invokes native repair, then permits a clean retry', async (t) => {
   const f = fixture(t),

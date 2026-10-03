@@ -467,6 +467,12 @@ var panels = [
 var emptyPanel = { activePanelId: null };
 var defaultPanel = { getSnapshot: () => emptyPanel, subscribe: () => () => {
 } };
+var featureIcons = {
+  "px-artifacts": "artifact",
+  "px-notes": "note",
+  "px-schedules": "schedule",
+  "dsh-px-taskflow": "jobs"
+};
 function SessionBar({ ctx }) {
   const sessions = useSnapshot(ctx.sessions.list);
   const panelInfo = useSnapshot(ctx.layout?.panelInfo ?? defaultPanel);
@@ -500,7 +506,7 @@ function SessionBar({ ctx }) {
       const title = entry.title ?? entry.guide?.[0]?.title;
       if (typeof title !== "function") continue;
       const label = title();
-      if (typeof label === "string") optional.push([kind, label, "artifact"]);
+      if (typeof label === "string") optional.push([kind, label, featureIcons[kind] ?? "artifact"]);
     }
   const panelStates = [...panels, ...optional].map(([type, text, icon]) => ({
     type,

@@ -14,6 +14,12 @@ const panels = [
 ] as const
 const emptyPanel = { activePanelId: null }
 const defaultPanel = { getSnapshot: () => emptyPanel, subscribe: () => () => {} }
+const featureIcons: Record<string, string> = {
+  'px-artifacts': 'artifact',
+  'px-notes': 'note',
+  'px-schedules': 'schedule',
+  'dsh-px-taskflow': 'jobs'
+}
 export function SessionBar({ ctx }: { ctx: Client }): unknown {
   const sessions = useSnapshot(ctx.sessions.list)
   const panelInfo = useSnapshot(ctx.layout?.panelInfo ?? defaultPanel)
@@ -49,7 +55,7 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
       const title = entry.title ?? entry.guide?.[0]?.title
       if (typeof title !== 'function') continue
       const label = title()
-      if (typeof label === 'string') optional.push([kind, label, 'artifact'])
+      if (typeof label === 'string') optional.push([kind, label, featureIcons[kind] ?? 'artifact'])
     }
   const panelStates = [...panels, ...optional].map(([type, text, icon]) => ({
     type,

@@ -44,6 +44,8 @@ const packSha256 = createHash('sha256').update(packBytes).digest('hex')
 const packManifest = JSON.parse(
   execFileSync('tar', ['-xOf', packArchive, 'package/package.json'], { encoding: 'utf8', windowsHide: true })
 )
+if (packManifest.dshPx?.sourceCommit !== ownHead)
+  throw Error('Pack must be rebuilt for the current source commit')
 const distribution = JSON.parse(
   execFileSync('tar', ['-xOf', packArchive, 'package/distribution.json'], {
     encoding: 'utf8',

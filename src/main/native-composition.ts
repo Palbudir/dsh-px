@@ -73,7 +73,7 @@ function ownedFeatureSpec(profile: string, own: string, name: string, spec: unkn
     new RegExp(`^${name}-[a-f0-9]{64}\\.tgz$`).test(path.replaceAll('\\', '/').split('/').at(-1) ?? '')
   )
 }
-function migratePatch(text: string): string {
+function migratePatch(text: string, bundles: string[], owned: Set<string>, packEnabled: boolean): string {
   const doc = parseDocument(text, {
     customTags: [{ tag: 'tag:yaml.org,2002:js', resolve: (v: string) => v }]
   })
@@ -86,6 +86,7 @@ function migratePatch(text: string): string {
     'dsh-better-sidebar'
   ]
   let changed = false
+  const switches = new Map<string, Array<{ index: number; value: unknown }>>()
   for (const [index, row] of doc.contents.items.entries())
     if (isMap(row)) {
       const id = doc.getIn([index, 'id']),
@@ -98,7 +99,29 @@ function migratePatch(text: string): string {
           changed = true
         }
       }
+      const mapped = expected === 'dsh-better-sidebar' ? 'dsh-px-files' : expected
+      const normalized = doc.getIn([index, 'name'])
+      if (
+        typeof mapped === 'string' &&
+        owned.has(mapped) &&
+        (normalized === undefined || normalized === expected) &&
+        row.has('disabled')
+      ) {
+        switches.set(mapped, [
+          ...(switches.get(mapped) ?? []),
+          { index, value: doc.getIn([index, 'disabled']) }
+        ])
+      }
     }
+  for (const [feature, rows] of switches) {
+    if (rows.some((row) => typeof row.value !== 'boolean')) continue
+    if (rows.at(-1)!.value === true || !packEnabled) {
+      const at = bundles.indexOf(feature)
+      if (at >= 0) bundles.splice(at, 1)
+    } else if (!bundles.includes(feature)) bundles.push(feature)
+    for (const row of rows) doc.deleteIn([row.index, 'disabled'])
+    changed = true
+  }
   return changed ? String(doc) : text
 }
 
@@ -229,7 +252,7 @@ export async function provisionNativeComposition(
   next.dsh.profile.bundles = bundles
   const patchPath = join(options.profile, 'cordis.patch.yml')
   const patch = existsSync(patchPath) ? readFileSync(patchPath, 'utf8') : ''
-  const migrated = legacy ? migratePatch(patch) : patch
+  const migrated = legacy ? migratePatch(patch, bundles, new Set(Object.keys(specs)), wasEnabled) : patch
   const identities = Object.keys(specs).every((name) => {
     try {
       return readJson(join(options.profile, 'node_modules', name, 'package.json')).version === options.version
