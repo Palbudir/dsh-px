@@ -759,6 +759,9 @@ function validNoteDraft(value) {
   return editing === null || record(editing) && typeof editing.id === "string" && typeof editing.messageId === "string" && typeof editing.sessionId === "string" && typeof editing.quote === "string" && typeof editing.note === "string" && finite(editing.updatedAt);
 }
 
+// packages/shared/quote-whitespace.ts
+var quoteWhitespace = (text) => text.replace(/\s+/gu, " ").trim();
+
 // packages/dsh-px-annotations/src/client/notes.tsx
 var import_jsx_runtime4 = require("react/jsx-runtime");
 function NotesPanel({ ctx, scope, visible, tab }) {
@@ -878,7 +881,7 @@ function NotesPanel({ ctx, scope, visible, tab }) {
       void choose(tab.meta.messageId, null, 0, false, "initial");
   }, [selection, tab.meta?.messageId, operationBusy, draftAvailable]);
   const draft = source ? { sessionId: scope.sessionId, messageId: source.id, seq: source.seq, quote, note } : null;
-  const validQuote = !!quote && (!!source?.text.includes(quote) || editing?.quote === quote);
+  const validQuote = !!quote && ((source?.rendered ? quoteWhitespace(source.text).includes(quoteWhitespace(quote)) : !!source?.text.includes(quote)) || editing?.quote === quote);
   async function action(fn, success) {
     setBusy(true);
     setFailure("");
@@ -964,7 +967,7 @@ function NotesPanel({ ctx, scope, visible, tab }) {
         source.seq
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
-        "\u6D88\u606F\u539F\u6587\uFF08\u53EF\u9009\u4E2D\u4E00\u6BB5\u4F5C\u4E3A\u5F15\u7528\uFF09",
+        "\u6D88\u606F\u6B63\u6587\uFF08\u53EF\u9009\u4E2D\u4E00\u6BB5\u4F5C\u4E3A\u5F15\u7528\uFF09",
         /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
           "textarea",
           {
@@ -1007,7 +1010,7 @@ function NotesPanel({ ctx, scope, visible, tab }) {
           }
         )
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "px-muted", children: "\u53EF\u9009\u4E2D\u4E0A\u65B9\u539F\u6587\uFF0C\u4E5F\u53EF\u5728\u8FD9\u91CC\u5220\u53BB\u4E0D\u9700\u8981\u7684\u90E8\u5206\uFF1B\u987B\u4FDD\u7559\u8FDE\u7EED\u7684\u539F\u6587\u3002" }),
+      /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "px-muted", children: "\u53EF\u9009\u4E2D\u4E0A\u65B9\u6B63\u6587\uFF0C\u4E5F\u53EF\u5220\u53BB\u4E0D\u9700\u8981\u7684\u90E8\u5206\uFF1B\u5F15\u7528\u987B\u5BF9\u5E94\u8FD9\u6761\u6D88\u606F\u7684\u8FDE\u7EED\u5185\u5BB9\u3002" }),
       quote && !validQuote ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "alert", children: "\u6B64\u7247\u6BB5\u4E0D\u5728\u5F53\u524D\u539F\u6587\u4E2D\uFF0C\u8BF7\u6062\u590D\u539F\u6587\uFF1B\u8865\u5145\u610F\u89C1\u8BF7\u5199\u5728\u6279\u6CE8\u91CC\u3002" }) : null,
       /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("label", { children: [
         "\u6211\u7684\u6279\u6CE8",
@@ -1035,7 +1038,12 @@ function NotesPanel({ ctx, scope, visible, tab }) {
                 ...editing ? { id: editing.id, updatedAt: editing.updatedAt } : {}
               });
               clearDraft({ ...editor, editing: saved, dirty: false });
-              insertQuote(ctx, scope.sessionId, saved);
+              notes.refresh();
+              try {
+                insertQuote(ctx, scope.sessionId, saved);
+              } catch (error2) {
+                throw new Error(`\u6279\u6CE8\u5DF2\u4FDD\u5B58\uFF0C\u4F46\u672A\u80FD\u52A0\u5165\u8349\u7A3F\uFF1A${errorText(error2)}`);
+              }
             }, "\u6279\u6CE8\u5DF2\u4FDD\u5B58\u5E76\u52A0\u5165\u4F1A\u8BDD\u8349\u7A3F\uFF0C\u8BF7\u68C0\u67E5\u540E\u53D1\u9001\u3002"),
             children: "\u4FDD\u5B58\u5E76\u52A0\u5165\u4F1A\u8BDD"
           }

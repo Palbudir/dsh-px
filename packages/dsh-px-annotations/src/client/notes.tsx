@@ -18,7 +18,8 @@ import { useDraft } from '../../../dsh-px-workspace/src/client/drafts'
 import { ConfirmDelete } from '../../../shared/ui'
 import { StorageNotice } from '../../../dsh-px-workspace/src/client/storage-notice'
 import { validNoteDraft } from '../../../dsh-px-workspace/src/client/draft-validation'
-type Source = Message & { length: number; offset: number; nextOffset: number | null }
+import { quoteWhitespace } from '../../../shared/quote-whitespace'
+type Source = Message & { length: number; offset: number; nextOffset: number | null; rendered?: boolean }
 interface NoteDraft {
   source: Source | null
   quote: string
@@ -179,7 +180,12 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
   const draft = source
     ? { sessionId: scope.sessionId, messageId: source.id, seq: source.seq, quote, note }
     : null
-  const validQuote = !!quote && (!!source?.text.includes(quote) || editing?.quote === quote)
+  const validQuote =
+    !!quote &&
+    ((source?.rendered
+      ? quoteWhitespace(source.text).includes(quoteWhitespace(quote))
+      : !!source?.text.includes(quote)) ||
+      editing?.quote === quote)
   async function action(fn: () => Promise<unknown>, success: string): Promise<void> {
     setBusy(true)
     setFailure('')
@@ -277,7 +283,7 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
               {source.role === 'user' ? '用户' : '助手'} · 记录 {source.seq}
             </h4>
             <label>
-              消息原文（可选中一段作为引用）
+              消息正文（可选中一段作为引用）
               <textarea
                 aria-label="消息原文"
                 readOnly
@@ -312,7 +318,7 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
                 onChange={(e: any) => setQuote(e.target.value)}
               />
             </label>
-            <p className="px-muted">可选中上方原文，也可在这里删去不需要的部分；须保留连续的原文。</p>
+            <p className="px-muted">可选中上方正文，也可删去不需要的部分；引用须对应这条消息的连续内容。</p>
             {quote && !validQuote ? (
               <p role="alert">此片段不在当前原文中，请恢复原文；补充意见请写在批注里。</p>
             ) : null}
@@ -338,7 +344,12 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
                       ...(editing ? { id: editing.id, updatedAt: editing.updatedAt } : {})
                     })
                     clearDraft({ ...editor, editing: saved, dirty: false })
-                    insertQuote(ctx, scope.sessionId, saved)
+                    notes.refresh()
+                    try {
+                      insertQuote(ctx, scope.sessionId, saved)
+                    } catch (error) {
+                      throw new Error(`批注已保存，但未能加入草稿：${errorText(error)}`)
+                    }
                   }, '批注已保存并加入会话草稿，请检查后发送。')
                 }
               >
