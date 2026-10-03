@@ -153,3 +153,17 @@ test('interrupted composition restores its journal before retrying', async (t) =
   assert.equal(readFileSync(join(f.profile, 'package.json'), 'utf8'), before)
   assert.equal(f.calls(), 2)
 })
+
+test('missing composition receipt recovers managed declarations without reviving removed features', async (t) => {
+  const f = fixture(t)
+  await provisionNativeComposition(f)
+  const m = f.manifest()
+  delete m.dependencies['dsh-px-schedules']
+  m.dsh.profile.bundles = m.dsh.profile.bundles.filter((n: string) => n !== 'dsh-px-schedules')
+  f.save(m)
+  rmSync(join(f.profile, '.dsh-px/composition-state.json'))
+  writeFileSync(join(f.profile, '.dsh-px/pack-state.json'), JSON.stringify({ phase: 'installed' }))
+  assert.equal(await provisionNativeComposition(f), 'installed')
+  assert.equal(f.manifest().dependencies['dsh-px-schedules'], undefined)
+  assert.ok(f.manifest().dependencies['dsh-px-annotations'])
+})

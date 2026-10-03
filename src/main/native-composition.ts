@@ -185,6 +185,28 @@ export async function provisionNativeComposition(
   }
   const manifest = readJson(join(options.profile, 'package.json'))
   const legacy = manifest.dependencies?.['dsh-px-pack']
+  if (
+    !state &&
+    !legacy &&
+    ((manifest.dsh?.profile?.bundles ?? []).includes('dsh-px-core') ||
+      FEATURE_BUNDLES.some((name) =>
+        ownedFeatureSpec(options.profile, own, name, manifest.dependencies?.[name])
+      ))
+  ) {
+    state = {
+      schemaVersion: 1,
+      phase: 'installed',
+      version: 'recovered',
+      specs: Object.fromEntries(
+        FEATURE_BUNDLES.flatMap((name) =>
+          ownedFeatureSpec(options.profile, own, name, manifest.dependencies?.[name])
+            ? [[name, manifest.dependencies[name]]]
+            : []
+        )
+      )
+    }
+    writeAtomic(statePath, JSON.stringify(state))
+  }
   const legacyStatePath = join(own, 'pack-state.json')
   let legacyState: any
   if (existsSync(legacyStatePath)) {
