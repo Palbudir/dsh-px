@@ -6,10 +6,12 @@ import { runInNewContext } from 'node:vm'
 test('managed client entries activate without the native sidebar and register panels when it appears', () => {
   const styles: any[] = []
   const document = {
-    querySelector: () => styles.find((style) => style.dataset.dshPxUi),
+    querySelector: (selector: string) =>
+      styles.find((style) => selector === `style[data-dsh-px-style="${style.dataset.dshPxStyle}"]`),
     createElement: () => {
       const style: any = {
         dataset: {},
+        setAttribute: () => {},
         remove: () => {
           const index = styles.indexOf(style)
           if (index >= 0) styles.splice(index, 1)

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { installOwnedStyle } from './owned-style'
 
 /** Theme tokens are resolved by DSH; this sheet affects only PX-owned surfaces. */
 export const uiCss = `
@@ -24,19 +25,7 @@ export const uiCss = `
 @media(prefers-reduced-motion:reduce){.px-ui,.px-ui *{animation:none!important;transition:none!important;scroll-behavior:auto!important}.px-ui button:not(:disabled):active{transform:none}}
 `
 export function installUiStyles(ctx: { effect?: (fn: () => () => void, label: string) => unknown }): void {
-  ctx.effect?.(() => {
-    const style =
-      document.querySelector<HTMLStyleElement>('style[data-dsh-px-ui]') ?? document.createElement('style')
-    style.dataset.dshPxUi = '1'
-    style.textContent = uiCss
-    style.dataset.users = String(Number(style.dataset.users ?? 0) + 1)
-    if (!style.isConnected) document.head.appendChild(style)
-    return () => {
-      const users = Number(style.dataset.users) - 1
-      style.dataset.users = String(users)
-      if (users <= 0) style.remove()
-    }
-  }, 'px: shared theme')
+  installOwnedStyle(ctx, 'shared-ui', uiCss)
 }
 export const controlStyle = {
   borderRadius: 8,

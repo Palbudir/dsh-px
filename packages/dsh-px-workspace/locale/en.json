@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Workspace foundation",
+    "description": "Provide workspace actions, conversation indexing and shared storage."
+  }
+}

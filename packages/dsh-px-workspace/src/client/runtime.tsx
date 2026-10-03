@@ -1,6 +1,7 @@
 import { createNativeSidebar } from '../../../shared/native-sidebar'
 import { createCapabilities } from '../../../shared/client-capabilities'
 import { installUiStyles } from '../../../shared/ui'
+import { installOwnedStyle } from '../../../shared/owned-style'
 import type { Client } from './contracts'
 import { css } from './styles'
 export const inject = ['slots', 'sessions', 'uiWorkspace', 'conversation', 'layout']
@@ -17,12 +18,7 @@ export function createWorkspaceClient(raw: Omit<Client, 'capabilities'>): Client
     capabilities
   }
   installUiStyles(ctx)
-  ctx.effect(() => {
-    const style = document.createElement('style')
-    style.textContent = css
-    document.head.appendChild(style)
-    return () => style.remove()
-  }, 'workspace: styles')
+  installOwnedStyle(ctx, 'workspace', css)
   ctx.inject(['sidebarRight'], (host) => {
     const terminal = host.sidebarRight
     capabilities.set({ terminal })

@@ -8,11 +8,11 @@ DSH-PX 使用同一套插件整合包提供 Agent 工作能力。Pack 是统一�
 
 [产品清单](../config/products.json) 记录 Pack、Desktop、接口代际、宿主范围和已验证的入口；`desktop.architecture` 只接受 `official-derived`。[native-pack.json](../config/native-pack.json) 与 [native-desktop.json](../config/native-desktop.json) 是宿主版本与上游提交的唯一来源，`npm run check:plugins` 交叉校验三者的版本与提交一致。[插件清单](../config/plugins.json) 记录自制插件与待迁移的社区插件。
 
-支持的入口为 `web`、`px-desktop` 与锁定版本的 `official-desktop`。官方 Windows Desktop 0.2.0-rc.2 安装版通过原生插件管理器安装同一 Pack；这不代表所有后续官方版本均兼容，也不代表两个独立服务可以共写数据。
+当前发布主线为 `web` 与 `px-desktop`。0.2.1 曾验证未修改的官方 Windows Desktop 0.2.0-rc.2 安装同一 Pack；0.3 不将原版客户端列为完整验收入口，也不为后续官方版本增加专用适配层。既有使用说明和历史版本保留。不同服务实例仍不能共写数据。
 
 ## 版本规则
 
-双方使用 `0.x.y`，可附加 `-alpha.N` 等预览标识。`x` 是 PX 接口兼容代际，`y` 是各产品的独立迭代次数。Pack 0.2.4 可以与 Desktop 0.2.1 配合，但 Desktop 每次构建锁定一个确切 Pack 版本。
+双方使用 `0.x.y`，可附加 `-alpha.N` 等预览标识。`x` 是 PX 接口兼容代际，`y` 是各产品的独立迭代次数。Pack 0.3.4 可以与满足能力要求的 Desktop 0.3.1 配合，但 Desktop 每次构建锁定一个确切 Pack 版本。0.3 引入基础部署及多功能包安装协议，Desktop 升级清单可明确允许从代际 2 迁移。
 
 需要双方配合的破坏性接口变化提升共同代际。新增兼容功能、修复或桌面资源调整可独立提升版本。共同代际是版本约束，不替代接口能力检测。官方 DSH 版本独立锁定，不跟随上游的后续预览版本，也不通过 PX 的版本号推断兼容性。
 
@@ -39,4 +39,6 @@ Pack 与 Desktop 分别以 `pack-v<版本>` 与 `desktop-v<版本>` 发布为 Gi
 
 先运行 `npm run build:plugins`，再运行 `npm run build:pack -- build-test/<新目录> --candidate`；输出目录必须不存在。`--candidate` 只用于隔离验证。正式构建要求干净检出并以 `--expect-head=<完整SHA>` 证明来源提交，由可信构建流程执行。
 
-构建器从固定来源获取侧栏插件，核对完整归档 SRI 后应用认证补丁；自制插件只复制声明的发行文件。可用 `--sidebar-archive=<文件路径>` 复用已下载归档，仍执行相同的完整性校验。成员使用包内真实文件入口，保留各自的客户端元数据，避免首次动态启用依赖尚未刷新的嵌套包解析表。`artifact.json` 只记录文件名、版本、来源与摘要，不包含构建机路径。
+构建器从固定来源获取侧栏插件，核对完整归档 SRI 后应用认证补丁；自制插件只复制声明的发行文件。可用 `--sidebar-archive=<文件路径>` 复用已下载归档，仍执行相同的完整性校验。聚合入口与 Desktop 均使用原生精确包名发现成员代码及本地化元数据。`distribution.json` 固定基础包及五个功能包的版本与摘要，`artifact.json` 标识整体发布产物；二者不包含构建机路径。
+
+Desktop 在宿主启动前、profile 锁内迁移旧受管聚合包。一次原生安装应用整套功能依赖；失败时恢复原配置并通过原生安装恢复依赖树，中断后按持久记录先恢复再重试。用户自管的聚合包或同名功能不被接管。业务数据不随拆包搬迁，已有明确禁用、删除与配置保留。基础组件由 Desktop 安装层供给，不与旧聚合包重复注册。

@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSyn
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { FEATURE_BUNDLES } from '../src/shared/distribution.ts'
 
 /**
  * Verify a build-native-pack output directory against its own archive bytes and the pinned products.
@@ -72,6 +73,37 @@ export function verifyPackOutput(directory, { products, nativePack, head, candid
   for (const member of manifest.bundledDependencies)
     if (!present.has(`package/node_modules/${member}/package.json`))
       throw new Error(`Pack archive is missing bundled member ${member}`)
+  if (products.protocolGeneration >= 3) {
+    const distribution = JSON.parse(tar('-xOzf', tgz, 'package/distribution.json'))
+    if (
+      distribution.schemaVersion !== 1 ||
+      distribution.version !== version ||
+      distribution.foundation?.name !== 'dsh-px-core' ||
+      distribution.features?.length !== FEATURE_BUNDLES.length ||
+      !FEATURE_BUNDLES.every((name) => distribution.features.filter((f) => f.name === name).length === 1)
+    )
+      throw Error('Pack distribution does not contain the foundation and five feature bundles')
+    for (const entry of [distribution.foundation, ...distribution.features]) {
+      if (entry.version !== version || entry.file !== `distribution/${entry.name}-${version}.tgz`)
+        throw Error('Invalid distribution member')
+      const member = execFileSync('tar', ['-xOzf', tgz, 'package/' + entry.file], {
+        cwd: directory,
+        windowsHide: true,
+        maxBuffer: 64 * 1024 * 1024
+      })
+      if (createHash('sha256').update(member).digest('hex') !== entry.sha256)
+        throw Error('Distribution member digest mismatch')
+      const metadata = JSON.parse(
+        execFileSync('tar', ['-xOzf', '-', 'package/package.json'], {
+          input: member,
+          encoding: 'utf8',
+          windowsHide: true
+        })
+      )
+      if (metadata.name !== entry.name || metadata.version !== version)
+        throw Error('Distribution member identity mismatch')
+    }
+  }
   if (!candidate && (artifact.sourceDirty !== false || px.sourceDirty !== false))
     throw new Error('Release Pack must be built from a clean checkout')
   return { file: tgz, size: bytes.length, sha256, sha512, manifest }

@@ -61,7 +61,8 @@ export function readPackIdentity(start = dirname(fileURLToPath(import.meta.url))
   }
   let here = start
   for (let i = 0; i < 8; i += 1) {
-    const manifestPath = join(here, 'package.json')
+    const core = join(here, 'dsh-px-core/package.json')
+    const manifestPath = existsSync(core) ? core : join(here, 'package.json')
     if (existsSync(manifestPath)) {
       try {
         const m = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
@@ -69,7 +70,7 @@ export function readPackIdentity(start = dirname(fileURLToPath(import.meta.url))
           version?: unknown
           dshPx?: { hostVersion?: unknown; upstreamCommit?: unknown; candidate?: unknown }
         }
-        if (m.name === 'dsh-px-pack')
+        if (m.name === 'dsh-px-pack' || m.name === 'dsh-px-core')
           return {
             version: typeof m.version === 'string' ? m.version : null,
             hostVersion: typeof m.dshPx?.hostVersion === 'string' ? m.dshPx.hostVersion : null,

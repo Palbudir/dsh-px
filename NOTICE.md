@@ -38,3 +38,7 @@ DSH-PX Desktop 由锁定提交的 [DeepSeek Harness](https://github.com/deepseek
 DSH-PX Pack 随附 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 0.24.1（MIT，`Copyright (c) 2026 dsh-external`），并对其宿主入口应用版本及摘要限定的认证补丁；补丁来源与范围见 [插件合约](docs/PLUGINS.md)。
 
 分发二进制前请逐一核对各上游许可要求。
+
+## Markdown 引用解析
+
+工作区组件内联使用 Marked 16.4.2（MIT）解析格式化消息的可引用正文。其许可和版权声明随组件保存在 `licenses/marked.txt`。

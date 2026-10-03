@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Runtime diagnostics",
+    "description": "Inspect local runtime, workspace and dependency status."
+  }
+}

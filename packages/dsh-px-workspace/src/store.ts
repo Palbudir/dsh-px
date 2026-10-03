@@ -309,7 +309,7 @@ export class WorkspaceStore {
     const sessionId = identifier(input.sessionId)
     const quote = text(input.quote, 8000),
       note = text(input.note, 4000, false)
-    if (source.id !== input.messageId || !source.text.includes(quote))
+    if (source.id !== input.messageId || !quoteMatches(source.text, quote))
       throw new InputError('引用必须是所选消息中的连续原文')
     const id = input.id === undefined ? randomUUID() : identifier(input.id)
     const sourceHash = createHash('sha256').update(source.text).digest('hex')
@@ -619,3 +619,4 @@ export class Scheduler {
     }
   }
 }
+import { quoteMatches } from './quote-text'

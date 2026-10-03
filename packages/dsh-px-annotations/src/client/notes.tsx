@@ -18,7 +18,8 @@ import { useDraft } from '../../../dsh-px-workspace/src/client/drafts'
 import { ConfirmDelete } from '../../../shared/ui'
 import { StorageNotice } from '../../../dsh-px-workspace/src/client/storage-notice'
 import { validNoteDraft } from '../../../dsh-px-workspace/src/client/draft-validation'
-type Source = Message & { length: number; offset: number; nextOffset: number | null }
+import { quoteWhitespace } from '../../../shared/quote-whitespace'
+type Source = Message & { length: number; offset: number; nextOffset: number | null; rendered?: boolean }
 interface NoteDraft {
   source: Source | null
   quote: string
@@ -33,6 +34,7 @@ interface SourceChoice {
   id: string
   existing: Annotation | null
   offset: number
+  quote?: string
 }
 export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }): unknown {
   const selection = useSnapshot(quoteRequests)[scope.sessionId]
@@ -96,7 +98,8 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
     existing: Annotation | null = null,
     offset = 0,
     replace = false,
-    request?: { token: string } | 'initial'
+    request?: { token: string } | 'initial',
+    selectedQuote?: string
   ): Promise<void> {
     if (operationBusy || !draftAvailable) return
     const pending = quoteRequests.getSnapshot()[scope.sessionId]
@@ -119,7 +122,7 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
       // not expose the tab's old initial message as a new selection.
       setEditor((old) => ({ ...old, initialized: true, requestToken: requestToken ?? old.requestToken }))
       if (requestToken) quoteRequests.consume(scope.sessionId, requestToken)
-      setReplacement({ id, existing, offset })
+      setReplacement({ id, existing, offset, quote: selectedQuote })
       return
     }
     setReplacement(null)
@@ -132,15 +135,23 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
     setFailure('')
     setNotice('')
     try {
-      const value = await requestJson<Source>(
-        `${base}/message?sessionId=${encodeURIComponent(scope.sessionId)}&messageId=${encodeURIComponent(id)}&offset=${offset}`,
-        { signal: controller.signal }
-      )
+      const value =
+        selectedQuote === undefined
+          ? await requestJson<Source>(
+              `${base}/message?sessionId=${encodeURIComponent(scope.sessionId)}&messageId=${encodeURIComponent(id)}&offset=${offset}`,
+              { signal: controller.signal }
+            )
+          : await requestJson<Source>(`${base}/selection`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ sessionId: scope.sessionId, messageId: id, quote: selectedQuote }),
+              signal: controller.signal
+            })
       if (rev !== revision.current || !active.current) return
       setEditor({
         source: value,
         editing: existing,
-        quote: existing?.quote ?? value.text.slice(0, 8000),
+        quote: existing?.quote ?? selectedQuote ?? value.text.slice(0, 8000),
         note: existing?.note ?? '',
         initialized: true,
         collapsed: false,
@@ -153,7 +164,7 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
     } catch (e) {
       if (active.current && rev === revision.current && !controller.signal.aborted) {
         setFailure(errorText(e))
-        setSourceRetry({ id, existing, offset })
+        setSourceRetry({ id, existing, offset, quote: selectedQuote })
       }
     } finally {
       if (active.current && rev === revision.current) setBusy(false)
@@ -162,14 +173,19 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
   useEffect(() => {
     const pending = quoteRequests.getSnapshot()[scope.sessionId]
     if (pending && pending.token !== editor.requestToken)
-      void choose(pending.messageId, null, 0, false, { token: pending.token })
+      void choose(pending.messageId, null, 0, false, { token: pending.token }, pending.quote)
     else if (!pending && !editor.initialized && tab.meta?.messageId)
       void choose(tab.meta.messageId, null, 0, false, 'initial')
   }, [selection, tab.meta?.messageId, operationBusy, draftAvailable])
   const draft = source
     ? { sessionId: scope.sessionId, messageId: source.id, seq: source.seq, quote, note }
     : null
-  const validQuote = !!quote && (!!source?.text.includes(quote) || editing?.quote === quote)
+  const validQuote =
+    !!quote &&
+    ((source?.rendered
+      ? quoteWhitespace(source.text).includes(quoteWhitespace(quote))
+      : !!source?.text.includes(quote)) ||
+      editing?.quote === quote)
   async function action(fn: () => Promise<unknown>, success: string): Promise<void> {
     setBusy(true)
     setFailure('')
@@ -218,7 +234,16 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
             <button onClick={() => setReplacement(null)}>保留当前草稿</button>
             <button
               disabled={busy}
-              onClick={() => void choose(replacement.id, replacement.existing, replacement.offset, true)}
+              onClick={() =>
+                void choose(
+                  replacement.id,
+                  replacement.existing,
+                  replacement.offset,
+                  true,
+                  undefined,
+                  replacement.quote
+                )
+              }
             >
               放弃修改并切换
             </button>
@@ -232,7 +257,16 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
       {sourceRetry ? (
         <button
           disabled={busy || !draftAvailable}
-          onClick={() => void choose(sourceRetry.id, sourceRetry.existing, sourceRetry.offset)}
+          onClick={() =>
+            void choose(
+              sourceRetry.id,
+              sourceRetry.existing,
+              sourceRetry.offset,
+              false,
+              undefined,
+              sourceRetry.quote
+            )
+          }
         >
           重试读取原文
         </button>
@@ -249,7 +283,7 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
               {source.role === 'user' ? '用户' : '助手'} · 记录 {source.seq}
             </h4>
             <label>
-              消息原文（可选中一段作为引用）
+              消息正文（可选中一段作为引用）
               <textarea
                 aria-label="消息原文"
                 readOnly
@@ -284,7 +318,7 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
                 onChange={(e: any) => setQuote(e.target.value)}
               />
             </label>
-            <p className="px-muted">可选中上方原文，也可在这里删去不需要的部分；须保留连续的原文。</p>
+            <p className="px-muted">可选中上方正文，也可删去不需要的部分；引用须对应这条消息的连续内容。</p>
             {quote && !validQuote ? (
               <p role="alert">此片段不在当前原文中，请恢复原文；补充意见请写在批注里。</p>
             ) : null}
@@ -299,6 +333,28 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
               />
             </label>
             <div className="px-actions">
+              <button
+                className="px-primary"
+                disabled={busy || !validQuote}
+                onClick={() =>
+                  void action(async () => {
+                    const saved = await post<Annotation>('annotations', {
+                      action: 'save',
+                      ...draft,
+                      ...(editing ? { id: editing.id, updatedAt: editing.updatedAt } : {})
+                    })
+                    clearDraft({ ...editor, editing: saved, dirty: false })
+                    notes.refresh()
+                    try {
+                      insertQuote(ctx, scope.sessionId, saved)
+                    } catch (error) {
+                      throw new Error(`批注已保存，但未能加入草稿：${errorText(error)}`)
+                    }
+                  }, '批注已保存并加入会话草稿，请检查后发送。')
+                }
+              >
+                保存并加入会话
+              </button>
               <button
                 className="px-primary"
                 disabled={busy || !validQuote}

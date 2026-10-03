@@ -113,7 +113,7 @@ test('publication is always a prerelease that never becomes GitHub Latest', () =
   assert.match(publish.name, /DSH-PX Desktop/)
 })
 
-function packFixture(t: any, mutate: (manifest: any, artifact: any) => void = () => {}) {
+function packFixture(t: any, mutate: (manifest: any, artifact: any, distribution: any) => void = () => {}) {
   const root = temp(t, 'pack-output')
   const version = products.pack.version
   const pkg = join(root, 'package')
@@ -121,6 +121,24 @@ function packFixture(t: any, mutate: (manifest: any, artifact: any) => void = ()
   writeFileSync(join(pkg, 'node_modules', 'member', 'package.json'), '{"name":"member"}')
   writeFileSync(join(pkg, 'cordis.patch.yml'), '- insert: []\n')
   writeFileSync(join(pkg, 'index.js'), 'export function apply() {}\n')
+  const components = [
+    'dsh-px-core',
+    'dsh-px-files',
+    'dsh-px-taskflow',
+    'dsh-px-artifacts',
+    'dsh-px-annotations',
+    'dsh-px-schedules'
+  ]
+  mkdirSync(join(pkg, 'distribution'))
+  const members = components.map((name) => {
+    const dir = join(root, name)
+    mkdirSync(join(dir, 'package'), { recursive: true })
+    writeFileSync(join(dir, 'package/package.json'), JSON.stringify({ name, version }))
+    const file = `distribution/${name}-${version}.tgz`
+    execFileSync('tar', ['-czf', '../package/' + file, 'package'], { cwd: dir, windowsHide: true })
+    return { name, version, file, sha256: hash(readFileSync(join(pkg, file))) }
+  })
+  const distribution = { schemaVersion: 1, version, foundation: members[0], features: members.slice(1) }
   const manifest = {
     name: 'dsh-px-pack',
     version,
@@ -144,7 +162,8 @@ function packFixture(t: any, mutate: (manifest: any, artifact: any) => void = ()
     protocolGeneration: products.protocolGeneration,
     artifact: `dsh-px-pack-${version}.tgz`
   }
-  mutate(manifest, artifact)
+  mutate(manifest, artifact, distribution)
+  writeFileSync(join(pkg, 'distribution.json'), JSON.stringify(distribution))
   writeFileSync(join(pkg, 'package.json'), JSON.stringify(manifest))
   execFileSync('tar', ['-czf', `dsh-px-pack-${version}.tgz`, 'package'], { cwd: root, windowsHide: true })
   rmSync(pkg, { recursive: true, force: true })
@@ -160,6 +179,26 @@ test('Pack verification binds artifact.json, archive bytes and the embedded mani
   const expected = { products, nativePack, head, candidate: false }
   const verified = verifyPackOutput(packFixture(t), expected)
   assert.equal(verified.file, `dsh-px-pack-${products.pack.version}.tgz`)
+  assert.throws(
+    () =>
+      verifyPackOutput(
+        packFixture(t, (_m, _a, d) => {
+          d.features[0].sha256 = '0'.repeat(64)
+        }),
+        expected
+      ),
+    /member digest/
+  )
+  assert.throws(
+    () =>
+      verifyPackOutput(
+        packFixture(t, (_m, _a, d) => {
+          d.features.pop()
+        }),
+        expected
+      ),
+    /five feature bundles/
+  )
   assert.throws(() => verifyPackOutput(packFixture(t), { ...expected, candidate: true }), /artifact\.json/)
   assert.throws(
     () => verifyPackOutput(packFixture(t), { ...expected, head: 'c'.repeat(40) }),
