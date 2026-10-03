@@ -42,7 +42,10 @@ export function readSentenceSelection(ctx: Client, reader: ConversationReader): 
     ctx.sessions.list.getSnapshot(),
     ctx.layout?.panelInfo?.getSnapshot().activePanelId ?? null
   )
-  if (!sessionId) return null
+  // Native node keys are only unique within a session; a side conversation can
+  // contain the same key as the active main conversation.
+  const owner = seat.closest('[data-conversation-session]')?.getAttribute('data-conversation-session')
+  if (!sessionId || owner !== sessionId) return null
   const node = reader
     .binding(sessionId)
     .target('chat')

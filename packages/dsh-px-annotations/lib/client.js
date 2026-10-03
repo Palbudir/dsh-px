@@ -1254,7 +1254,8 @@ function readSentenceSelection(ctx, reader) {
     ctx.sessions.list.getSnapshot(),
     ctx.layout?.panelInfo?.getSnapshot().activePanelId ?? null
   );
-  if (!sessionId) return null;
+  const owner = seat.closest("[data-conversation-session]")?.getAttribute("data-conversation-session");
+  if (!sessionId || owner !== sessionId) return null;
   const node = reader.binding(sessionId).target("chat").getSnapshot()?.nodes.get(seat.getAttribute("data-chat-node-key"));
   const messageId = node?.kind === "assistant-step" ? node.data?.finalNode?.messageId : node?.kind === "user" || node?.kind === "steering" ? node.id : void 0;
   if (typeof messageId !== "string" || !messageId) return null;

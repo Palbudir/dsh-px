@@ -17,7 +17,8 @@ test('selection accepts an empty turn-tail boundary but rejects cross-message te
   let outsideText = '',
     endInMessage = false,
     settled = true
-  const seat = { getAttribute: () => 'native-node-key' }
+  let domSession = 'session-a'
+  const seat = { getAttribute: () => 'native-node-key', closest: () => ({ getAttribute: () => domSession }) }
   class Element {
     constructor(readonly start: boolean) {}
     closest(selector: string) {
@@ -76,6 +77,9 @@ test('selection accepts an empty turn-tail boundary but rejects cross-message te
   assert.equal(read(), null)
   endInMessage = true
   assert.equal(read().messageId, 'message-a')
+  domSession = 'side-session'
+  assert.equal(read(), null, 'a repeated node key in a side conversation must not quote the main session')
+  domSession = 'session-a'
   settled = false
   assert.equal(read(), null)
 })
