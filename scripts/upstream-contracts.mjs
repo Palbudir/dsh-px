@@ -12,8 +12,8 @@ import { join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 
 /**
- * Trusted upstream DSH contract lock. It is part of the installed worker (and therefore of the
- * worker digest); candidate repositories never supply tarball URLs, hashes or file selections.
+ * Pinned upstream DSH contracts used by CI to verify official dependencies.
+ * Package identities, hashes and file selections are maintained here.
  * Each tarball URL is derived from the registry, package name and version, and must match the
  * pinned sha512 SRI. Only listed regular files are projected, in memory, never executed.
  */

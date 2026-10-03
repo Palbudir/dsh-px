@@ -1,6 +1,6 @@
 # Pack 与 Desktop
 
-DSH-PX 使用同一套插件提供 Agent 工作能力。Pack 是原生 DSH 插件整合包，Desktop 是以官方 Desktop 源码为基础、首次启动预装 Pack 的 Windows 客户端。浏览器连接同一 DSH 服务时使用同一套插件与会话，不是另一份产品实现。
+DSH-PX 使用同一套插件整合包提供 Agent 工作能力。Pack 是统一安装入口，内部保留各插件的职责与生命周期，不要求合并成一个插件。Pack 是原生 DSH 插件整合包，Desktop 是以官方 Desktop 源码为基础、首次启动预装 Pack 的 Windows 客户端。浏览器连接同一 DSH 服务时使用同一套插件与会话，不是另一份产品实现。
 
 ## 当前状态
 

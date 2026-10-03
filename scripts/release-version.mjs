@@ -84,3 +84,34 @@ export function releaseAssetNames(name, version) {
   for (const asset of Object.values(assets)) assertPublishableAssetName(asset)
   return assets
 }
+
+/** The last legacy-shell release. Old clients read GitHub Latest; it must never move. */
+export const LEGACY_LATEST_TAG = 'v0.1.0-beta.re.0.11'
+
+/**
+ * Each product is monotonic within its own tag prefix. Historical `v*` releases belong to the retired
+ * shell and are not compared; a malformed tag inside the product's own prefix fails closed.
+ */
+export function assertNewerVersion(product, version, releases) {
+  versionParts(version)
+  const prefix = `${product}-v`
+  for (const release of releases) {
+    if (release.draft) continue
+    const tag = String(release.tag_name)
+    if (!tag.startsWith(prefix)) continue
+    let existing
+    try {
+      existing = parseReleaseTag(tag)
+    } catch {
+      throw new Error(`Existing ${product} release has an invalid tag: ${tag}`)
+    }
+    if (existing?.product === product && compareVersions(version, existing.version) <= 0)
+      throw new Error(`Release ${product} ${version} is not newer than published ${existing.version}`)
+  }
+}
+
+/** GitHub Latest must remain the legacy release so old clients never see a new product. */
+export function assertLegacyLatest(latest) {
+  if (!latest || latest.tag_name !== LEGACY_LATEST_TAG || latest.prerelease || latest.draft)
+    throw new Error(`GitHub Latest must remain ${LEGACY_LATEST_TAG}; refusing to continue`)
+}

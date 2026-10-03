@@ -1,5 +1,5 @@
 name: release-build
-# The run name binds the exact source commit and one product tag; the release gate verifies it.
+# The run name identifies the exact source commit and product tag for publication checks.
 run-name: dsh-px-build:${{ inputs.head }}:${{ inputs.release }}
 
 on:
@@ -50,7 +50,7 @@ jobs:
           ref: ${{ inputs.head }}
           path: candidate
           persist-credentials: false
-          # Full history: review-graph regression tests read historical commits.
+          # Full history supports exact source checks and change-based upstream verification.
           fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -121,7 +121,7 @@ jobs:
           ref: ${{ inputs.head }}
           path: candidate
           persist-credentials: false
-          # Full history: review-graph regression tests read historical commits.
+          # Full history supports exact source checks and change-based upstream verification.
           fetch-depth: 0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

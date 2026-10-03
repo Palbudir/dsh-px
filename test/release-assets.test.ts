@@ -35,7 +35,7 @@ const {
   packArtifact,
   asarEntries
 } = await load('release-package.mjs')
-const { verifyReleaseFiles, releaseCreateBody, releasePublishBody } = await load('release-controller.mjs')
+const { verifyReleaseFiles, releaseCreateBody, releasePublishBody } = await load('release-assets.mjs')
 const { verifyPackOutput } = await load('release-quality.mjs')
 const head = 'a'.repeat(40),
   controllerSha = 'b'.repeat(40)

@@ -1,6 +1,6 @@
 # DSH-PX
 
-DSH-PX 是面向 Windows 本机工作的 Agent 工作能力，基于 DeepSeek Harness（DSH）的原生插件架构。它由两个独立发布的产品组成：
+DSH-PX 是面向 Windows 本机工作的 Agent 插件整合包，基于 DeepSeek Harness（DSH）的原生插件架构。多个自制与社区插件组成一套工作能力，通过两种形式发行：
 
 - **DSH-PX Pack**：原生 DSH 插件整合包，提供会话标签、执行记录、产物、批注、定时任务和运行诊断，可在 `dsh web` 与 PX Desktop 中使用。
 - **DSH-PX Desktop**：以锁定版本的官方 Desktop 源码为基础构建的 Windows 客户端，首次启动自动安装同版本 Pack。
@@ -20,6 +20,8 @@ Pack 也可以通过原生插件管理器安装到 `dsh web`。**设置 → 运�
 ## 与旧客户端的关系
 
 旧版 DSH-PX（`v0.1.0-beta.re.*`）是另一套已停止开发的 Electron 外壳，继续按原方式使用，不会收到新产品的更新。新 Desktop 使用独立的应用身份、安装目录和数据目录（`%USERPROFILE%\.dsh-px`），两者可以并行安装。历史版本与资产保持不变。
+
+确认新版可用后，可在 Windows“已安装的应用”卸载旧 **DSH-PX**，保留 **DSH-PX Desktop**。退出前先结束旧版任务，备份 `%APPDATA%\dsh-px`；旧卸载器询问是否删除本地数据时选择“否”。旧会话和配置不会因安装新版而自动导入，不要直接覆盖新版数据目录。
 
 ## 更新与数据
 

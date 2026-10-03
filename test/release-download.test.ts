@@ -17,11 +17,35 @@ import { test } from 'node:test'
 import type { TestContext } from 'node:test'
 import { pathToFileURL } from 'node:url'
 
-const { ensureReleaseArchive, RELEASE_DOWNLOAD_TIMEOUT_MS } = await import(
-  pathToFileURL(resolve('scripts/release-controller.mjs')).href
+const { ensureReleaseArchive, RELEASE_DOWNLOAD_TIMEOUT_MS, downloadCommand } = await import(
+  pathToFileURL(resolve('scripts/release-assets.mjs')).href
 )
 const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
 const bytes = Buffer.from('complete release archive fixture\x00\xff')
+
+test('binary downloads preserve bytes and reject failed, timed out or oversized child output', async (t) => {
+  const f = fixture(t)
+  assert.equal(
+    await downloadCommand(
+      process.execPath,
+      ['-e', 'process.stdout.write(Buffer.from([0,255,1]))'],
+      f.archive
+    ),
+    3
+  )
+  assert.deepEqual(readFileSync(f.archive), Buffer.from([0, 255, 1]))
+  await assert.rejects(downloadCommand(process.execPath, ['-e', 'process.exit(7)'], f.archive), /failed/)
+  await assert.rejects(
+    downloadCommand(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], f.archive, { timeout: 20 }),
+    /timed out/
+  )
+  await assert.rejects(
+    downloadCommand(process.execPath, ['-e', 'process.stdout.write(Buffer.alloc(100))'], f.archive, {
+      maxBytes: 10
+    }),
+    /limit/
+  )
+})
 
 function fixture(t: TestContext) {
   const parent = realpathSync(tmpdir()),

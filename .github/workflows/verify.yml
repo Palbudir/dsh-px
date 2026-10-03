@@ -2,12 +2,17 @@ name: verify
 
 on:
   push:
-    branches: ['**']
+    branches: ['master']
   pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
+
+# PR commits run once here; superseded commits do not keep consuming runners.
+concurrency:
+  group: verify-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   quality:
@@ -21,7 +26,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1, Node 24
         with:
           persist-credentials: false
-          # Full history: review-graph regression tests read historical commits.
+          # Full history supports exact source checks and change-based upstream verification.
           fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0, Node 24
         with:
@@ -45,7 +50,7 @@ jobs:
           needed=true
           if [[ "$EVENT" != workflow_dispatch && "$BASE" =~ ^[a-f0-9]{40}$ ]] && git cat-file -e "$BASE^{commit}" 2>/dev/null; then
             changes=$(git diff --name-only "$BASE" "$HEAD")
-            if ! printf '%s\n' "$changes" | grep -E '^(config/|scripts/(review-upstream|verify-upstream-lock|prepare-native-desktop|build-native-pack)|test/review-upstream|packages/shared/native-|\.github/workflows/)' >/dev/null; then
+            if ! printf '%s\n' "$changes" | grep -E '^(config/|scripts/(upstream-contracts|verify-upstream-lock|prepare-native-desktop|build-native-pack)|test/upstream-contracts|packages/shared/native-|\.github/workflows/)' >/dev/null; then
               needed=false
             fi
           fi

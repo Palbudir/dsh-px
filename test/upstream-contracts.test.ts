@@ -27,8 +27,7 @@ const {
   fetchTarball,
   loadUpstreamCatalog,
   requirePinnedHosts
-} = await load('review-upstream.mjs')
-const { selectUpstreamContracts, collectReviewContext, reviewHostServices } = await load('review-core.mjs')
+} = await load('upstream-contracts.mjs')
 
 type Entry = { name: string; body?: string | Buffer; type?: string; linkname?: string; raw?: Buffer }
 /** Build a real ustar archive so the reader is exercised on genuine header layouts. */
@@ -334,7 +333,7 @@ test('candidate hosts must be pinned; unknown or malformed product contracts blo
 })
 
 test('a streamed body without a declared length stops at the tarball limit', async () => {
-  const { boundedBody } = await import(pathToFileURL(resolve('scripts/review-upstream.mjs')).href)
+  const { boundedBody } = await import(pathToFileURL(resolve('scripts/upstream-contracts.mjs')).href)
   let delivered = 0,
     cancelled = false
   const chunk = new Uint8Array(1024 * 1024)
@@ -396,129 +395,4 @@ test('real pinned tarballs match a staged DSH runtime byte for byte', async (t) 
     }
   }
   assert.ok(compared > 40, `compared ${compared} files`)
-})
-
-test('group selection names referenced modules, host services and loader contracts once per identical file', async () => {
-  const file = (text: string, host: string) => ({
-    path: 'lib/types/index.d.ts',
-    sha256: createHash('sha256').update(text).digest('hex'),
-    bytes: text.length,
-    text,
-    host
-  })
-  const entry = (name: string, host: string, text: string) => ({
-    name,
-    version: host,
-    tarball: tarballUrl(name, host),
-    integrity: 'sha512-' + 'A'.repeat(86) + '==',
-    license: 'MIT',
-    files: [file(text, host)]
-  })
-  const catalog = {
-    lockDigest: 'f'.repeat(64),
-    services: {
-      connection: ['@deepseek-ai/dsh-client-connection'],
-      slots: ['@deepseek-ai/dsh-client-ui-slots']
-    },
-    manifest: ['@deepseek-ai/dsh-client-modules'],
-    hosts: new Map(
-      ['0.1.5-rc.2', '0.2.0-rc.1'].map((host) => [
-        host,
-        new Map([
-          [
-            '@deepseek-ai/dsh-client-connection',
-            entry('@deepseek-ai/dsh-client-connection', host, 'CONNECTION_' + host)
-          ],
-          [
-            '@deepseek-ai/dsh-client-ui-slots',
-            entry('@deepseek-ai/dsh-client-ui-slots', host, 'SLOTS_SHARED')
-          ],
-          [
-            '@deepseek-ai/dsh-client-modules',
-            entry('@deepseek-ai/dsh-client-modules', host, 'LOADER_' + host)
-          ]
-        ])
-      ])
-    )
-  }
-  const selected = selectUpstreamContracts(catalog, {
-    modules: ['@deepseek-ai/dsh-client-ui-slots', '@deepseek-ai/dsh-not-pinned/sub', 'react'],
-    services: ['connection', 'mystery']
-  })
-  assert.deepEqual(selected.packages, [
-    '@deepseek-ai/dsh-client-connection',
-    '@deepseek-ai/dsh-client-ui-slots'
-  ])
-  assert.deepEqual(selected.unprojectedModules, ['@deepseek-ai/dsh-not-pinned'])
-  assert.deepEqual(selected.unprojectedServices, ['mystery'])
-  const slots = selected.files.filter((f: any) => f.name === '@deepseek-ai/dsh-client-ui-slots')
-  assert.equal(slots.length, 1, 'identical upstream bytes are printed once')
-  assert.deepEqual(
-    slots[0].hosts.map((h: any) => h.version),
-    ['0.1.5-rc.2', '0.2.0-rc.1']
-  )
-  assert.equal(selected.files.filter((f: any) => f.name === '@deepseek-ai/dsh-client-connection').length, 2)
-  assert.deepEqual(
-    reviewHostServices("ctx.inject(['connection', 'webServer'], (host) => host.slots.x)", new Set(['slots'])),
-    ['connection', 'slots', 'webServer']
-  )
-  // End-to-end: a plugin manifest change and a Connection consumer receive labelled upstream sections.
-  const tree = {
-    'packages/dsh-px-a/package.json': '{"name":"dsh-px-a"}',
-    'packages/dsh-px-a/src/index.ts':
-      "import type { X } from '@deepseek-ai/dsh-client-ui-slots'\nctx.inject(['connection'], () => {})"
-  }
-  const head = 'a'.repeat(40),
-    base = 'b'.repeat(40)
-  const blobs = new Map<string, Buffer>()
-  const list = (ref: string) =>
-    Object.entries(tree).map(([path, text]) => {
-      const bytes = Buffer.from(ref === head && path.endsWith('.ts') ? text + '\n// head' : text)
-      blobs.set(ref + ':' + path, bytes)
-      return {
-        path,
-        mode: '100644',
-        type: 'blob',
-        size: bytes.length,
-        oid: createHash('sha1')
-          .update(ref + path)
-          .digest('hex')
-      }
-    })
-  const reader = {
-    list: async (ref: string) => list(ref),
-    read: async (ref: string, path: string) => blobs.get(ref + ':' + path)!
-  }
-  const result = await collectReviewContext(
-    {
-      repository: 'fixture/repo',
-      head,
-      base,
-      mergeBase: base,
-      names: ['packages/dsh-px-a/src/index.ts', 'packages/dsh-px-a/package.json']
-    },
-    reader,
-    {},
-    [],
-    { upstream: catalog }
-  )
-  // Upstream files are named in the header and read on demand with read_upstream, not inlined.
-  assert.deepEqual(
-    result.upstream.map((item: any) => item.package),
-    [
-      '@deepseek-ai/dsh-client-connection',
-      '@deepseek-ai/dsh-client-modules',
-      '@deepseek-ai/dsh-client-ui-slots'
-    ]
-  )
-  assert.ok(result.upstream.every((item: any) => item.paths.includes('lib/types/index.d.ts')))
-  assert.match(result.context, /read_upstream; trusted worker lock f{64}/)
-  for (const text of ['SLOTS_SHARED', 'LOADER_0.2.0-rc.1', 'CONNECTION_'])
-    assert.ok(!result.context.includes(text), text)
-  const without = await collectReviewContext(
-    { repository: 'fixture/repo', head, base, mergeBase: base, names: ['packages/dsh-px-a/src/index.ts'] },
-    reader
-  )
-  assert.match(without.context, /read_upstream is unavailable/)
-  assert.match(without.context, /External module references[^\n]*@deepseek-ai\/dsh-client-ui-slots/)
 })
