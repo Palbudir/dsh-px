@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, rmSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { importLegacyData, planLegacyImport } from '../src/main/import-legacy'
+import { importLegacyData, planLegacyImport, restoreLegacyTitleCaches } from '../src/main/import-legacy'
 
 function fixture(t: any) {
   const root = mkdtempSync(join(tmpdir(), 'px-import-'))
@@ -20,6 +20,31 @@ function fixture(t: any) {
   writeFileSync(join(target, '.credentials.yaml'), 'current credentials')
   return { source, target }
 }
+test('imports compatible native title checkpoints without overwriting newer target caches or unrelated sessions', (t) => {
+  const f = fixture(t),
+    cache = join(f.source, 'storages', 'session_projcache', 'sessions')
+  mkdirSync(cache, { recursive: true })
+  const bytes = JSON.stringify({
+    version: 7,
+    record: {
+      identity: { formatVersion: 3, createdAt: 1 },
+      rows: { title: { ver: 1, seq: 3, val: { title: 'original title' } } }
+    }
+  })
+  writeFileSync(join(cache, 'old-session.json'), bytes)
+  writeFileSync(join(cache, 'unrelated-session.json'), bytes)
+  const result = importLegacyData(f.source, f.target)
+  assert.equal(result.titleCaches, 1)
+  const target = join(f.target, 'storages', 'session_projcache', 'sessions', 'old-session.json')
+  assert.equal(readFileSync(target, 'utf8'), bytes)
+  assert.equal(
+    existsSync(join(f.target, 'storages', 'session_projcache', 'sessions', 'unrelated-session.json')),
+    false
+  )
+  writeFileSync(join(cache, 'old-session.json'), bytes.replace('original title', 'stale replacement'))
+  assert.equal(restoreLegacyTitleCaches(f.source, f.target).copied, 0)
+  assert.equal(readFileSync(target, 'utf8'), bytes)
+})
 test('offline import adds old logs and attachments while retaining current sessions and credentials', (t) => {
   const f = fixture(t)
   mkdirSync(join(f.source, 'attachments'))

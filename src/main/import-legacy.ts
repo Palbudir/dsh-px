@@ -10,7 +10,7 @@ import {
   renameSync,
   writeFileSync
 } from 'node:fs'
-import { join, relative, resolve, sep, dirname } from 'node:path'
+import { join, relative, resolve, sep, dirname, basename } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { WorkspaceStore, validateWorkspaceState } from '../../packages/dsh-px-workspace/src/store'
 
@@ -52,15 +52,58 @@ export function planLegacyImport(source: string, target: string) {
   const attachments = files(join(roots.source, 'attachments'))
   return { ...roots, sessionDirectories: directories, conflicts, attachments }
 }
+function assertOffline(source: string, target: string): void {
+  for (const directory of [source, target]) {
+    const profiles = join(directory, 'profiles')
+    if (existsSync(profiles))
+      for (const name of readdirSync(profiles))
+        if (existsSync(join(profiles, name, 'lock'))) throw new Error('请退出来源和目标 DSH 服务后再导入')
+  }
+}
+/** Preserve native per-record checkpoints; the native reader verifies log identity and row versions. */
+function copyProjectionCaches(source: string, target: string, directories: string[]) {
+  let copied = 0,
+    skipped = 0
+  for (const directory of directories) {
+    const id = basename(directory)
+    if (!/^[a-zA-Z0-9_-]{1,200}$/.test(id)) continue
+    if (!existsSync(join(target, 'sessions', relative(join(source, 'sessions'), directory)))) continue
+    const src = join(source, 'storages', 'session_projcache', 'sessions', id + '.json')
+    const dst = join(target, 'storages', 'session_projcache', 'sessions', id + '.json')
+    if (!existsSync(src) || existsSync(dst)) {
+      skipped++
+      continue
+    }
+    safeTarget(src)
+    safeTarget(dst)
+    let record: any
+    try {
+      record = JSON.parse(readFileSync(src, 'utf8'))
+    } catch {
+      skipped++
+      continue
+    }
+    if (![3, 4, 5, 6, 7].includes(record?.version) || !record.record?.identity || !record.record?.rows) {
+      skipped++
+      continue
+    }
+    mkdirSync(dirname(dst), { recursive: true })
+    copyFileSync(src, dst, constants.COPYFILE_EXCL)
+    if (hash(src) !== hash(dst)) throw new Error('原生标题缓存副本校验失败')
+    copied++
+  }
+  return { copied, skipped }
+}
+/** Supplement a completed import without copying logs again or overwriting an existing cache. */
+export function restoreLegacyTitleCaches(source: string, target: string) {
+  const plan = planLegacyImport(source, target)
+  assertOffline(plan.source, plan.target)
+  return copyProjectionCaches(plan.source, plan.target, plan.sessionDirectories)
+}
 /** Offline, additive import: never replaces a session, credentials, profile or plugin configuration. */
 export function importLegacyData(source: string, target: string) {
   const plan = planLegacyImport(source, target)
-  for (const home of [plan.source, plan.target]) {
-    const profiles = join(home, 'profiles')
-    if (existsSync(profiles))
-      for (const p of readdirSync(profiles))
-        if (existsSync(join(profiles, p, 'lock'))) throw new Error('请退出来源和目标 DSH 服务后再导入')
-  }
+  assertOffline(plan.source, plan.target)
   if (plan.conflicts.length)
     throw new Error(`有 ${plan.conflicts.length} 个会话目录已存在；请先处理冲突，导入不会覆盖它们`)
   const incomingPath = join(plan.source, 'storages', 'dsh-px-workspace', 'workspace.json')
@@ -109,7 +152,8 @@ export function importLegacyData(source: string, target: string) {
     sessions: [] as string[],
     attachments: 0,
     annotations: incoming?.annotations.length ?? 0,
-    schedulesPaused: incoming?.schedules.length ?? 0
+    schedulesPaused: incoming?.schedules.length ?? 0,
+    titleCaches: 0
   }
   const save = () => writeFileSync(join(reportDir, 'import.json'), JSON.stringify(report, null, 2))
   save()
@@ -144,6 +188,7 @@ export function importLegacyData(source: string, target: string) {
     const store = new WorkspaceStore(statePath)
     store.update((state) => Object.assign(state, merged))
   }
+  report.titleCaches = copyProjectionCaches(plan.source, plan.target, plan.sessionDirectories).copied
   report.complete = true
   save()
   return {
@@ -151,6 +196,7 @@ export function importLegacyData(source: string, target: string) {
     attachments: report.attachments,
     annotations: report.annotations,
     schedulesPaused: report.schedulesPaused,
+    titleCaches: report.titleCaches,
     report: join(reportDir, 'import.json')
   }
 }
