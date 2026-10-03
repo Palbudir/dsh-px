@@ -32,6 +32,37 @@ const checkpoint = {
   evidence: ['check']
 }
 
+test('native 0.2 tool messages retain output and status instead of becoming interrupted at turn end', () => {
+  const events: Event[] = [
+    start('native-call', 'pwsh', 19, { command: 'Get-Content -LiteralPath .\\input.txt' }),
+    {
+      seq: 20,
+      time: 2000,
+      type: 'tool/result',
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          role: 'tool',
+          source: { kind: 'tool', callId: 'native-call' },
+          toolCallId: 'native-call',
+          content: [{ type: 'text', text: '2,3,5' }],
+          isError: false,
+          id: 'result-id'
+        }
+      }
+    },
+    { seq: 21, time: 2100, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } }
+  ]
+  const execution = reviewEvents(events, false).executions[0]
+  assert.equal(execution.outcome, 'returned')
+  assert.equal(execution.output, '2,3,5')
+  assert.equal(execution.outcomeSource, 'tool')
+  const failed = structuredClone(events)
+  failed[1].data.message.isError = true
+  assert.equal(reviewEvents(failed, false).executions[0].outcome, 'error')
+})
+
 test('任务记录从持久会话恢复；保留失败复现的证据状态；修改与检查准确关联', () => {
   const events = [
     start('edit', 'edit', 0, { file_path: 'calc.js' }),

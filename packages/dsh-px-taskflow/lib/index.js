@@ -379,7 +379,7 @@ var EvidenceIndex = class {
         pending.add(call);
       }
       if (event.type === "tool/result" || event.type === "tool/ptc-dispatch") {
-        const blocks = event.type === "tool/result" ? (data.message?.content ?? []).filter((b) => b.type === "tool-result") : [data];
+        const blocks = event.type === "tool/result" ? data.message?.role === "tool" && typeof data.message.toolCallId === "string" ? [data.message] : (data.message?.content ?? []).filter((b) => b.type === "tool-result") : [data];
         for (const block of blocks) {
           const call = calls.get(block.toolCallId ?? data.subCallId);
           if (!call) continue;
