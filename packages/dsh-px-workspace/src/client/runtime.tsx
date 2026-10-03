@@ -47,7 +47,12 @@ export function createWorkspaceClient(raw: Omit<Client, 'capabilities'>): Client
     if (typeof host.sidebarRightTabs.entries !== 'function') return
     const sidebar = createNativeSidebar(host)
     capabilities.set({ sidebar })
-    host.effect(() => () => capabilities.set({ sidebar: undefined }), 'workspace: panels')
+    host.effect(
+      () => () => {
+        if (capabilities.getSnapshot().sidebar === sidebar) capabilities.set({ sidebar: undefined })
+      },
+      'workspace: panels'
+    )
   })
   return ctx
 }

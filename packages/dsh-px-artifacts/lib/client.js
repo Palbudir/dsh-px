@@ -220,7 +220,12 @@ window.__ModuleLoader__.load({
 		    if (typeof host.sidebarRightTabs.entries !== "function") return;
 		    const sidebar = createNativeSidebar(host);
 		    capabilities.set({ sidebar });
-		    host.effect(() => () => capabilities.set({ sidebar: void 0 }), "workspace: panels");
+		    host.effect(
+		      () => () => {
+		        if (capabilities.getSnapshot().sidebar === sidebar) capabilities.set({ sidebar: void 0 });
+		      },
+		      "workspace: panels"
+		    );
 		  });
 		  return ctx;
 		}
