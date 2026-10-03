@@ -94,10 +94,7 @@ const wrapped = `window.__ModuleLoader__.load({
 \tfactory: (require) => {
 \t\tvar module = { exports: {} };
 \t\tvar exports = module.exports;
-${body
-  .split('\n')
-  .map((line) => (line ? '\t\t' + line : line))
-  .join('\n')}
+${body}
 \t\treturn module.exports;
 \t}
 });

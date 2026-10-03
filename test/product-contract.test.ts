@@ -12,6 +12,7 @@ import {
 
 test('independent patches and prereleases retain the same generation', () => {
   const c = structuredClone(products)
+  c.protocolGeneration = 2
   c.pack.version = c.desktop.packVersion = '0.2.4'
   c.desktop.version = '0.2.1'
   validateProductCatalog(c)
@@ -32,8 +33,8 @@ test('the active products are official-derived on the pinned 0.2.0-rc.2 host', (
   assert.equal(products.desktop.architecture, 'official-derived')
   assert.equal(products.desktop.hostVersion, '0.2.0-rc.2')
   assert.deepEqual(products.pack.hostVersions, ['0.2.0-rc.2'])
-  // The same Pack is qualified against the pinned official Windows installer.
-  assert.equal(products.pack.surfaces.includes('official-desktop'), true)
+  // Current release qualification follows PX Desktop and its Web surface.
+  assert.deepEqual(products.pack.surfaces, ['web', 'px-desktop'])
   assertNativeHostPins(products, { pack: nativePack, desktop: nativeDesktop })
 })
 

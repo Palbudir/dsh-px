@@ -5,6 +5,7 @@ import { SessionContentIndex, type RecordEvent } from './model'
 import { identifier, InputError, Scheduler, WorkspaceStore } from './store'
 import { readFailure } from '../../shared/session-errors'
 import { indexImportedSessions } from './import-index'
+import { selectionSource } from './selection-source'
 
 export const name = 'dsh-px-workspace'
 export const inject: string[] = []
@@ -224,7 +225,7 @@ export function apply(ctx: { inject: (services: string[], cb: (host: Host) => vo
       }
       const routes =
         feature === 'annotations'
-          ? ['annotations']
+          ? ['annotations', 'selection']
           : feature === 'schedules'
             ? ['schedules']
             : feature === 'core'
@@ -265,9 +266,16 @@ export function apply(ctx: { inject: (services: string[], cb: (host: Host) => vo
                     throw new InputError('批注与定时配置不可用；可在存储恢复中查看有效快照。', 503)
                   if (req.method === 'POST') {
                     if (req.headers['x-dsh-px-request'] !== '1') throw new InputError('请求校验失败', 403)
-                    if (route !== 'annotations' && route !== 'schedules')
+                    if (route !== 'annotations' && route !== 'schedules' && route !== 'selection')
                       throw new InputError('此接口只读', 405)
                     const input = await body(req)
+                    if (route === 'selection') {
+                      const { index } = await content(identifier(input.sessionId))
+                      return send(
+                        200,
+                        selectionSource(index.message(identifier(input.messageId)), input.quote)
+                      )
+                    }
                     if (route === 'annotations') {
                       if (input.action === 'delete') {
                         store!.deleteAnnotation(input)
@@ -292,6 +300,7 @@ export function apply(ctx: { inject: (services: string[], cb: (host: Host) => vo
                   }
                   if (route === 'schedules')
                     return send(200, { schedules: store!.schedules(), timeZone: scheduler!.zone })
+                  if (route === 'selection') throw new InputError('选区接口需要 POST', 405)
                   const id = identifier(params.get('sessionId'))
                   if (route === 'annotations')
                     return send(200, store!.annotations(id, params.get('before') ?? undefined))

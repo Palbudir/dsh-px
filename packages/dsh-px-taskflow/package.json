@@ -1,6 +1,6 @@
 {
   "name": "dsh-px-taskflow",
-  "version": "0.2.1-alpha.1",
+  "version": "0.3.0-alpha.1",
   "private": true,
   "type": "module",
   "description": "DSH-PX 项目任务：持久工作记录、执行证据与交付核对",
@@ -9,11 +9,14 @@
     ".": "./lib/index.js",
     "./client": "./lib/client.js",
     "./package.json": "./package.json",
-    "./cordis.patch.yml": "./cordis.patch.yml"
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "lib",
-    "cordis.patch.yml"
+    "cordis.patch.yml",
+    "locale",
+    "icon.svg"
   ],
   "license": "MIT",
   "dsh": {
@@ -30,5 +33,6 @@
         "@deepseek-ai/dsh-client-ui-slots"
       ]
     }
-  }
+  },
+  "icon": "./icon.svg"
 }

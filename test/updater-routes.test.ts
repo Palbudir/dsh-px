@@ -25,7 +25,7 @@ function packManifest(version: string, changes: Partial<ReleaseManifest> = {}): 
     packVersion: version,
     protocolGeneration: products.protocolGeneration,
     upgradeFromGenerations: [],
-    hostVersion: '0.2.0-rc.1',
+    hostVersion: products.desktop.hostVersion,
     upstreamCommit: 'a'.repeat(40),
     sourceCommit: 'b'.repeat(40),
     issuedAt: '2026-09-30T00:00:00.000Z',
@@ -55,13 +55,26 @@ test('the Pack feed is fixed, preview-only and bound to this protocol generation
 })
 
 test('a verified newer Pack is announced for manual installation with its own release page', () => {
-  const result = evaluatePackFeed(signed(packManifest('0.2.0-alpha.2')), '0.2.0-alpha.1', new Date(0), keys)
+  const result = evaluatePackFeed(
+    signed(packManifest(`0.${products.protocolGeneration}.0-alpha.2`)),
+    `0.${products.protocolGeneration}.0-alpha.1`,
+    new Date(0),
+    keys
+  )
   assert.equal(result.error, null)
   assert.equal(result.updateAvailable, true)
   assert.equal(result.install, 'manual')
-  assert.equal(result.latest.pack, '0.2.0-alpha.2')
-  assert.equal(result.releaseUrl, 'https://github.com/Palbudir/dsh-px/releases/tag/pack-v0.2.0-alpha.2')
-  const same = evaluatePackFeed(signed(packManifest('0.2.0-alpha.1')), '0.2.0-alpha.1', new Date(0), keys)
+  assert.equal(result.latest.pack, `0.${products.protocolGeneration}.0-alpha.2`)
+  assert.equal(
+    result.releaseUrl,
+    `https://github.com/Palbudir/dsh-px/releases/tag/pack-v0.${products.protocolGeneration}.0-alpha.2`
+  )
+  const same = evaluatePackFeed(
+    signed(packManifest(`0.${products.protocolGeneration}.0-alpha.1`)),
+    `0.${products.protocolGeneration}.0-alpha.1`,
+    new Date(0),
+    keys
+  )
   assert.equal(same.updateAvailable, false)
   assert.equal(same.error, null)
 })
@@ -69,43 +82,55 @@ test('a verified newer Pack is announced for manual installation with its own re
 test('unsigned, foreign, wrong-product and wrong-generation feeds never report a version', () => {
   const other = generateKeyPairSync('ed25519')
   const foreign = JSON.stringify(
-    signRelease(packManifest('0.2.9'), keyId, other.privateKey.export({ type: 'pkcs8', format: 'pem' }))
+    signRelease(
+      packManifest(`0.${products.protocolGeneration}.9`),
+      keyId,
+      other.privateKey.export({ type: 'pkcs8', format: 'pem' })
+    )
   )
-  const tampered = JSON.parse(signed(packManifest('0.2.9')))
-  tampered.payload.version = tampered.payload.packVersion = '0.2.10'
+  const tampered = JSON.parse(signed(packManifest(`0.${products.protocolGeneration}.9`)))
+  tampered.payload.version = tampered.payload.packVersion = `0.${products.protocolGeneration}.10`
   const desktop: ReleaseManifest = {
-    ...packManifest('0.2.9'),
+    ...packManifest(`0.${products.protocolGeneration}.9`),
     product: 'desktop',
     platform: 'win32-x64',
     upgradeFromGenerations: [products.protocolGeneration],
     files: [
       {
         role: 'installer',
-        name: 'DSH-PX-Desktop-0.2.9-win-x64.exe',
-        url: 'https://github.com/Palbudir/dsh-px/releases/download/desktop-v0.2.9/DSH-PX-Desktop-0.2.9-win-x64.exe',
+        name: `DSH-PX-Desktop-0.${products.protocolGeneration}.9-win-x64.exe`,
+        url: `https://github.com/Palbudir/dsh-px/releases/download/desktop-v0.${products.protocolGeneration}.9/DSH-PX-Desktop-0.${products.protocolGeneration}.9-win-x64.exe`,
         size: 10,
         sha256: 'c'.repeat(64),
         sha512: Buffer.alloc(64, 1).toString('base64')
       }
     ]
   }
-  const next = packManifest('0.3.0', { protocolGeneration: 3 })
+  const next = packManifest(`0.${products.protocolGeneration + 1}.0`, {
+    protocolGeneration: products.protocolGeneration + 1
+  })
   for (const source of [
     'not json',
-    JSON.stringify(packManifest('0.2.9')),
+    JSON.stringify(packManifest(`0.${products.protocolGeneration}.9`)),
     foreign,
     JSON.stringify(tampered),
     signed(desktop),
     signed(next)
   ]) {
-    const result = evaluatePackFeed(source, '0.2.0-alpha.1', new Date(0), keys)
+    const result = evaluatePackFeed(source, `0.${products.protocolGeneration}.0-alpha.1`, new Date(0), keys)
     assert.notEqual(result.error, null, source.slice(0, 40))
     assert.equal(result.latest.pack, null)
     assert.equal(result.updateAvailable, false)
     assert.equal(result.releaseUrl, null)
   }
   // The shipped keys are the pinned update keys, so a feed signed by a test key is rejected there.
-  assert.notEqual(evaluatePackFeed(signed(packManifest('0.2.9')), '0.2.0-alpha.1').error, null)
+  assert.notEqual(
+    evaluatePackFeed(
+      signed(packManifest(`0.${products.protocolGeneration}.9`)),
+      `0.${products.protocolGeneration}.0-alpha.1`
+    ).error,
+    null
+  )
 })
 
 test('the updater host exposes only status and a signed check; no desktop bridge is claimed', async (t) => {
@@ -166,7 +191,7 @@ test('the updater host exposes only status and a signed check; no desktop bridge
   const urls: string[] = []
   t.mock.method(globalThis, 'fetch', async (url: string) => {
     urls.push(String(url))
-    return new Response(signed(packManifest('0.2.9')))
+    return new Response(signed(packManifest(`0.${products.protocolGeneration}.9`)))
   })
   const check = await request('check')
   // The feed override was ignored, and the test-key signature is not trusted by the shipped keys.

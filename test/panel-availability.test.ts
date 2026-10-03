@@ -61,7 +61,14 @@ const panelIds = [
   'px-schedules'
 ]
 function sidebarFixture(ids = panelIds) {
-  const descriptors = new Map(ids.map((id) => [id, { id }])),
+  const labels: Record<string, string> = {
+    'px-artifacts': '产物',
+    'px-notes': '引用与批注',
+    'px-schedules': '定时任务',
+    'dsh-px-taskflow': '执行记录'
+  }
+  const descriptor = (id: string) => ({ id, kind: id, title: () => labels[id] ?? id })
+  const descriptors = new Map(ids.map((id) => [id, descriptor(id)])),
     disabled = new Set<string>(),
     registry = new Set<() => void>(),
     state = new Set<() => void>()
@@ -83,7 +90,7 @@ function sidebarFixture(ids = panelIds) {
         state.delete(fn)
       }
     },
-    getSnapshot: () => ({}),
+    getSnapshot: () => [...descriptors.values()],
     registerTab: (_definition: unknown) => () => {},
     openTab: (...args: unknown[]) => {
       tabError?.()
@@ -100,7 +107,7 @@ function sidebarFixture(ids = panelIds) {
     registry,
     state,
     register: (id: string) => {
-      descriptors.set(id, { id })
+      descriptors.set(id, descriptor(id))
       registry.forEach((fn) => fn())
     },
     unregister: (id: string) => {
@@ -270,7 +277,7 @@ function fixture(name: keyof typeof entries, sidebar = sidebarFixture()) {
     requestAnimationFrame: (fn: () => void) => fn(),
     document: {
       querySelector: () => null,
-      createElement: () => ({ remove: () => {} }),
+      createElement: () => ({ dataset: {}, setAttribute: () => {}, remove: () => {} }),
       head: { appendChild: () => {} }
     },
     window: {
@@ -348,9 +355,7 @@ test('SessionBar uses actual descriptors and reacts to registration alone, unloa
   t.after(f.destroy)
   f.flush()
   assert.equal(side.service.isTabEnabled('dsh-px-taskflow'), true)
-  assert.equal(f.button('执行记录').props.disabled, true)
-  assert.match(f.button('执行记录').props.title, /尚未加载/)
-  assert.match(f.warning(), /执行记录/)
+  assert.equal(f.button('执行记录'), undefined, 'absent optional feature contributes no toolbar action')
   assert.equal(f.button('文件').props.disabled, false)
   side.register('dsh-px-taskflow')
   f.flush()
@@ -363,7 +368,7 @@ test('SessionBar uses actual descriptors and reacts to registration alone, unloa
   stale.props.onClick() // A callback captured before unload must recheck the live provider.
   f.flush()
   assert.equal(side.calls.length, 1)
-  assert.equal(f.button('执行记录').props.disabled, true)
+  assert.equal(f.button('执行记录'), undefined)
   side.register('dsh-px-taskflow')
   f.flush()
   f.button('执行记录').props.onClick()

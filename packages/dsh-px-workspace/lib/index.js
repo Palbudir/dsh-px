@@ -943,6 +943,24 @@ async function indexImportedSessions(home, host, signal) {
   }
 }
 
+// packages/dsh-px-workspace/src/selection-source.ts
+function selectionSource(source, quote) {
+  if (!source) throw new InputError("\u6D88\u606F\u5C1A\u672A\u4FDD\u5B58\u6216\u6CA1\u6709\u53EF\u5F15\u7528\u7684\u6B63\u6587", 404);
+  if (typeof quote !== "string" || !quote.trim() || quote.length > 8e3)
+    throw new InputError("\u5F15\u7528\u7247\u6BB5\u987B\u4E3A 1\u20138000 \u5B57\u7B26");
+  const found = source.text.indexOf(quote);
+  if (found < 0)
+    throw new InputError("\u9009\u533A\u8DE8\u8D8A\u4E86\u6B63\u6587\u683C\u5F0F\u6216\u5185\u5BB9\u5DF2\u53D8\u5316\uFF0C\u8BF7\u4F7F\u7528\u6D88\u606F\u4E0B\u65B9\u201C\u5F15\u7528 / \u6279\u6CE8\u201D\u5728\u539F\u6587\u4E2D\u9009\u62E9");
+  const offset = Math.max(0, found - 1e3);
+  return {
+    ...source,
+    text: source.text.slice(offset, offset + 32e3),
+    offset,
+    length: source.text.length,
+    nextOffset: offset + 32e3 < source.text.length ? offset + 32e3 : null
+  };
+}
+
 // packages/dsh-px-workspace/src/index.ts
 var name = "dsh-px-workspace";
 var inject = [];
@@ -1113,7 +1131,7 @@ ${schedule.prompt}`
           };
         }, "schedules: timer");
       }
-      const routes = feature === "annotations" ? ["annotations"] : feature === "schedules" ? ["schedules"] : feature === "core" ? ["content", "message", "storage"] : [];
+      const routes = feature === "annotations" ? ["annotations", "selection"] : feature === "schedules" ? ["schedules"] : feature === "core" ? ["content", "message", "storage"] : [];
       for (const route of routes)
         owner.effect(
           () => host.webServer.register({
@@ -1148,9 +1166,16 @@ ${schedule.prompt}`
                   throw new InputError("\u6279\u6CE8\u4E0E\u5B9A\u65F6\u914D\u7F6E\u4E0D\u53EF\u7528\uFF1B\u53EF\u5728\u5B58\u50A8\u6062\u590D\u4E2D\u67E5\u770B\u6709\u6548\u5FEB\u7167\u3002", 503);
                 if (req.method === "POST") {
                   if (req.headers["x-dsh-px-request"] !== "1") throw new InputError("\u8BF7\u6C42\u6821\u9A8C\u5931\u8D25", 403);
-                  if (route !== "annotations" && route !== "schedules")
+                  if (route !== "annotations" && route !== "schedules" && route !== "selection")
                     throw new InputError("\u6B64\u63A5\u53E3\u53EA\u8BFB", 405);
                   const input = await body(req);
+                  if (route === "selection") {
+                    const { index: index2 } = await content(identifier(input.sessionId));
+                    return send(
+                      200,
+                      selectionSource(index2.message(identifier(input.messageId)), input.quote)
+                    );
+                  }
                   if (route === "annotations") {
                     if (input.action === "delete") {
                       store.deleteAnnotation(input);
@@ -1175,6 +1200,7 @@ ${schedule.prompt}`
                 }
                 if (route === "schedules")
                   return send(200, { schedules: store.schedules(), timeZone: scheduler.zone });
+                if (route === "selection") throw new InputError("\u9009\u533A\u63A5\u53E3\u9700\u8981 POST", 405);
                 const id = identifier(params.get("sessionId"));
                 if (route === "annotations")
                   return send(200, store.annotations(id, params.get("before") ?? void 0));

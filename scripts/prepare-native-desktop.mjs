@@ -1,6 +1,6 @@
 /** Prepare an isolated branded overlay over verified official build outputs. */
-import { readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { basename, dirname, resolve, join } from 'node:path'
+import { readFileSync, writeFileSync, mkdirSync, cpSync, existsSync } from 'node:fs'
+import { basename, dirname, resolve, join, relative } from 'node:path'
 import { pathToFileURL, fileURLToPath } from 'node:url'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
@@ -44,6 +44,72 @@ const packSha256 = createHash('sha256').update(packBytes).digest('hex')
 const packManifest = JSON.parse(
   execFileSync('tar', ['-xOf', packArchive, 'package/package.json'], { encoding: 'utf8', windowsHide: true })
 )
+const distribution = JSON.parse(
+  execFileSync('tar', ['-xOf', packArchive, 'package/distribution.json'], {
+    encoding: 'utf8',
+    windowsHide: true
+  })
+)
+if (
+  distribution.schemaVersion !== 1 ||
+  distribution.version !== products.pack.version ||
+  distribution.foundation?.name !== 'dsh-px-core'
+)
+  throw Error('Missing native Pack distribution')
+const distributionDir = join(output, 'distribution-' + packSha256)
+mkdirSync(distributionDir, { recursive: true })
+writeFileSync(join(distributionDir, 'distribution.json'), JSON.stringify(distribution, null, 2) + '\n')
+for (const entry of [distribution.foundation, ...distribution.features]) {
+  if (
+    entry.file !== `distribution/${entry.name}-${products.pack.version}.tgz` ||
+    !/^[a-z0-9-]+$/.test(entry.name)
+  )
+    throw Error('Invalid distribution file')
+  const bytes = execFileSync('tar', ['-xOf', packArchive, 'package/' + entry.file], {
+    windowsHide: true,
+    maxBuffer: 32 * 1024 * 1024
+  })
+  if (createHash('sha256').update(bytes).digest('hex') !== entry.sha256)
+    throw Error('Distribution digest mismatch')
+  mkdirSync(dirname(join(distributionDir, entry.file)), { recursive: true })
+  writeFileSync(join(distributionDir, entry.file), bytes)
+}
+const coreDir = join(distributionDir, 'foundation')
+mkdirSync(coreDir, { recursive: true })
+execFileSync('tar', ['-xzf', relative(coreDir, join(distributionDir, distribution.foundation.file))], {
+  cwd: coreDir,
+  windowsHide: true
+})
+const nativeAnchor = join(
+  app,
+  '.desktop-build/targets/win-x64/dsh/node_modules/@deepseek-ai/dsh/package.json'
+)
+const foundationManifest = JSON.parse(readFileSync(join(coreDir, 'package/package.json'), 'utf8'))
+const installationManifest = JSON.parse(readFileSync(nativeAnchor, 'utf8'))
+installationManifest.dependencies = {
+  ...installationManifest.dependencies,
+  'dsh-px-core': products.pack.version,
+  ...foundationManifest.dependencies
+}
+const pxAnchor = join(distributionDir, 'dsh-package.json')
+writeFileSync(pxAnchor, JSON.stringify(installationManifest, null, 2) + '\n')
+// Assemble a private runtime tree instead of overlapping electron-builder file mappings.
+const nativeRuntime = join(app, '.desktop-build/targets/win-x64/dsh')
+const pxRuntime = join(output, 'runtime-' + packSha256)
+const runtimeReady = join(pxRuntime, '.px-runtime-ready')
+if (!existsSync(runtimeReady)) {
+  cpSync(nativeRuntime, pxRuntime, { recursive: true })
+  writeFileSync(
+    join(pxRuntime, 'node_modules/@deepseek-ai/dsh/package.json'),
+    JSON.stringify(installationManifest, null, 2) + '\n'
+  )
+  cpSync(join(coreDir, 'package'), join(pxRuntime, 'node_modules/dsh-px-core'), { recursive: true })
+  for (const name of Object.keys(foundationManifest.dependencies))
+    cpSync(join(coreDir, 'package/node_modules', name), join(pxRuntime, 'node_modules', name), {
+      recursive: true
+    })
+  writeFileSync(runtimeReady, packSha256)
+}
 if (
   packManifest.name !== 'dsh-px-pack' ||
   packManifest.version !== products.pack.version ||
@@ -209,14 +275,14 @@ await build({
 export {openDesktopInBrowser} from ${JSON.stringify(join(root, 'src/main/open-browser.ts'))};
 export function configurePxUpdates(updater){configureSignedUpdates(updater,${JSON.stringify(keys.keys)},'preview',${products.protocolGeneration})}
 import {prepareNativeProfileDefaults,applyNativeDesktopPolicy} from ${JSON.stringify(join(root, 'src/main/native-profile-defaults.ts'))};
-import {provisionNativePack} from ${JSON.stringify(join(root, 'src/main/native-pack-provision.ts'))};
-import {createRequire} from 'node:module';import {join,delimiter} from 'node:path';import {pathToFileURL} from 'node:url';import {existsSync} from 'node:fs';
+import {provisionNativeComposition} from ${JSON.stringify(join(root, 'src/main/native-composition.ts'))};
+import {createRequire} from 'node:module';import {join,delimiter} from 'node:path';import {pathToFileURL} from 'node:url';import {existsSync,readFileSync} from 'node:fs';
 // PX profile preparation never stops the Host: defaults, telemetry policy and Pack provisioning only log failures.
 export function preparePxDefaults(profile){
   try{return prepareNativeProfileDefaults(profile,process.env.DSH_PX_DOCUMENTS_DIRECTORY||'')}
   catch(error){console.error('[dsh-px] Profile defaults could not be applied; the Host starts without them',error);return false}
 }
-// provisionNativePack records and logs its own failures.
+// Native composition upgrades run offline under the Desktop profile lock.
 export async function preparePxPack(profile,runtimeDir){
   try{applyNativeDesktopPolicy(profile)}
   catch(error){console.error('[dsh-px] Desktop telemetry policy could not be applied; the Host starts with the current profile patch',error)}
@@ -230,8 +296,10 @@ export async function preparePxPack(profile,runtimeDir){
     const require=createRequire(join(runtimeDir,'package.json'));
     ({runPluginCommand}=await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-plugin-manager/operations')).href));
   }catch(error){console.error('[dsh-px] Native plugin operations unavailable; Pack provisioning skipped',error);return 'failed'}
-  const result=await provisionNativePack({profile,archive,version:${JSON.stringify(products.pack.version)},sha256:${JSON.stringify(packSha256)},install:async (archive,mode)=>{
-    const result=await runPluginCommand({profile:'desktop',dir:profile,installAnchor:join(runtimeDir,'node_modules/@deepseek-ai/dsh/package.json'),cwd:profile},['add',...(mode?.repair?['--force']:[]),archive.replaceAll('\\\\','/')],{
+  const foundation=JSON.parse(readFileSync(join(runtimeDir,'node_modules/dsh-px-core/package.json'),'utf8'));
+  if(foundation.version!==${JSON.stringify(products.pack.version)}||foundation.dshPx?.sourceCommit!==${JSON.stringify(ownHead)})throw Error('PX foundation does not match the installed Desktop');
+  const result=await provisionNativeComposition({profile,directory:join(process.resourcesPath,'px-distribution'),version:${JSON.stringify(products.pack.version)},install:async (args)=>{
+    const result=await runPluginCommand({profile:'desktop',dir:profile,installAnchor:join(runtimeDir,'node_modules/@deepseek-ai/dsh/package.json'),cwd:profile},args,{
       execution:'service',command:process.execPath,args:['--expose-internals',join(process.resourcesPath,'runtime/pnpm/bin/pnpm.mjs')],outputBytes:16384,idleTimeoutMs:120000,signal:AbortSignal.timeout(300000),
       env:{ELECTRON_RUN_AS_NODE:'1',DSH_DESKTOP_NODE_EXECUTABLE:process.execPath,PATH:join(process.resourcesPath,'runtime/bin')+delimiter+(process.env.PATH||'')}
     });if(result.exitCode!==0||result.timedOut)throw Error('Native Pack installation failed; see '+result.logPath);
@@ -305,6 +373,8 @@ config.extraMetadata={...config.extraMetadata,name:'dsh-px-desktop',version:${JS
 config.files=config.files.filter(f=>f!=='lib/main.js');config.files.push('lib/px-main.mjs','lib/px-bootstrap.cjs','lib/px-updates.mjs',${brandedPreloads.map((n) => JSON.stringify('lib/px-' + n)).join(',')});
 config.win.icon=${JSON.stringify(join(root, 'build/icon.png'))};config.extraResources=config.extraResources.map(r=>r.to==='icon.png'?{...r,from:${JSON.stringify(join(root, 'build/icon.png'))}}:r);
 config.extraResources.push({from:${JSON.stringify(packArchive)},to:'px-pack.tgz'});
+config.extraResources.push({from:${JSON.stringify(distributionDir)},to:'px-distribution',filter:['distribution.json','distribution/*.tgz']});
+config.files=config.files.map(f=>typeof f==='object'&&f.to==='dsh'?{...f,from:${JSON.stringify(pxRuntime)}}:typeof f==='object'&&f.to==='dsh/node_modules'?{...f,from:${JSON.stringify(join(pxRuntime, 'node_modules'))}}:f);
 config.extraResources=config.extraResources.map(r=>r.to==='runtime'?{...r,filter:['**/*','!cli/bin/dsh.cmd']}:r);
 config.extraResources.push({from:${JSON.stringify(cliPath)},to:'runtime/cli/bin/dsh.cmd'});
 config.directories.output=${JSON.stringify(join(output, 'dist'))};config.artifactName=${JSON.stringify(releaseAssetNames('desktop', products.desktop.version).installer)};config.nsis.differentialPackage=false;

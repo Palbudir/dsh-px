@@ -1,15 +1,15 @@
 {
   "schemaVersion": 1,
-  "protocolGeneration": 2,
+  "protocolGeneration": 3,
   "pack": {
-    "version": "0.2.1-alpha.1",
+    "version": "0.3.0-alpha.1",
     "dataSchemaVersion": 1,
     "hostVersions": ["0.2.0-rc.2"],
-    "surfaces": ["web", "px-desktop", "official-desktop"]
+    "surfaces": ["web", "px-desktop"]
   },
   "desktop": {
-    "version": "0.2.1-alpha.1",
-    "packVersion": "0.2.1-alpha.1",
+    "version": "0.3.0-alpha.1",
+    "packVersion": "0.3.0-alpha.1",
     "hostVersion": "0.2.0-rc.2",
     "architecture": "official-derived"
   }

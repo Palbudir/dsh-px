@@ -7,6 +7,7 @@ import { repoRoot } from './paths'
 import { copyBundlePayload } from '../src/shared/bundle-payload'
 import { MANAGED_PLUGIN_NAMES, PACK_VERSION, PRODUCT_CATALOG } from '../src/shared/plugin-catalog'
 import { patchSidebarAuthentication, SIDEBAR_AUTH_SOURCE } from '../src/shared/sidebar-auth-compatibility'
+import { buildDistribution } from './pack-distribution'
 
 const root = repoRoot()
 const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
@@ -79,6 +80,42 @@ if (sidebarManifest.name !== sidebar.name || sidebarManifest.version !== sidebar
 const patched = patchSidebarAuthentication(readFileSync(join(sidebarDirectory, 'lib/index.js'), 'utf8'))
 writeFileSync(join(sidebarDirectory, 'lib/index.js'), patched.code)
 const members = [...MANAGED_PLUGIN_NAMES, sidebar.name]
+// Native module discovery requires exact package names for client halves.
+const exports: Record<string, string> = {
+  '.': './index.js',
+  './package.json': './package.json',
+  './cordis.patch.yml': './cordis.patch.yml',
+  './locale/*.json': './locale/*.json'
+}
+mkdirSync(join(bundle, 'locale'))
+writeFileSync(
+  join(bundle, 'locale/zh.json'),
+  JSON.stringify({
+    meta: {
+      title: 'DSH-PX 插件整合包',
+      description: '为 DSH 提供工作区、执行记录、产物、引用批注和定时任务。'
+    }
+  }) + '\n'
+)
+writeFileSync(
+  join(bundle, 'locale/en.json'),
+  JSON.stringify({
+    meta: {
+      title: 'DSH-PX Pack',
+      description: 'Workspace tools, execution records, artifacts, annotations and scheduled tasks.'
+    }
+  }) + '\n'
+)
+copyFileSync(join(modules, 'dsh-px-workspace/icon.svg'), join(bundle, 'icon.svg'))
+copyFileSync(join(root, 'LICENSE'), join(bundle, 'LICENSE'))
+buildDistribution(bundle, PACK_VERSION, catalog.dependencies, {
+  candidate,
+  sourceCommit,
+  sourceDirty,
+  hostVersion: catalog.hostVersion,
+  upstreamCommit: catalog.upstreamCommit,
+  protocolGeneration: PRODUCT_CATALOG.protocolGeneration
+})
 const dependencies = { ...catalog.dependencies }
 for (const name of MANAGED_PLUGIN_NAMES) dependencies[name] = PACK_VERSION
 dependencies[sidebar.name] = sidebar.version
@@ -93,6 +130,8 @@ writeFileSync(
       main: 'index.js',
       license: 'MIT',
       description: 'DSH-PX: sessions, files, execution evidence and scheduled work for native DSH hosts.',
+      icon: './icon.svg',
+      exports,
       dependencies,
       bundledDependencies: members,
       peerDependencies: catalog.peerDependencies,
@@ -105,6 +144,7 @@ writeFileSync(
         hostVersion: catalog.hostVersion,
         upstreamCommit: catalog.upstreamCommit,
         protocolGeneration: PRODUCT_CATALOG.protocolGeneration,
+        distribution: './distribution.json',
         patches: [sidebar]
       }
     },
@@ -112,15 +152,12 @@ writeFileSync(
     2
   ) + '\n'
 )
-// Explicit real member paths work before the host rebuilds its nested package resolution table.
+// The native manager refreshes package resolution before the next Host boot.
 writeFileSync(
   join(bundle, 'cordis.patch.yml'),
   '- insert:\n' +
     members
-      .map(
-        (name) =>
-          `    - id: ${name === sidebar.name ? 'better-sidebar' : name}\n      name: ./node_modules/${name}/lib/index.js\n`
-      )
+      .map((name) => `    - id: ${name === sidebar.name ? 'better-sidebar' : name}\n      name: ${name}\n`)
       .join('')
 )
 writeFileSync(join(bundle, 'index.js'), 'export function apply() {}\n')

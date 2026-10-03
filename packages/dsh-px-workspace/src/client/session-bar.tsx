@@ -9,12 +9,8 @@ import { selectedSession } from '../../../shared/native-navigation'
 const panels = [
   ['editor', '文件', 'file'],
   ['terminal', '终端', 'terminal'],
-  ['px-artifacts', '产物', 'artifact'],
   ['git', '文件变动', 'git'],
-  ['dsh-px-taskflow', '执行记录', 'jobs'],
-  ['subagent', '后台任务', 'jobs'],
-  ['px-notes', '引用与批注', 'note'],
-  ['px-schedules', '定时任务', 'schedule']
+  ['subagent', '后台任务', 'jobs']
 ] as const
 const emptyPanel = { activePanelId: null }
 const defaultPanel = { getSnapshot: () => emptyPanel, subscribe: () => () => {} }
@@ -43,7 +39,19 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
       setError(errorText(e))
     }
   }
-  const panelStates = panels.map(([type, text, icon]) => ({
+  // Feature-owned native tab registrations supply the optional actions and their titles.
+  const entries = capabilities.sidebar?.getSnapshot()
+  const optional: Array<readonly [string, string, string]> = []
+  if (Array.isArray(entries))
+    for (const entry of entries) {
+      const kind = entry.kind ?? entry.id
+      if (typeof kind !== 'string' || !/^px-|^dsh-px-/.test(kind)) continue
+      const title = entry.title ?? entry.guide?.[0]?.title
+      if (typeof title !== 'function') continue
+      const label = title()
+      if (typeof label === 'string') optional.push([kind, label, 'artifact'])
+    }
+  const panelStates = [...panels, ...optional].map(([type, text, icon]) => ({
     type,
     text,
     icon,
