@@ -71,7 +71,7 @@ function rejectUntrustedRequest(req, res) {
 }
 
 // packages/dsh-px-workspace/src/index.ts
-import { join } from "node:path";
+import { join as join2 } from "node:path";
 
 // packages/dsh-px-workspace/src/model.ts
 var SessionContentIndex = class {
@@ -824,6 +824,125 @@ function readFailure(error) {
   };
 }
 
+// packages/dsh-px-workspace/src/import-index.ts
+import { existsSync as existsSync3, lstatSync as lstatSync2, readFileSync as readFileSync2, readdirSync } from "node:fs";
+import { basename, join } from "node:path";
+
+// src/main/native-atomic.ts
+import { randomUUID as randomUUID2 } from "node:crypto";
+import {
+  closeSync,
+  existsSync as existsSync2,
+  fsyncSync,
+  lstatSync,
+  openSync,
+  renameSync as renameSync2,
+  rmSync,
+  writeFileSync as writeFileSync2
+} from "node:fs";
+var TRANSIENT_CODES = /* @__PURE__ */ new Set(["EACCES", "EBUSY", "EPERM"]);
+var RETRY_LIMIT = 8;
+var RETRY_INITIAL_MS = 20;
+var RETRY_MAX_MS = 200;
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+function retryTransient(operation, windows = process.platform === "win32") {
+  let delay = RETRY_INITIAL_MS;
+  for (let retries = 0; ; retries++) {
+    try {
+      return operation();
+    } catch (error) {
+      const code = error?.code ?? "";
+      if (!windows || !TRANSIENT_CODES.has(code) || retries >= RETRY_LIMIT) throw error;
+    }
+    sleepSync(delay);
+    delay = Math.min(delay * 2, RETRY_MAX_MS);
+  }
+}
+function renameWithRetry(from, to) {
+  retryTransient(() => renameSync2(from, to));
+}
+function assertRegularOrAbsent(path, label = "Target") {
+  if (existsSync2(path) && !lstatSync(path).isFile()) throw new Error(`${label} must be a regular file`);
+}
+var defaultOperations = {
+  rename: renameWithRetry,
+  remove: (path) => rmSync(path, { force: true })
+};
+function writeAtomic2(file, bytes, operations = defaultOperations) {
+  assertRegularOrAbsent(file);
+  const temporary = `${file}.${randomUUID2()}.tmp`;
+  let renamed = false;
+  try {
+    const fd = openSync(temporary, "wx", 384);
+    try {
+      writeFileSync2(fd, bytes);
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
+    operations.rename(temporary, file);
+    renamed = true;
+  } finally {
+    if (!renamed) operations.remove(temporary);
+  }
+}
+
+// packages/dsh-px-workspace/src/import-index.ts
+async function indexImportedSessions(home, host, signal) {
+  const root = join(home, "backups");
+  if (!existsSync3(root) || lstatSync2(root).isSymbolicLink()) return;
+  for (const name2 of readdirSync(root)) {
+    if (!/^px-import-[a-f0-9-]{36}$/.test(name2)) continue;
+    const dir = join(root, name2), file = join(dir, "import.json");
+    if (lstatSync2(dir).isSymbolicLink() || !existsSync3(file) || lstatSync2(file).isSymbolicLink()) continue;
+    const report = JSON.parse(readFileSync2(file, "utf8"));
+    if (report.complete !== true || report.indexed === true && report.indexVersion === 1 || !Array.isArray(report.sessions) || report.sessions.length > 1e4)
+      continue;
+    const errors = [], skipped = [];
+    let indexed = 0;
+    for (const item of report.sessions) {
+      signal.throwIfAborted();
+      if (typeof item !== "string") throw new Error("\u5BFC\u5165\u8BB0\u5F55\u683C\u5F0F\u65E0\u6548");
+      const id = basename(item.replaceAll("\\", "/"));
+      if (!/^[a-zA-Z0-9_-]{1,200}$/.test(id)) throw new Error("\u5BFC\u5165\u8BB0\u5F55\u4F1A\u8BDD\u6807\u8BC6\u65E0\u6548");
+      try {
+        const { meta } = await host.sessionController.inspect(id, signal);
+        signal.throwIfAborted();
+        if (!meta.cwd || meta.origin === "subagent" || !existsSync3(meta.cwd)) {
+          skipped.push(id);
+          continue;
+        }
+        await host.sessionController.projections({ sessionId: id }, signal);
+        signal.throwIfAborted();
+        const workspace = await host.workspaceRegistry.create(meta.cwd);
+        signal.throwIfAborted();
+        await workspace.attachSession(id);
+        indexed++;
+      } catch (error) {
+        signal.throwIfAborted();
+        errors.push(id + ": " + String(error));
+      }
+    }
+    writeAtomic2(
+      file,
+      JSON.stringify(
+        {
+          ...report,
+          indexed: errors.length === 0,
+          indexVersion: 1,
+          indexedSessions: indexed,
+          skippedSessions: skipped,
+          indexErrors: errors
+        },
+        null,
+        2
+      )
+    );
+  }
+}
+
 // packages/dsh-px-workspace/src/index.ts
 var name = "dsh-px-workspace";
 var inject = [];
@@ -853,10 +972,19 @@ function numberParam(params, key, fallback) {
   return Number(v);
 }
 function apply(ctx) {
+  ctx.inject(["workspaceRegistry", "sessionController"], (host) => {
+    const controller = new AbortController();
+    host.effect(() => () => controller.abort(), "workspace: imported history index");
+    if (process.env.DSH_HOME)
+      void indexImportedSessions(process.env.DSH_HOME, host, controller.signal).catch((error) => {
+        if (!controller.signal.aborted) host.logger?.warn("\u5BFC\u5165\u4F1A\u8BDD\u7D22\u5F15\u672A\u5B8C\u6210", String(error));
+      });
+  });
   ctx.inject(["connection", "webServer", "sessions", "sessionController", "sessionPersistence"], (host) => {
     const lifetime = new AbortController();
+    let delivery = new AbortController();
     let store, scheduler, loadError = "";
-    const path = process.env.DSH_HOME ? join(process.env.DSH_HOME, "storages", name, "workspace.json") : void 0;
+    const path = process.env.DSH_HOME ? join2(process.env.DSH_HOME, "storages", name, "workspace.json") : void 0;
     const contentCache = /* @__PURE__ */ new Map();
     const inspect = async (id) => {
       const live = host.sessions.get(identifier(id));
@@ -908,6 +1036,9 @@ function apply(ctx) {
     const initialize = (nextStore) => {
       if (!path) throw new Error("DSH_HOME \u672A\u8BBE\u7F6E");
       scheduler?.stop();
+      delivery.abort();
+      delivery = new AbortController();
+      const signal = delivery.signal;
       store = nextStore ?? new WorkspaceStore(path);
       scheduler = new Scheduler(
         store,
@@ -929,7 +1060,7 @@ ${schedule.prompt}`
                 }
               ]
             },
-            lifetime.signal
+            signal
           );
           if (result?.accepted !== true) throw new Error("\u4F1A\u8BDD\u672A\u786E\u8BA4\u63A5\u6536");
         },
@@ -958,116 +1089,132 @@ ${schedule.prompt}`
       loadError = String(error);
       host.logger?.warn(name, loadError);
     }
-    host.effect(() => {
-      const timer = setInterval(() => {
-        void scheduler?.tick().catch((error) => host.logger?.warn("\u5B9A\u65F6\u4EFB\u52A1\u68C0\u67E5\u5931\u8D25", String(error)));
-      }, 2e3);
-      timer.unref();
-      return () => {
-        clearInterval(timer);
+    host.effect(
+      () => () => {
         scheduler?.stop();
+        delivery.abort();
         contentCache.clear();
         lifetime.abort();
-      };
-    }, "workspace: scheduler");
-    for (const route of ["content", "message", "annotations", "schedules", "storage"])
-      host.effect(
-        () => host.webServer.register({
-          kind: "exact",
-          path: `/${name}/${route}`,
-          handler: async (req, res) => {
-            if (rejectUnauthenticatedRequest(req, res, host.connection)) return;
-            const send = (status, data) => {
-              res.writeHead(status, {
-                "Content-Type": "application/json; charset=utf-8",
-                "Cache-Control": "no-store"
-              });
-              res.end(JSON.stringify(data));
-            };
-            try {
-              if (req.method !== "GET" && req.method !== "POST")
-                throw new InputError("\u4E0D\u652F\u6301\u6B64\u8BF7\u6C42\u65B9\u6CD5", 405);
-              const params = new URL(req.url ?? "/", "http://127.0.0.1").searchParams;
-              if (route === "storage") {
-                if (!path) throw new InputError("\u5DE5\u4F5C\u533A\u6570\u636E\u76EE\u5F55\u672A\u8BBE\u7F6E", 503);
+      },
+      "workspace: lifetime"
+    );
+    const mount = (owner, feature) => {
+      if (feature === "schedules") {
+        if (store) initialize(store);
+        owner.effect(() => {
+          const timer = setInterval(() => {
+            void scheduler?.tick().catch((error) => host.logger?.warn("\u5B9A\u65F6\u4EFB\u52A1\u68C0\u67E5\u5931\u8D25", String(error)));
+          }, 2e3);
+          timer.unref();
+          return () => {
+            clearInterval(timer);
+            scheduler?.stop();
+            delivery.abort();
+          };
+        }, "schedules: timer");
+      }
+      const routes = feature === "annotations" ? ["annotations"] : feature === "schedules" ? ["schedules"] : feature === "core" ? ["content", "message", "storage"] : [];
+      for (const route of routes)
+        owner.effect(
+          () => host.webServer.register({
+            kind: "exact",
+            path: `/${name}/${route}`,
+            handler: async (req, res) => {
+              if (rejectUnauthenticatedRequest(req, res, host.connection)) return;
+              const send = (status, data) => {
+                res.writeHead(status, {
+                  "Content-Type": "application/json; charset=utf-8",
+                  "Cache-Control": "no-store"
+                });
+                res.end(JSON.stringify(data));
+              };
+              try {
+                if (req.method !== "GET" && req.method !== "POST")
+                  throw new InputError("\u4E0D\u652F\u6301\u6B64\u8BF7\u6C42\u65B9\u6CD5", 405);
+                const params = new URL(req.url ?? "/", "http://127.0.0.1").searchParams;
+                if (route === "storage") {
+                  if (!path) throw new InputError("\u5DE5\u4F5C\u533A\u6570\u636E\u76EE\u5F55\u672A\u8BBE\u7F6E", 503);
+                  if (req.method === "POST") {
+                    if (req.headers["x-dsh-px-request"] !== "1") throw new InputError("\u8BF7\u6C42\u6821\u9A8C\u5931\u8D25", 403);
+                    const input = await body(req);
+                    if (input.action !== "restore") throw new InputError("\u64CD\u4F5C\u65E0\u6548");
+                    initialize(WorkspaceStore.restore(path, input.snapshotId, input.revision));
+                  }
+                  const status = WorkspaceStore.status(path);
+                  if (!status.ready) scheduler?.stop();
+                  return send(200, status);
+                }
+                if ((route === "annotations" || route === "schedules") && (!store || !scheduler))
+                  throw new InputError("\u6279\u6CE8\u4E0E\u5B9A\u65F6\u914D\u7F6E\u4E0D\u53EF\u7528\uFF1B\u53EF\u5728\u5B58\u50A8\u6062\u590D\u4E2D\u67E5\u770B\u6709\u6548\u5FEB\u7167\u3002", 503);
                 if (req.method === "POST") {
                   if (req.headers["x-dsh-px-request"] !== "1") throw new InputError("\u8BF7\u6C42\u6821\u9A8C\u5931\u8D25", 403);
+                  if (route !== "annotations" && route !== "schedules")
+                    throw new InputError("\u6B64\u63A5\u53E3\u53EA\u8BFB", 405);
                   const input = await body(req);
-                  if (input.action !== "restore") throw new InputError("\u64CD\u4F5C\u65E0\u6548");
-                  initialize(WorkspaceStore.restore(path, input.snapshotId, input.revision));
-                }
-                const status = WorkspaceStore.status(path);
-                if (!status.ready) scheduler?.stop();
-                return send(200, status);
-              }
-              if ((route === "annotations" || route === "schedules") && (!store || !scheduler))
-                throw new InputError("\u6279\u6CE8\u4E0E\u5B9A\u65F6\u914D\u7F6E\u4E0D\u53EF\u7528\uFF1B\u53EF\u5728\u5B58\u50A8\u6062\u590D\u4E2D\u67E5\u770B\u6709\u6548\u5FEB\u7167\u3002", 503);
-              if (req.method === "POST") {
-                if (req.headers["x-dsh-px-request"] !== "1") throw new InputError("\u8BF7\u6C42\u6821\u9A8C\u5931\u8D25", 403);
-                if (route !== "annotations" && route !== "schedules")
-                  throw new InputError("\u6B64\u63A5\u53E3\u53EA\u8BFB", 405);
-                const input = await body(req);
-                if (route === "annotations") {
+                  if (route === "annotations") {
+                    if (input.action === "delete") {
+                      store.deleteAnnotation(input);
+                      return send(200, { ok: true });
+                    }
+                    if (input.action !== "save") throw new InputError("\u64CD\u4F5C\u65E0\u6548");
+                    const { index: index2 } = await content(identifier(input.sessionId));
+                    const source = index2.message(input.messageId);
+                    if (!source) throw new InputError("\u5F15\u7528\u7684\u6D88\u606F\u4E0D\u5B58\u5728\u6216\u6CA1\u6709\u53EF\u5F15\u7528\u7684\u6B63\u6587", 404);
+                    return send(200, store.saveAnnotation(input, source));
+                  }
+                  if (input.action === "save") {
+                    await target(identifier(input.sessionId));
+                    return send(200, scheduler.save(input));
+                  }
                   if (input.action === "delete") {
-                    store.deleteAnnotation(input);
+                    scheduler.remove(input);
                     return send(200, { ok: true });
                   }
-                  if (input.action !== "save") throw new InputError("\u64CD\u4F5C\u65E0\u6548");
-                  const { index: index2 } = await content(identifier(input.sessionId));
-                  const source = index2.message(input.messageId);
-                  if (!source) throw new InputError("\u5F15\u7528\u7684\u6D88\u606F\u4E0D\u5B58\u5728\u6216\u6CA1\u6709\u53EF\u5F15\u7528\u7684\u6B63\u6587", 404);
-                  return send(200, store.saveAnnotation(input, source));
+                  if (input.action === "run") return send(200, await scheduler.run(identifier(input.id)));
+                  throw new InputError("\u64CD\u4F5C\u65E0\u6548");
                 }
-                if (input.action === "save") {
-                  await target(identifier(input.sessionId));
-                  return send(200, scheduler.save(input));
+                if (route === "schedules")
+                  return send(200, { schedules: store.schedules(), timeZone: scheduler.zone });
+                const id = identifier(params.get("sessionId"));
+                if (route === "annotations")
+                  return send(200, store.annotations(id, params.get("before") ?? void 0));
+                const { index } = await content(id);
+                if (route === "message") {
+                  const m = index.message(params.get("messageId") ?? "");
+                  if (!m) throw new InputError("\u6D88\u606F\u4E0D\u5B58\u5728\u6216\u6CA1\u6709\u53EF\u5F15\u7528\u6B63\u6587", 404);
+                  const offset = numberParam(params, "offset", 0), length = m.text.length;
+                  if (offset > length) throw new InputError("\u6B63\u6587\u504F\u79FB\u8D85\u8FC7\u957F\u5EA6");
+                  return send(200, {
+                    ...m,
+                    text: m.text.slice(offset, offset + 32e3),
+                    length,
+                    offset,
+                    nextOffset: offset + 32e3 < length ? offset + 32e3 : null
+                  });
                 }
-                if (input.action === "delete") {
-                  scheduler.remove(input);
-                  return send(200, { ok: true });
+                const before = numberParam(params, "before", Number.MAX_SAFE_INTEGER);
+                if (params.getAll("artifactBefore").length > 1) throw new InputError("\u4EA7\u7269\u5206\u9875\u53C2\u6570\u65E0\u6548");
+                try {
+                  send(200, index.content(before, params.get("artifactBefore") ?? void 0));
+                } catch {
+                  throw new InputError("\u4EA7\u7269\u5206\u9875\u53C2\u6570\u65E0\u6548");
                 }
-                if (input.action === "run") return send(200, await scheduler.run(identifier(input.id)));
-                throw new InputError("\u64CD\u4F5C\u65E0\u6548");
-              }
-              if (route === "schedules")
-                return send(200, { schedules: store.schedules(), timeZone: scheduler.zone });
-              const id = identifier(params.get("sessionId"));
-              if (route === "annotations")
-                return send(200, store.annotations(id, params.get("before") ?? void 0));
-              const { index } = await content(id);
-              if (route === "message") {
-                const m = index.message(params.get("messageId") ?? "");
-                if (!m) throw new InputError("\u6D88\u606F\u4E0D\u5B58\u5728\u6216\u6CA1\u6709\u53EF\u5F15\u7528\u6B63\u6587", 404);
-                const offset = numberParam(params, "offset", 0), length = m.text.length;
-                if (offset > length) throw new InputError("\u6B63\u6587\u504F\u79FB\u8D85\u8FC7\u957F\u5EA6");
-                return send(200, {
-                  ...m,
-                  text: m.text.slice(offset, offset + 32e3),
-                  length,
-                  offset,
-                  nextOffset: offset + 32e3 < length ? offset + 32e3 : null
-                });
-              }
-              const before = numberParam(params, "before", Number.MAX_SAFE_INTEGER);
-              if (params.getAll("artifactBefore").length > 1) throw new InputError("\u4EA7\u7269\u5206\u9875\u53C2\u6570\u65E0\u6548");
-              try {
-                send(200, index.content(before, params.get("artifactBefore") ?? void 0));
-              } catch {
-                throw new InputError("\u4EA7\u7269\u5206\u9875\u53C2\u6570\u65E0\u6548");
-              }
-            } catch (error) {
-              if (error instanceof InputError)
-                send(error.status, { error: error.message, retryable: false });
-              else {
-                host.logger?.warn(`${name}/${route}`, String(error));
-                const failure = readFailure(error);
-                send(failure.status, failure);
+              } catch (error) {
+                if (error instanceof InputError)
+                  send(error.status, { error: error.message, retryable: false });
+                else {
+                  host.logger?.warn(`${name}/${route}`, String(error));
+                  const failure = readFailure(error);
+                  send(failure.status, failure);
+                }
               }
             }
-          }
-        }),
-        `workspace: ${route}`
-      );
+          }),
+          `workspace: ${route}`
+        );
+    };
+    mount(host, "core");
+    host.provide("pxWorkspace", { mount });
   });
 }
 export {

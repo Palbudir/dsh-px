@@ -9,7 +9,7 @@ import { createDraftCell } from '../packages/shared/draft-store'
 // rendering and HTTP completion; it does not reproduce the selection algorithm.
 const source = (
   await build({
-    entryPoints: ['packages/dsh-px-workspace/src/client/notes.tsx'],
+    entryPoints: ['packages/dsh-px-annotations/src/client/notes.tsx'],
     bundle: true,
     write: false,
     platform: 'browser',
@@ -21,7 +21,7 @@ const source = (
       {
         name: 'notes-component-fixture',
         setup(builder) {
-          builder.onResolve({ filter: /(?:^\.\/data$|^\.\/drafts$|client-http$|shared\/ui$)/ }, (args) => ({
+          builder.onResolve({ filter: /(?:\/data$|\/drafts$|client-http$|shared\/ui$)/ }, (args) => ({
             path: args.path.endsWith('/data')
               ? 'fixture-data'
               : args.path.endsWith('/drafts')

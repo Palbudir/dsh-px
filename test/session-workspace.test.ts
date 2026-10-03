@@ -292,6 +292,10 @@ test('authenticated API rejects write-by-GET and missing CSRF header; uses nativ
     apply({
       inject: (_services, cb) =>
         cb({
+          provide: (_name, runtime) => {
+            for (const feature of ['annotations', 'schedules'])
+              runtime.mount({ effect: (fn: () => () => void) => disposers.push(fn()) }, feature)
+          },
           sessions: {
             get: (id) => ({
               header: { id, origin: id === 'child' ? 'subagent' : undefined },

@@ -515,6 +515,10 @@ test('corrupt business storage leaves content readable and recovery works throug
     workspace({
       inject: (_services, callback) =>
         callback({
+          provide: (_name, runtime) => {
+            for (const feature of ['annotations', 'schedules'])
+              runtime.mount({ effect: (fn: () => () => void) => cleanups.push(fn()) }, feature)
+          },
           sessions: {
             get: () => ({
               header: { id: 'owner' },

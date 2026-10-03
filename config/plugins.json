@@ -1,5 +1,13 @@
 {
   "schemaVersion": 2,
-  "managed": ["dsh-px-updater", "dsh-px-workbench", "dsh-px-taskflow", "dsh-px-workspace"],
+  "managed": [
+    "dsh-px-updater",
+    "dsh-px-workbench",
+    "dsh-px-taskflow",
+    "dsh-px-workspace",
+    "dsh-px-artifacts",
+    "dsh-px-annotations",
+    "dsh-px-schedules"
+  ],
   "deferredCommunity": ["dshmarket", "dsh-mermaid-render", "dsh-find-plugin"]
 }

@@ -67,8 +67,9 @@ try {
   if (typeof mod.apply !== 'function') problems.push('未导出 apply 函数')
   if (!Array.isArray(mod.inject)) problems.push('未导出 inject 数组')
   if (mod.name !== pkgName) problems.push(`name 应为 ${pkgName}，实际为 ${String(mod.name)}`)
-  if (typeof mod.DEFAULTS !== 'object' || mod.DEFAULTS === null) problems.push('未导出 DEFAULTS 对象')
-  else if (typeof mod.DEFAULTS.routePrefix !== 'string') problems.push('DEFAULTS.routePrefix 缺失')
+  // Feature plugins can contribute through a shared service without owning HTTP configuration.
+  if (mod.DEFAULTS !== undefined && (typeof mod.DEFAULTS !== 'object' || mod.DEFAULTS === null))
+    problems.push('DEFAULTS 必须是对象')
 } catch (err) {
   problems.push(`导入产物失败：${err instanceof Error ? err.message : String(err)}`)
 }

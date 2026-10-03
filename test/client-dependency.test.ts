@@ -25,7 +25,13 @@ test('managed client entries activate without the native sidebar and register pa
     }
   }
   const jsx = (type: unknown, props: unknown): unknown => ({ type, props })
-  for (const name of ['dsh-px-workspace', 'dsh-px-taskflow']) {
+  for (const name of [
+    'dsh-px-workspace',
+    'dsh-px-taskflow',
+    'dsh-px-artifacts',
+    'dsh-px-annotations',
+    'dsh-px-schedules'
+  ]) {
     const source = buildSync({
       entryPoints: [`packages/${name}/src/client.tsx`],
       bundle: true,
@@ -75,7 +81,7 @@ test('managed client entries activate without the native sidebar and register pa
     )
     assert.doesNotThrow(() => module.exports.apply(core))
     if (name === 'dsh-px-workspace')
-      assert.ok(registered.includes('dsh-px-workspace'), 'session navigation stays registered')
+      assert.ok(registered.includes('dsh-px-workspace'), 'feature toolbar stays registered')
     const panels: string[] = []
     const host = {
       ...core,
@@ -94,7 +100,15 @@ test('managed client entries activate without the native sidebar and register pa
       (entry) => entry.services.includes('sidebarRightTabs') && entry.services.includes('sidebarRight')
     ))
       injection.callback(host)
-    assert.ok(panels.includes(name === 'dsh-px-workspace' ? 'px-artifacts' : 'dsh-px-taskflow'))
+    const expected: Record<string, string> = {
+      'dsh-px-taskflow': 'dsh-px-taskflow',
+      'dsh-px-artifacts': 'px-artifacts',
+      'dsh-px-annotations': 'px-notes',
+      'dsh-px-schedules': 'px-schedules'
+    }
+    if (name === 'dsh-px-workspace')
+      assert.deepEqual(panels, [], 'foundation does not register optional feature panels')
+    else assert.ok(panels.includes(expected[name]))
     cleanups.reverse().forEach((dispose) => dispose())
     assert.equal(panels.length, 0)
   }

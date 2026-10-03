@@ -270,6 +270,14 @@ app.on('browser-window-created',(_e,window)=>{window.on('page-title-updated',(e,
 import(new URL('./px-main.mjs',pathToFileURL(__filename)).href).catch(e=>{console.error(e);dialog.showErrorBox('DSH-PX Desktop',String(e));app.exit(1)});
 `
 writeFileSync(join(lib, 'px-bootstrap.cjs'), bootstrap)
+// Keep the official command manager, but make its launcher use PX's executable and default home.
+const cliSource = readFileSync(join(app, 'cli', 'dsh.cmd'), 'utf8')
+const brandedCli = replaceOnce(cliSource, 'DeepSeek Harness.exe', 'DSH-PX Desktop.exe').replace(
+  'setlocal DisableDelayedExpansion',
+  'setlocal DisableDelayedExpansion\r\nif not defined DSH_HOME set "DSH_HOME=%USERPROFILE%\\.dsh-px"'
+)
+const cliPath = join(output, 'dsh.cmd')
+writeFileSync(cliPath, brandedCli)
 const factoryPath = join(app, 'scripts/electron-builder-config.mjs'),
   factoryUrl = pathToFileURL(factoryPath).href
 const originalFactory = readFileSync(factoryPath, 'utf8')
@@ -297,6 +305,8 @@ config.extraMetadata={...config.extraMetadata,name:'dsh-px-desktop',version:${JS
 config.files=config.files.filter(f=>f!=='lib/main.js');config.files.push('lib/px-main.mjs','lib/px-bootstrap.cjs','lib/px-updates.mjs',${brandedPreloads.map((n) => JSON.stringify('lib/px-' + n)).join(',')});
 config.win.icon=${JSON.stringify(join(root, 'build/icon.png'))};config.extraResources=config.extraResources.map(r=>r.to==='icon.png'?{...r,from:${JSON.stringify(join(root, 'build/icon.png'))}}:r);
 config.extraResources.push({from:${JSON.stringify(packArchive)},to:'px-pack.tgz'});
+config.extraResources=config.extraResources.map(r=>r.to==='runtime'?{...r,filter:['**/*','!cli/bin/dsh.cmd']}:r);
+config.extraResources.push({from:${JSON.stringify(cliPath)},to:'runtime/cli/bin/dsh.cmd'});
 config.directories.output=${JSON.stringify(join(output, 'dist'))};config.artifactName=${JSON.stringify(releaseAssetNames('desktop', products.desktop.version).installer)};config.nsis.differentialPackage=false;
 config.publish=[{provider:'generic',url:'https://raw.githubusercontent.com/Palbudir/dsh-px/updates/',channel:'preview',updaterCacheDirName:'dsh-px-desktop-updater'}];
 if(process.env.DSH_PX_DIRECTORY_PROBE==='1'){if(!process.argv.includes('--dir'))throw Error('Directory probe cannot build installer');config.beforeBuild=()=>true;}

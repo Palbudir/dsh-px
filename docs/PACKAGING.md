@@ -4,7 +4,7 @@
 
 | 制品                                | 内容                                             | 构建方式                                    |
 | ----------------------------------- | ------------------------------------------------ | ------------------------------------------- |
-| `dsh-px-pack-<版本>.tgz`            | 四个自制插件 + 已认证补丁的侧栏插件，原生 bundle | `scripts/build-native-pack.ts`              |
+| `dsh-px-pack-<版本>.tgz`            | 七个自制插件 + 已认证补丁的侧栏插件，原生 bundle | `scripts/build-native-pack.ts`              |
 | `DSH-PX-Desktop-<版本>-win-x64.exe` | 官方 Desktop 源码 + PX 覆盖层 + 同提交的 Pack    | GitHub Windows runner 上的 electron-builder |
 | `artifact.json`                     | 版本、来源提交、宿主锁定、大小与 SHA-256/SHA-512 | 随对应制品生成                              |
 

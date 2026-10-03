@@ -1,15 +1,23 @@
-import { useOperation } from './data'
+import { useOperation } from '../../../dsh-px-workspace/src/client/data'
 import { useEffect, useRef, useState } from 'react'
-import type { Panel, Client } from './contracts'
-import type { Content } from './panel-types'
-import type { Annotation, Message } from '../model'
+import type { Panel, Client } from '../../../dsh-px-workspace/src/client/contracts'
+import type { Content } from '../../../dsh-px-workspace/src/client/panel-types'
+import type { Annotation, Message } from '../../../dsh-px-workspace/src/model'
 import { requestJson } from '../../../shared/client-http'
-import { insertQuote } from '../client-input'
-import { base, stamp, useData, errorText, post, quoteRequests, useSnapshot } from './data'
-import { useDraft } from './drafts'
+import { insertQuote } from '../../../dsh-px-workspace/src/client-input'
+import {
+  base,
+  stamp,
+  useData,
+  errorText,
+  post,
+  quoteRequests,
+  useSnapshot
+} from '../../../dsh-px-workspace/src/client/data'
+import { useDraft } from '../../../dsh-px-workspace/src/client/drafts'
 import { ConfirmDelete } from '../../../shared/ui'
-import { StorageNotice } from './storage-notice'
-import { validNoteDraft } from './draft-validation'
+import { StorageNotice } from '../../../dsh-px-workspace/src/client/storage-notice'
+import { validNoteDraft } from '../../../dsh-px-workspace/src/client/draft-validation'
 type Source = Message & { length: number; offset: number; nextOffset: number | null }
 interface NoteDraft {
   source: Source | null

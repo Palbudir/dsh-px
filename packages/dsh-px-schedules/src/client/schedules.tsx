@@ -1,12 +1,12 @@
-import { useOperation } from './data'
+import { useOperation } from '../../../dsh-px-workspace/src/client/data'
 import { useState } from 'react'
-import { useDraft } from './drafts'
+import { useDraft } from '../../../dsh-px-workspace/src/client/drafts'
 import { ConfirmDelete } from '../../../shared/ui'
-import type { Panel, Client } from './contracts'
-import type { Schedule, Timing } from '../model'
-import { base, stamp, useData, errorText, post, useSnapshot } from './data'
-import { StorageNotice } from './storage-notice'
-import { validScheduleDraft } from './draft-validation'
+import type { Panel, Client } from '../../../dsh-px-workspace/src/client/contracts'
+import type { Schedule, Timing } from '../../../dsh-px-workspace/src/model'
+import { base, stamp, useData, errorText, post, useSnapshot } from '../../../dsh-px-workspace/src/client/data'
+import { StorageNotice } from '../../../dsh-px-workspace/src/client/storage-notice'
+import { validScheduleDraft } from '../../../dsh-px-workspace/src/client/draft-validation'
 function localTime(time: number): string {
   const d = new Date(time)
   return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16)

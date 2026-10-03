@@ -2,7 +2,7 @@
 
 ## 产品、版本与标签
 
-Pack 与 Desktop 独立发布，版本来源分别为 [products.json](../config/products.json) 的 `pack.version` 与 `desktop.version`；根 `package.json` 的版本与 Desktop 一致，四个受管插件与 Pack 一致。
+Pack 与 Desktop 独立发布，版本来源分别为 [products.json](../config/products.json) 的 `pack.version` 与 `desktop.version`；根 `package.json` 的版本与 Desktop 一致，受管插件与 Pack 一致。
 
 | 产品    | 标签              | 资产                                                 |
 | ------- | ----------------- | ---------------------------------------------------- |

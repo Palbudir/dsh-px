@@ -8,8 +8,9 @@ import { createQuoteRequests } from '../packages/shared/quote-requests'
 const entries = {
   SessionBar: 'packages/dsh-px-workspace/src/client/session-bar.tsx',
   QuoteAction: 'packages/dsh-px-workspace/src/client/quote-action.tsx',
-  ArtifactsPanel: 'packages/dsh-px-workspace/src/client/artifacts.tsx',
-  Entry: 'packages/dsh-px-workspace/src/client.tsx'
+  ArtifactsPanel: 'packages/dsh-px-artifacts/src/client/artifacts.tsx',
+  Entry: 'packages/dsh-px-workspace/src/client.tsx',
+  AnnotationEntry: 'packages/dsh-px-annotations/src/client.tsx'
 }
 const sources = Object.fromEntries(
   await Promise.all(
@@ -28,7 +29,7 @@ const sources = Object.fromEntries(
             name: 'panel-component-fixture',
             setup(builder) {
               builder.onResolve(
-                { filter: /(?:^\.\/data$|^\.\/layout$|^\.\/host-layout$|shared\/ui$)/ },
+                { filter: /(?:\/data$|^\.\/layout$|^\.\/host-layout$|shared\/ui$)/ },
                 (args) => ({
                   path: args.path.endsWith('/data')
                     ? 'fixture-data'
@@ -598,14 +599,18 @@ test('sidebar activation registers the quote footer slot without disturbing the 
     false,
     'the footer comes from the sidebar injection, not from the workspace entry alone'
   )
+  const annotations = fixture('AnnotationEntry')
+  annotations.module.exports.apply(raw)
   injections
-    .find((entry) => entry.names.includes('sidebarRightTabs') && entry.names.includes('sidebarRight'))!
-    .callback({
-      sidebarRight: f.native.controller,
-      sidebarRightTabs: { entries: () => [], get: () => undefined },
-      slots: raw.slots,
-      effect: () => () => {}
-    })
+    .filter((entry) => entry.names.includes('sidebarRightTabs') && entry.names.includes('sidebarRight'))
+    .forEach((entry) =>
+      entry.callback({
+        sidebarRight: f.native.controller,
+        sidebarRightTabs: { entries: () => [], get: () => undefined },
+        slots: raw.slots,
+        effect: () => () => {}
+      })
+    )
   assert.equal(
     slots.some(
       (slot) => slot.entry.name === 'conversation.chat.assistant-actions' && slot.entry.id === 'dsh-px-quote'

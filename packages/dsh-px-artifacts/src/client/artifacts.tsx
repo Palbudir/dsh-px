@@ -1,8 +1,11 @@
-import type { Panel, Client } from './contracts'
-import type { Content } from './panel-types'
-import { base, stamp, useData, errorText } from './data'
+import type { Panel, Client } from '../../../dsh-px-workspace/src/client/contracts'
+import type { Content } from '../../../dsh-px-workspace/src/client/panel-types'
+import { base, stamp, useData, errorText } from '../../../dsh-px-workspace/src/client/data'
 import { useState } from 'react'
-import { panelAvailability, usePanelCapabilities } from './panel-availability'
+import {
+  panelAvailability,
+  usePanelCapabilities
+} from '../../../dsh-px-workspace/src/client/panel-availability'
 export function ArtifactsPanel({ ctx, scope, visible }: Panel & { ctx: Client }): unknown {
   const filePanel = panelAvailability(usePanelCapabilities(ctx), 'editor')
   const [openError, setOpenError] = useState('')

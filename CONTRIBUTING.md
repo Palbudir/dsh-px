@@ -11,7 +11,7 @@ npm ci
 npm run build
 ```
 
-`npm run build` 重建四个自制插件的 `lib` 产物。需要完整 Pack 时运行 `npm run build:pack -- build-test/<新目录> --candidate`，输出目录必须不存在；`--candidate` 只用于隔离验证。本机 Desktop 验证与目录构建步骤见 [PACKAGING.md](docs/PACKAGING.md)。
+`npm run build` 重建七个自制插件的 `lib` 产物。需要完整 Pack 时运行 `npm run build:pack -- build-test/<新目录> --candidate`，输出目录必须不存在；`--candidate` 只用于隔离验证。本机 Desktop 验证与目录构建步骤见 [PACKAGING.md](docs/PACKAGING.md)。
 
 隔离实例显式设置独立数据目录，不共享同一个 DSH_HOME。评测使用专用目录与会话，常规测试不写入日常数据。
 
@@ -38,7 +38,7 @@ node scripts/release-quality.mjs
 
 `check:repo` 包含插件清单、产品与原生宿主锁定交叉校验、文档、密钥扫描和格式检查。`release-quality.mjs` 是 CI 与发布共用的门禁：运行上述检查、确认构建后工作树无差异，再构建候选 Pack 到临时目录并核对 `artifact.json` 与归档内清单。它会联网下载固定来源的侧栏归档。
 
-提交源码及重建后的四个插件 `lib` 产物。生成文件不能手工编辑。变更依赖时同步锁文件并检查审计结果，不自动强制升级不兼容依赖。
+提交源码及重建后的受管插件 `lib` 产物。生成文件不能手工编辑。变更依赖时同步锁文件并检查审计结果，不自动强制升级不兼容依赖。
 
 每个 PR 在候选内容稳定后做一次针对增量的独立审查，优先使用 DeepSeek Flash。记录准确 SHA、范围、结论和需要处理的问题；后续代码修复只复核相关增量。确认会影响本机使用、数据或升级的 P0/P1/P2 必须修复；一般维护建议进入后续任务，不无限扩大当前版本。测试通过不替代审查，也不证明未测场景正确。
 
