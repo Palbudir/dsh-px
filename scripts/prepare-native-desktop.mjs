@@ -135,6 +135,23 @@ main = replaceOnce(
   'async applyRelease() {\n\t\tawait this.withLock(() => {',
   'async applyRelease() {\n\t\tawait this.withLock(async () => {'
 )
+// Both the native menu and the Windows title-bar Application popup use applicationItems().
+// Resolve the currently owned Host at click time so a restart cannot reuse an earlier port/token.
+main = replaceOnce(
+  main,
+  'const applicationItems = () => [',
+  `const applicationItems = () => [
+    {
+      label: currentDesktopLocale().id.startsWith('zh') ? '在浏览器中打开' : 'Open in Browser',
+      click: () => {
+        openDesktopInBrowser(backend.host === undefined ? undefined : hostUrl, (url) => shell.openExternal(url)).catch(() => {
+          const zh = currentDesktopLocale().id.startsWith('zh');
+          void dialog.showMessageBox({type: 'error', title: 'DSH-PX Desktop', message: zh ? '无法打开浏览器' : 'Could not open browser', detail: zh ? '请确认本机服务已启动，并检查系统默认浏览器设置。' : 'Make sure the local service is running and check your default browser settings.'});
+        });
+      }
+    },
+    {type: 'separator'},`
+)
 // Branded preload copies: the originals stay untouched and are no longer loaded by px-main.
 // Each original is pinned by digest, so the text rewrite only ever runs over reviewed upstream content.
 const brandedPreloads = ['preload-app.cjs', 'preload-welcome.cjs']
@@ -176,7 +193,8 @@ if (
   throw Error('Upstream withLock no longer holds the profile lock across an awaited operation')
 writeFileSync(
   join(lib, 'px-main.mjs'),
-  'import { configurePxUpdates, preparePxDefaults, preparePxPack } from "./px-updates.mjs";\n' + main
+  'import { configurePxUpdates, preparePxDefaults, preparePxPack, openDesktopInBrowser } from "./px-updates.mjs";\n' +
+    main
 )
 // The patched entry is text surgery on the pinned bundle; parse it now (including every injected
 // `await`, which is only valid inside an async scope) so a bad splice fails the build, not the app.
@@ -188,6 +206,7 @@ try {
 await build({
   stdin: {
     contents: `import {configureSignedUpdates} from ${JSON.stringify(join(root, 'src/main/signed-update-provider.ts'))};
+export {openDesktopInBrowser} from ${JSON.stringify(join(root, 'src/main/open-browser.ts'))};
 export function configurePxUpdates(updater){configureSignedUpdates(updater,${JSON.stringify(keys.keys)},'preview',${products.protocolGeneration})}
 import {prepareNativeProfileDefaults,applyNativeDesktopPolicy} from ${JSON.stringify(join(root, 'src/main/native-profile-defaults.ts'))};
 import {provisionNativePack} from ${JSON.stringify(join(root, 'src/main/native-pack-provision.ts'))};
