@@ -2,15 +2,16 @@
  * Brand the official NSIS installer as DSH-PX without modifying pinned upstream files.
  *
  * The official `installer.nsh` defines `INSTALLER_STRINGS_FILE` and `INSTALLER_BUILD_DIR` with
- * `!define /ifndef`. A PX wrapper predefines both, then includes the unchanged official script, so
- * pages, the directory installer and the uninstall safety helper stay exactly the reviewed upstream
- * implementation. Only visible text and brand bitmaps differ.
+ * `!define /ifndef`. A PX wrapper provides branding and private copies with a longer update wait,
+ * diagnostics, and failure recovery. Native extraction, directory rollback and uninstall guards stay
+ * in charge of installation; pinned upstream files are never edited in place.
  *
  * Usage (after scripts/prepare-native-desktop.mjs):
  *   node scripts/brand-native-installer.mjs <prepared upstream checkout> --icon=<build/icon.png>
  * Then build with --config .desktop-build/px/builder-branded.mjs
  */
 import { execFileSync } from 'node:child_process'
+import { prepareInstallerRecovery } from './installer-recovery.mjs'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -40,10 +41,10 @@ const nsisPath = (value) => {
   return path.replaceAll('/', '\\')
 }
 
-/** Predefine the two /ifndef symbols, then include the unchanged official installer script. */
+/** Predefine the two /ifndef symbols, then include the pinned installer with its recovery overlay. */
 export function installerWrapper({ stringsFile, buildDirectory, officialInstaller }) {
   return (
-    '; DSH-PX installer wrapper. The official script is included unchanged; it uses !define /ifndef.\n' +
+    '; DSH-PX installer wrapper with branded resources and update recovery.\n' +
     `!define INSTALLER_STRINGS_FILE "${nsisPath(stringsFile)}"\n` +
     `!define INSTALLER_BUILD_DIR "${nsisPath(buildDirectory)}"\n` +
     `!include "${nsisPath(officialInstaller)}"\n`
@@ -83,7 +84,7 @@ config.beforeBuild=async(context)=>{
   for(const name of ${JSON.stringify(BRAND_BITMAPS)})if(!existsSync(join(pxUi,name+'.bmp')))throw Error('PX installer bitmap missing: '+name);
   return result;
 };
-config.nsis={...config.nsis,include:${JSON.stringify(wrapper)},installerSidebar:join(pxUi,'uninstaller-sidebar.bmp'),uninstallerSidebar:join(pxUi,'uninstaller-sidebar.bmp'),differentialPackage:false};
+config.nsis={...config.nsis,include:${JSON.stringify(wrapper)},installerSidebar:join(pxUi,'uninstaller-sidebar.bmp'),uninstallerSidebar:join(pxUi,'uninstaller-sidebar.bmp'),differentialPackage:true};
 export default config;
 `
 }
@@ -120,7 +121,7 @@ function main() {
     installerWrapper({
       stringsFile: strings,
       buildDirectory: ui,
-      officialInstaller: join(app, 'scripts/installer.nsh')
+      officialInstaller: prepareInstallerRecovery(app, join(brand, 'source'))
     })
   )
   execFileSync(

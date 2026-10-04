@@ -1,6 +1,6 @@
 {
   "name": "dsh-px-workbench",
-  "version": "0.3.2-alpha.1",
+  "version": "0.3.3-alpha.1",
   "private": true,
   "type": "module",
   "description": "DSH-PX 运行与帮助：运行检查、插件清单与活动快照",

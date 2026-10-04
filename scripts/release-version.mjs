@@ -59,12 +59,15 @@ export function assertNotLegacyClientTag(tag) {
   if (!parseReleaseTag(value)) throw new Error('Release tag must be desktop-v<version> or pack-v<version>')
 }
 
-/** Delta feeds and auto-update YAML are never published; the signed manifest is the only feed. */
+/** YAML feeds stay private; a named installer blockmap is an asset in the signed manifest. */
 export function assertPublishableAssetName(name) {
   if (typeof name !== 'string' || !name || name !== name.trim() || /[/\\:\r\n]/.test(name))
     throw new Error('Unsafe release asset name')
-  if (/\.(?:ya?ml|blockmap)$/i.test(name))
-    throw new Error(`Update feed or delta asset is not publishable: ${name}`)
+  if (
+    /\.ya?ml$/i.test(name) ||
+    (/\.blockmap$/i.test(name) && !/^DSH-PX-Desktop-[0-9A-Za-z._-]+-win-x64\.exe\.blockmap$/.test(name))
+  )
+    throw new Error(`Update feed or unrelated delta asset is not publishable: ${name}`)
   if (/[^0-9A-Za-z._-]/.test(name)) throw new Error(`Release asset name is not GitHub-safe: ${name}`)
   return name
 }
@@ -79,7 +82,11 @@ export function releaseAssetNames(name, version) {
   if (/[^0-9A-Za-z._-]/.test(safeVersion)) throw new Error('Invalid release asset version')
   const assets =
     name === 'desktop'
-      ? { installer: `DSH-PX-Desktop-${safeVersion}-win-x64.exe`, artifact: 'artifact.json' }
+      ? {
+          installer: `DSH-PX-Desktop-${safeVersion}-win-x64.exe`,
+          blockmap: `DSH-PX-Desktop-${safeVersion}-win-x64.exe.blockmap`,
+          artifact: 'artifact.json'
+        }
       : { pack: `dsh-px-pack-${safeVersion}.tgz`, artifact: 'artifact.json' }
   for (const asset of Object.values(assets)) assertPublishableAssetName(asset)
   return assets

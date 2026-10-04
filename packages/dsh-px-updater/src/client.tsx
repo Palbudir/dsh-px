@@ -34,6 +34,9 @@ const DICT: Record<string, Record<string, string>> = {
     latest: '已签名的最新版本',
     openRelease: '打开发布页',
     unavailable: '无法读取版本信息',
+    manage: '下载与安装更新',
+    managedNote:
+      '在独立更新窗口中管理客户端和整合包。下载完成后再确认重启，保留当前数据和插件选择。浏览器入口会唤起本机 DSH-PX Desktop。',
     note: 'Pack 更新只做提示：在官方插件管理器中安装新版本后按提示重启服务。桌面客户端的更新由客户端自身负责，这里不控制窗口、重启或安装。'
   },
   en: {
@@ -55,6 +58,9 @@ const DICT: Record<string, Record<string, string>> = {
     latest: 'Latest signed version',
     openRelease: 'Open release page',
     unavailable: 'Could not read version information',
+    manage: 'Download and install updates',
+    managedNote:
+      'Manage the client and Pack separately in the update window. Restart only after confirmation; your data and plugin choices are preserved. The browser link opens DSH-PX Desktop on this computer.',
     note: 'Pack updates are announced only: install the new version with the native plugin manager and restart the service when prompted. Desktop client updates belong to the client; this page does not control windows, restarts or installation.'
   }
 }
@@ -63,6 +69,7 @@ interface StatusPayload {
   version: string
   pack: { version: string | null; hostVersion: string | null; candidate: boolean | null }
   repository: string
+  managedDesktop?: boolean
 }
 
 interface CheckPayload {
@@ -149,46 +156,66 @@ function DshPxSection({ t }: SlotComponentProps): unknown {
       )}
 
       <Heading>{tr('section.update')}</Heading>
-      <Row label={tr('latest')} value={check?.latest.pack ?? '—'} />
-      <Row
-        label={tr('lastChecked')}
-        value={check ? new Date(check.checkedAt).toLocaleString() : tr('notChecked')}
-      />
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', padding: '6px 0' }}>
-        <span role="status" style={{ fontSize: 14 }}>
-          {label}
-        </span>
-        <button
-          type="button"
-          onClick={doCheck}
-          disabled={checking}
-          style={{
-            cursor: checking ? 'default' : 'pointer',
-            fontSize: 13,
-            padding: '4px 12px',
-            borderRadius: 8,
-            border: '1px solid currentColor',
-            background: 'transparent',
-            color: 'inherit',
-            opacity: checking ? 0.5 : 0.85
-          }}
-        >
-          {checking ? tr('checking') : tr('check')}
-        </button>
-      </div>
-      {check?.releaseUrl && safeReleaseUrl(check.releaseUrl, status?.repository) ? (
+      {status?.managedDesktop ? (
         <p>
-          <a href={check.releaseUrl} target="_blank" rel="noreferrer">
-            {tr('openRelease')}
-          </a>
+          <button
+            type="button"
+            onClick={() => {
+              const desktop = (window as any).dshDesktop
+              if (typeof desktop?.updates?.open === 'function') void desktop.updates.open()
+              else window.location.href = 'dsh-px://updates'
+            }}
+          >
+            {tr('manage')}
+          </button>
         </p>
       ) : null}
-      {checkError !== null || check?.error ? (
-        <div role="alert" style={{ fontSize: 12.5, opacity: 0.8, overflowWrap: 'anywhere' }}>
-          {check?.error ?? checkError}
-        </div>
+      {!status?.managedDesktop ? (
+        <>
+          <Row label={tr('latest')} value={check?.latest.pack ?? '—'} />
+          <Row
+            label={tr('lastChecked')}
+            value={check ? new Date(check.checkedAt).toLocaleString() : tr('notChecked')}
+          />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', padding: '6px 0' }}>
+            <span role="status" style={{ fontSize: 14 }}>
+              {label}
+            </span>
+            <button
+              type="button"
+              onClick={doCheck}
+              disabled={checking}
+              style={{
+                cursor: checking ? 'default' : 'pointer',
+                fontSize: 13,
+                padding: '4px 12px',
+                borderRadius: 8,
+                border: '1px solid currentColor',
+                background: 'transparent',
+                color: 'inherit',
+                opacity: checking ? 0.5 : 0.85
+              }}
+            >
+              {checking ? tr('checking') : tr('check')}
+            </button>
+          </div>
+          {check?.releaseUrl && safeReleaseUrl(check.releaseUrl, status?.repository) ? (
+            <p>
+              <a href={check.releaseUrl} target="_blank" rel="noreferrer">
+                {tr('openRelease')}
+              </a>
+            </p>
+          ) : null}
+          {checkError !== null || check?.error ? (
+            <div role="alert" style={{ fontSize: 12.5, opacity: 0.8, overflowWrap: 'anywhere' }}>
+              {check?.error ?? checkError}
+            </div>
+          ) : null}
+        </>
       ) : null}
-      <div style={{ fontSize: 12, opacity: 0.55, marginTop: 18, lineHeight: 1.7 }}>{tr('note')}</div>
+      <div style={{ fontSize: 12, opacity: 0.55, marginTop: 18, lineHeight: 1.7 }}>
+        {tr(status?.managedDesktop ? 'managedNote' : 'note')}
+      </div>
     </div>
   )
 }

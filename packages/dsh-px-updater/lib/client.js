@@ -188,6 +188,8 @@ var DICT = {
     latest: "\u5DF2\u7B7E\u540D\u7684\u6700\u65B0\u7248\u672C",
     openRelease: "\u6253\u5F00\u53D1\u5E03\u9875",
     unavailable: "\u65E0\u6CD5\u8BFB\u53D6\u7248\u672C\u4FE1\u606F",
+    manage: "\u4E0B\u8F7D\u4E0E\u5B89\u88C5\u66F4\u65B0",
+    managedNote: "\u5728\u72EC\u7ACB\u66F4\u65B0\u7A97\u53E3\u4E2D\u7BA1\u7406\u5BA2\u6237\u7AEF\u548C\u6574\u5408\u5305\u3002\u4E0B\u8F7D\u5B8C\u6210\u540E\u518D\u786E\u8BA4\u91CD\u542F\uFF0C\u4FDD\u7559\u5F53\u524D\u6570\u636E\u548C\u63D2\u4EF6\u9009\u62E9\u3002\u6D4F\u89C8\u5668\u5165\u53E3\u4F1A\u5524\u8D77\u672C\u673A DSH-PX Desktop\u3002",
     note: "Pack \u66F4\u65B0\u53EA\u505A\u63D0\u793A\uFF1A\u5728\u5B98\u65B9\u63D2\u4EF6\u7BA1\u7406\u5668\u4E2D\u5B89\u88C5\u65B0\u7248\u672C\u540E\u6309\u63D0\u793A\u91CD\u542F\u670D\u52A1\u3002\u684C\u9762\u5BA2\u6237\u7AEF\u7684\u66F4\u65B0\u7531\u5BA2\u6237\u7AEF\u81EA\u8EAB\u8D1F\u8D23\uFF0C\u8FD9\u91CC\u4E0D\u63A7\u5236\u7A97\u53E3\u3001\u91CD\u542F\u6216\u5B89\u88C5\u3002"
   },
   en: {
@@ -209,6 +211,8 @@ var DICT = {
     latest: "Latest signed version",
     openRelease: "Open release page",
     unavailable: "Could not read version information",
+    manage: "Download and install updates",
+    managedNote: "Manage the client and Pack separately in the update window. Restart only after confirmation; your data and plugin choices are preserved. The browser link opens DSH-PX Desktop on this computer.",
     note: "Pack updates are announced only: install the new version with the native plugin manager and restart the service when prompted. Desktop client updates belong to the client; this page does not control windows, restarts or installation."
   }
 };
@@ -272,39 +276,53 @@ function DshPxSection({ t }) {
       status?.pack.candidate ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { role: "status", children: tr("candidate") }) : null
     ] }),
     /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Heading, { children: tr("section.update") }),
-    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Row, { label: tr("latest"), value: check?.latest.pack ?? "\u2014" }),
-    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-      Row,
+    status?.managedDesktop ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+      "button",
       {
-        label: tr("lastChecked"),
-        value: check ? new Date(check.checkedAt).toLocaleString() : tr("notChecked")
+        type: "button",
+        onClick: () => {
+          const desktop = window.dshDesktop;
+          if (typeof desktop?.updates?.open === "function") void desktop.updates.open();
+          else window.location.href = "dsh-px://updates";
+        },
+        children: tr("manage")
       }
-    ),
-    /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", padding: "6px 0" }, children: [
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { role: "status", style: { fontSize: 14 }, children: label }),
+    ) }) : null,
+    !status?.managedDesktop ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(Row, { label: tr("latest"), value: check?.latest.pack ?? "\u2014" }),
       /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
-        "button",
+        Row,
         {
-          type: "button",
-          onClick: doCheck,
-          disabled: checking,
-          style: {
-            cursor: checking ? "default" : "pointer",
-            fontSize: 13,
-            padding: "4px 12px",
-            borderRadius: 8,
-            border: "1px solid currentColor",
-            background: "transparent",
-            color: "inherit",
-            opacity: checking ? 0.5 : 0.85
-          },
-          children: checking ? tr("checking") : tr("check")
+          label: tr("lastChecked"),
+          value: check ? new Date(check.checkedAt).toLocaleString() : tr("notChecked")
         }
-      )
-    ] }),
-    check?.releaseUrl && safeReleaseUrl(check.releaseUrl, status?.repository) ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("a", { href: check.releaseUrl, target: "_blank", rel: "noreferrer", children: tr("openRelease") }) }) : null,
-    checkError !== null || check?.error ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { role: "alert", style: { fontSize: 12.5, opacity: 0.8, overflowWrap: "anywhere" }, children: check?.error ?? checkError }) : null,
-    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { fontSize: 12, opacity: 0.55, marginTop: 18, lineHeight: 1.7 }, children: tr("note") })
+      ),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center", padding: "6px 0" }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("span", { role: "status", style: { fontSize: 14 }, children: label }),
+        /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(
+          "button",
+          {
+            type: "button",
+            onClick: doCheck,
+            disabled: checking,
+            style: {
+              cursor: checking ? "default" : "pointer",
+              fontSize: 13,
+              padding: "4px 12px",
+              borderRadius: 8,
+              border: "1px solid currentColor",
+              background: "transparent",
+              color: "inherit",
+              opacity: checking ? 0.5 : 0.85
+            },
+            children: checking ? tr("checking") : tr("check")
+          }
+        )
+      ] }),
+      check?.releaseUrl && safeReleaseUrl(check.releaseUrl, status?.repository) ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("a", { href: check.releaseUrl, target: "_blank", rel: "noreferrer", children: tr("openRelease") }) }) : null,
+      checkError !== null || check?.error ? /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { role: "alert", style: { fontSize: 12.5, opacity: 0.8, overflowWrap: "anywhere" }, children: check?.error ?? checkError }) : null
+    ] }) : null,
+    /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("div", { style: { fontSize: 12, opacity: 0.55, marginTop: 18, lineHeight: 1.7 }, children: tr(status?.managedDesktop ? "managedNote" : "note") })
   ] });
 }
 function apply(ctx) {

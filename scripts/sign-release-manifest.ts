@@ -72,6 +72,7 @@ export interface BuildArtifactRecord {
   sourceCommit: string
   sourceDirty?: boolean
   candidate?: boolean
+  blockmap?: { file: string; size: number; sha256: string; sha512: string }
 }
 
 /**
@@ -97,6 +98,16 @@ export function assertMatchesArtifact(
     primary.sha512 !== record.sha512
   )
     throw new Error('Local release file does not match the CI artifact record')
+  const blockmap = manifest.files.find((f) => f.role === 'blockmap')
+  if (
+    Boolean(blockmap) !== Boolean(record.blockmap) ||
+    (blockmap &&
+      (blockmap.name !== record.blockmap!.file ||
+        blockmap.size !== record.blockmap!.size ||
+        blockmap.sha256 !== record.blockmap!.sha256 ||
+        blockmap.sha512 !== record.blockmap!.sha512))
+  )
+    throw new Error('Local blockmap does not match the CI artifact record')
 }
 
 /** Sign, then prove the envelope verifies with the pinned keys for its own target. */

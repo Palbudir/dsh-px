@@ -196,12 +196,60 @@ main = replaceOnce(
 main = replaceOnce(
   main,
   'createPluginProfile(this.paths.profile);',
-  'preparePxDefaults(this.paths.profile);\n\t\t\tcreatePluginProfile(this.paths.profile);\n\t\t\tawait preparePxPack(this.paths.profile, this.runtime.dsh);'
+  'preparePxDefaults(this.paths.profile);\n\t\t\tcreatePluginProfile(this.paths.profile);\n\t\t\tthis.runtime.dsh = await preparePxPack(this.paths.profile, this.runtime.dsh);'
 )
 main = replaceOnce(
   main,
   'async applyRelease() {\n\t\tawait this.withLock(() => {',
   'async applyRelease() {\n\t\tawait this.withLock(async () => {'
+)
+main = replaceOnce(
+  main,
+  'const updateJournal = journalDirectory === void 0 ? void 0 : new DesktopUpdateJournal(journalDirectory, app.getVersion());',
+  'const updateJournal = createUpdateJournal(DesktopUpdateJournal, journalDirectory, app.getPath("userData"), app.getVersion());'
+)
+main = replaceOnce(
+  main,
+  '\tasync install(version) {',
+  `\tasync restartPack(version, commit) {
+    this.assertLive();
+    if (this.downloadOperation || this.installOperation || this.downloaded) throw Error('请先完成或取消客户端更新');
+    const previous = this.current;
+    this.installOperation = Promise.resolve().then(async () => {
+      await this.checkOperation;
+      this.setState({phase:'installing', version});
+      try {
+        if (!await this.beforeRestart()) { this.setState(previous); return false; }
+        this.assertLive();
+        commit();
+        app.relaunch(); app.quit(); return true;
+      } catch (error) { this.setState(this.failure(error, 'install')); throw error; }
+    }).finally(() => { this.installOperation = undefined; });
+    return this.installOperation;
+  }
+\tasync install(version) {`
+)
+main = replaceOnce(
+  main,
+  'const updateSchedule = new DesktopUpdateSchedule(',
+  `const pxUpdateWindow = createPackUpdateWindow({app, BrowserWindow, ipcMain, net}, {assets: fileURLToPath(new URL('.', import.meta.url)), deployment: currentPackDeployment, desktop: updates, restart: (version, commit) => updates.restartPack(version, commit)});
+\tconst updateSchedule = new DesktopUpdateSchedule(`
+)
+main = replaceOnce(main, 'await openUpdatePrompt();', 'pxUpdateWindow.open();')
+main = replaceOnce(
+  main,
+  '\t\t\t...this.target(),\n\t\t\tpercent\n',
+  '\t\t\t...this.target(),\n\t\t\tpercent, transferred: progress.transferred, total: progress.total, bytesPerSecond: progress.bytesPerSecond\n'
+)
+main = replaceOnce(
+  main,
+  'DSH_CLIENT_VERSION: desktopClientVersion()',
+  'DSH_PX_MANAGED_PACK: "1",\n\t\t\tDSH_CLIENT_VERSION: desktopClientVersion()'
+)
+main = main.replaceAll('openUpdatePrompt(true)', 'Promise.resolve(pxUpdateWindow.open())')
+main = main.replaceAll(
+  'if (backend.host !== void 0) updateJournal?.action("workspace-ready");',
+  'if (backend.host !== void 0) { confirmPackStartup(); updateJournal?.action("workspace-ready"); }'
 )
 // Both the native menu and the Windows title-bar Application popup use applicationItems().
 // Resolve the currently owned Host at click time so a restart cannot reuse an earlier port/token.
@@ -261,7 +309,7 @@ if (
   throw Error('Upstream withLock no longer holds the profile lock across an awaited operation')
 writeFileSync(
   join(lib, 'px-main.mjs'),
-  'import { configurePxUpdates, preparePxDefaults, preparePxPack, openDesktopInBrowser } from "./px-updates.mjs";\n' +
+  'import { configurePxUpdates, preparePxDefaults, preparePxPack, openDesktopInBrowser, createUpdateJournal, createPackUpdateWindow, currentPackDeployment, confirmPackStartup } from "./px-updates.mjs";\n' +
     main
 )
 // The patched entry is text surgery on the pinned bundle; parse it now (including every injected
@@ -275,9 +323,14 @@ await build({
   stdin: {
     contents: `import {configureSignedUpdates} from ${JSON.stringify(join(root, 'src/main/signed-update-provider.ts'))};
 export {openDesktopInBrowser} from ${JSON.stringify(join(root, 'src/main/open-browser.ts'))};
+export {createUpdateJournal} from ${JSON.stringify(join(root, 'src/main/update-history.ts'))};
+export {createPackUpdateWindow} from ${JSON.stringify(join(root, 'src/main/pack-update-window.ts'))};
+import {PackDeployment} from ${JSON.stringify(join(root, 'src/main/pack-deployment.ts'))};
+let deployment, bundledRuntime;
+export function currentPackDeployment(){return deployment}
+export function confirmPackStartup(){deployment?.confirm()}
 export function configurePxUpdates(updater){configureSignedUpdates(updater,${JSON.stringify(keys.keys)},'preview',${products.protocolGeneration})}
 import {prepareNativeProfileDefaults,applyNativeDesktopPolicy} from ${JSON.stringify(join(root, 'src/main/native-profile-defaults.ts'))};
-import {provisionNativeComposition} from ${JSON.stringify(join(root, 'src/main/native-composition.ts'))};
 import {createRequire} from 'node:module';import {join,delimiter} from 'node:path';import {pathToFileURL} from 'node:url';import {existsSync,readFileSync} from 'node:fs';
 // PX profile preparation never stops the Host: defaults, telemetry policy and Pack provisioning only log failures.
 export function preparePxDefaults(profile){
@@ -291,22 +344,21 @@ export async function preparePxPack(profile,runtimeDir){
   const archive=process.resourcesPath?join(process.resourcesPath,'px-pack.tgz'):'';
   if(process.env.DSH_DESKTOP_DEV_APP==='1'||!archive||!existsSync(archive)){
     console.error('[dsh-px] Bundled Pack archive unavailable (development app or missing resources/px-pack.tgz); Pack provisioning skipped');
-    return 'skipped';
+    return runtimeDir;
   }
-  let runPluginCommand;
-  try{
-    const require=createRequire(join(runtimeDir,'package.json'));
-    ({runPluginCommand}=await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-plugin-manager/operations')).href));
-  }catch(error){console.error('[dsh-px] Native plugin operations unavailable; Pack provisioning skipped',error);return 'failed'}
-  const foundation=JSON.parse(readFileSync(join(runtimeDir,'node_modules/dsh-px-core/package.json'),'utf8'));
+  bundledRuntime ??= runtimeDir;
+  const foundation=JSON.parse(readFileSync(join(bundledRuntime,'node_modules/dsh-px-core/package.json'),'utf8'));
   if(foundation.version!==${JSON.stringify(products.pack.version)}||foundation.dshPx?.sourceCommit!==${JSON.stringify(ownHead)})throw Error('PX foundation does not match the installed Desktop');
-  const result=await provisionNativeComposition({profile,directory:join(process.resourcesPath,'px-distribution'),version:${JSON.stringify(products.pack.version)},install:async (args)=>{
+  deployment = new PackDeployment({profile,bundledRuntime,bundledArchive:archive,candidate:${candidate},keys:${JSON.stringify(keys.keys)},hostKey:${JSON.stringify('native-cache-v1:' + expected)}+':'+process.versions.node+':'+process.arch,bundled:${JSON.stringify({ version: products.pack.version, sha256: packSha256, sourceCommit: ownHead, hostVersion: pin.version, upstreamCommit: expected, protocolGeneration: products.protocolGeneration })},install:async (runtimeDir,args)=>{
+    const require=createRequire(join(runtimeDir,'package.json'));
+    const {runPluginCommand}=await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-plugin-manager/operations')).href);
     const result=await runPluginCommand({profile:'desktop',dir:profile,installAnchor:join(runtimeDir,'node_modules/@deepseek-ai/dsh/package.json'),cwd:profile},args,{
       execution:'service',command:process.execPath,args:['--expose-internals',join(process.resourcesPath,'runtime/pnpm/bin/pnpm.mjs')],outputBytes:16384,idleTimeoutMs:120000,signal:AbortSignal.timeout(300000),
       env:{ELECTRON_RUN_AS_NODE:'1',DSH_DESKTOP_NODE_EXECUTABLE:process.execPath,PATH:join(process.resourcesPath,'runtime/bin')+delimiter+(process.env.PATH||'')}
     });if(result.exitCode!==0||result.timedOut)throw Error('Native Pack installation failed; see '+result.logPath);
   }});
-  return result;
+  process.env.DSH_PX_MANAGED_PACK='1';
+  return deployment.activate();
 }`,
     resolveDir: root,
     sourcefile: 'px-update-entry.ts',
@@ -340,14 +392,43 @@ app.on('browser-window-created',(_e,window)=>{window.on('page-title-updated',(e,
 import(new URL('./px-main.mjs',pathToFileURL(__filename)).href).catch(e=>{console.error(e);dialog.showErrorBox('DSH-PX Desktop',String(e));app.exit(1)});
 `
 writeFileSync(join(lib, 'px-bootstrap.cjs'), bootstrap)
+for (const name of ['px-update-preload.cjs', 'px-updates.html', 'px-updates-renderer.js'])
+  cpSync(join(root, 'src/main', name), join(lib, name))
 // Keep the official command manager, but make its launcher use PX's executable and default home.
 const cliSource = readFileSync(join(app, 'cli', 'dsh.cmd'), 'utf8')
-const brandedCli = replaceOnce(cliSource, 'DeepSeek Harness.exe', 'DSH-PX Desktop.exe').replace(
+const brandedCli = replaceOnce(
+  replaceOnce(cliSource, 'DeepSeek Harness.exe', 'DSH-PX Desktop.exe'),
+  '%~dp0..\\..\\..\\app.asar\\dsh\\node_modules\\@deepseek-ai\\dsh-desktop-host\\lib\\cli.js',
+  '%~dp0px-cli.cjs'
+).replace(
   'setlocal DisableDelayedExpansion',
   'setlocal DisableDelayedExpansion\r\nif not defined DSH_HOME set "DSH_HOME=%USERPROFILE%\\.dsh-px"'
 )
 const cliPath = join(output, 'dsh.cmd')
 writeFileSync(cliPath, brandedCli)
+const nativeSignals = replaceOnce(
+  replaceOnce(
+    readFileSync(join(upstream, 'apps/desktop-host/src/windows-cli-signals.ts'), 'utf8'),
+    'installWindowsCliSignals()',
+    'installWindowsCliSignals(loadKoffi: () => Promise<{default: any}>)'
+  ),
+  "await import('koffi')",
+  'await loadKoffi()'
+)
+const signalsPath = join(output, 'windows-cli-signals.ts')
+writeFileSync(signalsPath, nativeSignals)
+await build({
+  stdin: {
+    contents: `import {runPackCli} from ${JSON.stringify(join(root, 'src/main/pack-cli.ts'))};import {installWindowsCliSignals} from ${JSON.stringify(signalsPath)};void runPackCli(installWindowsCliSignals).catch(error=>{console.error(error);process.exitCode=1});`,
+    resolveDir: root,
+    loader: 'ts'
+  },
+  outfile: join(output, 'px-cli.cjs'),
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  target: 'node24'
+})
 const factoryPath = join(app, 'scripts/electron-builder-config.mjs'),
   factoryUrl = pathToFileURL(factoryPath).href
 const originalFactory = readFileSync(factoryPath, 'utf8')
@@ -372,14 +453,15 @@ const cfg = `import {createElectronBuilderConfig} from './factory.mjs';
 const config=createElectronBuilderConfig({...process.env,DSH_DESKTOP_UNSIGNED:'1',DSH_DESKTOP_TARGET_PLATFORM:'win32',DSH_DESKTOP_TARGET_ARCH:'x64',DSH_DESKTOP_APP_ID:'com.palbudir.dshpx.desktop',DSH_DESKTOP_BUILD_COMMIT:${JSON.stringify(ownHead)},DSH_DESKTOP_BUILD_DIRTY:${JSON.stringify(ownDirty ? '1' : '0')}});
 config.appId='com.palbudir.dshpx.desktop';config.productName='DSH-PX Desktop';config.protocols=[{name:'DSH-PX Desktop',schemes:['dsh-px']}];
 config.extraMetadata={...config.extraMetadata,name:'dsh-px-desktop',version:${JSON.stringify(products.desktop.version)},main:'lib/px-bootstrap.cjs',dshDesktopAppId:config.appId,dshPx:{packVersion:${JSON.stringify(products.pack.version)},protocolGeneration:${products.protocolGeneration},upstreamCommit:${JSON.stringify(expected)},upstreamVersion:${JSON.stringify(pin.version)},candidate:${candidate},sourceCommit:${JSON.stringify(ownHead)},sourceDirty:${ownDirty}}};
-config.files=config.files.filter(f=>f!=='lib/main.js');config.files.push('lib/px-main.mjs','lib/px-bootstrap.cjs','lib/px-updates.mjs',${brandedPreloads.map((n) => JSON.stringify('lib/px-' + n)).join(',')});
+config.files=config.files.filter(f=>f!=='lib/main.js');config.files.push('lib/px-main.mjs','lib/px-bootstrap.cjs','lib/px-updates.mjs','lib/px-update-preload.cjs','lib/px-updates.html','lib/px-updates-renderer.js',${brandedPreloads.map((n) => JSON.stringify('lib/px-' + n)).join(',')});
 config.win.icon=${JSON.stringify(join(root, 'build/icon.png'))};config.extraResources=config.extraResources.map(r=>r.to==='icon.png'?{...r,from:${JSON.stringify(join(root, 'build/icon.png'))}}:r);
 config.extraResources.push({from:${JSON.stringify(packArchive)},to:'px-pack.tgz'});
 config.extraResources.push({from:${JSON.stringify(distributionDir)},to:'px-distribution',filter:['distribution.json','distribution/*.tgz']});
 config.files=config.files.map(f=>typeof f==='object'&&f.to==='dsh'?{...f,from:${JSON.stringify(pxRuntime)}}:typeof f==='object'&&f.to==='dsh/node_modules'?{...f,from:${JSON.stringify(join(pxRuntime, 'node_modules'))}}:f);
 config.extraResources=config.extraResources.map(r=>r.to==='runtime'?{...r,filter:['**/*','!cli/bin/dsh.cmd']}:r);
 config.extraResources.push({from:${JSON.stringify(cliPath)},to:'runtime/cli/bin/dsh.cmd'});
-config.directories.output=${JSON.stringify(join(output, 'dist'))};config.artifactName=${JSON.stringify(releaseAssetNames('desktop', products.desktop.version).installer)};config.nsis.differentialPackage=false;
+config.extraResources.push({from:${JSON.stringify(join(output, 'px-cli.cjs'))},to:'runtime/cli/bin/px-cli.cjs'});
+config.directories.output=${JSON.stringify(join(output, 'dist'))};config.artifactName=${JSON.stringify(releaseAssetNames('desktop', products.desktop.version).installer)};config.nsis.differentialPackage=true;
 config.publish=[{provider:'generic',url:'https://raw.githubusercontent.com/Palbudir/dsh-px/updates/',channel:'preview',updaterCacheDirName:'dsh-px-desktop-updater'}];
 if(process.env.DSH_PX_DIRECTORY_PROBE==='1'){if(!process.argv.includes('--dir'))throw Error('Directory probe cannot build installer');config.beforeBuild=()=>true;}
 export default config;

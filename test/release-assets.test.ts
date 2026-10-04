@@ -64,9 +64,10 @@ test('release tags are product-prefixed and never look like a legacy v* client r
   assert.throws(() => releaseTag('pack', '../0.2.0'), /Invalid/)
 })
 
-test('asset names are fixed per product and feeds, YAML and blockmaps are never publishable', () => {
+test('asset names allow the matching installer blockmap but never unsigned YAML feeds', () => {
   assert.deepEqual(releaseAssetNames('desktop', '0.2.0-alpha.1'), {
     installer: 'DSH-PX-Desktop-0.2.0-alpha.1-win-x64.exe',
+    blockmap: 'DSH-PX-Desktop-0.2.0-alpha.1-win-x64.exe.blockmap',
     artifact: 'artifact.json'
   })
   assert.deepEqual(releaseAssetNames('pack', '0.2.0-alpha.1'), {
@@ -74,7 +75,11 @@ test('asset names are fixed per product and feeds, YAML and blockmaps are never 
     artifact: 'artifact.json'
   })
   assert.equal(releaseAssetNames('pack', '1.2.3+build.1').pack, 'dsh-px-pack-1.2.3_build.1.tgz')
-  for (const name of ['latest.yml', 'preview.yml', 'beta.YAML', 'DSH-PX-Desktop-0.2.0-win-x64.exe.blockmap'])
+  assert.equal(
+    assertPublishableAssetName('DSH-PX-Desktop-0.2.0-win-x64.exe.blockmap'),
+    'DSH-PX-Desktop-0.2.0-win-x64.exe.blockmap'
+  )
+  for (const name of ['latest.yml', 'preview.yml', 'beta.YAML', 'unrelated.tgz.blockmap'])
     assert.throws(() => assertPublishableAssetName(name), /not publishable/)
   for (const name of ['a b.exe', '../x.tgz', 'x\n.tgz']) assert.throws(() => assertPublishableAssetName(name))
   for (const invalid of ['../1.0.0', '1.0.0 bad', '01.0.0', '1.0.0-01', '1.0.0+'])
@@ -233,6 +238,7 @@ test('release directories are flat, manifested and verified by the controller be
     file: `dsh-px-pack-${version}.tgz`,
     size: primary.length,
     sha256: hash(primary),
+    sha512: createHash('sha512').update(primary).digest('base64'),
     sourceCommit: head,
     sourceDirty: false,
     candidate: false
@@ -283,7 +289,10 @@ test('Desktop inspection accepts exactly one full installer and a clean overlay 
   writeFileSync(join(root, 'preview.yml'), 'version: x\n')
   assert.equal(selectInstaller(root, version), join(root, exe))
   writeFileSync(join(root, exe + '.blockmap'), 'delta')
+  assert.equal(selectInstaller(root, version), join(root, exe))
+  writeFileSync(join(root, 'unrelated.exe.blockmap'), 'bad')
   assert.throws(() => selectInstaller(root, version), /blockmap/)
+  rmSync(join(root, 'unrelated.exe.blockmap'))
   rmSync(join(root, exe + '.blockmap'))
   writeFileSync(join(root, 'DSH-PX-Desktop-0.2.0-other-win-x64.exe'), 'x')
   assert.throws(() => selectInstaller(root, version), /exactly one installer/)

@@ -1,7 +1,41 @@
 import { Provider, type AppUpdater, type ResolvedUpdateFileInfo } from 'electron-updater'
 import type { UpdateInfo, CustomPublishOptions } from 'builder-util-runtime'
 import type { ProviderRuntimeOptions } from 'electron-updater/out/providers/Provider'
-import { verifySignedRelease, type ReleaseManifest, type ReleaseTarget } from '../shared/signed-release'
+import {
+  verifySignedRelease,
+  type ReleaseFile,
+  type ReleaseManifest,
+  type ReleaseTarget
+} from '../shared/signed-release'
+import { createHash } from 'node:crypto'
+import { versionGeneration } from '../shared/product-contract'
+
+type MapRules = { signed: Map<string, ReleaseFile>; previous: Set<string> }
+const mapRules = new WeakMap<object, MapRules>()
+/** Keep the native HTTP transport, but verify the new signed map before its parser sees bytes. */
+function blockmapRules(executor: ProviderRuntimeOptions['executor']): MapRules {
+  const existing = mapRules.get(executor)
+  if (existing) return existing
+  const rules: MapRules = { signed: new Map(), previous: new Set() }
+  const download = executor.downloadToBuffer.bind(executor)
+  executor.downloadToBuffer = async (url, options) => {
+    const expected = rules.signed.get(url.href)
+    if (url.pathname.endsWith('.blockmap') && !expected && !rules.previous.has(url.href))
+      throw Error('差分索引不属于当前更新')
+    const bytes = await download(url, options)
+    if (
+      expected &&
+      (!bytes ||
+        bytes.length !== expected.size ||
+        createHash('sha256').update(bytes).digest('hex') !== expected.sha256 ||
+        createHash('sha512').update(bytes).digest('base64') !== expected.sha512)
+    )
+      throw Error('差分索引校验失败，改用完整安装包')
+    return bytes
+  }
+  mapRules.set(executor, rules)
+  return rules
+}
 
 export interface SignedUpdateOptions {
   provider: 'custom'
@@ -10,10 +44,11 @@ export interface SignedUpdateOptions {
   target: ReleaseTarget
 }
 
-/** The updater never reads an unsigned YAML feed or chooses files outside the verified manifest. */
+/** Installer and new map are signed. The previous release map is a planning hint; final installer hashes remain mandatory. */
 export class SignedUpdateProvider extends Provider<UpdateInfo> {
   private readonly manifests = new WeakMap<UpdateInfo, ReleaseManifest>()
   private readonly configuration: SignedUpdateOptions
+  private currentManifest?: ReleaseManifest
   constructor(options: CustomPublishOptions, _updater: AppUpdater, runtime: ProviderRuntimeOptions) {
     super({ ...runtime, isUseMultipleRangeRequest: false })
     const configuration = options as unknown as SignedUpdateOptions
@@ -46,6 +81,7 @@ export class SignedUpdateProvider extends Provider<UpdateInfo> {
     const raw = await this.httpRequest(new URL(this.configuration.url))
     if (!raw) throw new Error('更新服务器没有返回签名清单')
     const manifest = verifySignedRelease(raw, this.configuration.keys, this.configuration.target)
+    this.currentManifest = manifest
     const installer = manifest.files.find((file) => file.role === 'installer')!
     const info: UpdateInfo = {
       version: manifest.version,
@@ -56,6 +92,26 @@ export class SignedUpdateProvider extends Provider<UpdateInfo> {
     }
     this.manifests.set(info, manifest)
     return info
+  }
+  override getBlockMapFiles(baseUrl: URL, oldVersion: string, newVersion: string): URL[] {
+    const manifest = this.currentManifest
+    const installer = manifest?.files.find((file) => file.role === 'installer')
+    const blockmap = manifest?.files.find((file) => file.role === 'blockmap')
+    if (!installer || !blockmap || manifest?.version !== newVersion || baseUrl.href !== installer.url)
+      throw Error('当前版本未提供匹配的签名差分索引')
+    versionGeneration(oldVersion)
+    const oldName = `DSH-PX-Desktop-${oldVersion.replace('+', '_')}-win-x64.exe.blockmap`
+    const previous = new URL(
+      `https://github.com/Palbudir/dsh-px/releases/download/desktop-v${encodeURIComponent(oldVersion)}/${oldName}`
+    )
+    const next = new URL(blockmap.url)
+    const rules = blockmapRules(this.executor)
+    rules.signed.set(next.href, blockmap)
+    rules.previous.add(previous.href)
+    // One updater owns at most one active transfer. Keep a bounded recent roster.
+    while (rules.signed.size > 8) rules.signed.delete(rules.signed.keys().next().value!)
+    while (rules.previous.size > 8) rules.previous.delete(rules.previous.values().next().value!)
+    return [previous, next]
   }
   override resolveFiles(info: UpdateInfo): ResolvedUpdateFileInfo[] {
     const manifest = this.manifests.get(info)
@@ -87,7 +143,7 @@ export function configureSignedUpdates(
   updater.autoDownload = false
   updater.autoInstallOnAppQuit = false
   updater.allowDowngrade = false
-  // Only the full signed installer is selected in this protocol generation.
-  updater.disableDifferentialDownload = true
+  // Missing baselines or invalid maps use electron-updater's full-download fallback.
+  updater.disableDifferentialDownload = false
   updater.disableWebInstaller = true
 }

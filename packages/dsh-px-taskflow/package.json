@@ -1,6 +1,6 @@
 {
   "name": "dsh-px-taskflow",
-  "version": "0.3.2-alpha.1",
+  "version": "0.3.3-alpha.1",
   "private": true,
   "type": "module",
   "description": "DSH-PX 项目任务：持久工作记录、执行证据与交付核对",

@@ -88,7 +88,10 @@ export function asarEntries(archive) {
 }
 
 /** Write the flat publishable directory and its manifest. Existing output is never overwritten. */
-export function writeReleaseDirectory(output, { product, version, head, controllerSha, primary, artifact }) {
+export function writeReleaseDirectory(
+  output,
+  { product, version, head, controllerSha, primary, artifact, blockmap }
+) {
   sha(head, 'candidate')
   sha(controllerSha, 'controller')
   if (existsSync(output) && readdirSync(output).length)
@@ -97,12 +100,25 @@ export function writeReleaseDirectory(output, { product, version, head, controll
   const names = releaseAssetNames(product, version)
   const primaryName = product === 'desktop' ? names.installer : names.pack
   writeFileSync(join(output, primaryName), primary, { flag: 'wx' })
+  if (blockmap !== undefined) {
+    if (
+      product !== 'desktop' ||
+      !artifact.blockmap ||
+      artifact.blockmap.file !== names.blockmap ||
+      artifact.blockmap.sha256 !== digests(blockmap).sha256 ||
+      artifact.blockmap.size !== blockmap.length
+    )
+      throw new Error('Blockmap does not match the Desktop artifact record')
+    writeFileSync(join(output, names.blockmap), blockmap, { flag: 'wx' })
+  } else if (artifact.blockmap) throw new Error('Recorded blockmap is missing')
   writeFileSync(join(output, names.artifact), JSON.stringify(artifact, null, 2) + '\n', { flag: 'wx' })
-  const files = [primaryName, names.artifact].map((name) => {
-    assertPublishableAssetName(name)
-    const bytes = readFileSync(join(output, name))
-    return { name, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
-  })
+  const files = [primaryName, names.artifact, ...(blockmap === undefined ? [] : [names.blockmap])].map(
+    (name) => {
+      assertPublishableAssetName(name)
+      const bytes = readFileSync(join(output, name))
+      return { name, size: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex') }
+    }
+  )
   const manifest = {
     schemaVersion: 2,
     product,
@@ -137,8 +153,7 @@ export function packArtifact(verified, products, nativePack) {
 }
 
 /**
- * The electron-builder output directory must contain exactly one versioned installer, and no delta
- * or feed file may be carried forward. Any *.yml the builder wrote stays behind, unpublished.
+ * Select one versioned installer and reject unrelated blockmaps. YAML stays unpublished.
  */
 export function selectInstaller(dist, version) {
   const names = readdirSync(dist)
@@ -146,12 +161,20 @@ export function selectInstaller(dist, version) {
   const installers = names.filter((name) => /\.exe$/i.test(name))
   if (installers.length !== 1 || installers[0] !== expected)
     throw new Error(`Expected exactly one installer ${expected}; found ${installers.join(', ') || 'none'}`)
-  if (names.some((name) => /\.blockmap$/i.test(name)))
-    throw new Error('Differential blockmap must not be produced')
+  if (names.some((name) => /\.blockmap$/i.test(name) && name !== expected + '.blockmap'))
+    throw new Error('Unexpected differential blockmap')
   return join(dist, expected)
 }
 
-export function desktopArtifact({ installer, overlay, products, nativeDesktop, head, authenticode }) {
+export function desktopArtifact({
+  installer,
+  blockmap,
+  overlay,
+  products,
+  nativeDesktop,
+  head,
+  authenticode
+}) {
   if (
     overlay.sourceCommit !== head ||
     overlay.sourceDirty !== false ||
@@ -169,6 +192,14 @@ export function desktopArtifact({ installer, overlay, products, nativeDesktop, h
     version: products.desktop.version,
     file: releaseAssetNames('desktop', products.desktop.version).installer,
     ...digests(bytes),
+    ...(blockmap
+      ? {
+          blockmap: {
+            file: releaseAssetNames('desktop', products.desktop.version).blockmap,
+            ...digests(regularFile(blockmap))
+          }
+        }
+      : {}),
     packVersion: products.desktop.packVersion,
     protocolGeneration: products.protocolGeneration,
     hostVersion: nativeDesktop.version,
@@ -253,8 +284,11 @@ function main() {
     if (bundled !== overlay.packSha256)
       throw new Error('Packaged resources/px-pack.tgz is not the Pack recorded in overlay.json')
     const installer = selectInstaller(join(px, 'dist'), products.desktop.version)
+    const blockmap = installer + '.blockmap'
+    if (!existsSync(blockmap)) throw new Error('Desktop differential blockmap is missing')
     const artifact = desktopArtifact({
       installer,
+      blockmap,
       overlay,
       products,
       nativeDesktop: readJson(join(root, 'config/native-desktop.json')),
@@ -267,6 +301,7 @@ function main() {
       head,
       controllerSha,
       primary: regularFile(installer),
+      blockmap: regularFile(blockmap),
       artifact
     })
     console.log(`Release Desktop prepared: ${artifact.file} ${artifact.sha256}`)

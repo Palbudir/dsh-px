@@ -68,7 +68,7 @@ test('Electron custom provider resolves only the immutable installer from its ve
   )
 })
 
-test('signed updates require explicit full-installer download and never enable downgrade or web installers', () => {
+test('signed updates allow native differential download without enabling downgrade or web installers', () => {
   let feed: any
   const updater: any = {
     setFeedURL: (options: unknown) => {
@@ -78,7 +78,7 @@ test('signed updates require explicit full-installer download and never enable d
   configureSignedUpdates(updater, keys, 'preview', 2)
   assert.equal(feed.provider, 'custom')
   assert.equal(feed.updateProvider, SignedUpdateProvider)
-  assert.equal(updater.disableDifferentialDownload, true)
+  assert.equal(updater.disableDifferentialDownload, false)
   assert.equal(updater.disableWebInstaller, true)
   assert.equal(updater.autoDownload, false)
   assert.equal(updater.autoInstallOnAppQuit, false)

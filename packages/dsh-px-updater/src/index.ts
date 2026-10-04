@@ -154,7 +154,8 @@ export function apply(ctx: HostPluginContext, rawConfig?: Partial<UpdaterConfig>
           pack: { version: pack.version, hostVersion: pack.hostVersion, candidate: pack.candidate },
           platform: process.platform,
           feed: config.feedUrl,
-          repository: config.repository
+          repository: config.repository,
+          managedDesktop: process.env.DSH_PX_MANAGED_PACK === '1'
         })
       }
     })

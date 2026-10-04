@@ -4,14 +4,14 @@
 
 Pack 与 Desktop 独立发布，版本来源分别为 [products.json](../config/products.json) 的 `pack.version` 与 `desktop.version`；根 `package.json` 的版本与 Desktop 一致，受管插件与 Pack 一致。
 
-| 产品    | 标签              | 资产                                                 |
-| ------- | ----------------- | ---------------------------------------------------- |
-| Desktop | `desktop-v<版本>` | `DSH-PX-Desktop-<版本>-win-x64.exe`、`artifact.json` |
-| Pack    | `pack-v<版本>`    | `dsh-px-pack-<版本>.tgz`、`artifact.json`            |
+| 产品    | 标签              | 资产                                                                   |
+| ------- | ----------------- | ---------------------------------------------------------------------- |
+| Desktop | `desktop-v<版本>` | `DSH-PX-Desktop-<版本>-win-x64.exe`、同名 `.blockmap`、`artifact.json` |
+| Pack    | `pack-v<版本>`    | `dsh-px-pack-<版本>.tgz`、`artifact.json`                              |
 
 每个产品在自己的标签前缀内按 SemVer 完整预发布段严格递增；历史 `v*` 标签属于已退役的旧外壳，不参与比较。不要使用任何 `v*` 标签：旧客户端的更新器会把这类标签当作自己的更新。版本的 `+` 在资产名中表示为 `_`。
 
-所有新发布均为 GitHub prerelease 并设置 `make_latest: false`，首发通道为 preview。GitHub Latest 必须保持为 `v0.1.0-beta.re.0.11`：发布前后都会核对，不一致即停止。不上传任何 `*.yml` 更新索引或 `*.blockmap` 差分文件；更新只通过签名清单进行。不要改写已发布 tag 或删除历史资产。
+所有新发布均为 GitHub prerelease 并设置 `make_latest: false`，首发通道为 preview。GitHub Latest 必须保持为 `v0.1.0-beta.re.0.11`：发布前后都会核对，不一致即停止。不上传任何 `*.yml` 更新索引；Desktop 的配套 `.blockmap` 与安装器一起上传并进入签名清单，更新只通过签名清单进行。不要改写已发布 tag 或删除历史资产。
 
 发布提交必须是受保护主分支的当前提交，通过普通 CI，并完成独立 DeepSeek Flash 审查。审查针对当前 PR 增量；改动后复核受影响部分，记录最终 SHA。确认的使用缺陷须修复，纯维护建议另行排期。当前流程不要求旧专用 App 的检查或证明，见 [GitHub 维护说明](github/README.md)。
 
@@ -28,9 +28,9 @@ Pack 与 Desktop 独立发布，版本来源分别为 [products.json](../config/
 默认分支的 `release.yml` 只响应 workflow_dispatch，输入精确 SHA 与产品标签，权限为只读，不使用任何 secret：
 
 - **Pack**：运行质量门禁，以 `--expect-head` 构建干净 release Pack，核对 `artifact.json` 与归档内清单。
-- **Desktop**：在 `windows-2025` runner 上检出锁定的官方源码并核对提交，构建官方运行时，生成 PX 覆盖层与安装界面品牌，产出一个未签名的完整 NSIS 安装程序；拒绝 blockmap，记录 SHA-256/SHA-512 与 Authenticode 状态。若该镜像的编译器拒绝官方安装辅助库，改用 `windows-2022` 并重新审查 workflow。
+- **Desktop**：在 `windows-2025` runner 上检出锁定的官方源码并核对提交，构建官方运行时，生成 PX 覆盖层与安装界面品牌，产出一个未签名的完整 NSIS 安装程序；同时产出配套 blockmap，记录 SHA-256/SHA-512 与 Authenticode 状态。若该镜像的编译器拒绝官方安装辅助库，改用 `windows-2022` 并重新审查 workflow。
 
-构建产物只包含两个资产和 `release-manifest.json`，由 GitHub Actions artifact 保存 14 天。
+Pack 构建产物包含归档和 `artifact.json`；Desktop 另含配套 blockmap。两者均包含 `release-manifest.json`，由 GitHub Actions artifact 保存 14 天。
 
 ## 发布
 
@@ -40,13 +40,13 @@ Pack 与 Desktop 独立发布，版本来源分别为 [products.json](../config/
 
 1. 核对当前主分支 SHA、普通 CI、独立审查结论与本机验收。构建运行必须来自该 SHA 的 `release.yml`，run-name 对应同一产品标签。
 2. 下载该运行的 Actions artifact；检查其中 `release-manifest.json` 的来源 SHA、产品、版本、文件名、大小和 SHA-256，并核对主资产 `artifact.json` 的 SHA-256/SHA-512。不要用本地候选包代替正式构建。
-3. 使用精确 SHA 创建产品 tag 和 draft Release；只上传主资产及 `artifact.json`，核对远端摘要。历史 tag 和资产不得改写，版本必须在自己的产品前缀内递增。
+3. 使用精确 SHA 创建产品 tag 和 draft Release；上传主资产、`artifact.json` 及 Desktop 的配套 blockmap，核对远端摘要。历史 tag 和资产不得改写，版本必须在自己的产品前缀内递增。
 4. 最终安装验收通过后，公开为 prerelease，明确 `make_latest: false`；核对 GitHub Latest 仍为旧客户端版本。可用 `gh release` 或 GitHub API 完成这些常规操作。
 
 公开后在本机离线签名更新清单：
 
 ```powershell
-node scripts/run.mjs sign-release-manifest sign --product desktop --channel preview --file installer=<安装程序> --artifact <该构建的 artifact.json> --upgrade-from 2 --upgrade-from 3 --key <仓库外私钥> --out <desktop-preview.json>
+node scripts/run.mjs sign-release-manifest sign --product desktop --channel preview --file installer=<安装程序> --file blockmap=<配套索引> --artifact <该构建的 artifact.json> --upgrade-from 2 --upgrade-from 3 --key <仓库外私钥> --out <desktop-preview.json>
 node scripts/run.mjs sign-release-manifest sign --product pack --channel preview --file pack=<Pack 归档> --artifact <该构建的 artifact.json> --key <仓库外私钥> --out <pack-preview.json>
 ```
 

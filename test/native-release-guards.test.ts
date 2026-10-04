@@ -144,7 +144,7 @@ test('the branded builder keeps the official helper preparation and refuses dire
   assert.match(source, /const official=config\.beforeBuild/)
   assert.match(source, /await official\(context\)/)
   assert.match(source, /window-frame\.dll/)
-  assert.match(source, /differentialPackage:false/)
+  assert.match(source, /differentialPackage:true/)
   assert.match(source, /DSH_PX_DIRECTORY_PROBE/)
   for (const name of brand.BRAND_BITMAPS) assert.ok(source.includes(name))
 })

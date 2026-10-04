@@ -159,14 +159,20 @@ export function verifyReleaseFiles(directory, manifest, expected) {
     manifest.version !== expected.version ||
     manifest.controllerSha !== expected.controllerSha ||
     !Array.isArray(manifest.files) ||
-    manifest.files.length !== 2
+    !(expected.product === 'desktop' ? [2, 3] : [2]).includes(manifest.files.length)
   )
     throw new Error('Build artifact identity mismatch')
   const assets = releaseAssetNames(expected.product, expected.version)
   const expectedNames = new Set(Object.values(assets))
   const names = manifest.files.map((file) => file.name)
   for (const name of names) assertPublishableAssetName(name)
-  if (new Set(names).size !== 2 || names.some((name) => !expectedNames.has(name)))
+  const primaryName = expected.product === 'desktop' ? assets.installer : assets.pack
+  if (
+    new Set(names).size !== names.length ||
+    !names.includes(primaryName) ||
+    !names.includes(assets.artifact) ||
+    names.some((name) => !expectedNames.has(name))
+  )
     throw new Error('Incomplete release file inventory')
   for (const file of manifest.files) {
     if (
@@ -198,10 +204,23 @@ export function verifyReleaseFiles(directory, manifest, expected) {
     artifact.file !== primary ||
     artifact.size !== bytes.length ||
     artifact.sha256 !== sha256(bytes) ||
+    artifact.sha512 !== createHash('sha512').update(bytes).digest('base64') ||
     artifact.sourceCommit !== expected.head ||
     artifact.sourceDirty !== false ||
     (expected.product === 'pack' && artifact.candidate !== false)
   )
     throw new Error('artifact.json does not identify this release asset')
+  const hasBlockmap = expected.product === 'desktop' && names.includes(assets.blockmap)
+  if (Boolean(artifact.blockmap) !== hasBlockmap) throw new Error('Blockmap record and inventory differ')
+  if (hasBlockmap) {
+    const map = readFileSync(join(directory, assets.blockmap))
+    if (
+      artifact.blockmap.file !== assets.blockmap ||
+      artifact.blockmap.size !== map.length ||
+      artifact.blockmap.sha256 !== sha256(map) ||
+      artifact.blockmap.sha512 !== createHash('sha512').update(map).digest('base64')
+    )
+      throw new Error('artifact.json does not identify the blockmap')
+  }
   return manifest.files
 }

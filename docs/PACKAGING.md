@@ -18,14 +18,16 @@ Pack 的依赖与 peer 固定在 [native-pack.json](../config/native-pack.json)�
 2. `build:official`，打包官方 dsh / vendor / landlock 闭包，再运行 `prepare:runtime`、`prepare:packages`、`prepare:dsh`；随后确认上游 tracked 树保持干净。
 3. 在 PX 检出中运行质量门禁，构建同提交的干净 release Pack。
 4. `scripts/prepare-native-desktop.mjs` 生成覆盖层及独立的运行时装配副本：应用身份、签名更新源、基础包与配套功能包预装，不修改官方原始文件。基础包加入副本的 installation 清单，避免多个文件映射覆盖同一清单。
-5. `scripts/brand-native-installer.mjs` 生成安装界面品牌：PX 包装脚本预先定义官方 `installer.nsh` 以 `!define /ifndef` 读取的 `INSTALLER_STRINGS_FILE` 与 `INSTALLER_BUILD_DIR`，再原样包含官方脚本；品牌位图由 `build/icon.png` 生成，官方安装器辅助库仍由官方准备步骤从源码编译。
-6. `electron-builder --win nsis --x64 --publish never`，只接受一个完整安装程序，不生成差分 blockmap；发布目录不携带任何 `*.yml`。
+5. `scripts/brand-native-installer.mjs` 生成安装界面品牌：PX 包装脚本预先定义官方 `installer.nsh` 以 `!define /ifndef` 读取的 `INSTALLER_STRINGS_FILE` 与 `INSTALLER_BUILD_DIR`，再包含保留原生解包、目录回滚与卸载机制的私有副本；覆盖层增加 60 秒退出等待、阶段日志和失败重启；品牌位图由 `build/icon.png` 生成，官方安装器辅助库仍由官方准备步骤从源码编译。
+6. `electron-builder --win nsis --x64 --publish never`，接受一个完整安装程序及同名 `.exe.blockmap`，索引必须进入签名清单；发布目录不携带任何 `*.yml`。
 
 安装器依赖官方安装界面辅助库，需要 x86 VC++ 编译器与 Windows SDK，因此正式构建只在 CI 进行。本机调试可用官方目录构建（`--dir`）配合 `DSH_PX_DIRECTORY_PROBE=1`，该模式不生成安装程序，也不能证明 NSIS 可用。
 
 ## 数据与卸载
 
 Desktop 的 Electron 用户数据位于 `%APPDATA%\dsh-px-desktop`，DSH_HOME 位于 `%USERPROFILE%\.dsh-px`，文档目录位于 `Documents\DSH-PX`。官方卸载程序只清理 Electron 用户数据与更新缓存，从不处理 DSH_HOME；PX 不提供删除数据的选项，会话、凭据、profile 与 Pack 缓存在卸载后保留。
+
+首次启动从随附运行时建立可重建缓存。各 Pack 版本复用宿主不可变文件，独立写入基础组件与可修改清单；Node/宿主身份变化时重建缓存。命令行入口使用同一个当前运行时指针。
 
 首次预装校验组合清单与每个功能归档，把受管功能归档复制到 profile 缓存，再通过一次原生安装应用依赖组合。写入使用临时文件、fsync 与原子替换；迁移前保留配置与锁文件恢复记录。安装失败恢复原依赖树，无法恢复时停止启动，避免运行不一致组合。用户凭据、会话、业务存储和自定义插件声明不被默认配置覆盖。
 

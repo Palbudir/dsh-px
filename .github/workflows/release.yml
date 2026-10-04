@@ -228,7 +228,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Pack install check failed' }
           node scripts/brand-native-installer.mjs ../upstream --icon=build/icon.png
           if ($LASTEXITCODE -ne 0) { throw 'installer branding failed' }
-      - name: electron-builder NSIS (unsigned, full installer only)
+      - name: electron-builder NSIS (unsigned installer and differential map)
         working-directory: upstream/apps/desktop
         run: |
           pnpm exec electron-builder --win nsis --x64 --publish never --config .desktop-build/px/builder-branded.mjs
@@ -242,7 +242,8 @@ jobs:
           $dist = '../upstream/apps/desktop/.desktop-build/px/dist'
           $exe = @(Get-ChildItem $dist -Filter '*.exe' -File)
           if ($exe.Count -ne 1) { throw "Expected one installer, found $($exe.Count)" }
-          if (Get-ChildItem $dist -Filter '*.blockmap' -File) { throw 'Differential blockmap must not be produced' }
+          $maps = @(Get-ChildItem $dist -Filter '*.blockmap' -File)
+          if ($maps.Count -ne 1 -or $maps[0].Name -ne ($exe[0].Name + '.blockmap')) { throw 'Expected one matching differential blockmap' }
           $env:BUILD_AUTHENTICODE = (Get-AuthenticodeSignature $exe[0].FullName).Status.ToString()
           node ../controller/scripts/release-package.mjs desktop "--upstream=../upstream" "--out=$env:RUNNER_TEMP/release-artifacts"
           if ($LASTEXITCODE -ne 0) { throw 'Desktop release inspection failed' }
