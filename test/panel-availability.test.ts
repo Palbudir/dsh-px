@@ -623,5 +623,11 @@ test('sidebar activation registers the quote footer slot without disturbing the 
     true,
     'the sidebar injection must contribute the quote footer action'
   )
-  assert.equal(slots.filter((slot) => slot.entry.name === 'shell.overlay').length, 1)
+  assert.deepEqual(
+    slots
+      .filter((slot) => slot.entry.name === 'shell.overlay')
+      .map((slot) => slot.entry.id)
+      .sort(),
+    ['dsh-px-workspace', 'px-annotation-preview']
+  )
 })

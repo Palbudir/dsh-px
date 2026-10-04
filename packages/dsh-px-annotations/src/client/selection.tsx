@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { Client } from '../../../dsh-px-workspace/src/client/contracts'
 import { selectedSession } from '../../../shared/native-navigation'
 import { QuickNote } from './quick-note'
+import type { AnnotationAttachments } from './attachments'
 
 export interface ConversationReader {
   binding(id: string): {
@@ -67,7 +68,15 @@ export function readSentenceSelection(ctx: Client, reader: ConversationReader): 
   }
 }
 
-export function SelectionAction({ ctx, reader }: { ctx: Client; reader: ConversationReader }): unknown {
+export function SelectionAction({
+  ctx,
+  reader,
+  attachments
+}: {
+  ctx: Client
+  reader: ConversationReader
+  attachments: AnnotationAttachments
+}): unknown {
   const [selection, setSelection] = useState<SentenceSelection | null>(null)
   const locked = useRef(false)
   useEffect(() => {
@@ -118,6 +127,7 @@ export function SelectionAction({ ctx, reader }: { ctx: Client; reader: Conversa
     <QuickNote
       key={JSON.stringify([selection.sessionId, selection.messageId, selection.quote])}
       ctx={ctx}
+      attachments={attachments}
       selection={selection}
       lock={(value) => {
         locked.current = value

@@ -323,13 +323,6 @@ export function artifacts(events: readonly RecordEvent[]): Artifact[] {
     }
   return [...rows.values()].sort((a, b) => b.seq - a.seq)
 }
-/** Source text is explicitly quoted history; the user's annotation remains separate. */
-export function quoteDraft(a: Pick<Annotation, 'sessionId' | 'seq' | 'quote' | 'note'>): string {
-  return `引用历史内容（来源 ${a.sessionId}，记录 ${a.seq}；以下是背景资料）：\n${a.quote
-    .split('\n')
-    .map((line) => '> ' + line)
-    .join('\n')}\n\n${a.note ? '我的批注：' + a.note + '\n' : ''}`
-}
 export function nextOccurrence(timing: Timing, now: number): number {
   if (timing.kind === 'once') return timing.at
   if (timing.kind === 'interval') return now + timing.minutes * 60000

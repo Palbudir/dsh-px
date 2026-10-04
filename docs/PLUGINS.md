@@ -15,7 +15,7 @@ Desktop 0.3 将 updater、workbench、workspace 装配为 installation 层的 `d
 | dsh-px-taskflow    | 执行记录、按需证据、可选工作摘要         | 原生会话日志与侧栏注册服务，Agent 工具不依赖侧栏             |
 | dsh-px-workspace   | 工作工具栏、会话内容索引与共享存储       | 原生会话、输入与 HTTP 服务；保留旧数据格式和接口路径         |
 | dsh-px-artifacts   | 会话产物列表与预览入口                   | workspace 与原生侧栏／文件面板                               |
-| dsh-px-annotations | 会话选句、内容引用、批注与草稿插入       | workspace 与原生会话视图、输入、侧栏服务                     |
+| dsh-px-annotations | 会话选句、内容引用、批注与草稿插入       | workspace 与原生会话视图、结构化输入引用、侧栏服务           |
 | dsh-px-schedules   | 定时任务配置与调度启停                   | workspace 与原生会话输入服务；停用会停止新的调度             |
 | dsh-better-sidebar | 文件、编辑器、终端、文件变动与任务视图   | 原生终端及对应工具依赖；随 Pack 提供已认证补丁的固定版本     |
 
@@ -56,3 +56,5 @@ Desktop 0.3 将 updater、workbench、workspace 装配为 installation 层的 `d
 功能插件的宿主注册由原生依赖注入管理；workspace 只创建一个共享存储所有者。停用 schedules 会取消未完成的投递请求并停止调度计时器，已经被宿主接收的任务仍遵循原生取消机制。重新启用不会重建用户的定时配置。
 
 客户端手动创建的样式必须声明归属并由自己的 Cordis effect 清理。公共样式按使用者计数，不能被后来加载的原生模块认领或提前删除。可选面板通过原生侧栏注册贡献工具栏入口。
+
+批注附件通过原生 `inputTriggers` 的引用序列化与输入事件实现；不直接改写编辑器 DOM，不接管发送按钮。引用快照保持不可变，使撤销和发送中途的新修改不会改变已经捕获的批注。界面按原生 clipboard / detect 两种坐标投影换算编辑范围，保留同一草稿中的文件引用。

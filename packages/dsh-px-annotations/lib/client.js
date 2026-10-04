@@ -442,8 +442,8 @@ function createQuoteRequests(limit = 64) {
       };
       publish();
     },
-    consume(sessionId, token) {
-      if (!requests[sessionId] || token && requests[sessionId].token !== token) return;
+    consume(sessionId, token2) {
+      if (!requests[sessionId] || token2 && requests[sessionId].token !== token2) return;
       const next = { ...requests };
       delete next[sessionId];
       requests = next;
@@ -534,28 +534,6 @@ function useData(url, enabled) {
 
 // packages/dsh-px-annotations/src/client/notes.tsx
 var import_react5 = require("react");
-
-// packages/dsh-px-workspace/src/model.ts
-function quoteDraft(a) {
-  return `\u5F15\u7528\u5386\u53F2\u5185\u5BB9\uFF08\u6765\u6E90 ${a.sessionId}\uFF0C\u8BB0\u5F55 ${a.seq}\uFF1B\u4EE5\u4E0B\u662F\u80CC\u666F\u8D44\u6599\uFF09\uFF1A
-${a.quote.split("\n").map((line) => "> " + line).join("\n")}
-
-${a.note ? "\u6211\u7684\u6279\u6CE8\uFF1A" + a.note + "\n" : ""}`;
-}
-
-// packages/dsh-px-workspace/src/client-input.ts
-function insertQuote(ctx, target, note) {
-  const actx = ctx.sessions.scope(target);
-  if (!actx) throw new Error("\u8BF7\u5148\u6253\u5F00\u76EE\u6807\u4F1A\u8BDD");
-  const input = ctx.conversation.input.for(actx), state = input.state.getSnapshot();
-  if (state.phase !== "plain") throw new Error("\u8F93\u5165\u6846\u6B63\u5728\u63D0\u4EA4\u6216\u5904\u4E8E\u547D\u4EE4\u6A21\u5F0F\uFF0C\u8BF7\u7A0D\u540E\u5F15\u7528");
-  const accepted = actx.bail(actx, "slash/input-insert-text", {
-    text: (state.draft ? "\n\n" : "") + quoteDraft(note),
-    span: { start: state.draft.length, end: state.draft.length, draftRev: state.draftRev }
-  });
-  if (accepted !== true) throw new Error("\u8F93\u5165\u6846\u5C1A\u672A\u5C31\u7EEA\u6216\u8349\u7A3F\u53D1\u751F\u53D8\u5316\uFF0C\u8BF7\u91CD\u8BD5");
-  input.notify("info", "\u5F15\u7528\u5DF2\u52A0\u5165\u8349\u7A3F\uFF0C\u8BF7\u68C0\u67E5\u540E\u53D1\u9001\u3002");
-}
 
 // packages/dsh-px-workspace/src/client/drafts.ts
 var import_react3 = require("react");
@@ -764,7 +742,13 @@ var quoteWhitespace = (text) => text.replace(/\s+/gu, " ").trim();
 
 // packages/dsh-px-annotations/src/client/notes.tsx
 var import_jsx_runtime4 = require("react/jsx-runtime");
-function NotesPanel({ ctx, scope, visible, tab }) {
+function NotesPanel({
+  ctx,
+  scope,
+  visible,
+  tab,
+  attachments
+}) {
   const selection = useSnapshot(quoteRequests)[scope.sessionId];
   const [before, setBefore] = (0, import_react5.useState)(null);
   const { data, error, refresh } = useData(
@@ -898,13 +882,10 @@ function NotesPanel({ ctx, scope, visible, tab }) {
     }
   }
   function insert(a) {
-    try {
-      insertQuote(ctx, scope.sessionId, a);
-      setFailure("");
-      setNotice("\u5DF2\u52A0\u5165\u8349\u7A3F\uFF0C\u68C0\u67E5\u540E\u53D1\u9001\u3002");
-    } catch (e) {
-      setFailure(errorText(e));
-    }
+    void action(async () => {
+      const saved = a.id ? a : await post("annotations", { action: "save", ...a });
+      attachments.attach(saved);
+    }, "\u5DF2\u6DFB\u52A0\u6279\u6CE8\u9644\u4EF6\uFF0C\u8BF7\u68C0\u67E5\u540E\u53D1\u9001\u3002");
   }
   return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "px-ui px-panel", children: [
     /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("h3", { children: "\u5F15\u7528\u4E0E\u6279\u6CE8" }),
@@ -1040,7 +1021,7 @@ function NotesPanel({ ctx, scope, visible, tab }) {
               clearDraft({ ...editor, editing: saved, dirty: false });
               notes.refresh();
               try {
-                insertQuote(ctx, scope.sessionId, saved);
+                attachments.attach(saved);
               } catch (error2) {
                 throw new Error(`\u6279\u6CE8\u5DF2\u4FDD\u5B58\uFF0C\u4F46\u672A\u80FD\u52A0\u5165\u8349\u7A3F\uFF1A${errorText(error2)}`);
               }
@@ -1238,6 +1219,7 @@ var import_react7 = require("react");
 var import_jsx_runtime6 = require("react/jsx-runtime");
 function QuickNote({
   ctx,
+  attachments,
   selection,
   lock,
   close
@@ -1319,7 +1301,7 @@ function QuickNote({
         }
         if (!alive.current) return;
         assertCurrent();
-        insertQuote(ctx, selection.sessionId, saved);
+        attachments.attach(saved);
         clearDraft();
         window.getSelection()?.removeAllRanges();
         close();
@@ -1479,7 +1461,11 @@ function readSentenceSelection(ctx, reader) {
     top: Math.max(48, Math.min(window.innerHeight - 44, rect.bottom + 6))
   };
 }
-function SelectionAction({ ctx, reader }) {
+function SelectionAction({
+  ctx,
+  reader,
+  attachments
+}) {
   const [selection, setSelection] = (0, import_react8.useState)(null);
   const locked = (0, import_react8.useRef)(false);
   (0, import_react8.useEffect)(() => {
@@ -1530,6 +1516,7 @@ function SelectionAction({ ctx, reader }) {
     QuickNote,
     {
       ctx,
+      attachments,
       selection,
       lock: (value) => {
         locked.current = value;
@@ -1543,16 +1530,472 @@ function SelectionAction({ ctx, reader }) {
   );
 }
 
-// packages/dsh-px-annotations/src/client.tsx
+// packages/dsh-px-annotations/src/client/attachment-model.ts
+var annotationSource = "px-annotations";
+var prefix2 = "dsh-px.annotation-attachment.v1.";
+var token = (ref) => `\u27E6px-note:${ref}\u27E7`;
+var tokens = (text) => text.matchAll(/⟦px-note:([a-f0-9-]{36})⟧/g);
+function validateBatch(value) {
+  return !!value && typeof value.sessionId === "string" && Array.isArray(value.notes) && value.notes.length > 0 && value.notes.length <= 20 && value.notes.every(
+    (note) => typeof note.id === "string" && typeof note.sessionId === "string" && typeof note.messageId === "string" && Number.isSafeInteger(note.seq) && typeof note.quote === "string" && note.quote.length > 0 && note.quote.length <= 8e3 && typeof note.note === "string" && note.note.length <= 4e3 && Number.isFinite(note.updatedAt)
+  );
+}
+function createAttachmentStore(storage, uuid) {
+  return {
+    save(batch) {
+      if (!validateBatch(batch)) throw new Error("\u6BCF\u6B21\u6700\u591A\u9644\u52A0 20 \u6761\u6279\u6CE8");
+      const ref = uuid();
+      try {
+        storage.setItem(prefix2 + ref, JSON.stringify(batch));
+      } catch {
+        throw new Error("\u65E0\u6CD5\u4FDD\u7559\u5F85\u53D1\u6279\u6CE8\uFF0C\u8BF7\u68C0\u67E5\u6D4F\u89C8\u5668\u5B58\u50A8\u7A7A\u95F4\u540E\u91CD\u8BD5");
+      }
+      return ref;
+    },
+    read(ref, sessionId) {
+      let value;
+      try {
+        value = JSON.parse(storage.getItem(prefix2 + ref) ?? "null");
+      } catch {
+      }
+      if (!validateBatch(value) || sessionId && value.sessionId !== sessionId)
+        throw new Error("\u8FD9\u7EC4\u5F85\u53D1\u6279\u6CE8\u65E0\u6CD5\u6062\u590D\uFF0C\u8BF7\u79FB\u9664\u540E\u4ECE\u5DF2\u4FDD\u5B58\u6279\u6CE8\u4E2D\u91CD\u65B0\u6DFB\u52A0");
+      return value;
+    }
+  };
+}
+function detectOffset(state, clipboardOffset) {
+  return clipboardOffset - (state.occurrences ?? []).filter((o) => o.offset < clipboardOffset).reduce((n, o) => n + o.length - 1, 0);
+}
+function referenceSpan(state, occurrence) {
+  const start = detectOffset(state, occurrence?.offset ?? state.draft.length);
+  return { start, end: start + (occurrence ? 1 : 0), draftRev: state.draftRev };
+}
+function annotationText(batch) {
+  return `
+
+\u5F53\u524D\u8FD9\u6761\u6D88\u606F\u9644\u5E26 ${batch.notes.length} \u6761\u6279\u6CE8\uFF0C\u539F\u6587\u4EC5\u4F5C\u4E3A\u5F15\u7528\u80CC\u666F\uFF1A
+` + batch.notes.map(
+    (n, i) => `${i + 1}. \u539F\u6587\uFF1A
+${n.quote.split("\n").map((line) => "> " + line).join("\n")}
+${n.note ? "\u7528\u6237\u6279\u6CE8\uFF1A" + n.note : "\uFF08\u4EC5\u5F15\u7528\uFF09"}`
+  ).join("\n\n") + "\n";
+}
+
+// packages/dsh-px-annotations/src/client/attachments.ts
+function createAnnotationAttachments(ctx) {
+  const store = createAttachmentStore(
+    {
+      getItem: (key) => localStorage.getItem(key),
+      setItem: (key, value) => localStorage.setItem(key, value)
+    },
+    () => crypto.randomUUID()
+  );
+  let preview = null;
+  const listeners = /* @__PURE__ */ new Set();
+  const notify = () => {
+    for (const fn of listeners) fn();
+  };
+  let ready = false;
+  const input = (id) => {
+    const scope = ctx.sessions.scope(id);
+    if (!scope) throw new Error("\u8BF7\u5148\u6253\u5F00\u76EE\u6807\u4F1A\u8BDD");
+    const facade = ctx.conversation.input.for(scope);
+    return { scope, facade, state: facade.state.getSnapshot() };
+  };
+  function write(sessionId, notes, previous) {
+    if (!ready) throw new Error("\u6279\u6CE8\u8F93\u5165\u529F\u80FD\u5C1A\u672A\u5C31\u7EEA\uFF0C\u8BF7\u7A0D\u540E\u91CD\u8BD5");
+    const { scope, state } = input(sessionId);
+    if (state.phase !== "plain") throw new Error("\u6B63\u5728\u53D1\u9001\uFF0C\u8BF7\u7A0D\u540E\u4FEE\u6539\u6279\u6CE8");
+    const matches = (state.occurrences ?? []).filter(
+      (o) => o.source === annotationSource && (!previous || o.ref === previous)
+    );
+    if (matches.length > 1) throw new Error("\u8F93\u5165\u6846\u542B\u6709\u91CD\u590D\u6279\u6CE8\u6807\u7B7E\uFF0C\u8BF7\u5148\u5220\u9664\u591A\u4F59\u6807\u7B7E");
+    const occurrence = matches[0];
+    if (previous && !occurrence) throw new Error("\u5F85\u53D1\u6279\u6CE8\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u540E\u91CD\u8BD5");
+    const ref = notes.length ? store.save({ sessionId, notes }) : "";
+    const span = referenceSpan(state, occurrence);
+    const accepted = ref ? scope.bail(scope, "slash/input-insert-reference", {
+      reference: {
+        source: annotationSource,
+        ref,
+        label: `${notes.length} \u6761\u6279\u6CE8`,
+        appearance: "session",
+        clipboardText: token(ref)
+      },
+      span
+    }) : scope.bail(scope, "slash/input-insert-text", { text: "", span });
+    if (accepted !== true) throw new Error("\u8F93\u5165\u6846\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u8BD5");
+    if (preview?.sessionId === sessionId) {
+      preview = ref ? { sessionId, ref } : null;
+      notify();
+    }
+  }
+  const service = {
+    activation: {
+      getSnapshot: () => ready,
+      subscribe: (fn) => {
+        listeners.add(fn);
+        return () => {
+          listeners.delete(fn);
+        };
+      }
+    },
+    getSnapshot: () => preview,
+    subscribe: (fn) => {
+      listeners.add(fn);
+      return () => {
+        listeners.delete(fn);
+      };
+    },
+    close: () => {
+      preview = null;
+      notify();
+    },
+    read: store.read,
+    replace: write,
+    attach(note) {
+      const { state } = input(note.sessionId);
+      const occurrence = state.occurrences?.find((o) => o.source === annotationSource);
+      const notes = occurrence ? store.read(occurrence.ref, note.sessionId).notes : [];
+      write(note.sessionId, [...notes.filter((n) => n.id !== note.id), note]);
+    },
+    recover(sessionId) {
+      if (!ready) return;
+      const { scope, state } = input(sessionId);
+      if (state.phase !== "plain") return;
+      for (const match of tokens(state.draft)) {
+        if (state.occurrences?.some((o) => match.index >= o.offset && match.index < o.offset + o.length))
+          continue;
+        let label = "\u6279\u6CE8\u5F85\u6062\u590D", ref = match[1];
+        try {
+          label = `${store.read(ref, sessionId).notes.length} \u6761\u6279\u6CE8`;
+        } catch {
+          ref = `unavailable:${ref}`;
+        }
+        const start = detectOffset(state, match.index);
+        scope.bail(scope, "slash/input-insert-reference", {
+          reference: {
+            source: annotationSource,
+            ref,
+            label,
+            appearance: "session",
+            clipboardText: match[0]
+          },
+          span: { start, end: start + match[0].length, draftRev: state.draftRev }
+        });
+        return;
+      }
+    }
+  };
+  ctx.inject(["inputTriggers"], (host) => {
+    host.effect(() => {
+      const off = host.inputTriggers.registerSource({
+        trigger: "@",
+        name: annotationSource,
+        showGroupTitle: false,
+        candidates: async () => [],
+        onPick: () => void 0,
+        warm: (session) => queueMicrotask(() => {
+          if (ready && ctx.sessions.scope(session.sessionId)) service.recover(session.sessionId);
+        }),
+        openReference: (session, reference) => {
+          preview = { sessionId: session.sessionId, ref: reference.ref };
+          notify();
+          return true;
+        },
+        codec: {
+          clipboardText: token,
+          serialize: async (ref, signal) => {
+            const batch = store.read(ref);
+            try {
+              await Promise.all(
+                batch.notes.map(
+                  (note) => requestJson(`${base}/selection`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    signal,
+                    body: JSON.stringify({
+                      sessionId: note.sessionId,
+                      messageId: note.messageId,
+                      quote: note.quote
+                    })
+                  })
+                )
+              );
+              return annotationText(batch);
+            } catch (error) {
+              const scope = ctx.sessions.scope(batch.sessionId);
+              if (scope && !signal.aborted)
+                ctx.conversation.input.for(scope).notify("error", `\u6279\u6CE8\u672A\u53D1\u9001\uFF0C\u8349\u7A3F\u5DF2\u4FDD\u7559\uFF1A${errorText(error)}`);
+              throw error;
+            }
+          }
+        }
+      });
+      ready = true;
+      notify();
+      return () => {
+        ready = false;
+        service.close();
+        off();
+      };
+    }, "annotations: structured input source");
+  });
+  return service;
+}
+
+// packages/dsh-px-annotations/src/client/attachment-preview.tsx
+var import_react9 = require("react");
 var import_jsx_runtime8 = require("react/jsx-runtime");
+function AttachmentRecovery({
+  attachments,
+  session,
+  input
+}) {
+  const ready = useSnapshot(attachments.activation);
+  (0, import_react9.useEffect)(() => {
+    attachments.recover(session.sessionId);
+  }, [attachments, session.sessionId, input.draftRev, input.phase, ready]);
+  return null;
+}
+function AttachmentPreview({
+  ctx,
+  attachments
+}) {
+  const chosen = useSnapshot(attachments);
+  const [editing, setEditing] = (0, import_react9.useState)(null);
+  const [error, setError] = (0, import_react9.useState)(""), [busy, setBusy] = (0, import_react9.useState)(false);
+  const root = (0, import_react9.useRef)(null);
+  const [anchor, setAnchor] = (0, import_react9.useState)({ left: 24, bottom: 140, height: 400 });
+  (0, import_react9.useEffect)(() => {
+    if (!chosen) return;
+    const chip = [...document.querySelectorAll('[data-composer-chip="px-annotations"]')].find((el) => {
+      const r = el.getBoundingClientRect();
+      return r.width > 0 && r.height > 0;
+    });
+    const rect = chip?.getBoundingClientRect();
+    setAnchor({
+      left: Math.max(8, Math.min(rect?.left ?? 24, window.innerWidth - 396)),
+      bottom: rect ? window.innerHeight - rect.top + 8 : 140,
+      height: Math.max(120, (rect?.top ?? window.innerHeight - 140) - 64)
+    });
+    const scroll = (event) => {
+      if (!root.current?.contains(event.target)) attachments.close();
+    };
+    const resize = () => attachments.close();
+    const outside = (event) => {
+      if (!root.current?.contains(event.target)) attachments.close();
+    };
+    const key = (event) => {
+      if (event.key === "Escape" && !event.isComposing) attachments.close();
+    };
+    document.addEventListener("scroll", scroll, true);
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", key);
+    window.addEventListener("resize", resize);
+    return () => {
+      document.removeEventListener("scroll", scroll, true);
+      window.removeEventListener("resize", resize);
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", key);
+    };
+  }, [chosen, attachments]);
+  (0, import_react9.useEffect)(() => {
+    const closeOther = () => {
+      if (chosen && selectedSession(
+        ctx.sessions.list.getSnapshot(),
+        ctx.layout?.panelInfo?.getSnapshot().activePanelId ?? null
+      ) !== chosen.sessionId)
+        attachments.close();
+    };
+    const off = ctx.sessions.list.subscribe(closeOther), offLayout = ctx.layout?.panelInfo?.subscribe(closeOther);
+    return () => {
+      off();
+      offLayout?.();
+    };
+  }, [chosen, ctx, attachments]);
+  (0, import_react9.useEffect)(() => {
+    setError("");
+  }, [chosen?.ref]);
+  if (!chosen) return null;
+  let batch, missing = "";
+  try {
+    batch = attachments.read(chosen.ref, chosen.sessionId);
+  } catch (e) {
+    missing = errorText(e);
+  }
+  const act = async (fn) => {
+    if (busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await fn();
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(
+    "div",
+    {
+      ref: root,
+      className: "px-ui",
+      role: "dialog",
+      "aria-label": "\u5F85\u53D1\u9001\u6279\u6CE8",
+      style: {
+        position: "fixed",
+        left: anchor.left,
+        bottom: anchor.bottom,
+        width: 380,
+        maxWidth: "calc(100vw - 32px)",
+        maxHeight: anchor.height,
+        overflow: "auto",
+        zIndex: 1050,
+        pointerEvents: "auto",
+        padding: 14,
+        boxSizing: "border-box",
+        background: "var(--px-bg)",
+        color: "var(--px-fg)",
+        border: "1px solid var(--px-border)",
+        borderRadius: 12,
+        boxShadow: "0 8px 28px #0002"
+      },
+      onKeyDown: (e) => {
+        if (e.key === "Escape" && !e.nativeEvent?.isComposing && !busy) attachments.close();
+      },
+      children: [
+        /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "px-actions", style: { justifyContent: "space-between", marginTop: 0 }, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("strong", { children: batch ? `${batch.notes.length} \u6761\u6279\u6CE8` : "\u5F85\u53D1\u9001\u6279\u6CE8" }),
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("button", { "aria-label": "\u5173\u95ED\u6279\u6CE8\u9884\u89C8", disabled: busy, onClick: attachments.close, children: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(Icon, { name: "close" }) })
+        ] }),
+        missing || error ? /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { role: "alert", children: missing || error }) : null,
+        batch?.notes.map((note, index) => /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("article", { style: { borderTop: "1px solid var(--px-border)", padding: "12px 0" }, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "px-actions", style: { justifyContent: "space-between", margin: 0 }, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("small", { className: "px-muted", children: [
+              index + 1,
+              ". \u6240\u9009\u6587\u5B57"
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("span", { style: { display: "flex", gap: 6 }, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                "button",
+                {
+                  disabled: busy,
+                  "aria-label": `\u7F16\u8F91\u6279\u6CE8 ${index + 1}`,
+                  onClick: () => setEditing({ sessionId: chosen.sessionId, id: note.id, note: note.note }),
+                  children: "\u7F16\u8F91"
+                }
+              ),
+              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                "button",
+                {
+                  disabled: busy,
+                  "aria-label": `\u79FB\u9664\u6279\u6CE8 ${index + 1}`,
+                  onClick: () => void act(() => {
+                    attachments.replace(
+                      chosen.sessionId,
+                      batch.notes.filter((_, i) => i !== index),
+                      chosen.ref
+                    );
+                    if (editing?.id === note.id) setEditing(null);
+                  }),
+                  children: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(Icon, { name: "close" })
+                }
+              )
+            ] })
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+            "blockquote",
+            {
+              style: {
+                margin: "8px 0",
+                paddingLeft: 10,
+                borderLeft: "2px solid var(--px-border)",
+                maxHeight: 120,
+                overflow: "auto",
+                whiteSpace: "pre-wrap",
+                overflowWrap: "anywhere"
+              },
+              children: note.quote
+            }
+          ),
+          editing?.sessionId === chosen.sessionId && editing.id === note.id ? /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(import_jsx_runtime8.Fragment, { children: [
+            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+              "textarea",
+              {
+                "aria-label": `\u6279\u6CE8 ${index + 1} \u7684\u610F\u89C1`,
+                rows: 2,
+                maxLength: 4e3,
+                disabled: busy,
+                style: { width: "100%", boxSizing: "border-box" },
+                value: editing.note,
+                onChange: (e) => setEditing({ ...editing, note: e.target.value })
+              }
+            ),
+            /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "px-actions", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                "button",
+                {
+                  className: "px-primary",
+                  disabled: busy,
+                  onClick: () => void act(() => {
+                    attachments.replace(
+                      chosen.sessionId,
+                      batch.notes.map((n, i) => i === index ? { ...n, note: editing.note } : n),
+                      chosen.ref
+                    );
+                    setEditing(null);
+                  }),
+                  children: "\u4FDD\u5B58\u4FEE\u6539"
+                }
+              ),
+              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("button", { disabled: busy, onClick: () => setEditing(null), children: "\u53D6\u6D88" })
+            ] })
+          ] }) : /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("p", { style: { margin: "6px 0", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("span", { className: "px-muted", children: "\u6211\u7684\u6279\u6CE8\uFF1A" }),
+            note.note || "\u4EC5\u5F15\u7528"
+          ] })
+        ] }, note.id)),
+        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+          "button",
+          {
+            disabled: busy,
+            onClick: () => void act(() => {
+              attachments.replace(chosen.sessionId, [], chosen.ref);
+              setEditing(null);
+            }),
+            children: "\u5168\u90E8\u79FB\u9664"
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "px-muted", style: { marginBottom: 0 }, children: "\u968F\u6D88\u606F\u53D1\u9001\uFF1B\u8FD9\u91CC\u7684\u4FEE\u6539\u4EC5\u5F71\u54CD\u5F85\u53D1\u526F\u672C\u3002" })
+      ]
+    }
+  );
+}
+
+// packages/dsh-px-annotations/src/client.tsx
+var import_jsx_runtime9 = require("react/jsx-runtime");
 function apply(raw) {
   const ctx = createWorkspaceClient(raw);
+  const attachments = createAnnotationAttachments(ctx);
+  ctx.slots.inject(
+    "shell.overlay",
+    () => ctx.slots.register({ name: "shell.overlay", id: "px-annotation-preview", order: 91 }, () => /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(AttachmentPreview, { ctx, attachments }))
+  );
+  ctx.slots.inject(
+    "conversation.input.dock",
+    () => ctx.slots.register(
+      { name: "conversation.input.dock", id: "px-annotation-recovery", order: 99 },
+      (p) => /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(AttachmentRecovery, { ...p, attachments })
+    )
+  );
   ctx.inject(["uiConversation"], (host) => {
     host.slots.inject(
       "shell.overlay",
       () => host.slots.register(
         { name: "shell.overlay", id: "dsh-px-selection", order: 90, registrant: "dsh-px-annotations" },
-        () => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(SelectionAction, { ctx, reader: host.uiConversation })
+        () => /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(SelectionAction, { ctx, reader: host.uiConversation, attachments })
       )
     );
   });
@@ -1564,7 +2007,7 @@ function apply(raw) {
         id: "px-notes",
         title: "\u5F15\u7528\u4E0E\u6279\u6CE8",
         order: 16,
-        component: (p) => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(NotesPanel, { ...p, ctx }, p.scope.sessionId)
+        component: (p) => /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(NotesPanel, { ...p, ctx, attachments }, p.scope.sessionId)
       }),
       "dsh-px-annotations: panel"
     );
@@ -1577,7 +2020,7 @@ function apply(raw) {
           order: 95,
           registrant: "dsh-px-annotations"
         },
-        (p) => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(QuoteAction, { ...p, ctx })
+        (p) => /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(QuoteAction, { ...p, ctx })
       )
     );
   });

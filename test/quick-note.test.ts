@@ -155,6 +155,12 @@ function fixture() {
   const props = {
     ctx,
     selection,
+    attachments: {
+      attach(note: any) {
+        if (phase !== 'plain') throw Error('input busy')
+        insertions.push(note)
+      }
+    },
     lock(value: boolean) {
       locked = value
     },
@@ -238,9 +244,9 @@ test('quick annotation adds once, preserves existing draft and does not submit',
   await tick()
   f.render()
   assert.equal(f.insertions.length, 1)
-  assert.match(f.input, /^已有草稿\n\n/)
-  assert.match(f.input, /原句/)
-  assert.match(f.input, /我的意见/)
+  assert.equal(f.input, '已有草稿')
+  assert.equal(f.insertions[0].quote, '原句')
+  assert.equal(f.insertions[0].note, '我的意见')
   assert.equal(f.closed, true)
   assert.equal(f.locked, false, 'completing one note must allow the next sentence selection')
   assert.equal(f.draft.note, '')

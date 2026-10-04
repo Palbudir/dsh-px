@@ -4,7 +4,7 @@ import type { Panel, Client } from '../../../dsh-px-workspace/src/client/contrac
 import type { Content } from '../../../dsh-px-workspace/src/client/panel-types'
 import type { Annotation, Message } from '../../../dsh-px-workspace/src/model'
 import { requestJson } from '../../../shared/client-http'
-import { insertQuote } from '../../../dsh-px-workspace/src/client-input'
+import type { AnnotationAttachments } from './attachments'
 import {
   base,
   stamp,
@@ -36,7 +36,13 @@ interface SourceChoice {
   offset: number
   quote?: string
 }
-export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }): unknown {
+export function NotesPanel({
+  ctx,
+  scope,
+  visible,
+  tab,
+  attachments
+}: Panel & { ctx: Client; attachments: AnnotationAttachments }): unknown {
   const selection = useSnapshot(quoteRequests)[scope.sessionId]
   const [before, setBefore] = useState<number | null>(null)
   const { data, error, refresh } = useData<Content>(
@@ -196,14 +202,11 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
       setBusy(false)
     }
   }
-  function insert(a: Pick<Annotation, 'sessionId' | 'seq' | 'quote' | 'note'>): void {
-    try {
-      insertQuote(ctx, scope.sessionId, a)
-      setFailure('')
-      setNotice('已加入草稿，检查后发送。')
-    } catch (e) {
-      setFailure(errorText(e))
-    }
+  function insert(a: Pick<Annotation, 'sessionId' | 'seq' | 'quote' | 'note'> & Partial<Annotation>): void {
+    void action(async () => {
+      const saved = a.id ? (a as Annotation) : await post<Annotation>('annotations', { action: 'save', ...a })
+      attachments.attach(saved)
+    }, '已添加批注附件，请检查后发送。')
   }
   return (
     <div className="px-ui px-panel">
@@ -339,7 +342,7 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
                     clearDraft({ ...editor, editing: saved, dirty: false })
                     notes.refresh()
                     try {
-                      insertQuote(ctx, scope.sessionId, saved)
+                      attachments.attach(saved)
                     } catch (error) {
                       throw new Error(`批注已保存，但未能加入草稿：${errorText(error)}`)
                     }

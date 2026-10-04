@@ -9,13 +9,11 @@ import {
   artifacts,
   messages,
   nextOccurrence,
-  quoteDraft,
   type RecordEvent,
   type Schedule
 } from '../packages/dsh-px-workspace/src/model'
 import { Scheduler, WorkspaceStore } from '../packages/dsh-px-workspace/src/store'
 import { apply } from '../packages/dsh-px-workspace/src/index'
-import { insertQuote } from '../packages/dsh-px-workspace/src/client-input'
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'dshpx-workspace-'))
@@ -60,10 +58,6 @@ test('quotes contain only authored visible text; artifacts come only from explic
   )
   assert.equal(artifacts(events).length, 2)
   assert.equal(artifacts(events).find((a) => a.path === 'a.md')?.description, '新版')
-  assert.match(
-    quoteDraft({ sessionId: 's', seq: 3, quote: '结果\n待修复', note: '检查边界' }),
-    /> 结果\n> 待修复/
-  )
 })
 test('annotations survive reload, validate exact source and reject stale edits/deletes', () => {
   const f = fixture()
@@ -408,38 +402,4 @@ test('plugin shutdown leaves the claim for recovery and cannot overwrite new-ins
   } finally {
     f.close()
   }
-})
-test('quote insertion explicitly scopes native events and appends without replacing another session draft', () => {
-  const drafts = { a: '已有草稿 A', b: '已有草稿 B' }
-  const scope: any = {
-    bail: (dispatch: unknown, name: string, request: any) => {
-      assert.equal(dispatch, scope)
-      assert.equal(name, 'slash/input-insert-text')
-      assert.equal(request.span.start, drafts.b.length)
-      assert.equal(request.span.end, drafts.b.length)
-      drafts.b += request.text
-      return true
-    }
-  }
-  insertQuote(
-    {
-      sessions: { scope: (id) => (id === 'b' ? scope : undefined) },
-      conversation: {
-        input: {
-          for: (c) => {
-            assert.equal(c, scope)
-            return {
-              state: { getSnapshot: () => ({ draft: drafts.b, draftRev: 3, phase: 'plain' }) },
-              notify: () => {}
-            }
-          }
-        }
-      }
-    },
-    'b',
-    { sessionId: 'a', seq: 1, quote: '引用正文', note: '我的批注' }
-  )
-  assert.equal(drafts.a, '已有草稿 A')
-  assert.match(drafts.b, /^已有草稿 B\n\n引用历史/)
-  assert.match(drafts.b, /我的批注/)
 })

@@ -4,7 +4,7 @@ import type { Annotation } from '../../../dsh-px-workspace/src/model'
 import { post, errorText, useOperation } from '../../../dsh-px-workspace/src/client/data'
 import { useDraft } from '../../../dsh-px-workspace/src/client/drafts'
 import { validNoteDraft } from '../../../dsh-px-workspace/src/client/draft-validation'
-import { insertQuote } from '../../../dsh-px-workspace/src/client-input'
+import type { AnnotationAttachments } from './attachments'
 import { selectedSession } from '../../../shared/native-navigation'
 import { Icon, ConfirmDelete } from '../../../shared/ui'
 import type { SentenceSelection } from './selection'
@@ -17,11 +17,13 @@ interface Draft {
 /** A selection owns its draft, so another selection never needs a replacement dialog. */
 export function QuickNote({
   ctx,
+  attachments,
   selection,
   lock,
   close
 }: {
   ctx: Client
+  attachments: AnnotationAttachments
   selection: SentenceSelection
   lock: (value: boolean) => void
   close: () => void
@@ -117,7 +119,7 @@ export function QuickNote({
         }
         if (!alive.current) return
         assertCurrent()
-        insertQuote(ctx, selection.sessionId, saved)
+        attachments.attach(saved)
         clearDraft()
         window.getSelection()?.removeAllRanges()
         close()
