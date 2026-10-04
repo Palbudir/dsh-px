@@ -1,6 +1,6 @@
 # 插件分层与组合发行
 
-当前源码为 Pack / Desktop 0.3.0-alpha.1，采用基础部署与五个功能包的分层。可下载版本以 GitHub Releases 为准；版本契约见 [EDITIONS.md](EDITIONS.md)，成员职责见 [PLUGINS.md](PLUGINS.md)。
+当前源码为 Pack / Desktop 0.3.1-alpha.1，采用基础部署与五个功能包的分层。可下载版本以 GitHub Releases 为准；版本契约见 [EDITIONS.md](EDITIONS.md)，成员职责见 [PLUGINS.md](PLUGINS.md)。
 
 ## 产品方向
 

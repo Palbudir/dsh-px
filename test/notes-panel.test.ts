@@ -228,6 +228,19 @@ function fixture(
   }
 }
 
+test('an unchanged partial quotation does not block choosing another message', async () => {
+  const f = fixture({
+    initialMessage: null,
+    draft: { source: message('A'), quote: 'Message', note: '', dirty: false, initialized: true }
+  })
+  await f.flush()
+  f.request('B')
+  await f.flush()
+  assert.equal(f.requests.length, 1)
+  assert.equal(f.requests[0].id, 'B')
+  assert.equal(f.button('放弃修改并切换'), undefined)
+})
+
 for (const selected of ['A', undefined])
   test(`latest explicit quote wins over initial tab metadata (${selected ? 'initial selection' : 'metadata fallback'})`, async () => {
     const f = fixture({ selected })

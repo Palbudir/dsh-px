@@ -112,12 +112,7 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
       setEditor((old) => ({ ...old, initialized: true, requestToken: pending?.token ?? old.requestToken }))
       if (pending) quoteRequests.consume(scope.sessionId, pending.token)
     }
-    if (
-      (editor.dirty ||
-        note !== (editing?.note ?? '') ||
-        Boolean(source && quote !== (editing?.quote ?? source.text.slice(0, 8000)))) &&
-      !replace
-    ) {
+    if ((editor.dirty || note !== (editing?.note ?? '')) && !replace) {
       // Keep the existing draft while the user decides. A consumed request must
       // not expose the tab's old initial message as a new selection.
       setEditor((old) => ({ ...old, initialized: true, requestToken: requestToken ?? old.requestToken }))
@@ -213,9 +208,7 @@ export function NotesPanel({ ctx, scope, visible, tab }: Panel & { ctx: Client }
   return (
     <div className="px-ui px-panel">
       <h3>引用与批注</h3>
-      <p className="px-muted">
-        选择原文并添加批注。草稿属于当前窗口，切换面板或刷新会保留；关闭窗口前请保存。点击引用才会加入会话输入框。
-      </p>
+      <p className="px-muted">这里管理已保存的批注。想对一句话提意见，可直接在对话中选中文字，点击“批注”。</p>
       {draftWarning ? <p role="alert">{draftWarning}</p> : null}
       {unreadableDraft ? (
         <ConfirmDelete label="放弃无法恢复的草稿" onConfirm={async () => resetEditor()} />

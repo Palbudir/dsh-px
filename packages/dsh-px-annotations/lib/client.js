@@ -827,7 +827,7 @@ function NotesPanel({ ctx, scope, visible, tab }) {
       setEditor((old) => ({ ...old, initialized: true, requestToken: pending?.token ?? old.requestToken }));
       if (pending) quoteRequests.consume(scope.sessionId, pending.token);
     }
-    if ((editor.dirty || note !== (editing?.note ?? "") || Boolean(source && quote !== (editing?.quote ?? source.text.slice(0, 8e3)))) && !replace) {
+    if ((editor.dirty || note !== (editing?.note ?? "")) && !replace) {
       setEditor((old) => ({ ...old, initialized: true, requestToken: requestToken ?? old.requestToken }));
       if (requestToken) quoteRequests.consume(scope.sessionId, requestToken);
       setReplacement({ id, existing, offset, quote: selectedQuote });
@@ -908,7 +908,7 @@ function NotesPanel({ ctx, scope, visible, tab }) {
   }
   return /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "px-ui px-panel", children: [
     /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("h3", { children: "\u5F15\u7528\u4E0E\u6279\u6CE8" }),
-    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "px-muted", children: "\u9009\u62E9\u539F\u6587\u5E76\u6DFB\u52A0\u6279\u6CE8\u3002\u8349\u7A3F\u5C5E\u4E8E\u5F53\u524D\u7A97\u53E3\uFF0C\u5207\u6362\u9762\u677F\u6216\u5237\u65B0\u4F1A\u4FDD\u7559\uFF1B\u5173\u95ED\u7A97\u53E3\u524D\u8BF7\u4FDD\u5B58\u3002\u70B9\u51FB\u5F15\u7528\u624D\u4F1A\u52A0\u5165\u4F1A\u8BDD\u8F93\u5165\u6846\u3002" }),
+    /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "px-muted", children: "\u8FD9\u91CC\u7BA1\u7406\u5DF2\u4FDD\u5B58\u7684\u6279\u6CE8\u3002\u60F3\u5BF9\u4E00\u53E5\u8BDD\u63D0\u610F\u89C1\uFF0C\u53EF\u76F4\u63A5\u5728\u5BF9\u8BDD\u4E2D\u9009\u4E2D\u6587\u5B57\uFF0C\u70B9\u51FB\u201C\u6279\u6CE8\u201D\u3002" }),
     draftWarning ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "alert", children: draftWarning }) : null,
     unreadableDraft ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(ConfirmDelete, { label: "\u653E\u5F03\u65E0\u6CD5\u6062\u590D\u7684\u8349\u7A3F", onConfirm: async () => resetEditor() }) : null,
     /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
@@ -1231,8 +1231,214 @@ function QuoteAction({
 }
 
 // packages/dsh-px-annotations/src/client/selection.tsx
+var import_react8 = require("react");
+
+// packages/dsh-px-annotations/src/client/quick-note.tsx
 var import_react7 = require("react");
 var import_jsx_runtime6 = require("react/jsx-runtime");
+function QuickNote({
+  ctx,
+  selection,
+  lock,
+  close
+}) {
+  const key = `quick-note:${JSON.stringify([selection.sessionId, selection.messageId, selection.quote])}`;
+  const [draft, setDraft, warning, available, clearDraft, unreadable] = useDraft(
+    key,
+    () => ({ note: "", saved: null }),
+    (value) => typeof value.note === "string" && value.note.length <= 4e3 && validNoteDraft({ source: null, editing: value.saved }) && (!value.saved || value.saved.sessionId === selection.sessionId && value.saved.messageId === selection.messageId && value.saved.quote === selection.quote && Number.isSafeInteger(value.saved.seq))
+  );
+  const [expanded, expand] = (0, import_react7.useState)(Boolean(draft.note || draft.saved || warning));
+  const [failure, fail] = (0, import_react7.useState)("");
+  const [busy, run] = useOperation(key);
+  const running = (0, import_react7.useRef)(false), alive = (0, import_react7.useRef)(true), root = (0, import_react7.useRef)(null);
+  const [viewport, resize] = (0, import_react7.useState)({ width: window.innerWidth, height: window.innerHeight });
+  (0, import_react7.useEffect)(() => {
+    alive.current = true;
+    const update = () => resize({ width: window.innerWidth, height: window.innerHeight });
+    window.addEventListener("resize", update);
+    return () => {
+      alive.current = false;
+      window.removeEventListener("resize", update);
+    };
+  }, []);
+  (0, import_react7.useEffect)(() => {
+    lock(expanded || busy);
+    if (expanded) root.current?.querySelector("textarea")?.focus();
+  }, [expanded, busy]);
+  (0, import_react7.useEffect)(() => {
+    if (!expanded) return;
+    const outside = (event) => {
+      if (!running.current && !root.current?.contains(event.target)) close();
+    };
+    const escape = (event) => {
+      if (event.key === "Escape" && !event.isComposing && !running.current) {
+        event.preventDefault();
+        close();
+      }
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [expanded, close]);
+  const assertCurrent = () => {
+    if (selectedSession(
+      ctx.sessions.list.getSnapshot(),
+      ctx.layout?.panelInfo?.getSnapshot().activePanelId ?? null
+    ) !== selection.sessionId)
+      throw new Error("\u4F1A\u8BDD\u5DF2\u5207\u6362\uFF1B\u6279\u6CE8\u5DF2\u4FDD\u7559\uFF0C\u8BF7\u56DE\u5230\u539F\u4F1A\u8BDD\u7EE7\u7EED");
+  };
+  async function add() {
+    if (running.current || busy || !available) return;
+    running.current = true;
+    lock(true);
+    fail("");
+    try {
+      await run(async () => {
+        assertCurrent();
+        let saved = draft.saved;
+        if (!saved || saved.note !== draft.note) {
+          saved = await post("annotations", {
+            action: "save",
+            sessionId: selection.sessionId,
+            messageId: selection.messageId,
+            quote: selection.quote,
+            note: draft.note,
+            ...saved ? { id: saved.id, updatedAt: saved.updatedAt } : {}
+          });
+          setDraft({ note: draft.note, saved });
+        }
+        if (!alive.current) return;
+        assertCurrent();
+        insertQuote(ctx, selection.sessionId, saved);
+        clearDraft();
+        window.getSelection()?.removeAllRanges();
+        close();
+      });
+    } catch (error) {
+      if (alive.current) {
+        fail(errorText(error));
+        expand(true);
+      }
+    } finally {
+      running.current = false;
+      if (alive.current) lock(expanded);
+    }
+  }
+  const width = Math.min(expanded ? 340 : 240, viewport.width - 16);
+  return /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+    "div",
+    {
+      ref: root,
+      className: "px-ui px-selection-action",
+      role: expanded ? "dialog" : "group",
+      "aria-label": expanded ? "\u6DFB\u52A0\u6279\u6CE8" : "\u9009\u4E2D\u6587\u5B57\u64CD\u4F5C",
+      style: {
+        position: "fixed",
+        zIndex: 1e3,
+        pointerEvents: "auto",
+        boxSizing: "border-box",
+        animation: "px-feedback-in 130ms ease-out",
+        width,
+        left: Math.max(8, Math.min(selection.left, viewport.width - width - 8)),
+        top: Math.max(48, Math.min(selection.top, viewport.height - (expanded ? 260 : 52))),
+        maxHeight: Math.max(100, viewport.height - 64),
+        overflowY: "auto",
+        background: "var(--px-bg)",
+        border: "1px solid var(--px-border)",
+        borderRadius: 12,
+        boxShadow: "0 6px 24px #0002",
+        padding: expanded ? 12 : 4
+      },
+      children: expanded ? /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          "blockquote",
+          {
+            style: {
+              margin: "0 0 8px",
+              paddingLeft: 8,
+              borderLeft: "2px solid var(--px-border)",
+              color: "var(--px-muted)",
+              display: "-webkit-box",
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+              overflowWrap: "anywhere"
+            },
+            title: selection.quote,
+            children: selection.quote
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          "textarea",
+          {
+            "aria-label": "\u6279\u6CE8",
+            placeholder: "\u5199\u4E0B\u4F60\u7684\u60F3\u6CD5\u2026",
+            rows: 2,
+            maxLength: 4e3,
+            style: { width: "100%", resize: "vertical", minHeight: 64, maxHeight: 140 },
+            value: draft.note,
+            disabled: busy || !available,
+            onChange: (event) => setDraft({ ...draft, note: event.target.value }),
+            onKeyDown: (event) => {
+              if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !event.nativeEvent?.isComposing) {
+                event.preventDefault();
+                void add();
+              }
+            }
+          }
+        ),
+        warning ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { className: "px-muted", children: warning }) : null,
+        unreadable ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(ConfirmDelete, { label: "\u653E\u5F03\u65E0\u6CD5\u6062\u590D\u7684\u8349\u7A3F", onConfirm: async () => clearDraft() }) : null,
+        failure ? /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "alert", children: failure }) : null,
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", style: { marginBottom: 0, justifyContent: "space-between" }, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: close, title: "\u8349\u7A3F\u4FDD\u7559\uFF0C\u91CD\u65B0\u9009\u4E2D\u539F\u53E5\u53EF\u7EE7\u7EED", children: "\u6536\u8D77" }),
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+            "button",
+            {
+              className: "px-primary",
+              disabled: busy || !available,
+              onClick: () => void add(),
+              title: "Ctrl+Enter \xB7 \u52A0\u5165\u8349\u7A3F\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u53D1\u9001",
+              children: busy ? "\u6B63\u5728\u6DFB\u52A0\u2026" : "\u52A0\u5165\u5BF9\u8BDD"
+            }
+          )
+        ] })
+      ] }) : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { style: { display: "flex", gap: 4 }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+          "button",
+          {
+            disabled: busy || !available,
+            onPointerDown: (e) => e.preventDefault(),
+            onClick: () => void add(),
+            children: "\u6DFB\u52A0\u5230\u5BF9\u8BDD"
+          }
+        ),
+        /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
+          "button",
+          {
+            disabled: busy,
+            onPointerDown: (e) => e.preventDefault(),
+            onClick: () => {
+              lock(true);
+              expand(true);
+            },
+            children: [
+              /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(Icon, { name: "note" }),
+              "\u6279\u6CE8"
+            ]
+          }
+        )
+      ] })
+    }
+  );
+}
+
+// packages/dsh-px-annotations/src/client/selection.tsx
+var import_jsx_runtime7 = require("react/jsx-runtime");
 function readSentenceSelection(ctx, reader) {
   const selected = window.getSelection();
   if (!selected || selected.isCollapsed || selected.rangeCount !== 1) return null;
@@ -1269,16 +1475,20 @@ function readSentenceSelection(ctx, reader) {
   };
 }
 function SelectionAction({ ctx, reader }) {
-  const [selection, setSelection] = (0, import_react7.useState)(null);
-  (0, import_react7.useEffect)(() => {
+  const [selection, setSelection] = (0, import_react8.useState)(null);
+  const locked = (0, import_react8.useRef)(false);
+  (0, import_react8.useEffect)(() => {
     const update = () => {
+      if (locked.current) return;
       try {
         setSelection(readSentenceSelection(ctx, reader));
       } catch {
         setSelection(null);
       }
     };
-    const clear = () => setSelection(null);
+    const clear = () => {
+      if (!locked.current) setSelection(null);
+    };
     const key = (event) => {
       if (event.key === "Escape") clear();
     };
@@ -1287,13 +1497,19 @@ function SelectionAction({ ctx, reader }) {
     document.addEventListener("keydown", key);
     document.addEventListener("scroll", clear, true);
     window.addEventListener("resize", clear);
-    const unsubscribe = ctx.sessions.list.subscribe(() => {
+    const checkSession = () => {
       const active = selectedSession(
         ctx.sessions.list.getSnapshot(),
         ctx.layout?.panelInfo?.getSnapshot().activePanelId ?? null
       );
-      setSelection((current) => current && current.sessionId !== active ? null : current);
-    });
+      setSelection((current) => {
+        if (!current || current.sessionId === active) return current;
+        locked.current = false;
+        return null;
+      });
+    };
+    const unsubscribe = ctx.sessions.list.subscribe(checkSession);
+    const unsubscribeLayout = ctx.layout?.panelInfo?.subscribe(checkSession);
     return () => {
       document.removeEventListener("selectionchange", update);
       document.removeEventListener("pointerup", update);
@@ -1301,46 +1517,29 @@ function SelectionAction({ ctx, reader }) {
       document.removeEventListener("scroll", clear, true);
       window.removeEventListener("resize", clear);
       unsubscribe();
+      unsubscribeLayout?.();
     };
   }, [ctx, reader]);
   if (!selection) return null;
-  const open = () => {
-    try {
-      const current = selectedSession(
-        ctx.sessions.list.getSnapshot(),
-        ctx.layout?.panelInfo?.getSnapshot().activePanelId ?? null
-      );
-      if (current !== selection.sessionId) throw new Error("\u4F1A\u8BDD\u5DF2\u5207\u6362\uFF0C\u8BF7\u91CD\u65B0\u9009\u62E9\u539F\u53E5");
-      const live = ctx.capabilities.getSnapshot();
-      const available = panelAvailability(live, "px-notes");
-      if (!available.enabled) throw new Error(available.reason);
-      requestQuote(selection.sessionId, selection.messageId, selection.quote);
-      live.sidebar.openTab({ type: "px-notes" }, { sessionId: selection.sessionId });
-      setSelection(null);
-    } catch (error) {
-      const scope = ctx.sessions.scope(selection.sessionId);
-      if (scope)
-        ctx.conversation.input.for(scope).notify("error", error instanceof Error ? error.message : String(error));
-    }
-  };
-  return /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
-    "div",
+  return /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+    QuickNote,
     {
-      className: "px-ui px-selection-action",
-      style: {
-        position: "fixed",
-        left: selection.left,
-        top: selection.top,
-        zIndex: 1e3,
-        pointerEvents: "auto"
+      ctx,
+      selection,
+      lock: (value) => {
+        locked.current = value;
       },
-      children: /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { className: "px-primary", onPointerDown: (event) => event.preventDefault(), onClick: open, children: "\u5F15\u7528\u5E76\u6279\u6CE8" })
-    }
+      close: () => {
+        locked.current = false;
+        setSelection(null);
+      }
+    },
+    JSON.stringify([selection.sessionId, selection.messageId, selection.quote])
   );
 }
 
 // packages/dsh-px-annotations/src/client.tsx
-var import_jsx_runtime7 = require("react/jsx-runtime");
+var import_jsx_runtime8 = require("react/jsx-runtime");
 function apply(raw) {
   const ctx = createWorkspaceClient(raw);
   ctx.inject(["uiConversation"], (host) => {
@@ -1348,7 +1547,7 @@ function apply(raw) {
       "shell.overlay",
       () => host.slots.register(
         { name: "shell.overlay", id: "dsh-px-selection", order: 90, registrant: "dsh-px-annotations" },
-        () => /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(SelectionAction, { ctx, reader: host.uiConversation })
+        () => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(SelectionAction, { ctx, reader: host.uiConversation })
       )
     );
   });
@@ -1360,7 +1559,7 @@ function apply(raw) {
         id: "px-notes",
         title: "\u5F15\u7528\u4E0E\u6279\u6CE8",
         order: 16,
-        component: (p) => /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(NotesPanel, { ...p, ctx }, p.scope.sessionId)
+        component: (p) => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(NotesPanel, { ...p, ctx }, p.scope.sessionId)
       }),
       "dsh-px-annotations: panel"
     );
@@ -1373,7 +1572,7 @@ function apply(raw) {
           order: 95,
           registrant: "dsh-px-annotations"
         },
-        (p) => /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(QuoteAction, { ...p, ctx })
+        (p) => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(QuoteAction, { ...p, ctx })
       )
     );
   });

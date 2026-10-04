@@ -1,6 +1,6 @@
 {
   "name": "dsh-px",
-  "version": "0.3.0-alpha.1",
+  "version": "0.3.1-alpha.1",
   "private": true,
   "description": "DSH-PX: a native DeepSeek Harness plugin Pack and an official-source derived Windows Desktop.",
   "license": "MIT",

@@ -685,14 +685,14 @@ var products_default = {
   schemaVersion: 1,
   protocolGeneration: 3,
   pack: {
-    version: "0.3.0-alpha.1",
+    version: "0.3.1-alpha.1",
     dataSchemaVersion: 1,
     hostVersions: ["0.2.0-rc.2"],
     surfaces: ["web", "px-desktop"]
   },
   desktop: {
-    version: "0.3.0-alpha.1",
-    packVersion: "0.3.0-alpha.1",
+    version: "0.3.1-alpha.1",
+    packVersion: "0.3.1-alpha.1",
     hostVersion: "0.2.0-rc.2",
     architecture: "official-derived"
   }
@@ -852,7 +852,7 @@ import { fileURLToPath } from "node:url";
 // packages/dsh-px-updater/package.json
 var package_default = {
   name: "dsh-px-updater",
-  version: "0.3.0-alpha.1",
+  version: "0.3.1-alpha.1",
   private: true,
   description: "DSH-PX \u7684\u7248\u672C\u63D2\u4EF6\uFF1A\u62A5\u544A Pack \u7248\u672C\u3001\u6821\u9A8C\u7B7E\u540D Pack \u66F4\u65B0\u6E05\u5355\u5E76\u5728 dsh \u8BBE\u7F6E\u9875\u63D0\u793A\uFF0C\u4E0D\u81EA\u52A8\u5B89\u88C5",
   _note: "\u4E24\u4E2A\u534A\u8FB9\u90FD\u662F**\u9884\u6784\u5EFA\u4EA7\u7269**\uFF08lib/index.js\u3001lib/client.js\uFF09\uFF0C\u6E90\u5728 src/\uFF08TypeScript\uFF09\u3002\u5BBF\u4E3B\u534A\u8FB9\u523B\u610F\u4FDD\u6301\u96F6\u8FD0\u884C\u65F6\u4F9D\u8D56\u4E0E\u96F6 peerDependencies\uFF1Apnpm \u7684 file:/link: \u5B89\u88C5\u4E0D\u4F1A\u5B89\u88C5 peer \u4F9D\u8D56\uFF0C\u800C link: \u4E0B Node \u53C8\u6309\u771F\u5B9E\u8DEF\u5F84\uFF08\u4ED3\u5E93\u5916\uFF09\u89E3\u6790\u6A21\u5757\uFF0C\u4E8E\u662F\u4EFB\u4F55 import \u7684\u5BBF\u4E3B\u5305\u90FD\u4F1A ERR_MODULE_NOT_FOUND\u3002\u914D\u7F6E\u9ED8\u8BA4\u503C\u81EA\u5DF1\u5408\u5E76\u5373\u53EF\uFF0C\u65E0\u9700 schemastery\u3002\u5BA2\u6237\u7AEF\u534A\u8FB9\u7684 react \u7B49\u7531**\u524D\u7AEF\u9759\u6001\u6A21\u5757\u8868**\u63D0\u4F9B\uFF0C\u662F\u6D4F\u89C8\u5668\u4FA7\u7684 require\uFF0C\u4E0D\u53D7\u6B64\u9650\u5236\u3002",

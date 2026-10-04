@@ -1,8 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Client } from '../../../dsh-px-workspace/src/client/contracts'
-import { requestQuote } from '../../../dsh-px-workspace/src/client/data'
 import { selectedSession } from '../../../shared/native-navigation'
-import { panelAvailability } from '../../../dsh-px-workspace/src/client/panel-availability'
+import { QuickNote } from './quick-note'
 
 export interface ConversationReader {
   binding(id: string): {
@@ -70,15 +69,19 @@ export function readSentenceSelection(ctx: Client, reader: ConversationReader): 
 
 export function SelectionAction({ ctx, reader }: { ctx: Client; reader: ConversationReader }): unknown {
   const [selection, setSelection] = useState<SentenceSelection | null>(null)
+  const locked = useRef(false)
   useEffect(() => {
     const update = (): void => {
+      if (locked.current) return
       try {
         setSelection(readSentenceSelection(ctx, reader))
       } catch {
         setSelection(null)
       }
     }
-    const clear = (): void => setSelection(null)
+    const clear = (): void => {
+      if (!locked.current) setSelection(null)
+    }
     const key = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') clear()
     }
@@ -87,13 +90,19 @@ export function SelectionAction({ ctx, reader }: { ctx: Client; reader: Conversa
     document.addEventListener('keydown', key)
     document.addEventListener('scroll', clear, true)
     window.addEventListener('resize', clear)
-    const unsubscribe = ctx.sessions.list.subscribe(() => {
+    const checkSession = (): void => {
       const active = selectedSession(
         ctx.sessions.list.getSnapshot(),
         ctx.layout?.panelInfo?.getSnapshot().activePanelId ?? null
       )
-      setSelection((current) => (current && current.sessionId !== active ? null : current))
-    })
+      setSelection((current) => {
+        if (!current || current.sessionId === active) return current
+        locked.current = false
+        return null
+      })
+    }
+    const unsubscribe = ctx.sessions.list.subscribe(checkSession)
+    const unsubscribeLayout = ctx.layout?.panelInfo?.subscribe(checkSession)
     return () => {
       document.removeEventListener('selectionchange', update)
       document.removeEventListener('pointerup', update)
@@ -101,44 +110,22 @@ export function SelectionAction({ ctx, reader }: { ctx: Client; reader: Conversa
       document.removeEventListener('scroll', clear, true)
       window.removeEventListener('resize', clear)
       unsubscribe()
+      unsubscribeLayout?.()
     }
   }, [ctx, reader])
   if (!selection) return null
-  const open = (): void => {
-    try {
-      const current = selectedSession(
-        ctx.sessions.list.getSnapshot(),
-        ctx.layout?.panelInfo?.getSnapshot().activePanelId ?? null
-      )
-      if (current !== selection.sessionId) throw new Error('会话已切换，请重新选择原句')
-      const live = ctx.capabilities.getSnapshot()
-      const available = panelAvailability(live, 'px-notes')
-      if (!available.enabled) throw new Error(available.reason)
-      requestQuote(selection.sessionId, selection.messageId, selection.quote)
-      live.sidebar!.openTab({ type: 'px-notes' }, { sessionId: selection.sessionId })
-      setSelection(null)
-    } catch (error) {
-      const scope = ctx.sessions.scope(selection.sessionId)
-      if (scope)
-        ctx.conversation.input
-          .for(scope)
-          .notify('error', error instanceof Error ? error.message : String(error))
-    }
-  }
   return (
-    <div
-      className="px-ui px-selection-action"
-      style={{
-        position: 'fixed',
-        left: selection.left,
-        top: selection.top,
-        zIndex: 1000,
-        pointerEvents: 'auto'
+    <QuickNote
+      key={JSON.stringify([selection.sessionId, selection.messageId, selection.quote])}
+      ctx={ctx}
+      selection={selection}
+      lock={(value) => {
+        locked.current = value
       }}
-    >
-      <button className="px-primary" onPointerDown={(event: any) => event.preventDefault()} onClick={open}>
-        引用并批注
-      </button>
-    </div>
+      close={() => {
+        locked.current = false
+        setSelection(null)
+      }}
+    />
   )
 }
