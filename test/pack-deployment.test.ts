@@ -6,7 +6,7 @@ import { join, dirname } from 'node:path'
 import { createHash, generateKeyPairSync } from 'node:crypto'
 import { gzipSync } from 'node:zlib'
 import { PackDeployment, type PackReceipt } from '../src/main/pack-deployment'
-import { FOUNDATION_PLUGINS, FEATURE_BUNDLES } from '../src/shared/distribution'
+import { FOUNDATION_PLUGINS, FEATURE_BUNDLES, LEGACY_FEATURE_BUNDLES } from '../src/shared/distribution'
 import { signRelease } from '../src/shared/signed-release'
 import { unpackFiles, sha256 } from '../src/main/pack-archive'
 import { managedRuntimePath } from '../src/main/runtime-cache'
@@ -36,7 +36,7 @@ function tar(files: Record<string, Buffer | string>): Buffer {
   }
   return gzipSync(Buffer.concat([...chunks, Buffer.alloc(1024)]))
 }
-function fixture(t: any) {
+function fixture(t: any, initialFeatures: readonly string[] = FEATURE_BUNDLES) {
   const root = mkdtempSync(join(tmpdir(), 'px-deployment-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
   const profile = join(root, 'profile'),
@@ -61,12 +61,12 @@ function fixture(t: any) {
   const pem = publicKey.export({ format: 'pem', type: 'spki' }).toString()
   const keyId = createHash('sha256').update(pem).digest('hex').slice(0, 24)
   const keys = { [keyId]: pem }
-  function pack(version: string, names: readonly string[] = FEATURE_BUNDLES) {
+  function pack(version: string, names: readonly string[] = FEATURE_BUNDLES, generation = 3) {
     const meta = {
       sourceCommit: 'a'.repeat(40),
       hostVersion: '0.2.0-rc.2',
       upstreamCommit: 'b'.repeat(40),
-      protocolGeneration: 3
+      protocolGeneration: generation
     }
     const record = { ...meta, candidate: false, sourceDirty: false }
     const members = Object.fromEntries(FOUNDATION_PLUGINS.map((n) => [n, version]))
@@ -124,7 +124,7 @@ function fixture(t: any) {
     )
     return { bytes, signed, receipt: { ...meta, version, sha256: digest } as PackReceipt }
   }
-  const baseline = pack('0.3.2-alpha.1'),
+  const baseline = pack('0.3.2-alpha.1', initialFeatures),
     next = pack('0.3.3-alpha.1')
   const bundledArchive = join(root, 'bundled.tgz')
   writeFileSync(bundledArchive, baseline.bytes)
@@ -168,6 +168,35 @@ function fixture(t: any) {
     }
   }
 }
+test('Desktop generation 4 activates its six-feature Pack over a generation 3 receipt without changing business data', async (t) => {
+  const f = fixture(t, LEGACY_FEATURE_BUNDLES)
+  await f.deployment.activate()
+  f.deployment.confirm()
+  const file = join(f.profile, 'package.json'),
+    manifest = JSON.parse(readFileSync(file, 'utf8'))
+  delete manifest.dependencies['dsh-px-annotations']
+  manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(
+    (n: string) => n !== 'dsh-px-annotations'
+  )
+  writeFileSync(file, JSON.stringify(manifest))
+  const dataFile = join(f.root, 'user-memory.json')
+  writeFileSync(dataFile, '{"keep":"personal configuration"}')
+  const next = f.pack('0.4.0-alpha.1', FEATURE_BUNDLES, 4),
+    archive = join(f.root, 'new-desktop-pack.tgz')
+  writeFileSync(archive, next.bytes)
+  const upgraded = new PackDeployment({
+    ...f.deployment.options,
+    bundled: next.receipt,
+    bundledArchive: archive
+  })
+  await upgraded.activate()
+  upgraded.confirm()
+  assert.equal(upgraded.read().active?.protocolGeneration, 4)
+  const result = JSON.parse(readFileSync(file, 'utf8'))
+  assert.ok(result.dependencies['dsh-px-memory'])
+  assert.equal(result.dependencies['dsh-px-annotations'], undefined)
+  assert.equal(readFileSync(dataFile, 'utf8'), '{"keep":"personal configuration"}')
+})
 test('a signed Pack adds a feature not compiled into Desktop without restoring a removed feature', async (t) => {
   const f = fixture(t)
   await f.deployment.activate()

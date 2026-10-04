@@ -215,7 +215,8 @@ function MemoryPanel({ sessionId, visible }) {
   const [name, setName] = (0, import_react2.useState)(""), [instructions, setInstructions] = (0, import_react2.useState)(""), [enabled, setEnabled] = (0, import_react2.useState)(true);
   const [newName, setNewName] = (0, import_react2.useState)(""), [note, setNote] = (0, import_react2.useState)(""), [editing, setEditing] = (0, import_react2.useState)(void 0);
   const [scope, setScope] = (0, import_react2.useState)("project");
-  const dirty = !!note || !!newName || !!(view && (name !== view.persona.name || instructions !== view.persona.instructions || enabled !== view.persona.memoryEnabled));
+  const configDirty = !!(view && (name !== view.persona.name || instructions !== view.persona.instructions || enabled !== view.persona.memoryEnabled));
+  const dirty = !!note || !!newName || configDirty;
   const url = `/dsh-px-memory?sessionId=${encodeURIComponent(sessionId)}`;
   const accept = (data) => {
     setView(data);
@@ -258,7 +259,7 @@ function MemoryPanel({ sessionId, visible }) {
         setError("\u53E6\u4E00\u4E2A\u7A97\u53E3\u5207\u6362\u4E86\u4EBA\u683C\uFF1B\u8BF7\u53D6\u6D88\u5F53\u524D\u7F16\u8F91\u540E\u5237\u65B0\uFF0C\u8349\u7A3F\u672A\u88AB\u8986\u76D6\u3002");
         return false;
       }
-      if (!action && dirty || action && ["save", "forget"].includes(action.type))
+      if (configDirty && (!action || ["save", "forget"].includes(action.type)))
         setView(data);
       else accept(data);
       return true;
