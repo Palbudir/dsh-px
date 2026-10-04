@@ -19,6 +19,7 @@ function fixture() {
     queued = true,
     tree: any,
     closed = false,
+    locked = false,
     current = 's',
     phase = 'plain'
   let draft: any = { note: '', saved: null },
@@ -154,12 +155,17 @@ function fixture() {
   const props = {
     ctx,
     selection,
-    lock() {},
+    lock(value: boolean) {
+      locked = value
+    },
     close: () => {
       closed = true
+      locked = false
+      for (const effect of effects) effect?.cleanup?.()
     }
   }
   const render = () => {
+    if (closed) return tree
     for (let n = 0; queued && n < 20; n++) {
       queued = false
       cursor = 0
@@ -191,6 +197,9 @@ function fixture() {
     },
     get closed() {
       return closed
+    },
+    get locked() {
+      return locked
     },
     note(value: string) {
       const field = walk(render()).find((n) => n.type === 'textarea')
@@ -233,6 +242,7 @@ test('quick annotation adds once, preserves existing draft and does not submit',
   assert.match(f.input, /原句/)
   assert.match(f.input, /我的意见/)
   assert.equal(f.closed, true)
+  assert.equal(f.locked, false, 'completing one note must allow the next sentence selection')
   assert.equal(f.draft.note, '')
 })
 

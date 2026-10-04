@@ -1265,6 +1265,7 @@ function QuickNote({
   (0, import_react7.useEffect)(() => {
     lock(expanded || busy);
     if (expanded) root.current?.querySelector("textarea")?.focus();
+    return () => lock(false);
   }, [expanded, busy]);
   (0, import_react7.useEffect)(() => {
     if (!expanded) return;
@@ -1277,11 +1278,16 @@ function QuickNote({
         close();
       }
     };
+    const scroll = (event) => {
+      if (!running.current && !root.current?.contains(event.target)) close();
+    };
     document.addEventListener("pointerdown", outside);
     document.addEventListener("keydown", escape);
+    document.addEventListener("scroll", scroll, true);
     return () => {
       document.removeEventListener("pointerdown", outside);
       document.removeEventListener("keydown", escape);
+      document.removeEventListener("scroll", scroll, true);
     };
   }, [expanded, close]);
   const assertCurrent = () => {
@@ -1325,7 +1331,6 @@ function QuickNote({
       }
     } finally {
       running.current = false;
-      if (alive.current) lock(expanded);
     }
   }
   const width = Math.min(expanded ? 340 : 240, viewport.width - 16);

@@ -59,6 +59,7 @@ export function QuickNote({
   useEffect(() => {
     lock(expanded || busy)
     if (expanded) root.current?.querySelector('textarea')?.focus()
+    return () => lock(false)
   }, [expanded, busy])
   useEffect(() => {
     if (!expanded) return
@@ -71,11 +72,16 @@ export function QuickNote({
         close()
       }
     }
+    const scroll = (event: Event): void => {
+      if (!running.current && !root.current?.contains(event.target)) close()
+    }
     document.addEventListener('pointerdown', outside)
     document.addEventListener('keydown', escape)
+    document.addEventListener('scroll', scroll, true)
     return () => {
       document.removeEventListener('pointerdown', outside)
       document.removeEventListener('keydown', escape)
+      document.removeEventListener('scroll', scroll, true)
     }
   }, [expanded, close])
   const assertCurrent = (): void => {
@@ -123,7 +129,6 @@ export function QuickNote({
       }
     } finally {
       running.current = false
-      if (alive.current) lock(expanded)
     }
   }
   const width = Math.min(expanded ? 340 : 240, viewport.width - 16)
