@@ -1,6 +1,6 @@
 # 插件分层与组合发行
 
-当前源码为 Pack / Desktop 0.3.3-alpha.1，采用基础部署与六个功能包的分层。可下载版本以 GitHub Releases 为准；版本契约见 [EDITIONS.md](EDITIONS.md)，成员职责见 [PLUGINS.md](PLUGINS.md)。
+当前源码为 Pack / Desktop 0.4.0-alpha.1，采用基础部署与六个功能包的分层。可下载版本以 GitHub Releases 为准；版本契约见 [EDITIONS.md](EDITIONS.md)，成员职责见 [PLUGINS.md](PLUGINS.md)。
 
 ## 产品方向
 
@@ -84,7 +84,7 @@ Pack 逐步成为带精确版本、依赖和摘要的组合交付物，Desktop �
 
 迁移必须保留用户声明、禁用状态、模型凭据、会话、批注和定时记录；移除旧入口不删除业务数据。多包安装失败时能恢复上一套一致配置并重试，避免半新半旧。失败恢复策略必须在真实安装器与隔离 profile 上验证。
 
-版本遵循 [EDITIONS.md](EDITIONS.md)：0.3 使用新的组合安装协议，Pack 与 Desktop 共用代际 3；Desktop 清单明确允许从代际 2 升级。DSH 上游版本独立锁定。
+版本遵循 [EDITIONS.md](EDITIONS.md)：Pack 与 Desktop 当前共用代际 4，由 Pack 清单声明功能成员。首次出现的新成员随升级安装；已经提供过且被用户卸载的成员不自动恢复。Desktop 清单允许从代际 2、3、4 升级；旧客户端先升级 Desktop。DSH 上游版本独立锁定。
 
 ## 维护与验收
 

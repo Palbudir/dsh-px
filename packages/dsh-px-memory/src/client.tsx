@@ -22,15 +22,13 @@ function MemoryPanel({ sessionId, visible }: { sessionId: string; visible: boole
     [note, setNote] = useState(''),
     [editing, setEditing] = useState<string | undefined>(undefined)
   const [scope, setScope] = useState('project')
-  const dirty =
-    !!note ||
-    !!newName ||
-    !!(
-      view &&
-      (name !== view.persona.name ||
-        instructions !== view.persona.instructions ||
-        enabled !== view.persona.memoryEnabled)
-    )
+  const configDirty = !!(
+    view &&
+    (name !== view.persona.name ||
+      instructions !== view.persona.instructions ||
+      enabled !== view.persona.memoryEnabled)
+  )
+  const dirty = !!note || !!newName || configDirty
   const url = `/dsh-px-memory?sessionId=${encodeURIComponent(sessionId)}`
   const accept = (data: View): void => {
     setView(data)
@@ -75,7 +73,7 @@ function MemoryPanel({ sessionId, visible }: { sessionId: string; visible: boole
         setError('另一个窗口切换了人格；请取消当前编辑后刷新，草稿未被覆盖。')
         return false
       }
-      if ((!action && dirty) || (action && ['save', 'forget'].includes((action as { type: string }).type)))
+      if (configDirty && (!action || ['save', 'forget'].includes((action as { type: string }).type)))
         setView(data)
       else accept(data)
       return true

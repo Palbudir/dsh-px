@@ -46,7 +46,7 @@ Pack 构建产物包含归档和 `artifact.json`；Desktop 另含配套 blockmap
 公开后在本机离线签名更新清单：
 
 ```powershell
-node scripts/run.mjs sign-release-manifest sign --product desktop --channel preview --file installer=<安装程序> --file blockmap=<配套索引> --artifact <该构建的 artifact.json> --upgrade-from 2 --upgrade-from 3 --key <仓库外私钥> --out <desktop-preview.json>
+node scripts/run.mjs sign-release-manifest sign --product desktop --channel preview --file installer=<安装程序> --file blockmap=<配套索引> --artifact <该构建的 artifact.json> --upgrade-from 2 --upgrade-from 3 --upgrade-from 4 --key <仓库外私钥> --out <desktop-preview.json>
 node scripts/run.mjs sign-release-manifest sign --product pack --channel preview --file pack=<Pack 归档> --artifact <该构建的 artifact.json> --key <仓库外私钥> --out <pack-preview.json>
 ```
 
