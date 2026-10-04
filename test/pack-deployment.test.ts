@@ -218,6 +218,38 @@ test('a signed Pack adds a feature not compiled into Desktop without restoring a
     future.receipt.version
   )
 })
+
+test('corrupt composition receipt still upgrades previously installed dynamic features', async (t) => {
+  const f = fixture(t)
+  await f.deployment.activate()
+  f.deployment.confirm()
+  const future = f.pack('0.3.9-alpha.1', [...FEATURE_BUNDLES, 'dsh-px-future'])
+  f.deployment.queue(f.deployment.stage(future.signed, future.bytes))
+  await f.deployment.activate()
+  f.deployment.confirm()
+  writeFileSync(join(f.profile, '.dsh-px/composition-state.json'), '{broken')
+  const next = f.pack('0.3.10-alpha.1', [...FEATURE_BUNDLES, 'dsh-px-future'])
+  f.deployment.queue(f.deployment.stage(next.signed, next.bytes))
+  await f.deployment.activate()
+  f.deployment.confirm()
+  assert.equal(
+    JSON.parse(readFileSync(join(f.profile, 'node_modules/dsh-px-future/package.json'), 'utf8')).version,
+    next.receipt.version
+  )
+  const file = join(f.profile, 'package.json'),
+    manifest = JSON.parse(readFileSync(file, 'utf8'))
+  delete manifest.dependencies['dsh-px-future']
+  manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter((n: string) => n !== 'dsh-px-future')
+  writeFileSync(file, JSON.stringify(manifest))
+  writeFileSync(join(f.profile, '.dsh-px/composition-state.json'), '{broken again')
+  const later = f.pack('0.3.11-alpha.1', [...FEATURE_BUNDLES, 'dsh-px-future', 'dsh-px-new-after-recovery'])
+  f.deployment.queue(f.deployment.stage(later.signed, later.bytes))
+  await f.deployment.activate()
+  f.deployment.confirm()
+  const preserved = JSON.parse(readFileSync(file, 'utf8'))
+  assert.equal(preserved.dependencies['dsh-px-future'], undefined)
+  assert.equal(preserved.dependencies['dsh-px-new-after-recovery'], undefined)
+})
 test('entire Pack switches native foundation and features; immutable host files are reused', async (t) => {
   const f = fixture(t),
     old = await f.deployment.activate()
