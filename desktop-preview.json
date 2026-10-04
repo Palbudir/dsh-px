@@ -1,0 +1,31 @@
+{
+  "keyId": "d03d2113641ecf60a2863ec0",
+  "payload": {
+    "schemaVersion": 1,
+    "product": "desktop",
+    "channel": "preview",
+    "platform": "win32-x64",
+    "version": "0.3.1-alpha.1",
+    "packVersion": "0.3.1-alpha.1",
+    "protocolGeneration": 3,
+    "upgradeFromGenerations": [
+      2,
+      3
+    ],
+    "hostVersion": "0.2.0-rc.2",
+    "upstreamCommit": "639ed015397290b3745d163aafe02ffee4aa3f84",
+    "sourceCommit": "046738ee3c39db7350b2fa105956f22a996dff26",
+    "issuedAt": "2026-10-04T07:52:07.490Z",
+    "files": [
+      {
+        "role": "installer",
+        "name": "DSH-PX-Desktop-0.3.1-alpha.1-win-x64.exe",
+        "url": "https://github.com/Palbudir/dsh-px/releases/download/desktop-v0.3.1-alpha.1/DSH-PX-Desktop-0.3.1-alpha.1-win-x64.exe",
+        "size": 244856012,
+        "sha256": "a13670d1363ac5feb01c4e6513564d1290afdb02caa0c1f7a9953c581694de71",
+        "sha512": "bivrNtgkb+N2zp2zoyAl4GElqaMOx8/3jpBCNJWbLmexZNBKgK1bpvipac+B/dWAwC/TIXC9oB2CQo9Hb/eexA=="
+      }
+    ]
+  },
+  "signature": "Fm57PeuCtW+H1QdV5Otws0W9LaE+Q3tLx7EeDLcPAoPMMpYT6GylkSdTisvR8N5ENsebVqw8npDwGJZLN0prBQ=="
+}
