@@ -162,11 +162,13 @@ export async function provisionNativeComposition(
           version: 'recovered',
           seenFeatures: [...FEATURE_BUNDLES],
           specs: Object.fromEntries(
-            FEATURE_BUNDLES.flatMap((name) =>
-              ownedFeatureSpec(options.profile, own, name, current.dependencies?.[name])
-                ? [[name, current.dependencies[name]]]
-                : []
-            )
+            Object.keys(current.dependencies ?? {})
+              .filter(isFeatureName)
+              .flatMap((name) =>
+                ownedFeatureSpec(options.profile, own, name, current.dependencies?.[name])
+                  ? [[name, current.dependencies[name]]]
+                  : []
+              )
           )
         }
         writeAtomic(statePath, JSON.stringify(state))
@@ -198,9 +200,9 @@ export async function provisionNativeComposition(
     !state &&
     !legacy &&
     ((manifest.dsh?.profile?.bundles ?? []).includes('dsh-px-core') ||
-      FEATURE_BUNDLES.some((name) =>
-        ownedFeatureSpec(options.profile, own, name, manifest.dependencies?.[name])
-      ))
+      Object.keys(manifest.dependencies ?? {})
+        .filter(isFeatureName)
+        .some((name) => ownedFeatureSpec(options.profile, own, name, manifest.dependencies?.[name])))
   ) {
     state = {
       schemaVersion: 1,
@@ -208,11 +210,13 @@ export async function provisionNativeComposition(
       version: 'recovered',
       seenFeatures: [...FEATURE_BUNDLES],
       specs: Object.fromEntries(
-        FEATURE_BUNDLES.flatMap((name) =>
-          ownedFeatureSpec(options.profile, own, name, manifest.dependencies?.[name])
-            ? [[name, manifest.dependencies[name]]]
-            : []
-        )
+        Object.keys(manifest.dependencies ?? {})
+          .filter(isFeatureName)
+          .flatMap((name) =>
+            ownedFeatureSpec(options.profile, own, name, manifest.dependencies?.[name])
+              ? [[name, manifest.dependencies[name]]]
+              : []
+          )
       )
     }
     writeAtomic(statePath, JSON.stringify(state))
@@ -257,7 +261,9 @@ export async function provisionNativeComposition(
   const bundles = selected.filter((n) => n !== 'dsh-px-pack')
   const specs: Record<string, string> = {}
   const seen = new Set(
-    state?.seenFeatures ?? (state ? [...LEGACY_FEATURE_BUNDLES, ...Object.keys(state.specs)] : [])
+    state?.version === 'recovered'
+      ? [...distribution.features.map((f) => f.name), ...Object.keys(state.specs)]
+      : (state?.seenFeatures ?? (state ? [...LEGACY_FEATURE_BUNDLES, ...Object.keys(state.specs)] : []))
   )
   if (!state && !bundles.includes('dsh-px-core')) bundles.push('dsh-px-core')
   for (const feature of distribution.features) {
