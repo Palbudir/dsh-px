@@ -281,6 +281,7 @@ function MemoryPanel({ sessionId, visible }) {
       style: { padding: 16, height: "100%", overflow: "auto", overflowWrap: "anywhere", fontSize: 13 },
       children: [
         /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h3", { children: "\u4EBA\u683C\u4E0E\u8BB0\u5FC6" }),
+        dirty && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { role: "status", style: { opacity: 0.7 }, children: "\u6709\u672A\u4FDD\u5B58\u7684\u7F16\u8F91\uFF0C\u81EA\u52A8\u5237\u65B0\u5DF2\u6682\u505C\u3002\u53EF\u624B\u52A8\u5237\u65B0\u8BB0\u5F55\uFF0C\u8349\u7A3F\u4F1A\u4FDD\u7559\u3002" }),
         /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { style: controlStyle, disabled: busy, onClick: () => void act(), children: "\u5237\u65B0\u8BB0\u5F55" }),
         /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: "\u6BCF\u4E2A\u4EBA\u683C\u6709\u72EC\u7ACB\u7684\u534F\u4F5C\u65B9\u5F0F\u548C\u8BB0\u5FC6\u3002\u5207\u6362\u6216\u4FEE\u6539\u4ECE\u4E0B\u4E00\u8F6E\u751F\u6548\uFF0C\u6A21\u578B\u4E0E\u6743\u9650\u6CBF\u7528\u5F53\u524D\u4F1A\u8BDD\u3002" }),
         error && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { role: "alert", children: [

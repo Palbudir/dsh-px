@@ -97,6 +97,11 @@ function MemoryPanel({ sessionId, visible }: { sessionId: string; visible: boole
       style={{ padding: 16, height: '100%', overflow: 'auto', overflowWrap: 'anywhere', fontSize: 13 }}
     >
       <h3>人格与记忆</h3>
+      {dirty && (
+        <p role="status" style={{ opacity: 0.7 }}>
+          有未保存的编辑，自动刷新已暂停。可手动刷新记录，草稿会保留。
+        </p>
+      )}
       <button style={controlStyle} disabled={busy} onClick={() => void act()}>
         刷新记录
       </button>
