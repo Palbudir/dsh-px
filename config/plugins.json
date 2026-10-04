@@ -7,7 +7,8 @@
     "dsh-px-workspace",
     "dsh-px-artifacts",
     "dsh-px-annotations",
-    "dsh-px-schedules"
+    "dsh-px-schedules",
+    "dsh-px-memory"
   ],
   "deferredCommunity": ["dshmarket", "dsh-mermaid-render", "dsh-find-plugin"]
 }

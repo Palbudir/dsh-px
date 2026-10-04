@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Execution records",
-    "description": "Inspect tool execution results, evidence and optional work summaries."
+    "description": "Inspect the current work ledger and execution evidence; restore saved state after compaction."
   }
 }

@@ -9,7 +9,7 @@ import { SIDEBAR_AUTH_SOURCE } from '../src/shared/sidebar-auth-compatibility'
 export const FOUNDATION = FOUNDATION_PLUGINS
 export const FEATURES = FEATURE_BUNDLES
 
-/** One download remains a complete composition; Desktop installs the five native feature bundles separately. */
+/** One download remains a complete composition; Desktop installs the declared native feature bundles separately. */
 export function buildDistribution(
   bundle: string,
   version: string,

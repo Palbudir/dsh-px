@@ -2,7 +2,14 @@ import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { isMap, isSeq, parseDocument } from 'yaml'
-import { FEATURE_BUNDLES, FOUNDATION_PLUGINS, type PackDistribution } from '../shared/distribution'
+import {
+  FEATURE_BUNDLES,
+  FOUNDATION_PLUGINS,
+  LEGACY_FEATURE_BUNDLES,
+  isFeatureName,
+  validFeatureList,
+  type PackDistribution
+} from '../shared/distribution'
 import { assertRegularOrAbsent, renameWithRetry, writeAtomic } from './native-atomic'
 
 type Files = Record<string, string | null>
@@ -11,6 +18,7 @@ interface State {
   phase: 'pending' | 'installed' | 'failed'
   version: string
   specs: Record<string, string>
+  seenFeatures?: string[]
 }
 export interface CompositionOptions {
   profile: string
@@ -60,9 +68,9 @@ function validState(value: any): value is State {
     value.specs &&
     typeof value.specs === 'object' &&
     !Array.isArray(value.specs) &&
-    Object.entries(value.specs).every(
-      ([name, spec]) => FEATURE_BUNDLES.includes(name as any) && typeof spec === 'string'
-    )
+    Object.entries(value.specs).every(([name, spec]) => isFeatureName(name) && typeof spec === 'string') &&
+    (value.seenFeatures === undefined ||
+      (Array.isArray(value.seenFeatures) && value.seenFeatures.every(isFeatureName)))
   )
 }
 function ownedFeatureSpec(profile: string, own: string, name: string, spec: unknown): spec is string {
@@ -152,6 +160,7 @@ export async function provisionNativeComposition(
           schemaVersion: 1,
           phase: 'installed',
           version: 'recovered',
+          seenFeatures: [...FEATURE_BUNDLES],
           specs: Object.fromEntries(
             FEATURE_BUNDLES.flatMap((name) =>
               ownedFeatureSpec(options.profile, own, name, current.dependencies?.[name])
@@ -197,6 +206,7 @@ export async function provisionNativeComposition(
       schemaVersion: 1,
       phase: 'installed',
       version: 'recovered',
+      seenFeatures: [...FEATURE_BUNDLES],
       specs: Object.fromEntries(
         FEATURE_BUNDLES.flatMap((name) =>
           ownedFeatureSpec(options.profile, own, name, manifest.dependencies?.[name])
@@ -235,8 +245,7 @@ export async function provisionNativeComposition(
     distribution.schemaVersion !== 1 ||
     distribution.version !== options.version ||
     distribution.foundation?.name !== 'dsh-px-core' ||
-    distribution.features?.length !== FEATURE_BUNDLES.length ||
-    !FEATURE_BUNDLES.every((n) => distribution.features.filter((f) => f.name === n).length === 1)
+    !validFeatureList(distribution.features)
   )
     throw Error('Wrong Pack composition')
   const selected: string[] = manifest.dsh?.profile?.bundles ?? []
@@ -247,6 +256,9 @@ export async function provisionNativeComposition(
   next.dsh.profile ??= {}
   const bundles = selected.filter((n) => n !== 'dsh-px-pack')
   const specs: Record<string, string> = {}
+  const seen = new Set(
+    state?.seenFeatures ?? (state ? [...LEGACY_FEATURE_BUNDLES, ...Object.keys(state.specs)] : [])
+  )
   if (!state && !bundles.includes('dsh-px-core')) bundles.push('dsh-px-core')
   for (const feature of distribution.features) {
     if (
@@ -259,7 +271,8 @@ export async function provisionNativeComposition(
     if (hash(bytes) !== feature.sha256) throw Error('Feature artifact digest mismatch')
     const current = manifest.dependencies?.[feature.name],
       previous = state?.specs[feature.name]
-    if (state ? !previous || current !== previous : current !== undefined) continue
+    const newlyOffered = !!state && !seen.has(feature.name) && current === undefined
+    if (state ? !newlyOffered && (!previous || current !== previous) : current !== undefined) continue
     // A directly installed community sidebar remains user-owned and is not shadowed.
     if (feature.name === 'dsh-px-files' && manifest.dependencies?.['dsh-better-sidebar']) continue
     const cached = join(own, `${feature.name}-${feature.sha256}.tgz`)
@@ -268,7 +281,7 @@ export async function provisionNativeComposition(
     const spec = 'file:' + cached.replaceAll('\\', '/')
     specs[feature.name] = spec
     next.dependencies[feature.name] = spec
-    if (!state && wasEnabled && !bundles.includes(feature.name)) bundles.push(feature.name)
+    if ((!state || newlyOffered) && wasEnabled && !bundles.includes(feature.name)) bundles.push(feature.name)
   }
   delete next.dependencies['dsh-px-pack']
   next.dsh.profile.bundles = bundles
@@ -292,7 +305,13 @@ export async function provisionNativeComposition(
     return 'unchanged'
   const before = snapshot(options.profile)
   writeAtomic(backupPath, JSON.stringify({ files: before, previousState: state ?? null }))
-  const pending: State = { schemaVersion: 1, phase: 'pending', version: options.version, specs }
+  const pending: State = {
+    schemaVersion: 1,
+    phase: 'pending',
+    version: options.version,
+    specs,
+    seenFeatures: [...new Set([...seen, ...distribution.features.map((f) => f.name)])]
+  }
   writeAtomic(statePath, JSON.stringify(pending))
   try {
     writeAtomic(join(options.profile, 'package.json'), JSON.stringify(next, null, 2) + '\n')

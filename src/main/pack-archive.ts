@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { gunzipSync } from 'node:zlib'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { FEATURE_BUNDLES, type PackDistribution } from '../shared/distribution'
+import { validFeatureList, type PackDistribution } from '../shared/distribution'
 
 export const sha256 = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
 
@@ -111,8 +111,7 @@ export function extractPack(
     distribution.schemaVersion !== 1 ||
     distribution.version !== expected.version ||
     distribution.foundation?.name !== 'dsh-px-core' ||
-    distribution.features?.length !== FEATURE_BUNDLES.length ||
-    !FEATURE_BUNDLES.every((name) => distribution.features.filter((f) => f.name === name).length === 1)
+    !validFeatureList(distribution.features)
   )
     throw Error('Invalid Pack distribution')
   const coreFiles = new Map<string, Buffer>()

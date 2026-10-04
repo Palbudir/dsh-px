@@ -65,6 +65,34 @@ test('composition installs once, preserves disabled features and never restores 
   await provisionNativeComposition(f)
   assert.equal(f.manifest().dependencies['dsh-px-schedules'], undefined)
 })
+
+test('upgrade offers a new memory bundle once without restoring previously removed features', async (t) => {
+  const f = fixture(t)
+  await provisionNativeComposition(f)
+  const receipt = join(f.profile, '.dsh-px/composition-state.json')
+  const state = JSON.parse(readFileSync(receipt, 'utf8'))
+  delete state.seenFeatures
+  delete state.specs['dsh-px-memory']
+  state.version = '0.3.3-alpha.1'
+  writeFileSync(receipt, JSON.stringify(state))
+  const manifest = f.manifest()
+  delete manifest.dependencies['dsh-px-memory']
+  delete manifest.dependencies['dsh-px-annotations']
+  manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(
+    (n: string) => !['dsh-px-memory', 'dsh-px-annotations'].includes(n)
+  )
+  f.save(manifest)
+  assert.equal(await provisionNativeComposition(f), 'installed')
+  assert.ok(f.manifest().dependencies['dsh-px-memory'])
+  assert.equal(f.manifest().dependencies['dsh-px-annotations'], undefined)
+  const next = f.manifest()
+  delete next.dependencies['dsh-px-memory']
+  next.dsh.profile.bundles = next.dsh.profile.bundles.filter((n: string) => n !== 'dsh-px-memory')
+  f.save(next)
+  await provisionNativeComposition(f)
+  await provisionNativeComposition(f)
+  assert.equal(f.manifest().dependencies['dsh-px-memory'], undefined)
+})
 test('legacy managed bundle migrates without duplicate registration or dropping row overrides', async (t) => {
   const f = fixture(t),
     m = f.manifest()

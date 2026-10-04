@@ -1,6 +1,6 @@
 # 插件分层与组合发行
 
-当前源码为 Pack / Desktop 0.3.3-alpha.1，采用基础部署与五个功能包的分层。可下载版本以 GitHub Releases 为准；版本契约见 [EDITIONS.md](EDITIONS.md)，成员职责见 [PLUGINS.md](PLUGINS.md)。
+当前源码为 Pack / Desktop 0.3.3-alpha.1，采用基础部署与六个功能包的分层。可下载版本以 GitHub Releases 为准；版本契约见 [EDITIONS.md](EDITIONS.md)，成员职责见 [PLUGINS.md](PLUGINS.md)。
 
 ## 产品方向
 
@@ -76,7 +76,7 @@
 
 ## Pack 与 Desktop 的安装更新调整
 
-Pack 逐步成为带精确版本、依赖和摘要的组合交付物，Desktop 在宿主启动前通过原生包管理操作安装匹配的能力包。保留一个组合安装入口，无须让用户手工装齐五个包。
+Pack 逐步成为带精确版本、依赖和摘要的组合交付物，Desktop 在宿主启动前通过原生包管理操作安装匹配的能力包。保留一个组合安装入口，无须让用户手工装齐六个包。
 
 基础组件在 Desktop 管理的可重建运行缓存中按原生 installation 方式装配；可选能力在 profile 中独立管理。Pack 保留 tgz 交付格式，增加 distribution.json 和六个组件归档。Desktop 消费组合清单并移除旧受管聚合入口；独立 Web 可使用同一归档的聚合入口，两种入口不能同时注册。
 

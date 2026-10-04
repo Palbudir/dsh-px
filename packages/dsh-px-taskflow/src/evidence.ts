@@ -12,6 +12,8 @@ export interface Checkpoint {
   nextStep: string
   state: 'working' | 'blocked' | 'ready_for_review'
   evidence: string[]
+  constraints?: string
+  decisions?: string
 }
 export type Outcome = 'returned' | 'error' | 'cancelled' | 'interrupted' | 'running'
 export interface Execution {
@@ -38,6 +40,7 @@ export interface EvidenceOptions {
   maxChars?: number
 }
 export interface TaskReview {
+  latestRequest?: { seq: number; text: string; truncated: boolean }
   checkpoint: (Checkpoint & { seq: number; time: number }) | null
   executions: Execution[]
   referencedExecutions: Execution[]
@@ -100,13 +103,17 @@ export function readCheckpoint(value: unknown): Checkpoint | null {
     !v.evidence.every((x) => typeof x === 'string' && x.length <= 200)
   )
     return null
+  if ([v.constraints, v.decisions].some((x) => x !== undefined && (typeof x !== 'string' || x.length > 2000)))
+    return null
   if (v.state !== 'ready_for_review' && !v.nextStep.trim()) return null
   return {
     goal: v.goal,
     summary: v.summary,
     nextStep: v.nextStep,
     state: v.state,
-    evidence: [...new Set(v.evidence)]
+    evidence: [...new Set(v.evidence)],
+    ...(v.constraints === undefined ? {} : { constraints: v.constraints }),
+    ...(v.decisions === undefined ? {} : { decisions: v.decisions })
   }
 }
 function effectOf(tool: string, args: any): Execution['effect'] {
@@ -146,6 +153,7 @@ function resultStatus(
   return { outcome: 'returned', outcomeSource: 'tool' }
 }
 interface Folded {
+  latestRequest?: TaskReview['latestRequest']
   commands: CommandGuidanceIndex
   calls: Map<string, Execution>
   relevant: Execution[]
@@ -194,6 +202,18 @@ export class EvidenceIndex {
       const event = events[i]
       this.processedEvents++
       const data = event.data ?? {}
+      if (event.type === 'user/message' && data.source?.kind === 'user') {
+        const text = (data.content ?? [])
+          .filter((b: any) => b.type === 'text')
+          .map((b: any) => b.text)
+          .join('\n')
+        if (text.trim())
+          this.folded.latestRequest = {
+            seq: event.seq,
+            text: text.slice(0, 3000),
+            truncated: text.length > 3000
+          }
+      }
       this.folded.commands.observe(event.type, data)
       if (['turn/start', 'turn/end', 'session/end-seed'].includes(event.type)) {
         const cancelled =
@@ -325,6 +345,7 @@ export function reviewEvents(
   const start = Math.max(0, lo - limit),
     page = relevant.slice(start, lo)
   return {
+    ...(folded.latestRequest ? { latestRequest: folded.latestRequest } : {}),
     checkpoint,
     executions: page.map((call) => summary(visibleCall(call, folded, live))),
     referencedExecutions: checkpoint
@@ -339,7 +360,9 @@ export function reviewEvents(
     changedFiles: [...folded.changedFiles.keys()],
     changedFilesTotal: folded.changedFileSet.size,
     changedFilesTruncated: folded.changedFileSet.size > folded.changedFiles.size,
-    checkpointStale: Boolean(checkpoint && folded.lastNonReadSeq > checkpoint.seq)
+    checkpointStale: Boolean(
+      checkpoint && Math.max(folded.lastNonReadSeq, folded.latestRequest?.seq ?? -1) > checkpoint.seq
+    )
   }
 }
 export function evidenceDetail(
