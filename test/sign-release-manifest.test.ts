@@ -70,6 +70,10 @@ test('offline signer hashes real artifacts and yields a manifest the updater acc
     }
     assertMatchesArtifact(manifest, record, head)
     assert.throws(
+      () => assertMatchesArtifact({ ...manifest, version: '0.3.3-alpha.1' }, record, head),
+      /blockmap is missing/
+    )
+    assert.throws(
       () => assertMatchesArtifact(manifest, { ...record, sha256: 'd'.repeat(64) }, head),
       /does not match the CI artifact/
     )

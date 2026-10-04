@@ -281,6 +281,43 @@ test('release directories are flat, manifested and verified by the controller be
   assert.throws(() => verifyReleaseFiles(output, recomputed, expected), /artifact\.json/)
 })
 
+test('new Desktop inventories require and verify the differential map', (t) => {
+  const root = temp(t, 'desktop-map'),
+    version = '0.3.3-alpha.1'
+  const primary = Buffer.from('installer'),
+    blockmap = Buffer.from('map')
+  const names = releaseAssetNames('desktop', version)
+  const digest = (bytes: Buffer) => ({
+    size: bytes.length,
+    sha256: hash(bytes),
+    sha512: createHash('sha512').update(bytes).digest('base64')
+  })
+  const artifact = {
+    product: 'desktop',
+    version,
+    file: names.installer,
+    ...digest(primary),
+    sourceCommit: head,
+    sourceDirty: false,
+    blockmap: { file: names.blockmap, ...digest(blockmap) }
+  }
+  const output = join(root, 'out'),
+    expected = { product: 'desktop', version, head, controllerSha }
+  const manifest = writeReleaseDirectory(output, { ...expected, primary, artifact, blockmap })
+  assert.equal(verifyReleaseFiles(output, manifest, expected).length, 3)
+  assert.throws(
+    () =>
+      verifyReleaseFiles(
+        output,
+        { ...manifest, files: manifest.files.filter((f: any) => f.name !== names.blockmap) },
+        expected
+      ),
+    /blockmap is missing/
+  )
+  writeFileSync(join(output, names.blockmap), 'bad')
+  assert.throws(() => verifyReleaseFiles(output, manifest, expected), /digest mismatch/)
+})
+
 test('Desktop inspection accepts exactly one full installer and a clean overlay of this commit', (t) => {
   const root = temp(t, 'desktop-dist')
   const version = products.desktop.version

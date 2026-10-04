@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { gt } from 'semver'
 import { verifySignedRelease, type ReleaseManifest } from '../shared/signed-release'
 import { assertRegularOrAbsent, writeAtomic } from './native-atomic'
@@ -39,6 +39,8 @@ export class PackDeployment {
   constructor(readonly options: DeploymentOptions) {
     this.own = join(options.profile, '.dsh-px')
     mkdirSync(this.own, { recursive: true })
+    if (!lstatSync(this.own).isDirectory() || lstatSync(this.own).isSymbolicLink())
+      throw Error('Pack state must be profile-owned')
     this.statePath = join(this.own, 'deployment.json')
   }
   read(): DeploymentState {
@@ -119,7 +121,8 @@ export class PackDeployment {
     if (this.read().userManaged) throw Error('当前使用自行安装的 Pack，请通过原生插件管理器维护。')
     const manifest = this.manifest(signed),
       file = manifest.files[0]
-    if (bytes.length !== file.size) throw Error('Incomplete Pack download')
+    if (bytes.length !== file.size || createHash('sha512').update(bytes).digest('base64') !== file.sha512)
+      throw Error('Incomplete or invalid Pack download')
     const receipt: PackReceipt = {
       version: manifest.version,
       sourceCommit: manifest.sourceCommit,
@@ -138,6 +141,8 @@ export class PackDeployment {
     this.verify(receipt)
     if (!receipt.signed) throw Error('Only a signed downloaded Pack can be queued')
     this.manifest(receipt.signed)
+    if (!gt(receipt.version, this.read().active?.version ?? this.options.bundled.version))
+      throw Error('准备的 Pack 已不再新于当前版本，请重新检查更新。')
     if (sha256(readFileSync(this.archive(receipt))) !== receipt.sha256)
       throw Error('Pack cache changed before restart')
     this.write({ ...this.read(), pending: receipt })

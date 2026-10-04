@@ -331,8 +331,8 @@ export function currentPackDeployment(){return deployment}
 export function confirmPackStartup(){deployment?.confirm()}
 export function configurePxUpdates(updater){configureSignedUpdates(updater,${JSON.stringify(keys.keys)},'preview',${products.protocolGeneration})}
 import {prepareNativeProfileDefaults,applyNativeDesktopPolicy} from ${JSON.stringify(join(root, 'src/main/native-profile-defaults.ts'))};
-import {createRequire} from 'node:module';import {join,delimiter} from 'node:path';import {pathToFileURL} from 'node:url';import {existsSync,readFileSync} from 'node:fs';
-// PX profile preparation never stops the Host: defaults, telemetry policy and Pack provisioning only log failures.
+import {createRequire} from 'node:module';import {createHash} from 'node:crypto';import {join,delimiter} from 'node:path';import {pathToFileURL} from 'node:url';import {existsSync,readFileSync} from 'node:fs';
+// Defaults can degrade; an incomplete Pack installation must not start a mixed cohort.
 export function preparePxDefaults(profile){
   try{return prepareNativeProfileDefaults(profile,process.env.DSH_PX_DOCUMENTS_DIRECTORY||'')}
   catch(error){console.error('[dsh-px] Profile defaults could not be applied; the Host starts without them',error);return false}
@@ -342,14 +342,13 @@ export async function preparePxPack(profile,runtimeDir){
   try{applyNativeDesktopPolicy(profile)}
   catch(error){console.error('[dsh-px] Desktop telemetry policy could not be applied; the Host starts with the current profile patch',error)}
   const archive=process.resourcesPath?join(process.resourcesPath,'px-pack.tgz'):'';
-  if(process.env.DSH_DESKTOP_DEV_APP==='1'||!archive||!existsSync(archive)){
-    console.error('[dsh-px] Bundled Pack archive unavailable (development app or missing resources/px-pack.tgz); Pack provisioning skipped');
-    return runtimeDir;
-  }
+  if(process.env.DSH_DESKTOP_DEV_APP==='1')return runtimeDir;
+  if(!archive||!existsSync(archive))throw Error('客户端缺少随附 Pack 归档，请重新运行安装程序修复；现有数据已保留。');
   bundledRuntime ??= runtimeDir;
+  const hostInventory=createHash('sha256').update(readFileSync(join(bundledRuntime,'desktop-runtime.json'))).digest('hex');
   const foundation=JSON.parse(readFileSync(join(bundledRuntime,'node_modules/dsh-px-core/package.json'),'utf8'));
   if(foundation.version!==${JSON.stringify(products.pack.version)}||foundation.dshPx?.sourceCommit!==${JSON.stringify(ownHead)})throw Error('PX foundation does not match the installed Desktop');
-  deployment = new PackDeployment({profile,bundledRuntime,bundledArchive:archive,candidate:${candidate},keys:${JSON.stringify(keys.keys)},hostKey:${JSON.stringify('native-cache-v1:' + expected)}+':'+process.versions.node+':'+process.arch,bundled:${JSON.stringify({ version: products.pack.version, sha256: packSha256, sourceCommit: ownHead, hostVersion: pin.version, upstreamCommit: expected, protocolGeneration: products.protocolGeneration })},install:async (runtimeDir,args)=>{
+  deployment = new PackDeployment({profile,bundledRuntime,bundledArchive:archive,candidate:${candidate},keys:${JSON.stringify(keys.keys)},hostKey:${JSON.stringify('native-cache-v1:' + expected)}+':'+hostInventory+':'+process.versions.node+':'+process.arch,bundled:${JSON.stringify({ version: products.pack.version, sha256: packSha256, sourceCommit: ownHead, hostVersion: pin.version, upstreamCommit: expected, protocolGeneration: products.protocolGeneration })},install:async (runtimeDir,args)=>{
     const require=createRequire(join(runtimeDir,'package.json'));
     const {runPluginCommand}=await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-plugin-manager/operations')).href);
     const result=await runPluginCommand({profile:'desktop',dir:profile,installAnchor:join(runtimeDir,'node_modules/@deepseek-ai/dsh/package.json'),cwd:profile},args,{

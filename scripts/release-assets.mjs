@@ -6,6 +6,7 @@ import {
   assertNotLegacyClientTag,
   assertPublishableAssetName,
   releaseAssetNames,
+  requiresDifferentialMap,
   releaseTag
 } from './release-version.mjs'
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex')
@@ -165,6 +166,12 @@ export function verifyReleaseFiles(directory, manifest, expected) {
   const assets = releaseAssetNames(expected.product, expected.version)
   const expectedNames = new Set(Object.values(assets))
   const names = manifest.files.map((file) => file.name)
+  if (
+    expected.product === 'desktop' &&
+    requiresDifferentialMap(expected.version) &&
+    !names.includes(assets.blockmap)
+  )
+    throw Error('Desktop differential blockmap is missing')
   for (const name of names) assertPublishableAssetName(name)
   const primaryName = expected.product === 'desktop' ? assets.installer : assets.pack
   if (

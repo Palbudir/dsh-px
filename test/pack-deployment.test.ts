@@ -191,6 +191,11 @@ test('entire Pack switches native foundation and features; immutable host files 
   assert.equal(updated.dependencies['dsh-px-schedules'], undefined)
   assert.equal(readFileSync(join(f.profile, 'cordis.patch.yml'), 'utf8'), '# user-owned\n')
   assert.equal(await f.deployment.activate(), current) // older embedded Pack must not overwrite newer independent Pack
+  assert.throws(
+    () => f.deployment.queue(receipt),
+    /不再新于/,
+    'stale restart confirmation must not queue an installed target'
+  )
   const relative = 'node_modules/@deepseek-ai/dsh-desktop-host/lib/index.js'
   assert.equal(statSync(join(old, relative)).ino, statSync(join(current, relative)).ino)
   assert.equal(managedRuntimePath(f.profile, current), current)

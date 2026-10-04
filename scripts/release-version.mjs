@@ -1,3 +1,8 @@
+/** Historical releases remain verifiable; new Desktop releases must carry a signed map. */
+export function requiresDifferentialMap(version) {
+  return compareVersions(version, '0.3.3-alpha.1') >= 0
+}
+
 export function versionParts(version) {
   const match =
     /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/.exec(

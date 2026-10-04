@@ -16,6 +16,7 @@ import {
 } from '../src/shared/signed-release'
 import { validateProductCatalog } from '../src/shared/product-contract'
 import { maintenanceArgs } from './maintenance-args'
+import { gte } from 'semver'
 
 export interface ReleaseInput {
   product: ReleaseManifest['product']
@@ -99,6 +100,8 @@ export function assertMatchesArtifact(
   )
     throw new Error('Local release file does not match the CI artifact record')
   const blockmap = manifest.files.find((f) => f.role === 'blockmap')
+  if (manifest.product === 'desktop' && gte(manifest.version, '0.3.3-alpha.1') && !blockmap)
+    throw Error('Desktop differential blockmap is missing')
   if (
     Boolean(blockmap) !== Boolean(record.blockmap) ||
     (blockmap &&
