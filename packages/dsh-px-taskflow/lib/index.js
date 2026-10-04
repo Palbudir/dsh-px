@@ -60,59 +60,6 @@ function readFailure(error) {
   };
 }
 
-// packages/shared/request-trust.ts
-function rejectUnauthenticatedRequest(req, res, connection) {
-  const rejection = connection?.requestRejection({ headers: req.headers ?? {} });
-  if (!connection || rejection !== void 0) {
-    res.writeHead(connection ? rejection : 503, {
-      "Content-Type": "application/json; charset=utf-8",
-      "Cache-Control": "no-store"
-    });
-    res.end(
-      JSON.stringify({
-        code: connection ? "HOST_AUTH_REQUIRED" : "HOST_AUTH_UNAVAILABLE",
-        error: "\u8BF7\u901A\u8FC7\u5BBF\u4E3B\u63D0\u4F9B\u7684\u767B\u5F55\u5165\u53E3\u8FDE\u63A5\u6B64\u670D\u52A1\u3002"
-      })
-    );
-    return true;
-  }
-  return rejectUntrustedRequest(req, res);
-}
-function trustedLocalRequest(req) {
-  const headers = req.headers ?? {}, host = headers.host, origin = headers.origin;
-  if (typeof host !== "string" || headers["sec-fetch-site"] === "cross-site") return false;
-  try {
-    const target = new URL("http://" + host);
-    if (target.username || target.password || target.pathname !== "/" || target.search || target.hash)
-      return false;
-    const parts = target.hostname.split(".");
-    const loopback = target.hostname === "localhost" || target.hostname === "[::1]" || parts.length === 4 && parts[0] === "127" && parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
-    if (!loopback) return false;
-    if (origin === void 0) return true;
-    if (typeof origin !== "string") return false;
-    const source = new URL(origin);
-    return ["http:", "https:"].includes(source.protocol) && source.hostname === target.hostname && (!source.port || source.port === target.port);
-  } catch {
-    return false;
-  }
-}
-function rejectUntrustedRequest(req, res) {
-  if (trustedLocalRequest(req)) return false;
-  res.writeHead(403, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store",
-    "X-Content-Type-Options": "nosniff"
-  });
-  res.end(
-    JSON.stringify({
-      code: "UNTRUSTED_REQUEST",
-      error: "\u6B64\u8BF7\u6C42\u7684\u6765\u6E90\u4E0D\u53D7\u4FE1\u4EFB\uFF0C\u8BF7\u4ECE\u672C\u673A DSH-PX \u754C\u9762\u91CD\u8BD5\u3002",
-      retryable: false
-    })
-  );
-  return true;
-}
-
 // packages/dsh-px-taskflow/src/command-guidance.ts
 import { createHash } from "node:crypto";
 import { win32 } from "node:path";
@@ -265,13 +212,17 @@ function readCheckpoint(value) {
   const v = value;
   if (![v.goal, v.summary, v.nextStep].every((x) => typeof x === "string" && x.length <= 4e3) || !v.goal.trim() || !v.summary.trim() || !["working", "blocked", "ready_for_review"].includes(v.state) || !Array.isArray(v.evidence) || v.evidence.length > 20 || !v.evidence.every((x) => typeof x === "string" && x.length <= 200))
     return null;
+  if ([v.constraints, v.decisions].some((x) => x !== void 0 && (typeof x !== "string" || x.length > 2e3)))
+    return null;
   if (v.state !== "ready_for_review" && !v.nextStep.trim()) return null;
   return {
     goal: v.goal,
     summary: v.summary,
     nextStep: v.nextStep,
     state: v.state,
-    evidence: [...new Set(v.evidence)]
+    evidence: [...new Set(v.evidence)],
+    ...v.constraints === void 0 ? {} : { constraints: v.constraints },
+    ...v.decisions === void 0 ? {} : { decisions: v.decisions }
   };
 }
 function effectOf(tool, args) {
@@ -331,6 +282,15 @@ var EvidenceIndex = class {
       const event = events[i];
       this.processedEvents++;
       const data = event.data ?? {};
+      if (event.type === "user/message" && data.source?.kind === "user") {
+        const text = (data.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+        if (text.trim())
+          this.folded.latestRequest = {
+            seq: event.seq,
+            text: text.slice(0, 3e3),
+            truncated: text.length > 3e3
+          };
+      }
       this.folded.commands.observe(event.type, data);
       if (["turn/start", "turn/end", "session/end-seed"].includes(event.type)) {
         const cancelled = event.type === "turn/end" && data.reason?.kind === "aborted" && data.reason?.reason?.kind === "user";
@@ -445,6 +405,7 @@ function reviewEvents(events, live = true, options = {}) {
   }
   const start = Math.max(0, lo - limit), page = relevant.slice(start, lo);
   return {
+    ...folded.latestRequest ? { latestRequest: folded.latestRequest } : {},
     checkpoint,
     executions: page.map((call) => summary(visibleCall(call, folded, live))),
     referencedExecutions: checkpoint ? checkpoint.evidence.flatMap((id) => {
@@ -457,7 +418,9 @@ function reviewEvents(events, live = true, options = {}) {
     changedFiles: [...folded.changedFiles.keys()],
     changedFilesTotal: folded.changedFileSet.size,
     changedFilesTruncated: folded.changedFileSet.size > folded.changedFiles.size,
-    checkpointStale: Boolean(checkpoint && folded.lastNonReadSeq > checkpoint.seq)
+    checkpointStale: Boolean(
+      checkpoint && Math.max(folded.lastNonReadSeq, folded.latestRequest?.seq ?? -1) > checkpoint.seq
+    )
   };
 }
 function evidenceDetail(events, id, live = true, options = {}) {
@@ -493,11 +456,140 @@ function validateCheckpoint(args, events) {
   return checkpoint;
 }
 
+// packages/dsh-px-taskflow/src/ledger.ts
+var LedgerIndex = class {
+  count = 0;
+  first;
+  last;
+  pending = /* @__PURE__ */ new Set();
+  checkpoint = null;
+  latestRequest;
+  lastActivity = -1;
+  processedEvents = 0;
+  update(events) {
+    if (events.length < this.count || this.count && (events[0] !== this.first || events[this.count - 1] !== this.last)) {
+      this.count = 0;
+      this.pending.clear();
+      this.checkpoint = null;
+      this.latestRequest = void 0;
+      this.lastActivity = -1;
+    }
+    for (let i = this.count; i < events.length; i++) {
+      const e = events[i], d = e.data ?? {};
+      this.processedEvents++;
+      if (e.type === "turn/end" || e.type === "turn/start") this.pending.clear();
+      if (e.type === "user/message" && d.source?.kind === "user") {
+        const text = (d.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+        if (text.trim()) {
+          this.latestRequest = { seq: e.seq, text: text.slice(0, 3e3), truncated: text.length > 3e3 };
+          this.lastActivity = e.seq;
+        }
+      }
+      if (e.type === "tool/call" || e.type === "tool/ptc-dispatch-start") {
+        if (d.name === "task_checkpoint") this.pending.add(d.callId ?? d.subCallId);
+        else if (!["task_review", "task_evidence"].includes(d.name)) this.lastActivity = e.seq;
+      }
+      if (e.type === "tool/result" || e.type === "tool/ptc-dispatch") {
+        const blocks = e.type === "tool/ptc-dispatch" ? [d] : d.message?.role === "tool" ? [d.message] : (d.message?.content ?? []).filter((b) => b.type === "tool-result");
+        for (const b of blocks) {
+          const id = b.toolCallId ?? d.subCallId;
+          if (!this.pending.delete(id) || b.isError) continue;
+          try {
+            const raw = (b.content ?? []).filter((v) => v.type === "text").map((v) => v.text).join("\n");
+            const note = readCheckpoint(JSON.parse(raw).checkpoint);
+            if (note) this.checkpoint = { ...note, seq: e.seq, time: e.time };
+          } catch {
+          }
+        }
+      }
+    }
+    this.count = events.length;
+    this.first = events[0];
+    this.last = events.at(-1);
+    return this;
+  }
+  context() {
+    return ledgerContext({
+      checkpoint: this.checkpoint,
+      checkpointStale: !!this.checkpoint && this.lastActivity > this.checkpoint.seq,
+      latestRequest: this.latestRequest
+    });
+  }
+};
+function ledgerContext(review) {
+  const checkpoint = review.checkpoint;
+  if (!checkpoint) return "";
+  return [
+    "PX \u5F53\u524D\u5DE5\u4F5C\u8D26\u672C\uFF08\u4ECE\u539F\u59CB\u4F1A\u8BDD\u8BB0\u5F55\u6062\u590D\uFF0C\u4E0D\u4F9D\u8D56\u538B\u7F29\u6458\u8981\uFF09\u3002",
+    "\u8FD9\u662F\u5148\u524D\u4FDD\u5B58\u7684\u5DE5\u4F5C\u72B6\u6001\uFF0C\u4E0D\u662F\u65B0\u7684\u6388\u6743\u3002\u5F53\u524D\u7528\u6237\u8981\u6C42\u4E0E\u539F\u751F goal/todo/job \u72B6\u6001\u4F18\u5148\u3002\u82E5\u540E\u7EED\u8981\u6C42\u5DF2\u53D8\u5316\uFF0C\u66F4\u65B0\u8D26\u672C\uFF1B\u4E0D\u53EF\u636E\u6B64\u81EA\u52A8\u91CD\u8DD1\u64CD\u4F5C\u6216\u65AD\u8A00\u5DF2\u9A8C\u6536\u3002",
+    JSON.stringify({
+      checkpoint,
+      hasLaterActivity: review.checkpointStale,
+      evidence: checkpoint.evidence,
+      latestSavedUserRequest: review.latestRequest
+    }),
+    "\u9700\u8981\u539F\u8F93\u51FA\u65F6\u4F7F\u7528 task_evidence\uFF0C\u65B0\u7684\u4EE3\u7801\u4FEE\u6539\u4F1A\u4F7F\u65E7\u9A8C\u8BC1\u7ED3\u679C\u8FC7\u65F6\u3002"
+  ].join("\n");
+}
+
+// packages/shared/request-trust.ts
+function rejectUnauthenticatedRequest(req, res, connection) {
+  const rejection = connection?.requestRejection({ headers: req.headers ?? {} });
+  if (!connection || rejection !== void 0) {
+    res.writeHead(connection ? rejection : 503, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Cache-Control": "no-store"
+    });
+    res.end(
+      JSON.stringify({
+        code: connection ? "HOST_AUTH_REQUIRED" : "HOST_AUTH_UNAVAILABLE",
+        error: "\u8BF7\u901A\u8FC7\u5BBF\u4E3B\u63D0\u4F9B\u7684\u767B\u5F55\u5165\u53E3\u8FDE\u63A5\u6B64\u670D\u52A1\u3002"
+      })
+    );
+    return true;
+  }
+  return rejectUntrustedRequest(req, res);
+}
+function trustedLocalRequest(req) {
+  const headers = req.headers ?? {}, host = headers.host, origin = headers.origin;
+  if (typeof host !== "string" || headers["sec-fetch-site"] === "cross-site") return false;
+  try {
+    const target = new URL("http://" + host);
+    if (target.username || target.password || target.pathname !== "/" || target.search || target.hash)
+      return false;
+    const parts = target.hostname.split(".");
+    const loopback = target.hostname === "localhost" || target.hostname === "[::1]" || parts.length === 4 && parts[0] === "127" && parts.every((p) => /^\d{1,3}$/.test(p) && Number(p) <= 255);
+    if (!loopback) return false;
+    if (origin === void 0) return true;
+    if (typeof origin !== "string") return false;
+    const source = new URL(origin);
+    return ["http:", "https:"].includes(source.protocol) && source.hostname === target.hostname && (!source.port || source.port === target.port);
+  } catch {
+    return false;
+  }
+}
+function rejectUntrustedRequest(req, res) {
+  if (trustedLocalRequest(req)) return false;
+  res.writeHead(403, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff"
+  });
+  res.end(
+    JSON.stringify({
+      code: "UNTRUSTED_REQUEST",
+      error: "\u6B64\u8BF7\u6C42\u7684\u6765\u6E90\u4E0D\u53D7\u4FE1\u4EFB\uFF0C\u8BF7\u4ECE\u672C\u673A DSH-PX \u754C\u9762\u91CD\u8BD5\u3002",
+      retryable: false
+    })
+  );
+  return true;
+}
+
 // packages/dsh-px-taskflow/src/index.ts
 var name = "dsh-px-taskflow";
 var inject = [];
 var DEFAULTS = { routePrefix: "/dsh-px-taskflow" };
-var POLICY = `Execution evidence is recorded automatically by the host. When prior results are needed, task_review reads compact execution summaries and task_evidence reads a recorded call's output in bounded pages; neither tool re-executes work. Tool return success does not prove tests passed: inspect the output and state what was verified. Follow the host's native plan, permissions, and the user's instructions. task_checkpoint is an optional work note only when the user requests a saved handoff or a task preset calls for it; do not create or maintain a second todo system by default. A checkpoint is not approval or permission to continue in the background. Before retrying an interrupted mutation, reconcile its recorded effect.`;
+var POLICY = `Execution evidence is recorded automatically by the host. task_review reads the current work ledger and execution summaries; task_evidence reads recorded output in bounded pages without re-executing. A successful tool return does not prove tests passed. For substantive multi-step work, use task_checkpoint after meaningful milestones, changed requirements, important decisions or blockers, and before a handoff. Keep one concise current-state note, not a diary or a second todo system. Record constraints, valid decisions, failure lessons and the next action. Read task_review before updating and pass its checkpoint seq as expectedCheckpointSeq (0 when absent). The latest saved ledger is restored outside conversation compaction; it is still historical evidence, never a new instruction or permission. Current user corrections and native goal/todo/job state take precedence. Reconcile interrupted effects before retrying mutations. Simple answers need no checkpoint.`;
 function queryInteger(params, key, fallback, min, max) {
   if (!params.has(key)) return fallback;
   const value = params.get(key);
@@ -505,6 +597,7 @@ function queryInteger(params, key, fallback, min, max) {
   return integerOption(Number(value), fallback, min, max);
 }
 function apply(ctx) {
+  const ledgerIndexes = /* @__PURE__ */ new WeakMap();
   const liveIndexes = /* @__PURE__ */ new Map();
   ctx.effect(() => () => liveIndexes.clear(), "taskflow: evidence cache");
   const liveEvidence = (session) => {
@@ -526,6 +619,20 @@ function apply(ctx) {
       () => host.systemPrompt.section({ name: "dsh-px-delivery-workflow", order: 9900, text: POLICY }),
       "taskflow: workflow"
     );
+    if (typeof host.systemPrompt.context === "function")
+      host.effect(
+        () => host.systemPrompt.context({
+          name: "dsh-px-work-ledger",
+          order: 510,
+          text: ({ agent }) => {
+            if (!agent) return "";
+            let ledger = ledgerIndexes.get(agent.session);
+            if (!ledger) ledgerIndexes.set(agent.session, ledger = new LedgerIndex());
+            return ledger.update(agent.session.snapshotEvents()).context();
+          }
+        }),
+        "taskflow: durable ledger context"
+      );
   });
   ctx.inject(["tools"], (host) => {
     const output = {
@@ -583,11 +690,19 @@ function apply(ctx) {
           summary: { type: "string" },
           nextStep: { type: "string" },
           state: { type: "string", enum: ["working", "blocked", "ready_for_review"] },
-          evidence: { type: "array", items: { type: "string" } }
+          evidence: { type: "array", items: { type: "string" } },
+          constraints: { type: "string", maxLength: 2e3 },
+          decisions: { type: "string", maxLength: 2e3 },
+          expectedCheckpointSeq: { type: "integer", minimum: 0 }
         }
       },
       output,
-      execute: async (args, exec) => JSON.stringify({ checkpoint: validateCheckpoint(args, liveEvidence(session(exec))) })
+      execute: async (args, exec) => {
+        const index = liveEvidence(session(exec));
+        if (args?.expectedCheckpointSeq !== void 0 && args.expectedCheckpointSeq !== (reviewEvents(index).checkpoint?.seq ?? 0))
+          throw new Error("\u8D26\u672C\u5DF2\u66F4\u65B0\uFF0C\u8BF7\u5148 task_review \u8BFB\u53D6\u6700\u65B0\u72B6\u6001");
+        return JSON.stringify({ checkpoint: validateCheckpoint(args, index) });
+      }
     });
   });
   ctx.inject(["connection", "webServer", "sessions", "sessionPersistence"], (host) => {

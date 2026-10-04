@@ -494,7 +494,7 @@ test('long execution history is incrementally indexed; cold reads do not mutate 
   assert.equal(evidenceDetail(index, 'pending', false)?.outcome, 'interrupted')
   assert.equal(evidenceDetail(index, 'pending', true)?.outcome, 'running')
   assert.equal(evidenceDetail(index, 'c0')?.output, 'result-0')
-  assert.match(POLICY, /optional/)
+  assert.match(POLICY, /Simple answers need no checkpoint/)
   assert.doesNotMatch(POLICY, /record a ready_for_review|call task_review and record/)
 })
 

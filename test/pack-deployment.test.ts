@@ -61,7 +61,7 @@ function fixture(t: any) {
   const pem = publicKey.export({ format: 'pem', type: 'spki' }).toString()
   const keyId = createHash('sha256').update(pem).digest('hex').slice(0, 24)
   const keys = { [keyId]: pem }
-  function pack(version: string) {
+  function pack(version: string, names: readonly string[] = FEATURE_BUNDLES) {
     const meta = {
       sourceCommit: 'a'.repeat(40),
       hostVersion: '0.2.0-rc.2',
@@ -88,7 +88,7 @@ function fixture(t: any) {
       return { name, version, file, sha256: sha256(bytes) }
     }
     const core = component('dsh-px-core', foundation)
-    const features = FEATURE_BUNDLES.map((name) =>
+    const features = names.map((name) =>
       component(name, tar({ 'package.json': JSON.stringify({ name, version }) }))
     )
     files['distribution.json'] = JSON.stringify({ schemaVersion: 1, version, foundation: core, features })
@@ -141,7 +141,7 @@ function fixture(t: any) {
         readFileSync(join(anchor, 'node_modules/dsh-px-core/package.json'), 'utf8')
       ).version
       const manifest = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8'))
-      for (const name of FEATURE_BUNDLES)
+      for (const name of Object.keys(manifest.dependencies).filter((n) => n.startsWith('dsh-px-')))
         if (manifest.dependencies[name]) {
           // A real native install follows each archive, including rollback's prior lock/dependencies.
           const archive = readFileSync(manifest.dependencies[name].slice(5))
@@ -162,11 +162,33 @@ function fixture(t: any) {
     baseline,
     next,
     deployment,
+    pack,
     failNext: () => {
       failingVersion = next.receipt.version
     }
   }
 }
+test('a signed Pack adds a feature not compiled into Desktop without restoring a removed feature', async (t) => {
+  const f = fixture(t)
+  await f.deployment.activate()
+  f.deployment.confirm()
+  const file = join(f.profile, 'package.json'),
+    manifest = JSON.parse(readFileSync(file, 'utf8'))
+  delete manifest.dependencies['dsh-px-schedules']
+  manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter((n: string) => n !== 'dsh-px-schedules')
+  writeFileSync(file, JSON.stringify(manifest))
+  const future = f.pack('0.3.9-alpha.1', [...FEATURE_BUNDLES, 'dsh-px-future'])
+  f.deployment.queue(f.deployment.stage(future.signed, future.bytes))
+  await f.deployment.activate()
+  f.deployment.confirm()
+  const result = JSON.parse(readFileSync(file, 'utf8'))
+  assert.ok(result.dependencies['dsh-px-future'])
+  assert.equal(result.dependencies['dsh-px-schedules'], undefined)
+  assert.equal(
+    JSON.parse(readFileSync(join(f.profile, 'node_modules/dsh-px-future/package.json'), 'utf8')).version,
+    future.receipt.version
+  )
+})
 test('entire Pack switches native foundation and features; immutable host files are reused', async (t) => {
   const f = fixture(t),
     old = await f.deployment.activate()

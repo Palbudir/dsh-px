@@ -82,7 +82,7 @@ export function verifyPackOutput(directory, { products, nativePack, head, candid
       distribution.features?.length !== FEATURE_BUNDLES.length ||
       !FEATURE_BUNDLES.every((name) => distribution.features.filter((f) => f.name === name).length === 1)
     )
-      throw Error('Pack distribution does not contain the foundation and five feature bundles')
+      throw Error('Pack distribution does not contain the foundation and declared feature bundles')
     for (const entry of [distribution.foundation, ...distribution.features]) {
       if (entry.version !== version || entry.file !== `distribution/${entry.name}-${version}.tgz`)
         throw Error('Invalid distribution member')

@@ -132,7 +132,8 @@ function packFixture(t: any, mutate: (manifest: any, artifact: any, distribution
     'dsh-px-taskflow',
     'dsh-px-artifacts',
     'dsh-px-annotations',
-    'dsh-px-schedules'
+    'dsh-px-schedules',
+    'dsh-px-memory'
   ]
   mkdirSync(join(pkg, 'distribution'))
   const members = components.map((name) => {
@@ -202,7 +203,7 @@ test('Pack verification binds artifact.json, archive bytes and the embedded mani
         }),
         expected
       ),
-    /five feature bundles/
+    /declared feature bundles/
   )
   assert.throws(() => verifyPackOutput(packFixture(t), { ...expected, candidate: true }), /artifact\.json/)
   assert.throws(

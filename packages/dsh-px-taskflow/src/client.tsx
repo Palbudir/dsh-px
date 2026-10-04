@@ -255,10 +255,17 @@ function SessionTaskPanel({
       {data ? (
         <>
           {data.checkpoint ? (
-            <section style={card} aria-label="可选工作摘要">
+            <section style={card} aria-label="当前工作账本">
+              <h4 style={{ marginTop: 0 }}>当前工作账本</h4>
               <>
                 <strong>{states[data.checkpoint.state]}</strong>
                 <h4 style={{ margin: '8px 0' }}>{data.checkpoint.goal}</h4>
+                {data.checkpoint.constraints && (
+                  <p style={{ whiteSpace: 'pre-wrap' }}>约束：{data.checkpoint.constraints}</p>
+                )}
+                {data.checkpoint.decisions && (
+                  <p style={{ whiteSpace: 'pre-wrap' }}>决定与经验：{data.checkpoint.decisions}</p>
+                )}
                 {data.checkpoint.summary.length > 240 ? (
                   <details>
                     <summary style={{ cursor: 'pointer' }}>{data.checkpoint.summary.slice(0, 240)}…</summary>
@@ -272,7 +279,7 @@ function SessionTaskPanel({
                   Agent 工作摘要 · {new Date(data.checkpoint.time).toLocaleString()}
                 </small>
                 {data.checkpointStale ? (
-                  <p role="status">记录之后还有可能影响结论的执行，请核对最新结果。</p>
+                  <p role="status">账本之后有新要求或执行，请以最新状态为准。</p>
                 ) : null}
                 {data.checkpoint.evidence.length ? (
                   <details>

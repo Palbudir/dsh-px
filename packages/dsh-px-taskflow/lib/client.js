@@ -457,44 +457,55 @@ function SessionTaskPanel({
         ] }),
         !data && !error ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u4EFB\u52A1\u8BB0\u5F55\u2026" }) : null,
         data ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
-          data.checkpoint ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("section", { style: card, "aria-label": "\u53EF\u9009\u5DE5\u4F5C\u6458\u8981", children: /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("strong", { children: states[data.checkpoint.state] }),
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h4", { style: { margin: "8px 0" }, children: data.checkpoint.goal }),
-            data.checkpoint.summary.length > 240 ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("summary", { style: { cursor: "pointer" }, children: [
-                data.checkpoint.summary.slice(0, 240),
-                "\u2026"
+          data.checkpoint ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("section", { style: card, "aria-label": "\u5F53\u524D\u5DE5\u4F5C\u8D26\u672C", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h4", { style: { marginTop: 0 }, children: "\u5F53\u524D\u5DE5\u4F5C\u8D26\u672C" }),
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("strong", { children: states[data.checkpoint.state] }),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h4", { style: { margin: "8px 0" }, children: data.checkpoint.goal }),
+              data.checkpoint.constraints && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { style: { whiteSpace: "pre-wrap" }, children: [
+                "\u7EA6\u675F\uFF1A",
+                data.checkpoint.constraints
               ] }),
-              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: data.checkpoint.summary })
-            ] }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: data.checkpoint.summary }),
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { children: [
-              "\u4E0B\u4E00\u6B65\uFF1A",
-              data.checkpoint.nextStep || "\u68C0\u67E5\u4FEE\u6539\u4E0E\u9A8C\u8BC1\u7ED3\u679C"
-            ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("small", { style: { opacity: 0.65 }, children: [
-              "Agent \u5DE5\u4F5C\u6458\u8981 \xB7 ",
-              new Date(data.checkpoint.time).toLocaleString()
-            ] }),
-            data.checkpointStale ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { role: "status", children: "\u8BB0\u5F55\u4E4B\u540E\u8FD8\u6709\u53EF\u80FD\u5F71\u54CD\u7ED3\u8BBA\u7684\u6267\u884C\uFF0C\u8BF7\u6838\u5BF9\u6700\u65B0\u7ED3\u679C\u3002" }) : null,
-            data.checkpoint.evidence.length ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { children: [
-              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("summary", { children: "\u5F15\u7528\u7684\u6267\u884C\u8BC1\u636E" }),
-              data.checkpoint.evidence.map((id) => {
-                const call = data.referencedExecutions.find((c) => c.id === id);
-                return call ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
-                  ExecutionCard,
-                  {
-                    call,
-                    sessionId: scope.sessionId,
-                    inputContext
-                  },
-                  id
-                ) : /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { children: [
-                  "\u6B64\u6761\u5F15\u7528\u672A\u627E\u5230\uFF1A",
-                  /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("code", { children: id })
-                ] }, id);
-              })
-            ] }) : null
-          ] }) }) : null,
+              data.checkpoint.decisions && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { style: { whiteSpace: "pre-wrap" }, children: [
+                "\u51B3\u5B9A\u4E0E\u7ECF\u9A8C\uFF1A",
+                data.checkpoint.decisions
+              ] }),
+              data.checkpoint.summary.length > 240 ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("summary", { style: { cursor: "pointer" }, children: [
+                  data.checkpoint.summary.slice(0, 240),
+                  "\u2026"
+                ] }),
+                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: data.checkpoint.summary })
+              ] }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: data.checkpoint.summary }),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { children: [
+                "\u4E0B\u4E00\u6B65\uFF1A",
+                data.checkpoint.nextStep || "\u68C0\u67E5\u4FEE\u6539\u4E0E\u9A8C\u8BC1\u7ED3\u679C"
+              ] }),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("small", { style: { opacity: 0.65 }, children: [
+                "Agent \u5DE5\u4F5C\u6458\u8981 \xB7 ",
+                new Date(data.checkpoint.time).toLocaleString()
+              ] }),
+              data.checkpointStale ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { role: "status", children: "\u8D26\u672C\u4E4B\u540E\u6709\u65B0\u8981\u6C42\u6216\u6267\u884C\uFF0C\u8BF7\u4EE5\u6700\u65B0\u72B6\u6001\u4E3A\u51C6\u3002" }) : null,
+              data.checkpoint.evidence.length ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("summary", { children: "\u5F15\u7528\u7684\u6267\u884C\u8BC1\u636E" }),
+                data.checkpoint.evidence.map((id) => {
+                  const call = data.referencedExecutions.find((c) => c.id === id);
+                  return call ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+                    ExecutionCard,
+                    {
+                      call,
+                      sessionId: scope.sessionId,
+                      inputContext
+                    },
+                    id
+                  ) : /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { children: [
+                    "\u6B64\u6761\u5F15\u7528\u672A\u627E\u5230\uFF1A",
+                    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("code", { children: id })
+                  ] }, id);
+                })
+              ] }) : null
+            ] })
+          ] }) : null,
           data.changedFiles.length ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("section", { style: card, children: [
             /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("strong", { children: [
               "\u5DF2\u8BB0\u5F55\u7684\u6587\u4EF6\u5199\u5165 \xB7 \u5171 ",
