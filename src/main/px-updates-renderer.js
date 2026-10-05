@@ -16,7 +16,9 @@ function render(value) {
     const root = document.getElementById(name),
       state = value[name]
     root.querySelector('.version').textContent =
-      '当前 ' + state.current + (state.version ? '　→　' + state.version : '')
+      '当前 ' +
+      state.current +
+      (state.version && state.version !== state.current ? '　→　' + state.version : '')
     const status = root.querySelector('.status')
     status.textContent = state.message || labels[state.phase] || state.phase
     status.classList.toggle('error', state.phase === 'error')
