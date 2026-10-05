@@ -5,7 +5,6 @@ import nativePack from '../config/native-pack.json'
 import nativeDesktop from '../config/native-desktop.json'
 import {
   assertNativeHostPins,
-  assertRuntimeProducts,
   validateProductCatalog,
   versionGeneration
 } from '../src/shared/product-contract'
@@ -16,7 +15,6 @@ test('independent patches and prereleases retain the same generation', () => {
   c.pack.version = c.desktop.packVersion = '0.2.4'
   c.desktop.version = '0.2.1'
   validateProductCatalog(c)
-  assertRuntimeProducts(c, c, '0.2.1', c.desktop.hostVersion)
   for (const v of ['0.2.0', '0.2.32', '0.2.0-alpha.12']) assert.equal(versionGeneration(v), 2)
   for (const v of ['1.2.0', 'v0.2.0', '0.02.0', '0.2.0-01', '0.2.0+other', '', '0.2.0/../'])
     assert.throws(() => versionGeneration(v))
@@ -88,13 +86,4 @@ test('wrong Pack baseline, host, surfaces or runtime identity fail before activa
     mutate(c)
     assert.throws(() => validateProductCatalog(c))
   }
-  assert.throws(() =>
-    assertRuntimeProducts(undefined, products, products.desktop.version, products.desktop.hostVersion)
-  )
-  assert.throws(() => assertRuntimeProducts(products, products, '0.2.99', products.desktop.hostVersion))
-  const substituted = structuredClone(products)
-  substituted.pack.version = substituted.desktop.packVersion = '0.2.99'
-  assert.throws(() =>
-    assertRuntimeProducts(substituted, products, products.desktop.version, products.desktop.hostVersion)
-  )
 })

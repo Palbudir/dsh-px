@@ -8,7 +8,7 @@ DSH-PX 使用同一套插件整合包提供 Agent 工作能力。Pack 是统一�
 
 [产品清单](../config/products.json) 记录 Pack、Desktop、接口代际、宿主范围和已验证的入口；`desktop.architecture` 只接受 `official-derived`。[native-pack.json](../config/native-pack.json) 与 [native-desktop.json](../config/native-desktop.json) 是宿主版本与上游提交的唯一来源，`npm run check:plugins` 交叉校验三者的版本与提交一致。[插件清单](../config/plugins.json) 记录自制插件与待迁移的社区插件。
 
-当前发布主线为 `web` 与 `px-desktop`。0.2.1 曾验证未修改的官方 Windows Desktop 0.2.0-rc.2 安装同一 Pack；0.3 不将原版客户端列为完整验收入口，也不为后续官方版本增加专用适配层。既有使用说明和历史版本保留。不同服务实例仍不能共写数据。
+当前发布主线为 `web` 与 `px-desktop`。0.2.1 曾验证未修改的官方 Windows Desktop 0.2.0-rc.2 安装同一 Pack；此后不将原版客户端列为完整验收入口，也不为后续官方版本增加专用适配层。既有使用说明和历史版本保留。不同服务实例仍不能共写数据。
 
 ## 版本规则
 

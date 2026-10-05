@@ -5,7 +5,6 @@ import { fileURLToPath } from 'node:url'
 
 /** 声明由 `run.mjs` 注入的全局。 */
 declare global {
-  // eslint-disable-next-line no-var
   var __DSH_REPO__: string | undefined
 }
 

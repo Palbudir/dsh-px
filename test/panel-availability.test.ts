@@ -33,11 +33,9 @@ const sources = Object.fromEntries(
                 (args) => ({
                   path: args.path.endsWith('/data')
                     ? 'fixture-data'
-                    : args.path.endsWith('/layout')
-                      ? 'fixture-layout'
-                      : args.path.endsWith('/host-layout')
-                        ? 'fixture-host'
-                        : 'fixture-ui',
+                    : args.path.endsWith('/host-layout')
+                      ? 'fixture-host'
+                      : 'fixture-ui',
                   external: true
                 })
               )
@@ -233,7 +231,6 @@ function fixture(name: keyof typeof entries, sidebar = sidebarFixture()) {
     }, [store])
     return value
   }
-  let tabs = { ids: ['s'], pins: [], closed: [], titles: { s: 'Session' } }
   const data = {
     useSnapshot,
     errorText: String,
@@ -250,22 +247,6 @@ function fixture(name: keyof typeof entries, sidebar = sidebarFixture()) {
       error: '',
       loading: false,
       refresh: () => {}
-    })
-  }
-  const layout = {
-    useSessionLayout: () => ({
-      tabs,
-      ready: true,
-      warning: '',
-      setTabs: (value: any) => {
-        const next = typeof value === 'function' ? value(tabs) : value
-        if (!Object.is(next, tabs)) {
-          tabs = next
-          update()
-        }
-      },
-      restore: () => {},
-      keepCurrent: () => {}
     })
   }
   const module: { exports: any } = { exports: {} }
@@ -290,7 +271,6 @@ function fixture(name: keyof typeof entries, sidebar = sidebarFixture()) {
           react,
           'react/jsx-runtime': { jsx, jsxs: jsx },
           'fixture-data': data,
-          'fixture-layout': layout,
           'fixture-host': { attachToolbarLayout: () => () => {}, isTypingTarget: () => false },
           'fixture-ui': { Icon() {}, ConfirmDelete() {}, installUiStyles() {} }
         }) as any

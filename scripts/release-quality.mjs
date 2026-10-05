@@ -145,10 +145,10 @@ export function buildAndVerifyPack({ candidate, root = process.cwd() }) {
 export function runQualityGates(root = process.cwd()) {
   const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
   const commands = [
-    [process.execPath, ['scripts/check-secrets.mjs']],
     [npm, ['run', 'typecheck']],
+    // check:repo includes the secret scan.
     [npm, ['run', 'check:repo']],
-    [process.execPath, ['scripts/release-catalog.mjs']],
+    [process.execPath, ['scripts/check-roadmap.mjs']],
     [npm, ['run', 'test']],
     // Tests rebuild the tracked plugin artifacts; the checkout must remain exactly the reviewed tree.
     ['git', ['diff', '--exit-code']],

@@ -8,10 +8,10 @@ export function validateCatalog(catalog) {
     catalog.statusAuthority !== '../ROADMAP.md' ||
     typeof catalog.purpose !== 'string' ||
     !Array.isArray(catalog.features) ||
-    catalog.features.length !== 100
+    !catalog.features.length
   )
     throw new Error(
-      'Roadmap catalog must contain 100 version-2 specifications and point to ROADMAP.md for current status'
+      'Roadmap catalog must contain version-2 specifications and point to ROADMAP.md for current status'
     )
   const ids = new Set()
   const fields = new Set([

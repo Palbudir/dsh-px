@@ -9,9 +9,5 @@ assertNativeHostPins(products, { pack: nativePack, desktop: nativeDesktop })
 export const PRODUCT_CATALOG = products
 export const PACK_VERSION = products.pack.version
 
-/** The same inventory drives plugin builds, the native Pack and artifact assertions. */
+/** The same inventory drives plugin builds and the native Pack. */
 export const MANAGED_PLUGIN_NAMES: readonly string[] = catalog.managed
-export const managedArtifacts = (prefix = 'packages'): string[] =>
-  MANAGED_PLUGIN_NAMES.flatMap((name) =>
-    ['index.js', 'client.js'].map((file) => `${prefix}/${name}/lib/${file}`)
-  )
