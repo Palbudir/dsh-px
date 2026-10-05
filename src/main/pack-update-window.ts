@@ -11,6 +11,12 @@ export function createPackUpdateWindow(
     deployment: () => PackDeployment | undefined
     desktop: any
     restart: (version: string, commit: () => void) => Promise<boolean>
+    /** Show the window that owns the native restart confirmation; it stays hidden while its parent is. */
+    revealConfirmation?: () => void
+    /** Reject a Desktop installation the silent installer would refuse after the app has quit. */
+    checkInstall?: () => Promise<void>
+    /** Note about a failed earlier installation of this version, read from the installer trace. */
+    installFailure?: (version: string | undefined) => string | undefined
   }
 ): { open: () => void } {
   const { app, BrowserWindow, ipcMain, net } = electron
@@ -22,7 +28,8 @@ export function createPackUpdateWindow(
     prepared: PackReceipt | undefined
   let pack: Record<string, any> = { phase: 'idle' },
     desktopChecked = false,
-    desktopError: string | undefined
+    desktopError: string | undefined,
+    failure: { version: string | undefined; note: string | undefined } | undefined
   const deployment = () => {
     const value = options.deployment()
     if (!value) throw Error('本机服务尚未准备好，请稍后重试。')
@@ -33,6 +40,12 @@ export function createPackUpdateWindow(
       saved = d?.read()
     const desktop = { current: app.getVersion(), ...options.desktop.state }
     if (desktopChecked && desktop.phase === 'idle') desktop.phase = 'current'
+    if (['available', 'ready'].includes(desktop.phase)) {
+      // The window polls state; read the installer trace once per offered version.
+      if (failure?.version !== desktop.version)
+        failure = { version: desktop.version, note: options.installFailure?.(desktop.version) }
+      desktop.notice = failure?.note
+    }
     if (desktopError) {
       desktop.phase = 'error'
       desktop.message = desktopError
@@ -111,14 +124,18 @@ export function createPackUpdateWindow(
     } else if (action === 'install-pack') {
       if (!prepared || pack.phase !== 'ready') throw Error('Pack 尚未准备完成')
       const receipt = prepared
+      options.revealConfirmation?.()
       if (await options.restart(receipt.version, () => deployment().queue(receipt)))
         pack = { phase: 'installing', version: receipt.version }
     } else if (action === 'check-desktop') {
       await options.desktop.check(true)
       desktopChecked = true
     } else if (action === 'download-desktop') await options.desktop.download(options.desktop.state.version)
-    else if (action === 'install-desktop') await options.desktop.install(options.desktop.state.version)
-    else throw Error('Unknown update action')
+    else if (action === 'install-desktop') {
+      await options.checkInstall?.()
+      options.revealConfirmation?.()
+      await options.desktop.install(options.desktop.state.version)
+    } else throw Error('Unknown update action')
   }
   ipcMain.handle(channel, async (event: any, action: unknown) => {
     if (
