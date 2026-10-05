@@ -28,7 +28,7 @@ Pack 与 Desktop 独立发布，版本来源分别为 [products.json](../config/
 默认分支的 `release.yml` 只响应 workflow_dispatch，输入精确 SHA 与产品标签，权限为只读，不使用任何 secret：
 
 - **Pack**：运行质量门禁，以 `--expect-head` 构建干净 release Pack，核对 `artifact.json` 与归档内清单。
-- **Desktop**：在 `windows-2025` runner 上检出锁定的官方源码并核对提交，构建官方运行时，生成 PX 覆盖层与安装界面品牌，产出一个未签名的完整 NSIS 安装程序；同时产出配套 blockmap，记录 SHA-256/SHA-512 与 Authenticode 状态。若该镜像的编译器拒绝官方安装辅助库，改用 `windows-2022` 并重新审查 workflow。
+- **Desktop**：在 `windows-2025` runner 上检出锁定的官方源码并核对提交，构建官方运行时，生成 PX 覆盖层与安装界面品牌，产出一个未签名的完整 NSIS 安装程序；同时产出配套 blockmap，记录 SHA-256/SHA-512 与 Authenticode 状态。随后在同一 runner 上做真实安装验收（`scripts/installer-acceptance.ps1`）：静默安装签名清单当前发布的 Desktop，按应用内方式静默升级到候选版，核对版本、安装登记与阶段日志；再注入“安装登记缺失”和“客户端仍在运行”两种失败，要求退出码为 2、日志记录原因且原程序可用。验收失败时不上传制品。该脚本会改写此应用的用户级登记，只能在一次性 CI runner 上运行。若该镜像的编译器拒绝官方安装辅助库，改用 `windows-2022` 并重新审查 workflow。
 
 Pack 构建产物包含归档和 `artifact.json`；Desktop 另含配套 blockmap。两者均包含 `release-manifest.json`，由 GitHub Actions artifact 保存 14 天。
 

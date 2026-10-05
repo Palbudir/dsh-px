@@ -249,6 +249,23 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Desktop release inspection failed' }
           $record = Get-Content "$env:RUNNER_TEMP/release-artifacts/artifact.json" -Raw | ConvertFrom-Json
           "file: $($record.file)`nsize: $($record.size)`nsha256: $($record.sha256)`nsha512: $($record.sha512)`nauthenticode: $($record.authenticode)" | Add-Content $env:GITHUB_STEP_SUMMARY
+      - name: Installer acceptance from the published Desktop
+        working-directory: candidate
+        run: |
+          # Upgrade from exactly what users run: the installer named by the published signed feed.
+          $feed = Invoke-RestMethod 'https://raw.githubusercontent.com/Palbudir/dsh-px/updates/desktop-preview.json'
+          $published = @($feed.payload.files | Where-Object role -eq 'installer')
+          if ($published.Count -ne 1) { throw 'The published Desktop feed names no installer' }
+          $previous = Join-Path $env:RUNNER_TEMP $published[0].name
+          Invoke-WebRequest -Uri $published[0].url -OutFile $previous
+          if ((Get-FileHash $previous -Algorithm SHA256).Hash.ToLowerInvariant() -ne $published[0].sha256) { throw 'Published installer digest mismatch' }
+          $candidate = @(Get-ChildItem '../upstream/apps/desktop/.desktop-build/px/dist' -Filter '*.exe' -File)
+          if ($candidate.Count -ne 1) { throw 'Expected one candidate installer' }
+          $version = (Get-Content config/products.json -Raw | ConvertFrom-Json).desktop.version
+          $guid = node -e "import('./scripts/nsis-guid.mjs').then((m) => console.log(m.nsisAppGuid(process.env.DSH_DESKTOP_APP_ID)))"
+          if ($LASTEXITCODE -ne 0 -or $guid -notmatch '^[0-9a-f-]{36}$') { throw 'Could not derive the installer registry GUID' }
+          ./scripts/installer-acceptance.ps1 -Candidate $candidate[0].FullName -CandidateVersion $version -Previous $previous -PreviousVersion $feed.payload.version -Guid $guid
+          "installer acceptance: $($feed.payload.version) -> $version" | Add-Content $env:GITHUB_STEP_SUMMARY
       - name: Candidate and upstream remain unchanged
         env:
           BUILD_HEAD: ${{ inputs.head }}
