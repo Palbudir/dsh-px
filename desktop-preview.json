@@ -5,8 +5,8 @@
     "product": "desktop",
     "channel": "preview",
     "platform": "win32-x64",
-    "version": "0.4.0-alpha.1",
-    "packVersion": "0.4.0-alpha.1",
+    "version": "0.4.1-alpha.1",
+    "packVersion": "0.4.1-alpha.1",
     "protocolGeneration": 4,
     "upgradeFromGenerations": [
       2,
@@ -15,26 +15,26 @@
     ],
     "hostVersion": "0.2.0-rc.2",
     "upstreamCommit": "639ed015397290b3745d163aafe02ffee4aa3f84",
-    "sourceCommit": "558ca23240564e8e61410c8342954504b52573e6",
-    "issuedAt": "2026-10-04T21:08:31.949Z",
+    "sourceCommit": "10845df190e7402f325fcf462c1fde203725ec15",
+    "issuedAt": "2026-10-05T19:21:37.547Z",
     "files": [
       {
         "role": "installer",
-        "name": "DSH-PX-Desktop-0.4.0-alpha.1-win-x64.exe",
-        "url": "https://github.com/Palbudir/dsh-px/releases/download/desktop-v0.4.0-alpha.1/DSH-PX-Desktop-0.4.0-alpha.1-win-x64.exe",
-        "size": 287601686,
-        "sha256": "c686560c51536ffa0b5b030d49d31f053688a60e122fed9f5828ddfc77af581b",
-        "sha512": "SSG/z3+DJt6w6sa5/ATDApMvqZ7JgqPBXoLA0K4l+sXw7TROeaKQ6mNVhPb+o1AdGP6/Vu6dl7/W2zn7UBuWsA=="
+        "name": "DSH-PX-Desktop-0.4.1-alpha.1-win-x64.exe",
+        "url": "https://github.com/Palbudir/dsh-px/releases/download/desktop-v0.4.1-alpha.1/DSH-PX-Desktop-0.4.1-alpha.1-win-x64.exe",
+        "size": 287596539,
+        "sha256": "ce292c6f3647d519d8abbb3ae0fee72df9fd0eb31975017cc750bc58608ad1be",
+        "sha512": "cs17Vb+kJC7Tn67m9TvdSY4vYba2mCOQCq8QcjmoCB2pdJ5N4Msqp7lNJwvA/3lV4DEgCk7JHU9axQfETqaMmw=="
       },
       {
         "role": "blockmap",
-        "name": "DSH-PX-Desktop-0.4.0-alpha.1-win-x64.exe.blockmap",
-        "url": "https://github.com/Palbudir/dsh-px/releases/download/desktop-v0.4.0-alpha.1/DSH-PX-Desktop-0.4.0-alpha.1-win-x64.exe.blockmap",
-        "size": 297279,
-        "sha256": "22c28c704cdd4b23654b9bbd941d65cefc8436c9a027fc4d0f5adfda1f0d2b5c",
-        "sha512": "8wW9gnREdMDaX5Z+PTFBqOpZscPNDXXRvXIpk0FUEAZKg/q52xApCFi97VOL5gKCUY299Grldh1+WZ+J/XoeAA=="
+        "name": "DSH-PX-Desktop-0.4.1-alpha.1-win-x64.exe.blockmap",
+        "url": "https://github.com/Palbudir/dsh-px/releases/download/desktop-v0.4.1-alpha.1/DSH-PX-Desktop-0.4.1-alpha.1-win-x64.exe.blockmap",
+        "size": 297514,
+        "sha256": "aaf969120ee0cc00a28598188cae722f728e73391678775ca1a4a97d405c3dbe",
+        "sha512": "hfmhanm72jaSpQewB/qjaEHzvyeoDksdM6Ts3j15/KoxaoeLndkK3JbbL34QdhAfVui6Vm41vlHvIudjtrHWAA=="
       }
     ]
   },
-  "signature": "gmApB8LkXXRvqfcD9W9GaNa4EfczeYOtrDhe6H2ryCgRNhKEZeioB/9jzN2H8j/opvjVKB1F0VDW4rbJpNg2Bw=="
+  "signature": "FQDHm4wEuyo0YCxmI7Q6WJK1vObROuIc0v8TLpZ6i1CLOwOHs6WOOhhmwP4AiUlBYypXpevHBy8KUEUwryZ+BA=="
 }
