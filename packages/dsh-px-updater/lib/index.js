@@ -685,14 +685,14 @@ var products_default = {
   schemaVersion: 1,
   protocolGeneration: 4,
   pack: {
-    version: "0.4.0-alpha.1",
+    version: "0.4.1-alpha.1",
     dataSchemaVersion: 1,
     hostVersions: ["0.2.0-rc.2"],
     surfaces: ["web", "px-desktop"]
   },
   desktop: {
-    version: "0.4.0-alpha.1",
-    packVersion: "0.4.0-alpha.1",
+    version: "0.4.1-alpha.1",
+    packVersion: "0.4.1-alpha.1",
     hostVersion: "0.2.0-rc.2",
     architecture: "official-derived"
   }
@@ -857,7 +857,7 @@ import { fileURLToPath } from "node:url";
 // packages/dsh-px-updater/package.json
 var package_default = {
   name: "dsh-px-updater",
-  version: "0.4.0-alpha.1",
+  version: "0.4.1-alpha.1",
   private: true,
   description: "DSH-PX \u7684\u7248\u672C\u63D2\u4EF6\uFF1A\u62A5\u544A Pack \u7248\u672C\u3001\u6821\u9A8C\u7B7E\u540D Pack \u66F4\u65B0\u6E05\u5355\u5E76\u5728 dsh \u8BBE\u7F6E\u9875\u63D0\u793A\uFF0C\u4E0D\u81EA\u52A8\u5B89\u88C5",
   type: "module",
