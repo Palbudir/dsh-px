@@ -29,7 +29,7 @@
     "check:secrets": "node scripts/check-secrets.mjs",
     "check:docs": "node scripts/check-docs.mjs",
     "quality": "node scripts/release-quality.mjs",
-    "check:catalog": "node scripts/release-catalog.mjs"
+    "check:roadmap": "node scripts/check-roadmap.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",

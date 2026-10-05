@@ -74,100 +74,16 @@ function rejectUntrustedRequest(req, res) {
 import { isAbsolute as isAbsolute2 } from "node:path";
 
 // packages/dsh-px-workbench/src/status.ts
-import { accessSync, constants, existsSync, readFileSync as readFileSync2, readdirSync, statSync as statSync2 } from "node:fs";
-import { delimiter, isAbsolute, join as join2 } from "node:path";
-
-// packages/dsh-px-workbench/src/layout.ts
-import { createHash, randomUUID } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
-
-// packages/shared/session-layout.ts
-function parseTabs(raw) {
-  try {
-    const p = JSON.parse(raw ?? "{}");
-    const ids = (v) => Array.isArray(v) ? [...new Set(v.filter((x) => typeof x === "string" && /^[\w-]{1,200}$/.test(x)))] : [];
-    const open = ids(p.ids), closed = ids(p.closed).slice(0, 10), titles = {};
-    for (const id of [...open, ...closed])
-      if (typeof p.titles?.[id] === "string")
-        Object.defineProperty(titles, id, {
-          value: p.titles[id].slice(0, 160),
-          enumerable: true,
-          writable: true,
-          configurable: true
-        });
-    return { ids: open, pins: ids(p.pins).filter((id) => open.includes(id)), closed, titles };
-  } catch {
-    return { ids: [], pins: [], closed: [], titles: {} };
-  }
-}
-
-// packages/dsh-px-workbench/src/layout.ts
-function serviceIdentity(home, platform = process.platform) {
-  const path = resolve(home);
-  return createHash("sha256").update(platform === "win32" ? path.toLowerCase() : path).digest("hex").slice(0, 24);
-}
-var LayoutError = class extends Error {
-  constructor(message, status = 400) {
-    super(message);
-    this.status = status;
-  }
-};
-function createLayoutStore(home) {
-  const dir = join(home, "storages", "dsh-px-workbench");
-  const path = join(dir, "session-layout.json");
-  const serviceId = serviceIdentity(home);
-  function read() {
-    try {
-      if (statSync(path).size > 512e3) throw new Error("\u5E03\u5C40\u6587\u4EF6\u8FC7\u5927");
-      const value = JSON.parse(readFileSync(path, "utf8"));
-      if (value.version !== 1 || !Number.isSafeInteger(value.revision) || value.revision < 0 || !value.layout)
-        throw new Error("\u5E03\u5C40\u6587\u4EF6\u683C\u5F0F\u65E0\u6548");
-      return { serviceId, revision: value.revision, layout: parseTabs(JSON.stringify(value.layout)) };
-    } catch (err) {
-      if (err?.code === "ENOENT") return { serviceId, revision: 0, layout: parseTabs(null) };
-      throw new LayoutError(
-        "\u65E0\u6CD5\u8BFB\u53D6\u4F1A\u8BDD\u5E03\u5C40\uFF0C\u539F\u6587\u4EF6\u5DF2\u4FDD\u7559\u3002\u8BF7\u68C0\u67E5\u8FD0\u884C\u65E5\u5FD7\u6216\u6062\u590D\u6709\u6548\u5907\u4EFD\uFF1B\u5F53\u524D\u7A97\u53E3\u4ECD\u53EF\u4F7F\u7528\u3002",
-        503
-      );
-    }
-  }
-  return {
-    read,
-    write(request) {
-      const value = request;
-      if (!value || value.serviceId !== serviceId || !Number.isSafeInteger(value.revision) || !value.layout)
-        throw new LayoutError("\u5E03\u5C40\u670D\u52A1\u8EAB\u4EFD\u6216\u4FEE\u8BA2\u53F7\u65E0\u6548\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6\u5E03\u5C40\u3002");
-      if (JSON.stringify(value.layout).length > 48e4 || !Array.isArray(value.layout.ids) || value.layout.ids.length > 1e3)
-        throw new LayoutError("\u5DF2\u6253\u5F00\u4F1A\u8BDD\u8FC7\u591A\uFF0C\u8BF7\u5173\u95ED\u90E8\u5206\u6807\u7B7E\u540E\u91CD\u8BD5\u3002", 413);
-      const previous = read();
-      if (value.revision !== previous.revision)
-        throw new LayoutError(
-          "\u53E6\u4E00\u4E2A\u7A97\u53E3\u5DF2\u4FDD\u5B58\u65B0\u7684\u5E03\u5C40\u3002\u5F53\u524D\u7A97\u53E3\u6807\u7B7E\u5DF2\u4FDD\u7559\uFF0C\u8BF7\u9009\u62E9\u6062\u590D\u6700\u65B0\u5E03\u5C40\u6216\u4FDD\u5B58\u6B64\u7A97\u53E3\u5E03\u5C40\u3002",
-          409
-        );
-      const next = {
-        serviceId,
-        revision: previous.revision + 1,
-        layout: parseTabs(JSON.stringify(value.layout))
-      };
-      mkdirSync(dir, { recursive: true });
-      const temp = path + "." + randomUUID() + ".tmp";
-      writeFileSync(temp, JSON.stringify({ version: 1, ...next }) + "\n");
-      renameSync(temp, path);
-      return next;
-    }
-  };
-}
-
-// packages/dsh-px-workbench/src/status.ts
+import { createHash } from "node:crypto";
+import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { delimiter, isAbsolute, join, resolve } from "node:path";
 var startedAt = (/* @__PURE__ */ new Date()).toISOString();
 function findCommand(name2, path = process.env.PATH ?? "") {
   for (const dir of path.split(delimiter).filter(Boolean)) {
     for (const ext of process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""]) {
-      const candidate = join2(dir.replace(/^"|"$/g, ""), name2 + ext);
+      const candidate = join(dir.replace(/^"|"$/g, ""), name2 + ext);
       try {
-        if (statSync2(candidate).isFile()) return candidate;
+        if (statSync(candidate).isFile()) return candidate;
       } catch {
       }
     }
@@ -176,13 +92,13 @@ function findCommand(name2, path = process.env.PATH ?? "") {
 }
 function profileDirectory(home, running) {
   if (running && isAbsolute(running.dir)) return running.dir;
-  const profiles = join2(home, "profiles");
+  const profiles = join(home, "profiles");
   let names = [];
   try {
-    names = readdirSync(profiles).filter((name2) => existsSync(join2(profiles, name2, "package.json")));
+    names = readdirSync(profiles).filter((name2) => existsSync(join(profiles, name2, "package.json")));
   } catch {
   }
-  return names.length === 1 ? join2(profiles, names[0]) : null;
+  return names.length === 1 ? join(profiles, names[0]) : null;
 }
 function localStatus(activity = {
   known: false,
@@ -208,12 +124,12 @@ function localStatus(activity = {
   try {
     if (!home) throw new Error("\u672A\u63D0\u4F9B DSH_HOME");
     if (!profile) throw new Error("\u5BBF\u4E3B\u672A\u63D0\u4F9B\u5F53\u524D Profile\uFF0C\u4E14\u6570\u636E\u76EE\u5F55\u4E2D\u4E0D\u6B62\u4E00\u4E2A Profile\uFF0C\u65E0\u6CD5\u786E\u5B9A\u63D2\u4EF6\u6E05\u5355");
-    const pkg = JSON.parse(readFileSync2(join2(profile, "package.json"), "utf8"));
+    const pkg = JSON.parse(readFileSync(join(profile, "package.json"), "utf8"));
     for (const [name2, requested] of Object.entries(pkg.dependencies ?? {})) {
       if (!/^(?:@[a-z0-9._-]+\/)?[a-z0-9._-]+$/i.test(name2)) continue;
       let version = null;
       try {
-        version = JSON.parse(readFileSync2(join2(profile, "node_modules", name2, "package.json"), "utf8")).version ?? null;
+        version = JSON.parse(readFileSync(join(profile, "node_modules", name2, "package.json"), "utf8")).version ?? null;
       } catch {
       }
       plugins.push({
@@ -236,7 +152,7 @@ function localStatus(activity = {
     tools: ["git", "pnpm"].map((name2) => ({ name: name2, path: findCommand(name2) })),
     plugins,
     profileError,
-    credentialsFile: Boolean(home && existsSync(join2(home, ".credentials.yaml"))),
+    credentialsFile: Boolean(home && existsSync(join(home, ".credentials.yaml"))),
     serviceId: home ? serviceIdentity(home) : null,
     runtime: {
       mode: "native",
@@ -246,6 +162,10 @@ function localStatus(activity = {
     },
     activity
   };
+}
+function serviceIdentity(home, platform = process.platform) {
+  const path = resolve(home);
+  return createHash("sha256").update(platform === "win32" ? path.toLowerCase() : path).digest("hex").slice(0, 24);
 }
 
 // packages/dsh-px-workbench/src/network.ts
@@ -280,22 +200,6 @@ async function checkWebAccess(fetchPage) {
       })
     )
   };
-}
-
-// packages/dsh-px-workbench/src/http.ts
-async function readJsonBody(req, limit = 512e3) {
-  if (!String(req.headers["content-type"] ?? "").startsWith("application/json"))
-    throw new Error("\u8BF7\u4F7F\u7528 JSON \u8BF7\u6C42");
-  let bytes = 0;
-  const chunks = [];
-  for await (const chunk of req) {
-    bytes += Buffer.byteLength(chunk);
-    if (bytes > limit) throw new Error("\u8BF7\u6C42\u5185\u5BB9\u8FC7\u5927");
-    chunks.push(Buffer.from(chunk));
-  }
-  const value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("JSON \u5185\u5BB9\u65E0\u6548");
-  return value;
 }
 
 // packages/dsh-px-workbench/src/terminal-activity.ts
@@ -532,27 +436,6 @@ function apply(ctx) {
           if (rejectUnauthenticatedRequest(req, res, ctx2.connection)) return;
           if (req.method !== "GET") return json(res, 405, { error: "\u8BF7\u4F7F\u7528 GET" });
           json(res, 200, localStatus(activity(), runningProfile));
-        }
-      }),
-      ctx2.webServer.register({
-        kind: "exact",
-        path: `${DEFAULTS.routePrefix}/layout`,
-        handler: async (req, res) => {
-          if (rejectUnauthenticatedRequest(req, res, ctx2.connection)) return;
-          if (!process.env.DSH_HOME)
-            return json(res, 503, { error: "\u670D\u52A1\u672A\u63D0\u4F9B\u6570\u636E\u76EE\u5F55\uFF0C\u6807\u7B7E\u4ECD\u53EF\u5728\u5F53\u524D\u7A97\u53E3\u4F7F\u7528\u3002" });
-          const store = createLayoutStore(process.env.DSH_HOME);
-          try {
-            if (req.method === "GET") return json(res, 200, store.read());
-            if (req.method !== "POST") return json(res, 405, { error: "\u8BF7\u4F7F\u7528 GET \u6216 POST" });
-            if (req.headers?.["x-dsh-px-request"] !== "1")
-              return json(res, 403, { error: "\u8BF7\u4ECE\u672C\u673A\u9875\u9762\u4FDD\u5B58\u5E03\u5C40" });
-            json(res, 200, store.write(await readJsonBody(req)));
-          } catch (err) {
-            json(res, err instanceof LayoutError ? err.status : 400, {
-              error: err instanceof Error ? err.message : "\u5E03\u5C40\u64CD\u4F5C\u5931\u8D25"
-            });
-          }
         }
       }),
       ctx2.webServer.register({

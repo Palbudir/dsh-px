@@ -83,28 +83,3 @@ export function assertNativeHostPins(catalog: unknown, pins: NativeHostPins): vo
   if (!catalog.pack.hostVersions.includes(pins.pack.hostVersion))
     throw new Error('Pack host compatibility does not include the pinned native host')
 }
-
-/** Fail closed on a mismatched manifest before a runtime is activated or migrated. */
-export function assertRuntimeProducts(
-  actual: unknown,
-  expected: unknown,
-  appVersion: string,
-  hostVersion: string
-): void {
-  validateProductCatalog(actual)
-  validateProductCatalog(expected)
-  if (
-    actual.desktop.version !== appVersion ||
-    actual.desktop.hostVersion !== hostVersion ||
-    actual.protocolGeneration !== expected.protocolGeneration ||
-    actual.pack.version !== expected.pack.version ||
-    actual.pack.dataSchemaVersion !== expected.pack.dataSchemaVersion ||
-    actual.desktop.version !== expected.desktop.version ||
-    actual.desktop.architecture !== expected.desktop.architecture ||
-    actual.desktop.hostVersion !== expected.desktop.hostVersion ||
-    JSON.stringify([...actual.pack.hostVersions].sort()) !==
-      JSON.stringify([...expected.pack.hostVersions].sort()) ||
-    JSON.stringify([...actual.pack.surfaces].sort()) !== JSON.stringify([...expected.pack.surfaces].sort())
-  )
-    throw new Error('Runtime product identities do not match the reviewed build')
-}

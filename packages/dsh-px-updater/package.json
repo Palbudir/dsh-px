@@ -3,7 +3,6 @@
   "version": "0.4.0-alpha.1",
   "private": true,
   "description": "DSH-PX 的版本插件：报告 Pack 版本、校验签名 Pack 更新清单并在 dsh 设置页提示，不自动安装",
-  "_note": "两个半边都是**预构建产物**（lib/index.js、lib/client.js），源在 src/（TypeScript）。宿主半边刻意保持零运行时依赖与零 peerDependencies：pnpm 的 file:/link: 安装不会安装 peer 依赖，而 link: 下 Node 又按真实路径（仓库外）解析模块，于是任何 import 的宿主包都会 ERR_MODULE_NOT_FOUND。配置默认值自己合并即可，无需 schemastery。客户端半边的 react 等由**前端静态模块表**提供，是浏览器侧的 require，不受此限制。",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
@@ -19,11 +18,6 @@
     "locale",
     "icon.svg"
   ],
-  "scripts": {
-    "build": "node scripts/build-host.mjs && node scripts/build-client.mjs",
-    "build:host": "node scripts/build-host.mjs",
-    "build:client": "node scripts/build-client.mjs"
-  },
   "license": "MIT",
   "dsh": {
     "bundle": {
@@ -31,7 +25,6 @@
     },
     "client": {
       "platform": "web",
-      "_note": "inject 既决定前端模块图的加载顺序，也正是浏览器里 ctx.slots 的来源。官方客户端插件都只声明 inject、不用 external —— react 等本来就在前端的静态模块表里。",
       "inject": [
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-client-ui-slots",

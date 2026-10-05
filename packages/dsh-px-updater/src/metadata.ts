@@ -23,17 +23,6 @@ function decodeBody(bytes: Uint8Array, encoding: string | null): Buffer {
   }
   return body
 }
-/** Handles plain JSON, already-decoded fetch bodies, and encoded proxy responses. */
-export function decodeMetadata(bytes: Uint8Array, encoding: string | null): Record<string, unknown> {
-  const body = decodeBody(bytes, encoding)
-  try {
-    const value = JSON.parse(body.toString('utf8').replace(/^\uFEFF/u, ''))
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error()
-    return value as Record<string, unknown>
-  } catch {
-    throw new Error('版本服务未返回有效的 JSON 信息，请稍后重试')
-  }
-}
 /** Fetch the exact bounded text; signed feeds must be verified over the bytes that were served. */
 export async function fetchMetadataText(url: string, timeoutMs: number): Promise<string> {
   const controller = new AbortController(),
@@ -71,7 +60,4 @@ export async function fetchMetadataText(url: string, timeoutMs: number): Promise
   } finally {
     clearTimeout(timer)
   }
-}
-export async function fetchMetadata(url: string, timeoutMs: number): Promise<Record<string, unknown>> {
-  return decodeMetadata(Buffer.from(await fetchMetadataText(url, timeoutMs)), null)
 }
