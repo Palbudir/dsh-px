@@ -133,7 +133,16 @@ test('installer recovery always explains a silent failure and records why the ap
   )
   assert.equal(main.match(/!insertmacro PxInstallerFail/g)?.length, 2)
   const recovery = readFileSync(join(output, 'scripts/px-recovery.nsh'), 'utf8')
-  assert.match(recovery, /stage=\$\{Stage\} reason=\$InstallerError/)
+  // Official directory functions are compiled before the pages declare $InstallerError, so the shared trace
+  // macro must only use the overlay's own variable; only the recovery function copies the official reason.
+  const trace = recovery.slice(recovery.indexOf('!macro PxInstallerTrace'), recovery.indexOf('!macroend'))
+  assert.match(trace, /stage=\$\{Stage\} reason=\$PxFailureReason/)
+  assert.doesNotMatch(trace, /\$InstallerError/)
+  assert.match(recovery, /^!ifndef BUILD_UNINSTALLER\s+Var PxFailureReason\s+!endif/m)
+  assert.match(
+    recovery,
+    /Function PxRecoverInstallFailure[\s\S]*?StrCpy \$PxFailureReason \$InstallerError\s+!insertmacro PxInstallerTrace "failed"/
+  )
   assert.doesNotMatch(recovery, /GetLastError/)
   // The silent notice follows the relaunch branch instead of living inside it.
   const relaunchEnd = recovery.indexOf('!insertmacro PxInstallerTrace "relaunch-available"')

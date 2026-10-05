@@ -1,5 +1,9 @@
 ; Per-user installer diagnostics. No conversation, credential or request data is logged.
-; `reason` is the installer's own user-facing failure text ($InstallerError), empty until a check fails.
+; `reason` is the installer's own user-facing failure text, empty until a check fails. Official functions that use
+; this trace are compiled before the official pages declare $InstallerError, so the trace keeps its own copy.
+!ifndef BUILD_UNINSTALLER
+  Var PxFailureReason
+!endif
 !macro PxInstallerTrace Stage
   !ifndef BUILD_UNINSTALLER
     Push $R6
@@ -14,7 +18,7 @@
     FileOpen $R9 "$LOCALAPPDATA\dsh-px-desktop-updater\installer-logs\install-${VERSION}.log" a
     ${IfNot} ${Errors}
       FileSeek $R9 0 END
-      FileWrite $R9 "pid=$R6 stage=${Stage} reason=$InstallerError$\r$\n"
+      FileWrite $R9 "pid=$R6 stage=${Stage} reason=$PxFailureReason$\r$\n"
       FileClose $R9
     ${EndIf}
     ${If} $R7 == 1
@@ -38,6 +42,8 @@
 
 !macro PxInstallerRecoveryFunctions
   Function PxRecoverInstallFailure
+    ; Defined after the official pages, so $InstallerError is declared here.
+    StrCpy $PxFailureReason $InstallerError
     !insertmacro PxInstallerTrace "failed"
     ${If} $dshFinalDirectory != ""
       Call dshRollbackDirectories
