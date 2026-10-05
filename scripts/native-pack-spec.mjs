@@ -1,9 +1,9 @@
 import { isAbsolute, resolve } from 'node:path'
 
 /**
- * The `file:` dependency rule first-start provisioning applies (src/main/native-pack-provision.ts
- * specPath/sameSpec): a relative path resolves against the profile, and Windows paths compare
- * case-insensitively. Any other spec form never names the archive.
+ * Whether a profile's recorded `dsh-px-pack` dependency names the installed aggregate archive: a
+ * relative `file:` path resolves against the profile, and Windows paths compare case-insensitively.
+ * Any other spec form never names the archive.
  * @param {unknown} spec - the profile's recorded dsh-px-pack dependency.
  * @param {string} archive - absolute path of the archive that was installed.
  * @param {string} profile - absolute profile directory.

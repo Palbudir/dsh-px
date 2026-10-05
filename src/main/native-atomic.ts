@@ -90,15 +90,3 @@ export function writeAtomic(
     if (!renamed) operations.remove(temporary)
   }
 }
-
-/** Names `writeAtomic` gives its temporaries: `<basename>.<random UUID v4>.tmp`. */
-const TEMPORARY_PATTERN = /^.+\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.tmp$/
-
-/**
- * Whether a directory entry name matches the exact temporary naming rule of `writeAtomic`.
- * @param name - entry basename.
- * @returns true only for `<name>.<uuid v4>.tmp`.
- */
-export function isAtomicTemporary(name: string): boolean {
-  return TEMPORARY_PATTERN.test(name)
-}

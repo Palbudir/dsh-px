@@ -4,7 +4,6 @@ import type { IncomingMessage } from 'node:http'
 import type { HostPluginContext, HostResponse } from '@deepseek-ai/cordis'
 import { localStatus, type RunningProfile } from './status'
 import { checkWebAccess, type FetchPage, type NetworkCheck } from './network'
-import { createLayoutStore, LayoutError } from './layout'
 import { readJsonBody } from './http'
 import { registerActivity } from './activity'
 
@@ -81,27 +80,6 @@ export function apply(ctx: HostPluginContext): void {
           if (rejectUntrustedRequest(req, res, ctx.connection)) return
           if (req.method !== 'GET') return json(res, 405, { error: '请使用 GET' })
           json(res, 200, localStatus(activity(), runningProfile))
-        }
-      }),
-      ctx.webServer.register({
-        kind: 'exact',
-        path: `${DEFAULTS.routePrefix}/layout`,
-        handler: async (req, res) => {
-          if (rejectUntrustedRequest(req, res, ctx.connection)) return
-          if (!process.env.DSH_HOME)
-            return json(res, 503, { error: '服务未提供数据目录，标签仍可在当前窗口使用。' })
-          const store = createLayoutStore(process.env.DSH_HOME)
-          try {
-            if (req.method === 'GET') return json(res, 200, store.read())
-            if (req.method !== 'POST') return json(res, 405, { error: '请使用 GET 或 POST' })
-            if (req.headers?.['x-dsh-px-request'] !== '1')
-              return json(res, 403, { error: '请从本机页面保存布局' })
-            json(res, 200, store.write(await readJsonBody(req as IncomingMessage)))
-          } catch (err) {
-            json(res, err instanceof LayoutError ? err.status : 400, {
-              error: err instanceof Error ? err.message : '布局操作失败'
-            })
-          }
         }
       }),
       ctx.webServer.register({

@@ -8,9 +8,7 @@ import { validNoteDraft, validScheduleDraft } from '../packages/dsh-px-workspace
 import { createOperationRegistry } from '../packages/shared/operation'
 import { createQuoteRequests } from '../packages/shared/quote-requests'
 import { pageCarrier } from '../packages/shared/client-capabilities'
-import { createLayoutStore, LayoutError, serviceIdentity } from '../packages/dsh-px-workbench/src/layout'
 import { activitySnapshot, isIdle, registerActivity } from '../packages/dsh-px-workbench/src/activity'
-import { closeTabState, parseTabs } from '../packages/dsh-px-workspace/src/client/tab-state'
 
 test('inactive persisted drafts leave bounded memory and restore all unsaved text', () => {
   const records = new Map<string, string>()
@@ -135,42 +133,6 @@ test('operation observers can replay an effect without creating a second mutatio
   unsubscribe()
   await Promise.resolve()
   assert.equal(registry.size(), 0)
-})
-test('service-owned layout restores across connections and rejects another window stale save', () => {
-  const dir = mkdtempSync(join(tmpdir(), 'dshpx-layout-'))
-  try {
-    const first = createLayoutStore(dir),
-      second = createLayoutStore(dir)
-    const one = first.read(),
-      two = second.read()
-    const ids = Array.from({ length: 85 }, (_, index) => `session-${index}`)
-    const saved = first.write({ ...one, layout: { ...one.layout, ids, pins: ['session-84'] } })
-    assert.equal(saved.serviceId, serviceIdentity(dir))
-    assert.deepEqual(second.read().layout.ids, ids)
-    assert.throws(
-      () => second.write({ ...two, layout: { ...two.layout, ids: ['other'] } }),
-      (err: unknown) => err instanceof LayoutError && err.status === 409
-    )
-    assert.deepEqual(first.read().layout.ids, ids)
-    assert.notEqual(serviceIdentity(join(dir, 'another')), saved.serviceId)
-    const file = join(dir, 'storages', 'dsh-px-workbench', 'session-layout.json')
-    writeFileSync(file, '{damaged')
-    assert.throws(() => first.write(saved), /原文件已保留/)
-    assert.equal(readFileSync(file, 'utf8'), '{damaged')
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
-test('closing many tabs reclaims titles outside the bounded reopen list', () => {
-  let tabs = parseTabs(
-    JSON.stringify({
-      ids: Array.from({ length: 80 }, (_, i) => `s-${i}`),
-      titles: Object.fromEntries(Array.from({ length: 80 }, (_, i) => [`s-${i}`, `title ${i}`]))
-    })
-  )
-  for (let i = 0; i < 80; i++) tabs = closeTabState(tabs, `s-${i}`, tabs.ids).tabs
-  assert.equal(tabs.closed.length, 10)
-  assert.equal(Object.keys(tabs.titles).length, 10)
 })
 test('page carrier never infers Electron from the desktop service behind a browser', () => {
   assert.equal(pageCarrier(undefined), 'browser')

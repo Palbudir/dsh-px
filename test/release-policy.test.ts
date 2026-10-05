@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url'
 const load = (name: string): Promise<any> => import(pathToFileURL(resolve('scripts', name)).href)
 const { assertNewerVersion, assertLegacyLatest, LEGACY_LATEST_TAG } = await load('release-version.mjs')
 const { archiveMemberNames, verifyReleaseFiles } = await load('release-assets.mjs')
-const { validateCatalog } = await load('release-catalog.mjs')
+const { validateCatalog } = await load('check-roadmap.mjs')
 const head = 'a'.repeat(40),
   base = 'b'.repeat(40)
 test('versions are monotonic per product prefix; history tags and drafts are not compared', () => {

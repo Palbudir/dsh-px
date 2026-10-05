@@ -1,6 +1,6 @@
+import { createHash } from 'node:crypto'
 import { accessSync, constants, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
-import { delimiter, isAbsolute, join } from 'node:path'
-import { serviceIdentity } from './layout'
+import { delimiter, isAbsolute, join, resolve } from 'node:path'
 import type { Activity } from './activity'
 
 export interface LocalStatus {
@@ -131,4 +131,13 @@ export function localStatus(
     },
     activity
   }
+}
+
+/** Stable identifier of one DSH data directory, shown in diagnostics. */
+export function serviceIdentity(home: string, platform = process.platform): string {
+  const path = resolve(home)
+  return createHash('sha256')
+    .update(platform === 'win32' ? path.toLowerCase() : path)
+    .digest('hex')
+    .slice(0, 24)
 }

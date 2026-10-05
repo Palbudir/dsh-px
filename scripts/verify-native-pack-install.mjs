@@ -1,8 +1,9 @@
 /**
- * Release gate for Desktop first-start provisioning: install the bundled Pack into a fresh profile
- * through the packaged dsh plugin manager and the packaged pnpm, exactly as the overlay does at
- * first start, and require the profile to record that archive as its dsh-px-pack dependency (the
- * check first start applies) and every Pack member to resolve inside the installed Pack.
+ * Release gate for the aggregate Pack that `dsh web` users install through the plugin manager:
+ * install the release Pack into a fresh profile with the packaged dsh plugin manager and pnpm, then
+ * require the profile to record that archive as its dsh-px-pack dependency and every bundled member
+ * to resolve inside the installed Pack. Desktop first start uses the split foundation and feature
+ * archives instead; this gate does not exercise that path.
  *
  * Usage: node scripts/verify-native-pack-install.mjs <prepared upstream checkout> --pack=<tgz>
  */
@@ -34,8 +35,8 @@ const { runPluginCommand } = await import(
 )
 const profile = mkdtempSync(join(tmpdir(), 'dsh-px-pack-install-'))
 try {
-  // Same context, arguments and environment as the generated preparePxPack in the overlay; the
-  // build runs on Node instead of Electron, so the runtime node shims point at this executable.
+  // Same plugin-manager context and environment as the Desktop overlay; the build runs on Node
+  // instead of Electron, so the runtime node shims point at this executable.
   const result = await runPluginCommand(
     {
       profile: 'desktop',
@@ -50,7 +51,7 @@ try {
       args: ['--expose-internals', pnpm],
       outputBytes: 16384,
       idleTimeoutMs: 120000,
-      // The same bound as first-start provisioning, so a slower install than the app allows fails here.
+      // The same bound Desktop applies to native installs.
       signal: AbortSignal.timeout(300000),
       env: {
         ELECTRON_RUN_AS_NODE: '1',
@@ -63,8 +64,7 @@ try {
     throw Error(
       `Pack install through the packaged plugin manager failed (exit ${result.exitCode}):\n${result.output ?? ''}`
     )
-  // First start then requires the profile to name exactly this archive (provisionNativePack's
-  // sameSpec); a manager that records another spec form would leave the Desktop without its Pack.
+  // The profile must name exactly this archive; another spec form would leave the Pack unmanaged.
   const spec = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8')).dependencies?.['dsh-px-pack']
   if (!sameArchiveSpec(spec, archive, profile))
     throw Error(`Installed profile records dsh-px-pack as ${JSON.stringify(spec)}, not the installed archive`)
