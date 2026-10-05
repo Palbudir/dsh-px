@@ -1,21 +1,20 @@
 ; Per-user installer diagnostics. No conversation, credential or request data is logged.
+; `reason` is the installer's own user-facing failure text ($InstallerError), empty until a check fails.
 !macro PxInstallerTrace Stage
   !ifndef BUILD_UNINSTALLER
     Push $R6
     Push $R7
-    Push $R8
     Push $R9
     StrCpy $R7 0
     ${If} ${Errors}
       StrCpy $R7 1
     ${EndIf}
-    System::Call 'kernel32::GetLastError() i.R8'
     System::Call 'kernel32::GetCurrentProcessId() i.R6'
     CreateDirectory "$LOCALAPPDATA\dsh-px-desktop-updater\installer-logs"
     FileOpen $R9 "$LOCALAPPDATA\dsh-px-desktop-updater\installer-logs\install-${VERSION}.log" a
     ${IfNot} ${Errors}
       FileSeek $R9 0 END
-      FileWrite $R9 "pid=$R6 stage=${Stage} error=$R8$\r$\n"
+      FileWrite $R9 "pid=$R6 stage=${Stage} reason=$InstallerError$\r$\n"
       FileClose $R9
     ${EndIf}
     ${If} $R7 == 1
@@ -24,7 +23,6 @@
       ClearErrors
     ${EndIf}
     Pop $R9
-    Pop $R8
     Pop $R7
     Pop $R6
   !endif
@@ -52,10 +50,11 @@
         SetOutPath $TEMP
         ExecShell "open" "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "--updated"
         !insertmacro PxInstallerTrace "relaunch-available"
-        ${If} ${Silent}
-          System::Call 'user32::MessageBoxW(p 0, w "$(INSTALLER_FAILED)$\r$\n$LOCALAPPDATA\dsh-px-desktop-updater\installer-logs", w "DSH-PX Desktop", i 48)'
-        ${EndIf}
       ${EndIf}
+    ${EndIf}
+    ; A silent update has no other UI: the application already quit, so always say why it did not return.
+    ${If} ${Silent}
+      System::Call 'user32::MessageBoxW(p 0, w "$(INSTALLER_FAILED)$\r$\n$InstallerError$\r$\n$\r$\n$LOCALAPPDATA\dsh-px-desktop-updater\installer-logs", w "DSH-PX Desktop", i 48)'
     ${EndIf}
   FunctionEnd
 !macroend

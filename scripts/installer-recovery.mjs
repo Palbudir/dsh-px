@@ -12,9 +12,16 @@ export function prepareInstallerRecovery(app, output) {
   })
   let main = readFileSync(join(app, 'scripts/installer.nsh'), 'utf8').replaceAll('\r\n', '\n')
   if (main.split('${If} $R1 >= 40').length !== 2) throw Error('Installer process-wait anchor changed')
+  const running = 'MessageBox MB_OK|MB_ICONINFORMATION "$(INSTALLER_RUNNING)" /SD IDOK'
+  if (main.split(running).length !== 2) throw Error('Installer running-app message anchor changed')
   main = '!include "${__FILEDIR__}\\px-recovery.nsh"\n' + main
   main = main
     .replace('${If} $R1 >= 40', '${If} $R1 >= 240')
+    // Record why a silent update stopped; the uninstaller build has no $InstallerError.
+    .replace(
+      running,
+      `!ifndef BUILD_UNINSTALLER\n        StrCpy $InstallerError "$(INSTALLER_RUNNING)"\n      !endif\n      ${running}`
+    )
     .replace('!macro customInit\n', '!macro customInit\n  !insertmacro PxInstallerTrace "init"\n')
     .replace(
       '    Function InstallerCheckAppRunning',

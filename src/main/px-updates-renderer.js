@@ -7,7 +7,7 @@ const labels = {
   verifying: '正在校验下载…',
   preparing: '正在校验并准备插件包…',
   ready: '下载完成，可以安装',
-  installing: '正在准备重启…',
+  installing: '请在主窗口的确认框中选择；确认后客户端会退出并更新…',
   error: '更新失败'
 }
 const mb = (value) => (value / 1048576).toFixed(1) + ' MB'
@@ -22,6 +22,9 @@ function render(value) {
     const status = root.querySelector('.status')
     status.textContent = state.message || labels[state.phase] || state.phase
     status.classList.toggle('error', state.phase === 'error')
+    const notice = root.querySelector('.notice')
+    notice.textContent = state.notice || ''
+    notice.hidden = !state.notice
     if (state.phase === 'downloading')
       status.textContent +=
         ' ' +
