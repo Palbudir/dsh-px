@@ -53,8 +53,14 @@
       ${EndIf}
     ${EndIf}
     ; A silent update has no other UI: the application already quit, so always say why it did not return.
+    ; Unattended acceptance runs pass --px-quiet-failure and read the trace instead.
     ${If} ${Silent}
-      System::Call 'user32::MessageBoxW(p 0, w "$(INSTALLER_FAILED)$\r$\n$InstallerError$\r$\n$\r$\n$LOCALAPPDATA\dsh-px-desktop-updater\installer-logs", w "DSH-PX Desktop", i 48)'
+      ${GetParameters} $R0
+      ClearErrors
+      ${GetOptions} $R0 "--px-quiet-failure" $R1
+      ${If} ${Errors}
+        System::Call 'user32::MessageBoxW(p 0, w "$(INSTALLER_FAILED)$\r$\n$InstallerError$\r$\n$\r$\n$LOCALAPPDATA\dsh-px-desktop-updater\installer-logs", w "DSH-PX Desktop", i 48)'
+      ${EndIf}
     ${EndIf}
   FunctionEnd
 !macroend

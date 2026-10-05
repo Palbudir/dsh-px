@@ -141,4 +141,21 @@ test('installer recovery always explains a silent failure and records why the ap
   assert.ok(relaunchEnd > 0 && notice > relaunchEnd)
   const between = recovery.slice(relaunchEnd, notice)
   assert.equal(between.match(/\$\{EndIf\}/g)?.length, 2, 'both relaunch conditions close before the notice')
+  // Unattended acceptance runs suppress only the dialog, never the trace or the exit code.
+  const quiet = recovery.slice(notice)
+  assert.match(
+    quiet,
+    /\$\{GetOptions\} \$R0 "--px-quiet-failure" \$R1\s+\$\{If\} \$\{Errors\}\s+System::Call 'user32::MessageBoxW/
+  )
+})
+
+test('installer acceptance refuses to run outside a CI runner', () => {
+  const script = readFileSync('scripts/installer-acceptance.ps1', 'utf8')
+  assert.match(script, /if \(\$env:CI -ne 'true' -or -not \$env:RUNNER_TEMP\) \{\s+throw/)
+  assert.match(script, /--px-quiet-failure/)
+  const workflow = readFileSync('.github/workflows/release.yml', 'utf8')
+  const inspect = workflow.indexOf('- name: Inspect and hash the installer')
+  const acceptance = workflow.indexOf('- name: Installer acceptance from the published Desktop')
+  const upload = workflow.indexOf('- name: Upload inspected release assets', inspect)
+  assert.ok(inspect > 0 && acceptance > inspect && upload > acceptance, 'acceptance gates the Desktop upload')
 })
