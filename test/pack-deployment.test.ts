@@ -192,6 +192,8 @@ test('Desktop generation 4 activates its six-feature Pack over a generation 3 re
   await upgraded.activate()
   upgraded.confirm()
   assert.equal(upgraded.read().active?.protocolGeneration, 4)
+  // A normal generation upgrade is not reported as a recovery problem.
+  assert.equal(upgraded.read().error, undefined)
   const result = JSON.parse(readFileSync(file, 'utf8'))
   assert.ok(result.dependencies['dsh-px-memory'])
   assert.equal(result.dependencies['dsh-px-annotations'], undefined)
@@ -371,4 +373,23 @@ test('bundled receipts accept beta and stable product versions, not malformed on
     if (valid) assert.equal(deployment.read().active?.version, version)
     else assert.throws(() => deployment.read(), /Invalid bundled Pack receipt/)
   }
+})
+
+test('replacing a newer incompatible Pack with an older bundled one is reported', async (t) => {
+  const f = fixture(t)
+  const newer = f.pack('0.4.0-alpha.1', FEATURE_BUNDLES, 4),
+    archive = join(f.root, 'newer-desktop-pack.tgz')
+  writeFileSync(archive, newer.bytes)
+  const newerDesktop = new PackDeployment({
+    ...f.deployment.options,
+    bundled: newer.receipt,
+    bundledArchive: archive
+  })
+  await newerDesktop.activate()
+  newerDesktop.confirm()
+  // An older generation-3 Desktop cannot run the generation-4 Pack and falls back to its own.
+  await f.deployment.activate()
+  f.deployment.confirm()
+  assert.equal(f.deployment.read().active?.version, f.baseline.receipt.version)
+  assert.match(f.deployment.read().error ?? '', /0\.4\.0-alpha\.1 与此客户端核心不兼容.*0\.3\.2-alpha\.1/)
 })
