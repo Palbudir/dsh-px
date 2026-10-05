@@ -175,8 +175,11 @@ export class PackDeployment {
       r.upstreamCommit === bundled.upstreamCommit &&
       r.protocolGeneration === bundled.protocolGeneration
     if (!compatible(selected)) {
+      // An ordinary Desktop upgrade replaces an older generation silently; only a newer, independently
+      // installed Pack that this client cannot run is worth reporting.
+      if (gt(selected.version, bundled.version))
+        state.error = `已安装的 Pack ${selected.version} 与此客户端核心不兼容，已改用随附的 ${bundled.version}。`
       selected = bundled
-      state.error = '原 Pack 与新客户端核心不兼容，已切换到随附版本。'
     } else if (!state.pending && !interrupted && gt(bundled.version, selected.version)) selected = bundled
     const previous = interrupted
       ? selected
