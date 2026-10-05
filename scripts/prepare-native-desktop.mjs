@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { build } from 'esbuild'
 import { releaseAssetNames } from './release-version.mjs'
+import { nsisAppGuid } from './nsis-guid.mjs'
 const root = fileURLToPath(new URL('../', import.meta.url))
 if (!process.argv[2] || process.argv[2].startsWith('--'))
   throw Error(
@@ -34,6 +35,9 @@ if (
     'Native Desktop is not the active product contract; --candidate is required for isolated validation'
   )
 const keys = JSON.parse(readFileSync(join(root, 'config/update-keys.json'), 'utf8'))
+const appId = 'com.palbudir.dshpx.desktop'
+// The per-user NSIS registration the silent updater requires: HKCU\Software\<GUID of appId>.
+const installRegistryKey = 'Software\\' + nsisAppGuid(appId)
 const ownHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
 const ownDirty = !!execFileSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8' }).trim()
 const packOption = process.argv.find((arg) => arg.startsWith('--pack='))
@@ -232,7 +236,7 @@ main = replaceOnce(
 main = replaceOnce(
   main,
   'const updateSchedule = new DesktopUpdateSchedule(',
-  `const pxUpdateWindow = createPackUpdateWindow({app, BrowserWindow, ipcMain, net}, {assets: fileURLToPath(new URL('.', import.meta.url)), deployment: currentPackDeployment, desktop: updates, restart: (version, commit) => updates.restartPack(version, commit)});
+  `const pxUpdateWindow = createPackUpdateWindow({app, BrowserWindow, ipcMain, net}, {assets: fileURLToPath(new URL('.', import.meta.url)), deployment: currentPackDeployment, desktop: updates, restart: (version, commit) => updates.restartPack(version, commit), revealConfirmation: () => { const owner = currentDialogWindow(); if (owner && !owner.isDestroyed()) { if (owner.isMinimized()) owner.restore(); owner.show(); owner.focus(); } }, checkInstall: app.isPackaged ? checkPxInstall : undefined, installFailure: pxInstallFailure});
 \tconst updateSchedule = new DesktopUpdateSchedule(`
 )
 main = replaceOnce(main, 'await openUpdatePrompt();', 'pxUpdateWindow.open();')
@@ -309,7 +313,7 @@ if (
   throw Error('Upstream withLock no longer holds the profile lock across an awaited operation')
 writeFileSync(
   join(lib, 'px-main.mjs'),
-  'import { configurePxUpdates, preparePxDefaults, preparePxPack, openDesktopInBrowser, createUpdateJournal, createPackUpdateWindow, currentPackDeployment, confirmPackStartup } from "./px-updates.mjs";\n' +
+  'import { configurePxUpdates, preparePxDefaults, preparePxPack, openDesktopInBrowser, createUpdateJournal, createPackUpdateWindow, currentPackDeployment, confirmPackStartup, checkPxInstall, pxInstallFailure } from "./px-updates.mjs";\n' +
     main
 )
 // The patched entry is text surgery on the pinned bundle; parse it now (including every injected
@@ -325,6 +329,10 @@ await build({
 export {openDesktopInBrowser} from ${JSON.stringify(join(root, 'src/main/open-browser.ts'))};
 export {createUpdateJournal} from ${JSON.stringify(join(root, 'src/main/update-history.ts'))};
 export {createPackUpdateWindow} from ${JSON.stringify(join(root, 'src/main/pack-update-window.ts'))};
+import {assertInstallRegistration} from ${JSON.stringify(join(root, 'src/main/install-registration.ts'))};
+import {previousInstallFailure} from ${JSON.stringify(join(root, 'src/main/installer-log.ts'))};
+export function checkPxInstall(){return assertInstallRegistration(${JSON.stringify(installRegistryKey)}, process.execPath)}
+export function pxInstallFailure(version){return previousInstallFailure(process.env.LOCALAPPDATA, version)}
 import {PackDeployment} from ${JSON.stringify(join(root, 'src/main/pack-deployment.ts'))};
 let deployment, bundledRuntime;
 export function currentPackDeployment(){return deployment}
@@ -450,8 +458,8 @@ factory = factory.replace(
 )
 writeFileSync(join(output, 'factory.mjs'), factory)
 const cfg = `import {createElectronBuilderConfig} from './factory.mjs';
-const config=createElectronBuilderConfig({...process.env,DSH_DESKTOP_UNSIGNED:'1',DSH_DESKTOP_TARGET_PLATFORM:'win32',DSH_DESKTOP_TARGET_ARCH:'x64',DSH_DESKTOP_APP_ID:'com.palbudir.dshpx.desktop',DSH_DESKTOP_BUILD_COMMIT:${JSON.stringify(ownHead)},DSH_DESKTOP_BUILD_DIRTY:${JSON.stringify(ownDirty ? '1' : '0')}});
-config.appId='com.palbudir.dshpx.desktop';config.productName='DSH-PX Desktop';config.protocols=[{name:'DSH-PX Desktop',schemes:['dsh-px']}];
+const config=createElectronBuilderConfig({...process.env,DSH_DESKTOP_UNSIGNED:'1',DSH_DESKTOP_TARGET_PLATFORM:'win32',DSH_DESKTOP_TARGET_ARCH:'x64',DSH_DESKTOP_APP_ID:${JSON.stringify(appId)},DSH_DESKTOP_BUILD_COMMIT:${JSON.stringify(ownHead)},DSH_DESKTOP_BUILD_DIRTY:${JSON.stringify(ownDirty ? '1' : '0')}});
+config.appId=${JSON.stringify(appId)};config.productName='DSH-PX Desktop';config.protocols=[{name:'DSH-PX Desktop',schemes:['dsh-px']}];
 config.extraMetadata={...config.extraMetadata,name:'dsh-px-desktop',version:${JSON.stringify(products.desktop.version)},main:'lib/px-bootstrap.cjs',dshDesktopAppId:config.appId,dshPx:{packVersion:${JSON.stringify(products.pack.version)},protocolGeneration:${products.protocolGeneration},upstreamCommit:${JSON.stringify(expected)},upstreamVersion:${JSON.stringify(pin.version)},candidate:${candidate},sourceCommit:${JSON.stringify(ownHead)},sourceDirty:${ownDirty}}};
 config.files=config.files.filter(f=>f!=='lib/main.js');config.files.push('lib/px-main.mjs','lib/px-bootstrap.cjs','lib/px-updates.mjs','lib/px-update-preload.cjs','lib/px-updates.html','lib/px-updates-renderer.js',${brandedPreloads.map((n) => JSON.stringify('lib/px-' + n)).join(',')});
 config.win.icon=${JSON.stringify(join(root, 'build/icon.png'))};config.extraResources=config.extraResources.map(r=>r.to==='icon.png'?{...r,from:${JSON.stringify(join(root, 'build/icon.png'))}}:r);
