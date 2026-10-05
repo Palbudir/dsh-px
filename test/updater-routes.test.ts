@@ -210,3 +210,18 @@ test('the updater host exposes only status and a signed check; no desktop bridge
   dispose?.()
   assert.equal(routes.size, 0)
 })
+
+test('a newer-generation Pack feed tells the user to update Desktop first', () => {
+  const next = packManifest(`0.${products.protocolGeneration + 1}.0`, {
+    protocolGeneration: products.protocolGeneration + 1
+  })
+  const result = evaluatePackFeed(
+    signed(next),
+    `0.${products.protocolGeneration}.0-alpha.1`,
+    new Date(0),
+    keys
+  )
+  assert.equal(result.updateAvailable, false)
+  assert.match(result.error ?? '', /需要先更新桌面客户端/)
+  assert.doesNotMatch(result.error ?? '', /协议代际/)
+})

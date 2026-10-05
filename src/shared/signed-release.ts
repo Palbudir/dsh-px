@@ -206,12 +206,14 @@ export function verifySignedRelease(
   validateReleaseManifest(envelope.payload)
   for (const field of ['product', 'channel', 'platform'] as const)
     if (envelope.payload[field] !== target[field]) throw new Error('更新清单不属于当前产品、通道或协议代际')
-  if (
-    envelope.payload.product === 'desktop'
-      ? !envelope.payload.upgradeFromGenerations.includes(target.protocolGeneration)
-      : envelope.payload.protocolGeneration !== target.protocolGeneration
-  )
-    throw new Error('更新清单未允许从当前协议代际升级')
+  const payload = envelope.payload
+  // Generation mismatches are expected across releases; say what the user can do next.
+  if (payload.product === 'desktop' && !payload.upgradeFromGenerations.includes(target.protocolGeneration))
+    throw new Error(`客户端 ${payload.version} 不支持从当前版本直接升级，请从发布页下载安装程序。`)
+  if (payload.product === 'pack' && payload.protocolGeneration > target.protocolGeneration)
+    throw new Error(`新版插件包 ${payload.version} 需要先更新桌面客户端；客户端更新后会包含匹配的插件包。`)
+  if (payload.product === 'pack' && payload.protocolGeneration < target.protocolGeneration)
+    throw new Error('更新服务暂时只提供较旧的插件包，当前已是可用的最新版本；请稍后再检查。')
   for (const file of envelope.payload.files) Object.freeze(file)
   Object.freeze(envelope.payload.files)
   Object.freeze(envelope.payload.upgradeFromGenerations)

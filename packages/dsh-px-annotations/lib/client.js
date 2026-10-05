@@ -164,6 +164,8 @@ var paths = {
   artifact: "M3 6l7-3 7 3-7 3z M3 6v8l7 3 7-3V6 M10 9v8",
   git: "M6 4v9 M14 7v3c0 3-8 0-8 3 M4 3h4v3H4z M12 4h4v3h-4z M4 13h4v3H4z",
   jobs: "M10 2a8 8 0 1 0 .01 0 M10 5v5l3 2",
+  ledger: "M4 3h12v14H4z M7 7l1.5 1.5L11 6 M7 12h6 M7 15h4",
+  persona: "M10 3a3 3 0 1 0 .01 0 M4 17c0-3.3 2.7-5 6-5s6 1.7 6 5",
   note: "M3 3h14v11H9l-4 3v-3H3z M6 7h8 M6 10h5",
   schedule: "M3 5h14v12H3z M6 2v5 M14 2v5 M3 9h14 M6 12h2 M11 12h2",
   pin: "M7 3h6l-1 5 3 3H5l3-3z M10 11v6",

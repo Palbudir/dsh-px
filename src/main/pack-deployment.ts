@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { gt } from 'semver'
 import { verifySignedRelease, type ReleaseManifest } from '../shared/signed-release'
+import { versionGeneration } from '../shared/product-contract'
 import { assertRegularOrAbsent, writeAtomic } from './native-atomic'
 import { extractPack, sha256, type PackContract } from './pack-archive'
 import { materializePackRuntime } from './runtime-cache'
@@ -88,8 +89,15 @@ export class PackDeployment {
         throw Error('Pack receipt differs from its signed release')
     } else {
       // Bundled receipts survive Desktop upgrades; archive provenance was checked by the installer.
+      // Any canonical 0.x.y product version is valid, with or without a prerelease label.
+      let canonical = true
+      try {
+        versionGeneration(receipt.version)
+      } catch {
+        canonical = false
+      }
       if (
-        !/^\d+\.\d+\.\d+-alpha\.\d+$/.test(receipt.version) ||
+        !canonical ||
         !/^[a-f0-9]{40}$/.test(receipt.sourceCommit) ||
         !/^[a-f0-9]{40}$/.test(receipt.upstreamCommit)
       )
