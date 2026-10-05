@@ -335,3 +335,40 @@ test('a user-managed aggregate remains runnable and is not reported as upgraded'
   assert.throws(() => f.deployment.stage(f.next.signed, f.next.bytes), /自行安装/)
   assert.equal(JSON.parse(readFileSync(file, 'utf8')).dependencies['dsh-px-pack'], 'file:./custom-pack.tgz')
 })
+
+test('bundled receipts accept beta and stable product versions, not malformed ones', (t) => {
+  for (const [version, valid] of [
+    ['0.4.0-alpha.1', true],
+    ['0.5.0-beta.1', true],
+    ['0.5.0', true],
+    ['1.0.0', false],
+    ['0.5', false]
+  ] as const) {
+    const profile = mkdtempSync(join(tmpdir(), 'dshpx-receipt-'))
+    t.after(() => rmSync(profile, { recursive: true, force: true }))
+    const receipt: PackReceipt = {
+      version,
+      sha256: 'a'.repeat(64),
+      sourceCommit: 'b'.repeat(40),
+      hostVersion: '0.2.0-rc.2',
+      upstreamCommit: 'c'.repeat(40),
+      protocolGeneration: 5
+    }
+    mkdirSync(join(profile, '.dsh-px'))
+    writeFileSync(
+      join(profile, '.dsh-px/deployment.json'),
+      JSON.stringify({ schemaVersion: 1, active: receipt })
+    )
+    const deployment = new PackDeployment({
+      profile,
+      bundledRuntime: profile,
+      bundledArchive: join(profile, 'pack.tgz'),
+      bundled: receipt,
+      hostKey: 'test',
+      keys: {},
+      install: async () => {}
+    })
+    if (valid) assert.equal(deployment.read().active?.version, version)
+    else assert.throws(() => deployment.read(), /Invalid bundled Pack receipt/)
+  }
+})

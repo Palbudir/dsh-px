@@ -791,8 +791,13 @@ function verifySignedRelease(source, keys, target) {
   validateReleaseManifest(envelope.payload);
   for (const field of ["product", "channel", "platform"])
     if (envelope.payload[field] !== target[field]) throw new Error("\u66F4\u65B0\u6E05\u5355\u4E0D\u5C5E\u4E8E\u5F53\u524D\u4EA7\u54C1\u3001\u901A\u9053\u6216\u534F\u8BAE\u4EE3\u9645");
-  if (envelope.payload.product === "desktop" ? !envelope.payload.upgradeFromGenerations.includes(target.protocolGeneration) : envelope.payload.protocolGeneration !== target.protocolGeneration)
-    throw new Error("\u66F4\u65B0\u6E05\u5355\u672A\u5141\u8BB8\u4ECE\u5F53\u524D\u534F\u8BAE\u4EE3\u9645\u5347\u7EA7");
+  const payload = envelope.payload;
+  if (payload.product === "desktop" && !payload.upgradeFromGenerations.includes(target.protocolGeneration))
+    throw new Error(`\u5BA2\u6237\u7AEF ${payload.version} \u4E0D\u652F\u6301\u4ECE\u5F53\u524D\u7248\u672C\u76F4\u63A5\u5347\u7EA7\uFF0C\u8BF7\u4ECE\u53D1\u5E03\u9875\u4E0B\u8F7D\u5B89\u88C5\u7A0B\u5E8F\u3002`);
+  if (payload.product === "pack" && payload.protocolGeneration > target.protocolGeneration)
+    throw new Error(`\u65B0\u7248\u63D2\u4EF6\u5305 ${payload.version} \u9700\u8981\u5148\u66F4\u65B0\u684C\u9762\u5BA2\u6237\u7AEF\uFF1B\u5BA2\u6237\u7AEF\u66F4\u65B0\u540E\u4F1A\u5305\u542B\u5339\u914D\u7684\u63D2\u4EF6\u5305\u3002`);
+  if (payload.product === "pack" && payload.protocolGeneration < target.protocolGeneration)
+    throw new Error("\u66F4\u65B0\u670D\u52A1\u6682\u65F6\u53EA\u63D0\u4F9B\u8F83\u65E7\u7684\u63D2\u4EF6\u5305\uFF0C\u5F53\u524D\u5DF2\u662F\u53EF\u7528\u7684\u6700\u65B0\u7248\u672C\uFF1B\u8BF7\u7A0D\u540E\u518D\u68C0\u67E5\u3002");
   for (const file of envelope.payload.files) Object.freeze(file);
   Object.freeze(envelope.payload.files);
   Object.freeze(envelope.payload.upgradeFromGenerations);
