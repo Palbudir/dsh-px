@@ -296,6 +296,10 @@ test('interrupted Pack startup rolls foundation and features back as one cohort'
   f.deployment.confirm()
   assert.equal(f.deployment.read().active?.version, f.baseline.receipt.version)
   assert.match(f.deployment.read().error!, /回退/)
+  // The recovery note belongs to that startup; the next clean start must not keep reporting it.
+  await f.deployment.activate()
+  f.deployment.confirm()
+  assert.equal(f.deployment.read().error, undefined)
   assert.equal(
     JSON.parse(readFileSync(join(rollback, 'node_modules/dsh-px-core/package.json'), 'utf8')).version,
     f.baseline.receipt.version

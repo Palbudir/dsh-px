@@ -166,9 +166,12 @@ export class PackDeployment {
     this.prepare(readFileSync(options.bundledArchive), bundled, options.candidate)
     let selected = state.pending ?? state.active ?? bundled
     const interrupted = state.trial !== undefined
+    // Each activation reports only what happened in it; an earlier recovery note is not carried over.
+    let error: string | undefined
     if (interrupted) {
       selected = state.previous ?? bundled
-      state = { ...state, pending: undefined, error: '上次 Pack 启动未完成，已回退到先前版本。' }
+      state = { ...state, pending: undefined }
+      error = '上次 Pack 启动未完成，已回退到先前版本。'
     }
     const compatible = (r: PackReceipt) =>
       r.hostVersion === bundled.hostVersion &&
@@ -178,7 +181,7 @@ export class PackDeployment {
       // An ordinary Desktop upgrade replaces an older generation silently; only a newer, independently
       // installed Pack that this client cannot run is worth reporting.
       if (gt(selected.version, bundled.version))
-        state.error = `已安装的 Pack ${selected.version} 与此客户端核心不兼容，已改用随附的 ${bundled.version}。`
+        error = `已安装的 Pack ${selected.version} 与此客户端核心不兼容，已改用随附的 ${bundled.version}。`
       selected = bundled
     } else if (!state.pending && !interrupted && gt(bundled.version, selected.version)) selected = bundled
     const previous = interrupted
@@ -212,13 +215,12 @@ export class PackDeployment {
     }
     // Persist trial before the first profile mutation. A process crash retries the previous cohort.
     const changing = interrupted || selected.sha256 !== state.active?.sha256
-    if (state.pending && !interrupted) state.error = undefined
     if (changing) this.write({ ...state, previous, trial: selected, pending: undefined })
     let runtime: string
     try {
       runtime = await deploy(selected)
-    } catch (error) {
-      if (error instanceof UserManagedPack) {
+    } catch (failure) {
+      if (failure instanceof UserManagedPack) {
         this.write({
           schemaVersion: 1,
           userManaged: true,
@@ -229,9 +231,9 @@ export class PackDeployment {
         rmSync(pointer, { force: true })
         return options.bundledRuntime
       }
-      if (selected.sha256 === previous.sha256) throw error
+      if (selected.sha256 === previous.sha256) throw failure
       runtime = await deploy(previous)
-      state.error = String(error instanceof Error ? error.message : error)
+      error = String(failure instanceof Error ? failure.message : failure)
       selected = previous
     }
     this.write({
@@ -239,7 +241,7 @@ export class PackDeployment {
       active: selected,
       previous: changing ? previous : state.previous,
       trial: changing ? selected : undefined,
-      error: state.error
+      error
     })
     writeAtomic(
       join(this.own, 'runtime.json'),
