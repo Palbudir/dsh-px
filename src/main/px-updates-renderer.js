@@ -15,10 +15,14 @@ function render(value) {
   for (const name of ['pack', 'desktop']) {
     const root = document.getElementById(name),
       state = value[name]
+    // A feed that only offers the current or an older version is not an update.
+    const offered = ['available', 'downloading', 'verifying', 'preparing', 'ready', 'installing'].includes(
+      state.phase
+    )
     root.querySelector('.version').textContent =
       '当前 ' +
       state.current +
-      (state.version && state.version !== state.current ? '　→　' + state.version : '')
+      (offered && state.version && state.version !== state.current ? '　→　' + state.version : '')
     const status = root.querySelector('.status')
     status.textContent = state.message || labels[state.phase] || state.phase
     status.classList.toggle('error', state.phase === 'error')
