@@ -23,6 +23,7 @@ import {
 } from '../packages/dsh-px-computer/src/desktop'
 import {
   BROWSER_TOOLS,
+  BrowserSessions,
   browserArgs,
   checkBrowserArgs,
   childEnv,
@@ -36,7 +37,7 @@ import {
 } from '../packages/dsh-px-computer/src/browser'
 import { McpStdioClient } from '../packages/dsh-px-computer/src/mcp-stdio'
 import { SettingsStore } from '../packages/dsh-px-computer/src/settings'
-import { SessionStates } from '../packages/dsh-px-computer/src/runtime'
+import { ComputerUseRefusal, SessionStates } from '../packages/dsh-px-computer/src/runtime'
 import { apply } from '../packages/dsh-px-computer/src/index'
 
 const contract = JSON.parse(readFileSync('test/fixtures/cua-driver-0.28.0-tools.json', 'utf8'))
@@ -558,7 +559,7 @@ test('settings start disabled, reject stale or invalid edits and survive corrupt
 test('session state pauses and aborts running calls and forgets a finished session', async () => {
   const states = new SessionStates()
   let aborted = false
-  const running = states.track('s', new AbortController().signal, (signal) => {
+  const running = states.track('s', 'desktop', new AbortController().signal, (signal) => {
     return new Promise((_, reject) =>
       signal.addEventListener('abort', () => {
         aborted = true
@@ -570,17 +571,81 @@ test('session state pauses and aborts running calls and forgets a finished sessi
   await assert.rejects(running, /停止/)
   assert.ok(aborted)
   await assert.rejects(
-    states.track('s', new AbortController().signal, async () => 1),
+    states.track('s', 'desktop', new AbortController().signal, async () => 1),
     /暂停/
   )
   states.resume('s')
-  assert.equal(await states.track('s', new AbortController().signal, async () => 1), 1)
+  assert.equal(await states.track('s', 'desktop', new AbortController().signal, async () => 1), 1)
   states.grant('s', 'notepad.exe', '记事本')
   states.forget('s')
   assert.equal(states.granted('s', 'notepad.exe'), false)
 })
 
-function hostFixture(t: any) {
+test('stopping a capability aborts only its calls, in every session', async () => {
+  const states = new SessionStates()
+  const hang = (signal: AbortSignal) =>
+    new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason)))
+  const browserA = states.track('a', 'browser', new AbortController().signal, hang)
+  const browserB = states.track('b', 'browser', new AbortController().signal, hang)
+  let desktopDone = false
+  const desktop = states.track('a', 'desktop', new AbortController().signal, async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    return (desktopDone = true)
+  })
+  assert.equal(states.stop('browser', new ComputerUseRefusal('浏览器操作已关闭')), 2)
+  await assert.rejects(browserA, /已关闭/)
+  await assert.rejects(browserB, /已关闭/)
+  assert.equal(await desktop, true)
+  assert.ok(desktopDone)
+  states.grant('a', 'site|example.com')
+  states.grant('b', 'site|example.org')
+  states.grant('a', 'notepad.exe')
+  states.revokeAll((key) => key.startsWith('site|'))
+  assert.deepEqual(
+    [...states.grantedApps('a'), ...states.grantedApps('b')].map((app) => app.key),
+    ['notepad.exe']
+  )
+})
+
+test('a browser with its setting turned off can never be started', async (t) => {
+  const sessions = new BrowserSessions(() => undefined, temp(t, 'px-computer-off-'), {})
+  assert.equal(sessions.holder(), undefined)
+  await assert.rejects(
+    sessions.call(
+      's',
+      undefined,
+      'px-s',
+      'browser_navigate',
+      { url: 'https://example.com/' },
+      new AbortController().signal
+    ),
+    /已关闭/
+  )
+  assert.deepEqual(sessions.active, [])
+})
+
+/** An approval service that, like DSH, answers `cancelled` when the request signal aborts. */
+function fakeApproval(honorsSignal = true) {
+  const pending: Array<{ req: any; answer: (outcome: string) => void }> = []
+  return {
+    pending,
+    request: (req: any) =>
+      new Promise<string>((resolve) => {
+        if (honorsSignal) {
+          if (req.signal?.aborted) return resolve('cancelled')
+          req.signal?.addEventListener('abort', () => resolve('cancelled'), { once: true })
+        }
+        pending.push({ req, answer: resolve })
+      })
+  }
+}
+
+async function until(condition: () => boolean): Promise<void> {
+  for (let i = 0; i < 200 && !condition(); i++) await new Promise((resolve) => setTimeout(resolve, 5))
+  assert.ok(condition(), 'condition not reached')
+}
+
+function hostFixture(t: any, services: Record<string, unknown> = {}) {
   const dir = temp(t, 'px-computer-host-'),
     old = process.env.DSH_HOME
   process.env.DSH_HOME = dir
@@ -594,7 +659,7 @@ function hostFixture(t: any) {
   const host: any = {
     on: () => {},
     effect: (fn: any) => fn(),
-    get: () => undefined,
+    get: (name: string) => services[name],
     connection: { requestRejection: () => undefined },
     webServer: { register: (route: any) => ((handler = route.handler), () => {}) },
     systemPrompt: { section: (s: any) => (sections.push(s), () => {}) },
@@ -692,6 +757,156 @@ test(
     await assert.rejects(confirm.execute({ action: '发送邮件', category: 'send' }, run), /无法显示确认/)
     const log = (await request('GET')).json.session.log
     assert.equal(log[0].outcome, 'rejected')
+  }
+)
+
+// Whether a real driver or browser could start if a call got past its checks; tests that let a
+// call through after a grant run only where neither can.
+const resolvable = (specifier: string): boolean => {
+  try {
+    import.meta.resolve(specifier)
+    return true
+  } catch {
+    return false
+  }
+}
+const noRealDrivers = !resolvable('@playwright/mcp/package.json') && !resolvable('@trycua/cua-driver')
+const agentRun = (name: string, callId: string) => ({
+  agent: { session: { id: 's1', header: { id: 's1' } } },
+  signal: new AbortController().signal,
+  name,
+  callId
+})
+
+for (const [variant, honorsSignal] of [
+  ['the host cancels the card', true],
+  ['a late allow on the stale card', false]
+] as const)
+  test(
+    `pausing during a pending confirmation stops the call, starts nothing and asks again after resume (${variant})`,
+    { skip: process.platform !== 'win32' },
+    async (t) => {
+      const approval = fakeApproval(honorsSignal)
+      const { tools, request } = hostFixture(t, { approval })
+      await request('POST', { action: 'settings', revision: 0, desktop: true })
+      const launch = tools.get('computer_launch_app')
+      const first = launch.execute({ name: 'Notepad' }, agentRun('computer_launch_app', 'c1'))
+      await until(() => approval.pending.length === 1)
+      assert.ok(!approval.pending[0].req.signal.aborted)
+      await request('POST', { action: 'pause' })
+      if (honorsSignal) assert.ok(approval.pending[0].req.signal.aborted)
+      else approval.pending[0].answer('allowed-once')
+      await assert.rejects(first, /用户已停止电脑操作/)
+      let view = (await request('GET')).json
+      assert.equal(view.session.paused, true)
+      assert.equal(view.session.log[0].outcome, 'denied')
+      await request('POST', { action: 'resume' })
+      // No grant survived the stopped request: the next launch asks again.
+      const second = launch.execute({ name: 'Notepad' }, agentRun('computer_launch_app', 'c2'))
+      await until(() => approval.pending.length === 2)
+      approval.pending[1].answer('rejected')
+      await assert.rejects(second, /没有允许/)
+      view = (await request('GET')).json
+      assert.equal(view.status.driverLoaded, false)
+    }
+  )
+
+for (const [variant, honorsSignal] of [
+  ['the host cancels the card', true],
+  ['a late allow on the stale card', false]
+] as const)
+  test(
+    `turning browser use off ends a call waiting for site approval and the old card cannot start a browser (${variant})`,
+    { skip: process.platform !== 'win32' },
+    async (t) => {
+      const approval = fakeApproval(honorsSignal)
+      const { tools, request } = hostFixture(t, { approval })
+      let view = (await request('POST', { action: 'settings', revision: 0, browser: 'profile' })).json
+      const navigate = tools.get('browser_navigate')
+      const pending = navigate.execute({ url: 'http://localhost:8123/' }, agentRun('browser_navigate', 'c1'))
+      await until(() => approval.pending.length === 1)
+      view = (await request('POST', { action: 'settings', revision: view.settings.revision, browser: 'off' }))
+        .json
+      assert.equal(view.settings.browser, 'off')
+      assert.ok(!tools.has('browser_navigate'))
+      if (!honorsSignal) approval.pending[0].answer('allowed-once')
+      await assert.rejects(pending, /浏览器操作已在「电脑操作」面板关闭/)
+      view = (await request('GET')).json
+      assert.equal(view.settings.browser, 'off')
+      assert.equal(view.status.browserOpen, false)
+      assert.deepEqual(view.session.sites, [])
+      assert.equal(view.session.log[0].outcome, 'denied')
+      // A call the host dispatched before unregistering the tool is refused before it asks.
+      await assert.rejects(
+        navigate.execute({ url: 'http://localhost:8123/' }, agentRun('browser_navigate', 'c2')),
+        /关闭/
+      )
+      assert.equal(approval.pending.length, 1)
+    }
+  )
+
+test(
+  'changing the browser mode stops pending site approvals and ends grants made for the old browser',
+  { skip: process.platform !== 'win32' || !noRealDrivers },
+  async (t) => {
+    const approval = fakeApproval()
+    const { tools, request } = hostFixture(t, { approval })
+    let view = (await request('POST', { action: 'settings', revision: 0, browser: 'profile' })).json
+    const navigate = tools.get('browser_navigate')
+    // Granted in the PX profile; the browser itself cannot start in this test environment.
+    const granted = navigate.execute({ url: 'http://localhost:8123/' }, agentRun('browser_navigate', 'c1'))
+    await until(() => approval.pending.length === 1)
+    approval.pending[0].answer('allowed-once')
+    await assert.rejects(granted, /@playwright\/mcp/)
+    assert.deepEqual((await request('GET')).json.session.sites, ['localhost'])
+    const waiting = navigate.execute({ url: 'http://127.0.0.1:8123/' }, agentRun('browser_navigate', 'c2'))
+    await until(() => approval.pending.length === 2)
+    view = (
+      await request('POST', { action: 'settings', revision: view.settings.revision, browser: 'extension' })
+    ).json
+    await assert.rejects(waiting, /浏览器模式已在「电脑操作」面板更改/)
+    // The grant named the PX profile; the user's Edge asks again.
+    assert.deepEqual(view.session.sites, [])
+    const again = tools
+      .get('browser_navigate')
+      .execute({ url: 'http://localhost:8123/' }, agentRun('browser_navigate', 'c3'))
+    await until(() => approval.pending.length === 3)
+    assert.match(approval.pending[2].req.displayReason.zh, /你的 Edge/)
+    approval.pending[2].answer('rejected')
+    await assert.rejects(again, /没有允许/)
+  }
+)
+
+test(
+  'turning desktop use off stops a pending launch confirmation and ends the session app grants',
+  { skip: process.platform !== 'win32' || !noRealDrivers },
+  async (t) => {
+    const approval = fakeApproval()
+    const { tools, request } = hostFixture(t, { approval })
+    let view = (await request('POST', { action: 'settings', revision: 0, desktop: true })).json
+    // Granted, then the driver itself cannot load in this test environment.
+    const granted = tools
+      .get('computer_launch_app')
+      .execute({ name: 'Notepad' }, agentRun('computer_launch_app', 'c1'))
+    await until(() => approval.pending.length === 1)
+    approval.pending[0].answer('allowed-once')
+    await assert.rejects(granted, /Cua Driver/)
+    const waiting = tools
+      .get('computer_launch_app')
+      .execute({ name: 'Paint' }, agentRun('computer_launch_app', 'c2'))
+    await until(() => approval.pending.length === 2)
+    view = (await request('POST', { action: 'settings', revision: view.settings.revision, desktop: false }))
+      .json
+    await assert.rejects(waiting, /桌面应用操作已在「电脑操作」面板关闭/)
+    assert.equal(tools.size, 0)
+    await request('POST', { action: 'settings', revision: view.settings.revision, desktop: true })
+    // The earlier launch grant ended with the switch: the same app asks again.
+    const again = tools
+      .get('computer_launch_app')
+      .execute({ name: 'Notepad' }, agentRun('computer_launch_app', 'c3'))
+    await until(() => approval.pending.length === 3)
+    approval.pending[2].answer('rejected')
+    await assert.rejects(again, /没有允许/)
   }
 )
 

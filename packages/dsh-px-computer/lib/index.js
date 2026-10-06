@@ -564,6 +564,11 @@ var SessionStates = class {
   revoke(sessionId, key) {
     this.grants.get(sessionId)?.delete(key);
   }
+  /** Revoke matching grants in every session. */
+  revokeAll(matches) {
+    for (const map of this.grants.values())
+      for (const key of [...map.keys()]) if (matches(key)) map.delete(key);
+  }
   record(sessionId, entry) {
     const log = this.logs.get(sessionId) ?? [];
     log.push(entry);
@@ -576,28 +581,43 @@ var SessionStates = class {
   isPaused(sessionId) {
     return this.paused.has(sessionId);
   }
-  /** Pause a session and abort its in-flight computer actions. */
+  /** Pause a session and abort its in-flight computer actions, including pending confirmations. */
   pause(sessionId) {
     this.paused.add(sessionId);
     const active = this.running.get(sessionId);
-    for (const controller of active ?? []) controller.abort(new ComputerUseRefusal("\u7528\u6237\u5DF2\u505C\u6B62\u7535\u8111\u64CD\u4F5C"));
+    for (const controller of active?.keys() ?? [])
+      controller.abort(new ComputerUseRefusal("\u7528\u6237\u5DF2\u505C\u6B62\u7535\u8111\u64CD\u4F5C"));
     return active?.size ?? 0;
   }
   resume(sessionId) {
     this.paused.delete(sessionId);
   }
-  /** Track one call so the panel's stop button can abort it together with the turn signal. */
-  async track(sessionId, signal, run) {
+  /** Abort every in-flight call of one capability, in all sessions. */
+  stop(capability, reason) {
+    let count = 0;
+    for (const active of this.running.values())
+      for (const [controller, owner] of active)
+        if (owner === capability) {
+          controller.abort(reason);
+          count++;
+        }
+    return count;
+  }
+  /**
+   * Track one call so the panel's stop button and setting changes can abort it together with the
+   * turn signal. Registration is synchronous: a setting change after the caller's check still sees it.
+   */
+  async track(sessionId, capability, signal, run) {
     if (this.paused.has(sessionId))
       throw new ComputerUseRefusal("\u7528\u6237\u5DF2\u5728\u300C\u7535\u8111\u64CD\u4F5C\u300D\u9762\u677F\u6682\u505C\u672C\u4F1A\u8BDD\u7684\u7535\u8111\u64CD\u4F5C\uFF0C\u8BF7\u7B49\u5F85\u7528\u6237\u6062\u590D\u540E\u518D\u7EE7\u7EED\u3002");
     const controller = new AbortController();
-    const set = this.running.get(sessionId) ?? /* @__PURE__ */ new Set();
-    set.add(controller);
-    this.running.set(sessionId, set);
+    const active = this.running.get(sessionId) ?? /* @__PURE__ */ new Map();
+    active.set(controller, capability);
+    this.running.set(sessionId, active);
     try {
       return await run(AbortSignal.any([signal, controller.signal]));
     } finally {
-      set.delete(controller);
+      active.delete(controller);
     }
   }
   /** Drop everything a finished session owned. */
@@ -608,7 +628,7 @@ var SessionStates = class {
     this.running.delete(sessionId);
   }
 };
-async function askUser(approval, run, question) {
+async function askUser(approval, run, signal, question) {
   if (!approval || typeof approval.request !== "function" || !run.agent) return "unavailable";
   try {
     const outcome = await approval.request({
@@ -617,7 +637,7 @@ async function askUser(approval, run, question) {
       ...run.callId ? { callId: run.callId } : {},
       reason: question.reason,
       displayReason: { en: question.en, zh: question.zh },
-      signal: run.signal
+      signal
     });
     return ["allowed-once", "rejected", "cancelled", "unavailable"].includes(outcome) ? outcome : "unavailable";
   } catch {
@@ -1271,7 +1291,8 @@ var BrowserSessions = class {
   sessions = /* @__PURE__ */ new Map();
   /** The session holding the single shared browser in the login-carrying modes. */
   holder() {
-    return this.options().mode === "isolated" ? void 0 : this.sessions.keys().next().value;
+    const mode = this.options()?.mode;
+    return mode && mode !== "isolated" ? this.sessions.keys().next().value : void 0;
   }
   currentUrl(sessionId) {
     return this.sessions.get(sessionId)?.url;
@@ -1287,10 +1308,11 @@ var BrowserSessions = class {
     session.unknown = false;
   }
   open(sessionId, cwd, label, signal) {
+    const options = this.options();
+    if (!options) throw new ComputerUseRefusal("\u6D4F\u89C8\u5668\u64CD\u4F5C\u5DF2\u5173\u95ED");
     const existing = this.sessions.get(sessionId);
     if (existing && existing.client.alive) return existing;
     if (existing) this.drop(sessionId);
-    const options = this.options();
     const holder = this.holder();
     if (holder && holder !== sessionId)
       throw new ComputerUseRefusal(
@@ -1992,8 +2014,9 @@ function apply(ctx) {
   });
   const launchOptions = () => {
     const current = settings.read();
+    if (current.browser === "off") return void 0;
     return {
-      mode: current.browser === "off" ? "isolated" : current.browser,
+      mode: current.browser,
       headless: current.headless,
       // Resolved only when a browser starts, so a missing optional install never breaks the panel.
       get cli() {
@@ -2019,11 +2042,20 @@ function apply(ctx) {
     if (!run.agent) throw new ComputerUseRefusal("\u7535\u8111\u64CD\u4F5C\u53EA\u80FD\u5728\u4F1A\u8BDD\u4E2D\u4F7F\u7528");
     return { agent: run.agent, id: run.agent.session.id };
   };
-  const askOrRefuse = async (run, subject, zh, en, reason) => {
-    const outcome = await askUser(approval(), run, { toolName: run.name ?? name, reason, zh, en });
+  const askOrRefuse = async (run, signal, subject, zh, en, reason) => {
+    const outcome = await askUser(approval(), run, signal, { toolName: run.name ?? name, reason, zh, en });
+    signal.throwIfAborted();
     if (outcome !== "allowed-once") throw new AnswerRefusal(refusalText(outcome, subject));
   };
-  const tool = (definition, target, detail, body) => ({
+  const windows = process.platform === "win32";
+  const enabled = (current) => windows && (current.desktop || current.browser !== "off");
+  const available = (capability, current) => capability === "desktop" ? windows && current.desktop : capability === "browser" ? windows && current.browser !== "off" : enabled(current);
+  const CLOSED = {
+    desktop: "\u684C\u9762\u5E94\u7528\u64CD\u4F5C\u5DF2\u5728\u300C\u7535\u8111\u64CD\u4F5C\u300D\u9762\u677F\u5173\u95ED\uFF0C\u672C\u6B21\u8C03\u7528\u5DF2\u4E2D\u6B62\u3002",
+    browser: "\u6D4F\u89C8\u5668\u64CD\u4F5C\u5DF2\u5728\u300C\u7535\u8111\u64CD\u4F5C\u300D\u9762\u677F\u5173\u95ED\uFF0C\u672C\u6B21\u8C03\u7528\u5DF2\u4E2D\u6B62\u3002",
+    confirm: "\u7535\u8111\u64CD\u4F5C\u5DF2\u5728\u300C\u7535\u8111\u64CD\u4F5C\u300D\u9762\u677F\u5173\u95ED\uFF0C\u672C\u6B21\u8C03\u7528\u5DF2\u4E2D\u6B62\u3002"
+  };
+  const tool = (capability, definition, target, detail, body) => ({
     ...definition,
     output: {
       schema: TOOL_OUTPUT_SCHEMA,
@@ -2034,8 +2066,10 @@ function apply(ctx) {
       const session = sessionOf(run);
       let label = target(args);
       try {
+        if (!available(capability, settings.read())) throw new ComputerUseRefusal(CLOSED[capability]);
         const result = await states.track(
           session.id,
+          capability,
           run.signal,
           (signal) => body(args, run, session, signal)
         );
@@ -2072,6 +2106,7 @@ function apply(ctx) {
     }
   });
   const desktopTool = (spec) => tool(
+    "desktop",
     spec,
     (args) => args.pid !== void 0 ? `pid=${args.pid}` : spec.name,
     spec.log,
@@ -2091,6 +2126,7 @@ function apply(ctx) {
           if (states.granted(s.id, key) || settings.alwaysAllowsApp(key)) return;
           await askOrRefuse(
             run,
+            signal,
             `\u64CD\u4F5C\u300C${display}\u300D`,
             `\u5141\u8BB8 DSH \u5728\u672C\u4F1A\u8BDD\u4E2D\u8BFB\u53D6\u548C\u64CD\u4F5C\u300C${display}\u300D\u5417\uFF1F\u4E4B\u540E\u672C\u4F1A\u8BDD\u5BF9\u5B83\u7684\u67E5\u770B\u3001\u70B9\u51FB\u548C\u8F93\u5165\u4E0D\u518D\u9010\u6B21\u8BE2\u95EE\uFF1B\u5220\u9664\u3001\u53D1\u9001\u3001\u4ED8\u6B3E\u7B49\u654F\u611F\u52A8\u4F5C\u4ECD\u4F1A\u5355\u72EC\u786E\u8BA4\u3002`,
             `Allow DSH to read and operate "${display}" in this session? Later views, clicks and typing in this app will not ask again; deleting, sending or paying still asks separately.`,
@@ -2103,6 +2139,7 @@ function apply(ctx) {
           if (!confirm && states.granted(s.id, key)) return;
           await askOrRefuse(
             run,
+            signal,
             `\u542F\u52A8\u300C${display}\u300D`,
             confirm ? `\u5373\u5C06${confirm}\uFF1A${display}\u3002\u5141\u8BB8\u5417\uFF1F` : `\u5141\u8BB8 DSH \u542F\u52A8\u300C${display}\u300D\u5E76\u5728\u672C\u4F1A\u8BDD\u4E2D\u64CD\u4F5C\u5B83\u5417\uFF1F`,
             confirm ? `About to ${LAUNCH_REASON_EN[confirm] ?? "run a program"}: ${display}. Allow?` : `Allow DSH to start "${display}" and operate it in this session?`,
@@ -2127,12 +2164,12 @@ function apply(ctx) {
     }
   );
   const browserTool = (spec) => tool(
+    "browser",
     spec,
     (args) => String(args.url ?? spec.name),
     ["url", "action", "element", "text", "key"],
     async (args, run, s, signal) => {
       const current = settings.read();
-      if (current.browser === "off") throw new ComputerUseRefusal("\u6D4F\u89C8\u5668\u64CD\u4F5C\u5DF2\u5173\u95ED");
       checkBrowserArgs(spec.name, args);
       if (spec.name === "browser_take_screenshot" && !await modelSeesImages(ctx, s.agent, signal))
         throw new ComputerUseRefusal("\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u56FE\u7247\uFF0C\u8BF7\u6539\u7528 browser_snapshot\u3002");
@@ -2149,6 +2186,7 @@ function apply(ctx) {
         if (siteGranted(target)) return;
         await askOrRefuse(
           run,
+          signal,
           `\u8BBF\u95EE ${target}`,
           landed2 ? `\u9875\u9762\u5DF2\u8DF3\u8F6C\u5230 ${target}\u3002\u5141\u8BB8 DSH \u5728\u672C\u4F1A\u8BDD\u4E2D\u4F7F\u7528${where[0]}\u8BFB\u53D6\u5E76\u64CD\u4F5C\u8FD9\u4E2A\u7F51\u7AD9\u5417\uFF1F\u8BE5\u6D4F\u89C8\u5668\u53EF\u80FD\u4FDD\u7559\u4F60\u7684\u767B\u5F55\u72B6\u6001\u3002` : `\u5141\u8BB8 DSH \u5728\u672C\u4F1A\u8BDD\u4E2D\u4F7F\u7528${where[0]}\u8BBF\u95EE\u5E76\u64CD\u4F5C ${target} \u5417\uFF1F\u8BE5\u6D4F\u89C8\u5668\u53EF\u80FD\u4FDD\u7559\u4F60\u7684\u767B\u5F55\u72B6\u6001\u3002`,
           `${landed2 ? `The page moved to ${target}. ` : ""}Allow DSH to open and operate ${target} in ${where[1]} for this session? It may hold your signed-in state.`,
@@ -2162,6 +2200,7 @@ function apply(ctx) {
         if (files.length)
           await askOrRefuse(
             run,
+            signal,
             "\u4E0A\u4F20\u6587\u4EF6",
             `\u5373\u5C06\u5411 ${site ?? "\u5F53\u524D\u7F51\u9875"} \u4E0A\u4F20\uFF1A${files.join("\u3001")}\u3002\u5141\u8BB8\u5417\uFF1F`,
             `About to upload ${files.join(", ")} to ${site ?? "the current page"}. Allow?`,
@@ -2183,6 +2222,7 @@ function apply(ctx) {
     }
   );
   const confirmTool = tool(
+    "confirm",
     {
       name: "computer_confirm",
       description: "\u5728\u6267\u884C\u9700\u8981\u7528\u6237\u786E\u8BA4\u7684\u7535\u8111\u6216\u6D4F\u89C8\u5668\u52A8\u4F5C\u4E4B\u524D\u8C03\u7528\uFF08\u5220\u9664\u3001\u5BF9\u5916\u53D1\u9001\u6216\u63D0\u4EA4\u3001\u4ED8\u6B3E\u3001\u4FEE\u6539\u8D26\u53F7\u6743\u9650\u3001\u5B89\u88C5\u8F6F\u4EF6\u7B49\uFF09\u3002\u7528\u6237\u6279\u51C6\u540E\u53EA\u5BF9\u63CF\u8FF0\u7684\u90A3\u4E00\u6B65\u6709\u6548\uFF1B\u672A\u83B7\u6279\u51C6\u65F6\u4E0D\u8981\u6267\u884C\uFF0C\u5E76\u5728\u56DE\u590D\u4E2D\u8BF4\u660E\u3002",
@@ -2206,11 +2246,12 @@ function apply(ctx) {
     },
     (args) => String(args.category ?? "confirm"),
     ["category", "action"],
-    async (args, run) => {
+    async (args, run, _session, signal) => {
       const action = String(args.action ?? "").trim();
       if (!action) throw new ComputerUseRefusal("\u8BF7\u5199\u660E\u8981\u786E\u8BA4\u7684\u5177\u4F53\u52A8\u4F5C");
       await askOrRefuse(
         run,
+        signal,
         "\u8FD9\u4E00\u6B65",
         `\u5373\u5C06\u6267\u884C\uFF1A${action}\u3002\u5141\u8BB8\u5417\uFF1F`,
         `About to: ${action}. Allow?`,
@@ -2222,8 +2263,6 @@ function apply(ctx) {
       };
     }
   );
-  const windows = process.platform === "win32";
-  const enabled = (current) => windows && (current.desktop || current.browser !== "off");
   ctx.inject(["tools"], (host) => {
     let registered = [];
     let shape = "";
@@ -2265,11 +2304,25 @@ function apply(ctx) {
       "computer: guidance"
     )
   );
-  let browserShape = `${settings.read().browser}|${settings.read().headless}`;
+  let previous = settings.read();
   settings.subscribe((current) => {
-    const next = `${current.browser}|${current.headless}`;
-    if (next !== browserShape) void browsers.closeAll().catch(() => void 0);
-    browserShape = next;
+    const before = previous;
+    previous = current;
+    if (current.browser !== before.browser || current.headless !== before.headless) {
+      states.stop(
+        "browser",
+        new ComputerUseRefusal(
+          current.browser === "off" ? CLOSED.browser : "\u6D4F\u89C8\u5668\u6A21\u5F0F\u5DF2\u5728\u300C\u7535\u8111\u64CD\u4F5C\u300D\u9762\u677F\u66F4\u6539\uFF0C\u672C\u6B21\u8C03\u7528\u5DF2\u4E2D\u6B62\uFF1B\u5982\u4ECD\u9700\u8981\uFF0C\u8BF7\u91CD\u65B0\u53D1\u8D77\u3002"
+        )
+      );
+      void browsers.closeAll().catch(() => void 0);
+    }
+    if (current.browser !== before.browser) states.revokeAll((key) => key.startsWith("site|"));
+    if (before.desktop && !current.desktop) {
+      states.stop("desktop", new ComputerUseRefusal(CLOSED.desktop));
+      states.revokeAll((key) => !key.startsWith("site|"));
+    }
+    if (!enabled(current)) states.stop("confirm", new ComputerUseRefusal(CLOSED.confirm));
     if (!current.desktop) void driver.close().catch(() => void 0);
   });
   ctx.on("agent/created", ({ agent }) => {

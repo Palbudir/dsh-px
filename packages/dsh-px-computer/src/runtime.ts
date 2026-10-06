@@ -50,11 +50,14 @@ export interface ActivityEntry {
 const LOG_LIMIT = 200
 const MEDIA = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 
+/** The setting a tool call depends on; turning that setting off or changing it stops the call. */
+export type Capability = 'desktop' | 'browser' | 'confirm'
+
 export class SessionStates {
   private readonly grants = new Map<string, Map<string, string>>()
   private readonly logs = new Map<string, ActivityEntry[]>()
   private readonly paused = new Set<string>()
-  private readonly running = new Map<string, Set<AbortController>>()
+  private readonly running = new Map<string, Map<AbortController, Capability>>()
 
   granted(sessionId: string, key: string): boolean {
     return this.grants.get(sessionId)?.has(key) ?? false
@@ -71,6 +74,11 @@ export class SessionStates {
   revoke(sessionId: string, key: string): void {
     this.grants.get(sessionId)?.delete(key)
   }
+  /** Revoke matching grants in every session. */
+  revokeAll(matches: (key: string) => boolean): void {
+    for (const map of this.grants.values())
+      for (const key of [...map.keys()]) if (matches(key)) map.delete(key)
+  }
   record(sessionId: string, entry: ActivityEntry): void {
     const log = this.logs.get(sessionId) ?? []
     log.push(entry)
@@ -83,32 +91,48 @@ export class SessionStates {
   isPaused(sessionId: string): boolean {
     return this.paused.has(sessionId)
   }
-  /** Pause a session and abort its in-flight computer actions. */
+  /** Pause a session and abort its in-flight computer actions, including pending confirmations. */
   pause(sessionId: string): number {
     this.paused.add(sessionId)
     const active = this.running.get(sessionId)
-    for (const controller of active ?? []) controller.abort(new ComputerUseRefusal('用户已停止电脑操作'))
+    for (const controller of active?.keys() ?? [])
+      controller.abort(new ComputerUseRefusal('用户已停止电脑操作'))
     return active?.size ?? 0
   }
   resume(sessionId: string): void {
     this.paused.delete(sessionId)
   }
-  /** Track one call so the panel's stop button can abort it together with the turn signal. */
+  /** Abort every in-flight call of one capability, in all sessions. */
+  stop(capability: Capability, reason: ComputerUseRefusal): number {
+    let count = 0
+    for (const active of this.running.values())
+      for (const [controller, owner] of active)
+        if (owner === capability) {
+          controller.abort(reason)
+          count++
+        }
+    return count
+  }
+  /**
+   * Track one call so the panel's stop button and setting changes can abort it together with the
+   * turn signal. Registration is synchronous: a setting change after the caller's check still sees it.
+   */
   async track<T>(
     sessionId: string,
+    capability: Capability,
     signal: AbortSignal,
     run: (signal: AbortSignal) => Promise<T>
   ): Promise<T> {
     if (this.paused.has(sessionId))
       throw new ComputerUseRefusal('用户已在「电脑操作」面板暂停本会话的电脑操作，请等待用户恢复后再继续。')
     const controller = new AbortController()
-    const set = this.running.get(sessionId) ?? new Set<AbortController>()
-    set.add(controller)
-    this.running.set(sessionId, set)
+    const active = this.running.get(sessionId) ?? new Map<AbortController, Capability>()
+    active.set(controller, capability)
+    this.running.set(sessionId, active)
     try {
       return await run(AbortSignal.any([signal, controller.signal]))
     } finally {
-      set.delete(controller)
+      active.delete(controller)
     }
   }
   /** Drop everything a finished session owned. */
@@ -130,9 +154,15 @@ export interface Question {
 
 /**
  * Ask through the native approval card attached to the tool call. Missing services and every
- * non-grant outcome fail closed.
+ * non-grant outcome fail closed. `signal` is the call's combined signal, so pausing the session or
+ * turning the capability off cancels the card instead of leaving the turn waiting on it.
  */
-export async function askUser(approval: any, run: ToolRun, question: Question): Promise<Outcome> {
+export async function askUser(
+  approval: any,
+  run: ToolRun,
+  signal: AbortSignal,
+  question: Question
+): Promise<Outcome> {
   if (!approval || typeof approval.request !== 'function' || !run.agent) return 'unavailable'
   try {
     const outcome = await approval.request({
@@ -141,7 +171,7 @@ export async function askUser(approval: any, run: ToolRun, question: Question): 
       ...(run.callId ? { callId: run.callId } : {}),
       reason: question.reason,
       displayReason: { en: question.en, zh: question.zh },
-      signal: run.signal
+      signal
     })
     return ['allowed-once', 'rejected', 'cancelled', 'unavailable'].includes(outcome)
       ? outcome

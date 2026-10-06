@@ -203,14 +203,16 @@ export class BrowserSessions {
   private readonly sessions = new Map<string, Session>()
 
   constructor(
-    private readonly options: () => BrowserLaunchOptions,
+    /** Current launch options; `undefined` while browser use is turned off, so nothing can start one. */
+    private readonly options: () => BrowserLaunchOptions | undefined,
     private readonly outputRoot: string,
     private readonly env: NodeJS.ProcessEnv
   ) {}
 
   /** The session holding the single shared browser in the login-carrying modes. */
   holder(): string | undefined {
-    return this.options().mode === 'isolated' ? undefined : this.sessions.keys().next().value
+    const mode = this.options()?.mode
+    return mode && mode !== 'isolated' ? this.sessions.keys().next().value : undefined
   }
 
   currentUrl(sessionId: string): string | undefined {
@@ -230,10 +232,11 @@ export class BrowserSessions {
   }
 
   private open(sessionId: string, cwd: string | undefined, label: string, signal: AbortSignal): Session {
+    const options = this.options()
+    if (!options) throw new ComputerUseRefusal('浏览器操作已关闭')
     const existing = this.sessions.get(sessionId)
     if (existing && existing.client.alive) return existing
     if (existing) this.drop(sessionId)
-    const options = this.options()
     const holder = this.holder()
     if (holder && holder !== sessionId)
       throw new ComputerUseRefusal(
