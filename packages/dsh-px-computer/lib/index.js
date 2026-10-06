@@ -1244,6 +1244,23 @@ ${shaped}` : shaped;
 function pageUrlOf(text2) {
   return text2.match(/Page URL:\s*(\S+)/)?.[1];
 }
+function currentTabUrl(text2) {
+  return text2.match(/^- \d+: \(current\) \[.*\]\((\S+)\)\s*$/m)?.[1];
+}
+function redactTabTitles(text2, granted) {
+  return text2.replace(
+    /^(- \d+: (?:\(current\) )?)\[.*\]\((\S+)\)\s*$/gm,
+    (line, head, url) => {
+      const site = siteOf(url);
+      return site && !granted(site) ? `${head}[\uFF08\u672A\u83B7\u51C6\u7684\u7F51\u7AD9\uFF09](${url})` : line;
+    }
+  );
+}
+function keepsPage(name2, args) {
+  return ["browser_find", "browser_console_messages", "browser_take_screenshot", "browser_snapshot"].includes(
+    name2
+  ) || name2 === "browser_tabs" && args.action === "list";
+}
 var IDLE_MS = 20 * 6e4;
 var BrowserSessions = class {
   constructor(options, outputRoot, env) {
@@ -1258,6 +1275,16 @@ var BrowserSessions = class {
   }
   currentUrl(sessionId) {
     return this.sessions.get(sessionId)?.url;
+  }
+  /** Whether the current page must be probed before the next site check. */
+  pageUnknown(sessionId) {
+    return this.sessions.get(sessionId)?.unknown === true;
+  }
+  setUrl(sessionId, url) {
+    const session = this.sessions.get(sessionId);
+    if (!session) return;
+    session.url = url;
+    session.unknown = false;
   }
   open(sessionId, cwd, label, signal) {
     const existing = this.sessions.get(sessionId);
@@ -1294,8 +1321,14 @@ var BrowserSessions = class {
       const url = pageUrlOf(
         (result.content ?? []).filter((c) => c.type === "text").map((c) => c.text).join("\n")
       );
-      if (url) session.url = url;
-      if (name2 === "browser_close") session.url = void 0;
+      if (url) {
+        session.url = url;
+        session.unknown = false;
+      } else if (!keepsPage(name2, args)) session.unknown = true;
+      if (name2 === "browser_close") {
+        session.url = void 0;
+        session.unknown = false;
+      }
       return result;
     } finally {
       if (this.sessions.get(sessionId) === session)
@@ -2103,11 +2136,17 @@ function apply(ctx) {
       checkBrowserArgs(spec.name, args);
       if (spec.name === "browser_take_screenshot" && !await modelSeesImages(ctx, s.agent, signal))
         throw new ComputerUseRefusal("\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u56FE\u7247\uFF0C\u8BF7\u6539\u7528 browser_snapshot\u3002");
-      const site = targetSite(spec.name, args, browsers.currentUrl(s.id));
       const signedIn = current.browser !== "isolated";
+      const cwd = s.agent.session.header.cwd, label = driverSession(s.id);
+      if (signedIn && browsers.pageUnknown(s.id)) {
+        const listed = await browsers.call(s.id, cwd, label, "browser_tabs", { action: "list" }, signal);
+        browsers.setUrl(s.id, currentTabUrl(browserText(listed)));
+      }
+      const site = targetSite(spec.name, args, browsers.currentUrl(s.id));
       const where = current.browser === "extension" ? ["\u4F60\u7684 Edge", "your Edge"] : ["PX \u4E13\u7528\u6D4F\u89C8\u5668", "the PX browser profile"];
+      const siteGranted = (target) => states.granted(s.id, `site|${target}`) || settings.alwaysAllowsSite(target);
       const grantSite = async (target, landed2) => {
-        if (states.granted(s.id, `site|${target}`) || settings.alwaysAllowsSite(target)) return;
+        if (siteGranted(target)) return;
         await askOrRefuse(
           run,
           `\u8BBF\u95EE ${target}`,
@@ -2129,18 +2168,12 @@ function apply(ctx) {
             `browser use: upload ${files.length} file(s)`
           );
       }
-      const result = await browsers.call(
-        s.id,
-        s.agent.session.header.cwd,
-        driverSession(s.id),
-        spec.name,
-        args,
-        signal
-      );
-      const text2 = browserText(result);
+      const result = await browsers.call(s.id, cwd, label, spec.name, args, signal);
+      let text2 = browserText(result);
       if (result.isError) throw new Error(text2 || `${spec.name} \u5931\u8D25`);
       const landed = siteOf(pageUrlOf(text2) ?? "");
       if (signedIn && landed && landed !== site) await grantSite(landed, true);
+      if (signedIn && spec.name === "browser_tabs") text2 = redactTabTitles(text2, siteGranted);
       const sees = browserImages(result).length > 0 && await modelSeesImages(ctx, s.agent, signal);
       return {
         text: text2 || "\u5B8C\u6210\u3002",

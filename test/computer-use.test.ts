@@ -26,6 +26,9 @@ import {
   browserArgs,
   checkBrowserArgs,
   childEnv,
+  currentTabUrl,
+  keepsPage,
+  redactTabTitles,
   removeQuietly,
   shapeBrowserText,
   sweepOutput,
@@ -699,4 +702,26 @@ test('browser output cleanup never throws and sweeps only folders of exited host
   assert.deepEqual(readdirSync(parent).sort(), ['222', 'notes'])
   assert.doesNotThrow(() => removeQuietly(join(parent, 'missing', 'deeper')))
   assert.doesNotThrow(() => sweepOutput(join(parent, 'absent'), () => false))
+})
+
+test('signed-in browsing re-probes the page after actions that do not report where they landed', () => {
+  const list =
+    '### Result\n- 0: (current) [Inbox [3]](https://mail.example.com/u/0)\n- 1: [Docs](https://docs.example.com/)'
+  assert.equal(currentTabUrl(list), 'https://mail.example.com/u/0')
+  assert.equal(currentTabUrl('### Result\n- 0: [A](https://a.example/)'), undefined)
+  const redacted = redactTabTitles(list, (site) => site === 'docs.example.com')
+  assert.ok(!redacted.includes('Inbox'))
+  assert.ok(redacted.includes('[（未获准的网站）](https://mail.example.com/u/0)'))
+  assert.ok(redacted.includes('[Docs](https://docs.example.com/)'))
+  for (const name of [
+    'browser_find',
+    'browser_console_messages',
+    'browser_take_screenshot',
+    'browser_snapshot'
+  ])
+    assert.ok(keepsPage(name, {}), name)
+  assert.ok(keepsPage('browser_tabs', { action: 'list' }))
+  for (const name of ['browser_type', 'browser_press_key', 'browser_handle_dialog', 'browser_select_option'])
+    assert.ok(!keepsPage(name, {}), name)
+  assert.ok(!keepsPage('browser_tabs', { action: 'select', index: 1 }))
 })
