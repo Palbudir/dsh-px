@@ -1252,7 +1252,7 @@ function redactTabTitles(text2, granted) {
     /^(- \d+: (?:\(current\) )?)\[.*\]\((\S+)\)\s*$/gm,
     (line, head, url) => {
       const site = siteOf(url);
-      return site && !granted(site) ? `${head}[\uFF08\u672A\u83B7\u51C6\u7684\u7F51\u7AD9\uFF09](${url})` : line;
+      return site && !granted(site) ? `${head}[\uFF08\u672A\u83B7\u51C6\u7684\u7F51\u7AD9\uFF09](${new URL(url).origin}/\u2026)` : line;
     }
   );
 }
