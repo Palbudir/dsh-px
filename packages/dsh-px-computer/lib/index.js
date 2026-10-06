@@ -110,7 +110,10 @@ var McpStdioClient = class {
       this.stderr = (this.stderr + chunk).slice(-4e3);
     });
     child.on("error", (error) => this.fail(error));
-    child.on("exit", (code) => this.fail(new Error(`\u6D4F\u89C8\u5668\u670D\u52A1\u5DF2\u9000\u51FA\uFF08${code ?? "signal"}\uFF09${this.stderrTail()}`)));
+    child.on(
+      "exit",
+      (code) => this.fail(new Error(`\u6D4F\u89C8\u5668\u670D\u52A1\u5DF2\u9000\u51FA\uFF08${code ?? "signal"}\uFF09${this.stderrTail()}`))
+    );
     await this.request(
       "initialize",
       {
@@ -222,7 +225,8 @@ var McpStdioClient = class {
         result: { roots: this.launch.roots.map((root) => ({ uri: pathToFileURL(root).href, name: root })) }
       });
     else if (message.method === "ping") this.write({ jsonrpc: "2.0", id: message.id, result: {} });
-    else this.write({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not supported" } });
+    else
+      this.write({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not supported" } });
   }
   fail(error) {
     this.exitError ??= error;
@@ -450,7 +454,8 @@ function launchDecision(request, downloads) {
     const reason = DENIED_PROCESSES[file] ?? DENIED_PROCESSES[withExe];
     if (reason) return { kind: "deny", reason };
     const extension = win32.extname(file);
-    if (SCRIPT_EXTENSIONS.has(extension)) return { kind: "deny", reason: "\u4E0D\u80FD\u76F4\u63A5\u6253\u5F00\u811A\u672C\u3001\u5FEB\u6377\u65B9\u5F0F\u6216\u7CFB\u7EDF\u914D\u7F6E\u6587\u4EF6" };
+    if (SCRIPT_EXTENSIONS.has(extension))
+      return { kind: "deny", reason: "\u4E0D\u80FD\u76F4\u63A5\u6253\u5F00\u811A\u672C\u3001\u5FEB\u6377\u65B9\u5F0F\u6216\u7CFB\u7EDF\u914D\u7F6E\u6587\u4EF6" };
     if (INSTALLER_EXTENSIONS.has(extension)) return { kind: "confirm", reason: "\u5B89\u88C5\u8F6F\u4EF6" };
   }
   const program = request.path ?? (request.launch_path ? commandProgram(request.launch_path) : "");
@@ -502,7 +507,8 @@ function deniedUrl(raw) {
   if (url.protocol !== "http:" && url.protocol !== "https:") return "\u53EA\u80FD\u6253\u5F00 http \u6216 https \u7F51\u5740";
   if (url.username || url.password) return "\u7F51\u5740\u4E2D\u4E0D\u80FD\u5305\u542B\u8D26\u53F7\u6216\u5BC6\u7801";
   const host = url.hostname.toLowerCase();
-  if (DENIED_HOSTS.some((denied) => host === denied || host.endsWith("." + denied))) return "\u4E0D\u80FD\u64CD\u4F5C\u5BC6\u7801\u7BA1\u7406\u5668\u7F51\u7AD9";
+  if (DENIED_HOSTS.some((denied) => host === denied || host.endsWith("." + denied)))
+    return "\u4E0D\u80FD\u64CD\u4F5C\u5BC6\u7801\u7BA1\u7406\u5668\u7F51\u7AD9";
   return void 0;
 }
 function uploadNames(paths) {
@@ -667,9 +673,7 @@ var playwright_tools_default = {
             description: "The URL to navigate to"
           }
         },
-        required: [
-          "url"
-        ],
+        required: ["url"],
         additionalProperties: false
       },
       readOnly: false
@@ -735,30 +739,18 @@ var playwright_tools_default = {
           button: {
             description: "Button to click, defaults to left",
             type: "string",
-            enum: [
-              "left",
-              "right",
-              "middle"
-            ]
+            enum: ["left", "right", "middle"]
           },
           modifiers: {
             description: "Modifier keys to press",
             type: "array",
             items: {
               type: "string",
-              enum: [
-                "Alt",
-                "Control",
-                "ControlOrMeta",
-                "Meta",
-                "Shift"
-              ]
+              enum: ["Alt", "Control", "ControlOrMeta", "Meta", "Shift"]
             }
           }
         },
-        required: [
-          "target"
-        ],
+        required: ["target"],
         additionalProperties: false
       },
       readOnly: false
@@ -791,10 +783,7 @@ var playwright_tools_default = {
             type: "boolean"
           }
         },
-        required: [
-          "target",
-          "text"
-        ],
+        required: ["target", "text"],
         additionalProperties: false
       },
       readOnly: false
@@ -825,13 +814,7 @@ var playwright_tools_default = {
                 },
                 type: {
                   type: "string",
-                  enum: [
-                    "textbox",
-                    "checkbox",
-                    "radio",
-                    "combobox",
-                    "slider"
-                  ],
+                  enum: ["textbox", "checkbox", "radio", "combobox", "slider"],
                   description: "Type of the field"
                 },
                 value: {
@@ -839,20 +822,13 @@ var playwright_tools_default = {
                   description: "Value to fill in the field. If the field is a checkbox, the value should be `true` or `false`. If the field is a combobox, the value should be the text of the option."
                 }
               },
-              required: [
-                "target",
-                "name",
-                "type",
-                "value"
-              ],
+              required: ["target", "name", "type", "value"],
               additionalProperties: false
             },
             description: "Fields to fill in"
           }
         },
-        required: [
-          "fields"
-        ],
+        required: ["fields"],
         additionalProperties: false
       },
       readOnly: false
@@ -880,10 +856,7 @@ var playwright_tools_default = {
             description: "Array of values to select in the dropdown. This can be a single value or multiple values."
           }
         },
-        required: [
-          "target",
-          "values"
-        ],
+        required: ["target", "values"],
         additionalProperties: false
       },
       readOnly: false
@@ -904,9 +877,7 @@ var playwright_tools_default = {
             description: "Exact target element reference from the page snapshot, or a unique element selector"
           }
         },
-        required: [
-          "target"
-        ],
+        required: ["target"],
         additionalProperties: false
       },
       readOnly: false
@@ -935,10 +906,7 @@ var playwright_tools_default = {
             description: "Exact target element reference from the page snapshot, or a unique element selector"
           }
         },
-        required: [
-          "startTarget",
-          "endTarget"
-        ],
+        required: ["startTarget", "endTarget"],
         additionalProperties: false
       },
       readOnly: false
@@ -955,9 +923,7 @@ var playwright_tools_default = {
             description: "Name of the key to press or a character to generate, such as `ArrowLeft` or `a`"
           }
         },
-        required: [
-          "key"
-        ],
+        required: ["key"],
         additionalProperties: false
       },
       readOnly: false
@@ -995,12 +961,7 @@ var playwright_tools_default = {
         properties: {
           action: {
             type: "string",
-            enum: [
-              "list",
-              "new",
-              "close",
-              "select"
-            ],
+            enum: ["list", "new", "close", "select"],
             description: "Operation to perform"
           },
           index: {
@@ -1012,9 +973,7 @@ var playwright_tools_default = {
             type: "string"
           }
         },
-        required: [
-          "action"
-        ],
+        required: ["action"],
         additionalProperties: false
       },
       readOnly: false
@@ -1055,9 +1014,7 @@ var playwright_tools_default = {
             type: "string"
           }
         },
-        required: [
-          "accept"
-        ],
+        required: ["accept"],
         additionalProperties: false
       },
       readOnly: false
@@ -1099,11 +1056,7 @@ var playwright_tools_default = {
           type: {
             description: "Image format for the screenshot. If unset, inferred from the filename extension, otherwise png.",
             type: "string",
-            enum: [
-              "png",
-              "jpeg",
-              "webp"
-            ]
+            enum: ["png", "jpeg", "webp"]
           },
           filename: {
             description: "File name to save the screenshot to. Defaults to `page-{timestamp}.{png|jpeg|webp}` if not specified. Prefer relative file names to stay within the output directory.",
@@ -1117,15 +1070,10 @@ var playwright_tools_default = {
             default: "css",
             description: 'Image resolution scale. "css" produces a screenshot sized in CSS pixels (smaller, consistent across devices). "device" produces a high-resolution screenshot using device pixels (larger, accounts for the device pixel ratio). Default is css.',
             type: "string",
-            enum: [
-              "css",
-              "device"
-            ]
+            enum: ["css", "device"]
           }
         },
-        required: [
-          "scale"
-        ],
+        required: ["scale"],
         additionalProperties: false
       },
       readOnly: true
@@ -1141,12 +1089,7 @@ var playwright_tools_default = {
             default: "info",
             description: 'Level of the console messages to return. Each level includes the messages of more severe levels. Defaults to "info".',
             type: "string",
-            enum: [
-              "error",
-              "warning",
-              "info",
-              "debug"
-            ]
+            enum: ["error", "warning", "info", "debug"]
           },
           all: {
             description: "Return all console messages since the beginning of the session, not just since the last navigation. Defaults to false.",
@@ -1157,9 +1100,7 @@ var playwright_tools_default = {
             type: "string"
           }
         },
-        required: [
-          "level"
-        ],
+        required: ["level"],
         additionalProperties: false
       },
       readOnly: true
@@ -1253,7 +1194,8 @@ var READS = /* @__PURE__ */ new Set([
 var BROWSER_TOOLS = playwright_tools_default.tools.map((tool) => {
   const schema = structuredClone(tool.inputSchema);
   for (const key of STRIPPED) delete schema.properties?.[key];
-  if (Array.isArray(schema.required)) schema.required = schema.required.filter((key) => !STRIPPED.has(key));
+  if (Array.isArray(schema.required))
+    schema.required = schema.required.filter((key) => !STRIPPED.has(key));
   const note = tool.name === "browser_take_screenshot" ? " \u4EC5\u652F\u6301\u56FE\u7247\u7684\u6A21\u578B\u53EF\u7528\uFF1B\u64CD\u4F5C\u7F51\u9875\u8BF7\u7528 browser_snapshot \u8FD4\u56DE\u7684 ref\u3002" : tool.name === "browser_file_upload" ? " \u6BCF\u6B21\u4E0A\u4F20\u524D\u90FD\u4F1A\u8BF7\u7528\u6237\u786E\u8BA4\uFF1B\u53EA\u80FD\u4E0A\u4F20\u5F53\u524D\u9879\u76EE\u76EE\u5F55\u5185\u7684\u6587\u4EF6\u3002" : "";
   return {
     name: tool.name,
@@ -1370,7 +1312,8 @@ function checkBrowserArgs(name2, args) {
 }
 function targetSite(name2, args, current) {
   if (name2 === "browser_navigate") return siteOf(String(args.url ?? ""));
-  if (name2 === "browser_tabs") return args.action === "new" && typeof args.url === "string" ? siteOf(args.url) : void 0;
+  if (name2 === "browser_tabs")
+    return args.action === "new" && typeof args.url === "string" ? siteOf(args.url) : void 0;
   return current ? siteOf(current) : void 0;
 }
 function uploadSummary(args) {
@@ -1492,10 +1435,12 @@ var DESKTOP_TOOLS = [
     kind: "read",
     vision: true,
     description: "\u653E\u5927\u6700\u8FD1\u4E00\u6B21\u7A97\u53E3\u622A\u56FE\u4E2D\u7684\u77E9\u5F62\u533A\u57DF\uFF08\u5BBD\u4E0D\u8D85\u8FC7 500 \u50CF\u7D20\uFF09\u4EE5\u770B\u6E05\u5C0F\u5B57\u6216\u56FE\u6807\u3002\u4EC5\u652F\u6301\u56FE\u7247\u7684\u6A21\u578B\u53EF\u7528\u3002",
-    parameters: window(
-      { x1: num("\u5DE6"), y1: num("\u4E0A"), x2: num("\u53F3"), y2: num("\u4E0B") },
-      ["x1", "y1", "x2", "y2"]
-    ),
+    parameters: window({ x1: num("\u5DE6"), y1: num("\u4E0A"), x2: num("\u53F3"), y2: num("\u4E0B") }, [
+      "x1",
+      "y1",
+      "x2",
+      "y2"
+    ]),
     pass: ["pid", "window_id", "x1", "y1", "x2", "y2"],
     log: []
   },
@@ -1523,7 +1468,11 @@ var DESKTOP_TOOLS = [
     session: true,
     description: "\u5411\u7A97\u53E3\u5F53\u524D\u7126\u70B9\u8F93\u5165\u6587\u5B57\uFF08\u4E0D\u542B Enter\u3001Tab \u7B49\u6309\u952E\uFF0C\u6309\u952E\u8BF7\u7528 computer_press_key\uFF09\u3002\u8F93\u5165\u524D\u5148\u89C2\u5BDF\u786E\u8BA4\u7126\u70B9\uFF1B\u65B0\u5F0F Windows \u5E94\u7528\u9700\u8981\u63D0\u4F9B element_index\u3002",
     parameters: window(
-      { text: { type: "string", description: "\u8981\u8F93\u5165\u7684\u6587\u5B57" }, element_index: ELEMENT, delivery_mode: DELIVERY },
+      {
+        text: { type: "string", description: "\u8981\u8F93\u5165\u7684\u6587\u5B57" },
+        element_index: ELEMENT,
+        delivery_mode: DELIVERY
+      },
       ["text"]
     ),
     pass: ["pid", "window_id", "text", "element_index", "delivery_mode"],
@@ -1569,10 +1518,10 @@ var DESKTOP_TOOLS = [
     kind: "act",
     session: true,
     description: "\u76F4\u63A5\u8BBE\u7F6E\u53EF\u7F16\u8F91\u5143\u7D20\uFF08\u6587\u672C\u6846\u3001\u6ED1\u5757\u7B49\uFF09\u7684\u503C\uFF0C\u66FF\u6362\u539F\u6709\u5185\u5BB9\u3002",
-    parameters: window(
-      { element_index: ELEMENT, value: { type: "string", description: "\u65B0\u503C" } },
-      ["element_index", "value"]
-    ),
+    parameters: window({ element_index: ELEMENT, value: { type: "string", description: "\u65B0\u503C" } }, [
+      "element_index",
+      "value"
+    ]),
     pass: ["pid", "window_id", "element_index", "value"],
     log: ["element_index", "value"]
   },
@@ -1649,7 +1598,9 @@ var DESKTOP_TOOLS = [
     session: true,
     description: '\u6309\u83DC\u5355\u8DEF\u5F84\u9010\u7EA7\u6253\u5F00\u5E76\u6267\u884C\u83DC\u5355\u9879\uFF0C\u4F8B\u5982 ["\u6587\u4EF6","\u53E6\u5B58\u4E3A\u2026"]\u3002\u8DEF\u5F84\u4E0D\u660E\u786E\u65F6\u5931\u8D25\uFF0C\u4E0D\u4F1A\u9000\u56DE\u6309\u5750\u6807\u70B9\u51FB\u3002',
     parameters: window(
-      { path: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 16, description: "\u83DC\u5355\u8DEF\u5F84" } },
+      {
+        path: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 16, description: "\u83DC\u5355\u8DEF\u5F84" }
+      },
       ["path"]
     ),
     pass: ["pid", "window_id", "path"],
@@ -1688,12 +1639,16 @@ async function runDesktopTool(tool, rawArgs, c) {
   const args = rawArgs && typeof rawArgs === "object" ? rawArgs : {};
   const driverArgs = argsFor(tool, args);
   if (tool.vision && !c.seesImages)
-    throw new ComputerUseRefusal("\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u56FE\u7247\uFF0C\u65E0\u6CD5\u4F7F\u7528\u8FD9\u4E2A\u5DE5\u5177\uFF1B\u8BF7\u6539\u7528\u5143\u7D20\u6811\uFF0C\u6216\u8BF7\u7528\u6237\u5207\u6362\u5230\u652F\u6301\u56FE\u7247\u7684\u6A21\u578B\u3002");
+    throw new ComputerUseRefusal(
+      "\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u56FE\u7247\uFF0C\u65E0\u6CD5\u4F7F\u7528\u8FD9\u4E2A\u5DE5\u5177\uFF1B\u8BF7\u6539\u7528\u5143\u7D20\u6811\uFF0C\u6216\u8BF7\u7528\u6237\u5207\u6362\u5230\u652F\u6301\u56FE\u7247\u7684\u6A21\u578B\u3002"
+    );
   if (tool.kind === "discover") {
     if (tool.driver === "list_windows") {
       const result3 = await c.driver.call("list_windows", driverArgs, c.signal);
       const windows = result3.structuredContent?.windows ?? [];
-      const visible = windows.filter((w) => !deniedWindow({ appName: String(w.app_name ?? ""), title: w.title }));
+      const visible = windows.filter(
+        (w) => !deniedWindow({ appName: String(w.app_name ?? ""), title: w.title })
+      );
       const hidden = windows.length - visible.length;
       const lines2 = visible.slice(0, 80).map(windowsLine);
       if (visible.length > 80) lines2.push(`\u2026\u53E6\u6709 ${visible.length - 80} \u4E2A\u7A97\u53E3\uFF0C\u7528 pid \u8FC7\u6EE4`);
@@ -1707,7 +1662,9 @@ async function runDesktopTool(tool, rawArgs, c) {
       const exe = app.bundle_id && /\.exe$/i.test(app.bundle_id) ? app.bundle_id : app.name;
       return !deniedWindow({ appName: String(exe ?? "") }) && launchDecision({ name: app.name }, []).kind !== "deny";
     });
-    const picked = query ? allowed.filter((app) => String(app.name ?? "").toLowerCase().includes(query)).slice(0, 40) : allowed.filter((app) => app.running).slice(0, 60);
+    const picked = query ? allowed.filter(
+      (app) => String(app.name ?? "").toLowerCase().includes(query)
+    ).slice(0, 40) : allowed.filter((app) => app.running).slice(0, 60);
     const lines = picked.map((app) => {
       const state = app.running ? `\u8FD0\u884C\u4E2D pid=${app.pid}` : "\u672A\u8FD0\u884C";
       return `- ${app.name} | ${state} | launch_path=${JSON.stringify(app.launch_path ?? app.bundle_id ?? "")}`;
@@ -1741,14 +1698,21 @@ async function runDesktopTool(tool, rawArgs, c) {
     c.grantLaunched(identities);
     const lines = launched.map((w) => windowsLine({ ...w, pid: pid2, app_name: identities[0]?.appName ?? "" }));
     return {
-      text: [`\u5DF2\u5728\u540E\u53F0\u542F\u52A8 ${label2}\uFF08pid=${pid2}\uFF09\u3002`, ...lines, lines.length ? "" : "\u7A97\u53E3\u5C1A\u672A\u51FA\u73B0\uFF0C\u7A0D\u540E\u8C03\u7528 computer_list_windows\u3002"].join("\n").trim(),
+      text: [
+        `\u5DF2\u5728\u540E\u53F0\u542F\u52A8 ${label2}\uFF08pid=${pid2}\uFF09\u3002`,
+        ...lines,
+        lines.length ? "" : "\u7A97\u53E3\u5C1A\u672A\u51FA\u73B0\uFF0C\u7A0D\u540E\u8C03\u7528 computer_list_windows\u3002"
+      ].join("\n").trim(),
       images: [],
       target: label2
     };
   }
   const pid = integer(args.pid, "pid"), windowId = integer(args.window_id, "window_id");
   if (tool.driver === "press_key") {
-    const reason = deniedKeys([String(args.key ?? ""), ...Array.isArray(args.modifiers) ? args.modifiers.map(String) : []]);
+    const reason = deniedKeys([
+      String(args.key ?? ""),
+      ...Array.isArray(args.modifiers) ? args.modifiers.map(String) : []
+    ]);
     if (reason) throw new ComputerUseRefusal(reason);
   }
   if (tool.driver === "hotkey") {
@@ -1765,7 +1729,8 @@ async function runDesktopTool(tool, rawArgs, c) {
   const key = `${pid}:${windowId}`;
   if (ELEMENT_ADDRESSED.has(tool.driver) && args.element_index !== void 0) {
     const snapshot = c.snapshots.get(key);
-    if (!snapshot) throw new ComputerUseRefusal("\u8BF7\u5148\u8C03\u7528 computer_get_window_state \u89C2\u5BDF\u8FD9\u4E2A\u7A97\u53E3\uFF0C\u518D\u4F7F\u7528\u5143\u7D20\u7F16\u53F7\u3002");
+    if (!snapshot)
+      throw new ComputerUseRefusal("\u8BF7\u5148\u8C03\u7528 computer_get_window_state \u89C2\u5BDF\u8FD9\u4E2A\u7A97\u53E3\uFF0C\u518D\u4F7F\u7528\u5143\u7D20\u7F16\u53F7\u3002");
     driverArgs.snapshot_id = snapshot;
   }
   if (tool.session) driverArgs.session = driverSession(c.sessionId);
@@ -1785,7 +1750,8 @@ async function runDesktopTool(tool, rawArgs, c) {
     ];
     const notes = [];
     if (s.degraded && s.degraded_reason) notes.push(`\u6CE8\u610F\uFF1A${String(s.degraded_reason).split(".")[0]}`);
-    if (identity.minimized) notes.push("\u7A97\u53E3\u5DF2\u6700\u5C0F\u5316\uFF0C\u65E0\u6CD5\u622A\u56FE\uFF1B\u9700\u8981\u622A\u56FE\u65F6\u5148\u7528 computer_bring_to_front \u6062\u590D\u3002");
+    if (identity.minimized)
+      notes.push("\u7A97\u53E3\u5DF2\u6700\u5C0F\u5316\uFF0C\u65E0\u6CD5\u622A\u56FE\uFF1B\u9700\u8981\u622A\u56FE\u65F6\u5148\u7528 computer_bring_to_front \u6062\u590D\u3002");
     else if (!c.seesImages) notes.push("\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u56FE\u7247\uFF0C\u53EA\u8FD4\u56DE\u5143\u7D20\u6811\u3002");
     const tree = String(s.tree_markdown ?? "").trim();
     return {
@@ -1980,7 +1946,11 @@ function apply(ctx) {
       const session = sessionOf(run);
       let label = target(args);
       try {
-        const result = await states.track(session.id, run.signal, (signal) => body(args, run, session, signal));
+        const result = await states.track(
+          session.id,
+          run.signal,
+          (signal) => body(args, run, session, signal)
+        );
         label = result.target ?? label;
         if (result.images.length) {
           const images = await imageContent(ctx, result.images, run.signal);
@@ -2013,56 +1983,61 @@ function apply(ctx) {
       return blocks && !result.isError ? blocks : void 0;
     }
   });
-  const desktopTool = (spec) => tool(spec, (args) => args.pid !== void 0 ? `pid=${args.pid}` : spec.name, spec.log, async (args, run, s, signal) => {
-    const label = driverSession(s.id);
-    const sessionSnapshots = snapshots.get(s.id) ?? /* @__PURE__ */ new Map();
-    snapshots.set(s.id, sessionSnapshots);
-    return runDesktopTool(spec, args, {
-      driver,
-      sessionId: s.id,
-      signal,
-      seesImages: await modelSeesImages(ctx, s.agent, signal),
-      snapshots: sessionSnapshots,
-      env: process.env,
-      authorize: async (window2, display) => {
-        const key = appKey(window2);
-        if (states.granted(s.id, key) || settings.alwaysAllowsApp(key)) return;
-        await askOrRefuse(
-          run,
-          `\u64CD\u4F5C\u300C${display}\u300D`,
-          `\u5141\u8BB8 DSH \u5728\u672C\u4F1A\u8BDD\u4E2D\u8BFB\u53D6\u548C\u64CD\u4F5C\u300C${display}\u300D\u5417\uFF1F\u4E4B\u540E\u672C\u4F1A\u8BDD\u5BF9\u5B83\u7684\u67E5\u770B\u3001\u70B9\u51FB\u548C\u8F93\u5165\u4E0D\u518D\u9010\u6B21\u8BE2\u95EE\uFF1B\u5220\u9664\u3001\u53D1\u9001\u3001\u4ED8\u6B3E\u7B49\u654F\u611F\u52A8\u4F5C\u4ECD\u4F1A\u5355\u72EC\u786E\u8BA4\u3002`,
-          `Allow DSH to read and operate "${display}" in this session? Later views, clicks and typing in this app will not ask again; deleting, sending or paying still asks separately.`,
-          `computer use: app access ${window2.appName}`
-        );
-        states.grant(s.id, key, display);
-      },
-      authorizeLaunch: async (display, confirm) => {
-        const key = `launch|${display.toLowerCase()}`;
-        if (!confirm && states.granted(s.id, key)) return;
-        await askOrRefuse(
-          run,
-          `\u542F\u52A8\u300C${display}\u300D`,
-          confirm ? `\u5373\u5C06${confirm}\uFF1A${display}\u3002\u5141\u8BB8\u5417\uFF1F` : `\u5141\u8BB8 DSH \u542F\u52A8\u300C${display}\u300D\u5E76\u5728\u672C\u4F1A\u8BDD\u4E2D\u64CD\u4F5C\u5B83\u5417\uFF1F`,
-          confirm ? `About to ${confirm === "\u5B89\u88C5\u8F6F\u4EF6" ? "install software" : "run a newly downloaded program"}: ${display}. Allow?` : `Allow DSH to start "${display}" and operate it in this session?`,
-          `computer use: launch ${display}`
-        );
-        states.grant(s.id, key);
-      },
-      grantLaunched: (windows2) => {
-        for (const window2 of windows2) states.grant(s.id, appKey(window2), appLabel(window2));
-      },
-      beginSession: async () => {
-        if (cursors.has(label)) return;
-        cursors.add(label);
-        try {
-          await driver.call("start_session", { session: label }, signal);
-          await driver.call("set_agent_cursor_enabled", { session: label, enabled: true }, signal);
-        } catch (error) {
-          ctx.logger?.warn?.("dsh-px-computer: agent cursor unavailable: %s", String(error));
+  const desktopTool = (spec) => tool(
+    spec,
+    (args) => args.pid !== void 0 ? `pid=${args.pid}` : spec.name,
+    spec.log,
+    async (args, run, s, signal) => {
+      const label = driverSession(s.id);
+      const sessionSnapshots = snapshots.get(s.id) ?? /* @__PURE__ */ new Map();
+      snapshots.set(s.id, sessionSnapshots);
+      return runDesktopTool(spec, args, {
+        driver,
+        sessionId: s.id,
+        signal,
+        seesImages: await modelSeesImages(ctx, s.agent, signal),
+        snapshots: sessionSnapshots,
+        env: process.env,
+        authorize: async (window2, display) => {
+          const key = appKey(window2);
+          if (states.granted(s.id, key) || settings.alwaysAllowsApp(key)) return;
+          await askOrRefuse(
+            run,
+            `\u64CD\u4F5C\u300C${display}\u300D`,
+            `\u5141\u8BB8 DSH \u5728\u672C\u4F1A\u8BDD\u4E2D\u8BFB\u53D6\u548C\u64CD\u4F5C\u300C${display}\u300D\u5417\uFF1F\u4E4B\u540E\u672C\u4F1A\u8BDD\u5BF9\u5B83\u7684\u67E5\u770B\u3001\u70B9\u51FB\u548C\u8F93\u5165\u4E0D\u518D\u9010\u6B21\u8BE2\u95EE\uFF1B\u5220\u9664\u3001\u53D1\u9001\u3001\u4ED8\u6B3E\u7B49\u654F\u611F\u52A8\u4F5C\u4ECD\u4F1A\u5355\u72EC\u786E\u8BA4\u3002`,
+            `Allow DSH to read and operate "${display}" in this session? Later views, clicks and typing in this app will not ask again; deleting, sending or paying still asks separately.`,
+            `computer use: app access ${window2.appName}`
+          );
+          states.grant(s.id, key, display);
+        },
+        authorizeLaunch: async (display, confirm) => {
+          const key = `launch|${display.toLowerCase()}`;
+          if (!confirm && states.granted(s.id, key)) return;
+          await askOrRefuse(
+            run,
+            `\u542F\u52A8\u300C${display}\u300D`,
+            confirm ? `\u5373\u5C06${confirm}\uFF1A${display}\u3002\u5141\u8BB8\u5417\uFF1F` : `\u5141\u8BB8 DSH \u542F\u52A8\u300C${display}\u300D\u5E76\u5728\u672C\u4F1A\u8BDD\u4E2D\u64CD\u4F5C\u5B83\u5417\uFF1F`,
+            confirm ? `About to ${confirm === "\u5B89\u88C5\u8F6F\u4EF6" ? "install software" : "run a newly downloaded program"}: ${display}. Allow?` : `Allow DSH to start "${display}" and operate it in this session?`,
+            `computer use: launch ${display}`
+          );
+          states.grant(s.id, key);
+        },
+        grantLaunched: (windows2) => {
+          for (const window2 of windows2) states.grant(s.id, appKey(window2), appLabel(window2));
+        },
+        beginSession: async () => {
+          if (cursors.has(label)) return;
+          cursors.add(label);
+          try {
+            await driver.call("start_session", { session: label }, signal);
+            await driver.call("set_agent_cursor_enabled", { session: label, enabled: true }, signal);
+          } catch (error) {
+            ctx.logger?.warn?.("dsh-px-computer: agent cursor unavailable: %s", String(error));
+          }
         }
-      }
-    });
-  });
+      });
+    }
+  );
   const browserTool = (spec) => tool(
     spec,
     (args) => String(args.url ?? spec.name),
@@ -2107,7 +2082,11 @@ function apply(ctx) {
       const text2 = browserText(result);
       if (result.isError) throw new Error(text2 || `${spec.name} \u5931\u8D25`);
       const sees = browserImages(result).length > 0 && await modelSeesImages(ctx, s.agent, signal);
-      return { text: text2 || "\u5B8C\u6210\u3002", images: sees ? browserImages(result) : [], target: site ?? spec.name };
+      return {
+        text: text2 || "\u5B8C\u6210\u3002",
+        images: sees ? browserImages(result) : [],
+        target: site ?? spec.name
+      };
     }
   );
   const confirmTool = tool(
@@ -2119,7 +2098,11 @@ function apply(ctx) {
         additionalProperties: false,
         required: ["action", "category"],
         properties: {
-          action: { type: "string", maxLength: 300, description: "\u5373\u5C06\u6267\u884C\u7684\u5177\u4F53\u52A8\u4F5C\uFF0C\u5199\u6E05\u5BF9\u8C61\u548C\u5185\u5BB9\uFF0C\u4F8B\u5982\u201C\u5728 Outlook \u4E2D\u628A\u8349\u7A3F\u300A\u5468\u62A5\u300B\u53D1\u9001\u7ED9 li@example.com\u201D" },
+          action: {
+            type: "string",
+            maxLength: 300,
+            description: "\u5373\u5C06\u6267\u884C\u7684\u5177\u4F53\u52A8\u4F5C\uFF0C\u5199\u6E05\u5BF9\u8C61\u548C\u5185\u5BB9\uFF0C\u4F8B\u5982\u201C\u5728 Outlook \u4E2D\u628A\u8349\u7A3F\u300A\u5468\u62A5\u300B\u53D1\u9001\u7ED9 li@example.com\u201D"
+          },
           category: {
             type: "string",
             enum: ["delete", "send", "submit", "purchase", "account", "install", "settings", "other"],
@@ -2140,7 +2123,10 @@ function apply(ctx) {
         `About to: ${action}. Allow?`,
         `computer use: confirm ${String(args.category)}: ${action}`
       );
-      return { text: "\u7528\u6237\u5DF2\u6279\u51C6\u8FD9\u4E00\u6B65\u3002\u53EA\u6267\u884C\u521A\u624D\u63CF\u8FF0\u7684\u52A8\u4F5C\uFF1B\u82E5\u5BF9\u8C61\u6216\u5185\u5BB9\u6709\u53D8\u5316\uFF0C\u9700\u8981\u91CD\u65B0\u786E\u8BA4\u3002", images: [] };
+      return {
+        text: "\u7528\u6237\u5DF2\u6279\u51C6\u8FD9\u4E00\u6B65\u3002\u53EA\u6267\u884C\u521A\u624D\u63CF\u8FF0\u7684\u52A8\u4F5C\uFF1B\u82E5\u5BF9\u8C61\u6216\u5185\u5BB9\u6709\u53D8\u5316\uFF0C\u9700\u8981\u91CD\u65B0\u786E\u8BA4\u3002",
+        images: []
+      };
     }
   );
   const windows = process.platform === "win32";
@@ -2154,8 +2140,10 @@ function apply(ctx) {
       for (const dispose of registered) dispose();
       registered = [];
       shape = next;
-      if (windows && current.desktop) for (const spec of DESKTOP_TOOLS) registered.push(host.tools.register(desktopTool(spec)));
-      if (windows && current.browser !== "off") for (const spec of BROWSER_TOOLS) registered.push(host.tools.register(browserTool(spec)));
+      if (windows && current.desktop)
+        for (const spec of DESKTOP_TOOLS) registered.push(host.tools.register(desktopTool(spec)));
+      if (windows && current.browser !== "off")
+        for (const spec of BROWSER_TOOLS) registered.push(host.tools.register(browserTool(spec)));
       if (enabled(current)) registered.push(host.tools.register(confirmTool));
     };
     sync(settings.read());
@@ -2221,7 +2209,10 @@ function apply(ctx) {
         handler: async (req, res) => {
           if (rejectUnauthenticatedRequest(req, res, host.connection)) return;
           const send = (status, data) => {
-            res.writeHead(status, { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" });
+            res.writeHead(status, {
+              "Content-Type": "application/json; charset=utf-8",
+              "Cache-Control": "no-store"
+            });
             res.end(JSON.stringify(data));
           };
           try {

@@ -2,6 +2,8 @@
 
 可下载的安装包、完整 tag 和发布时间见 [GitHub Releases](https://github.com/Palbudir/dsh-px/releases)。这些说明描述对应历史版本的用户可见变化；当前行为和后续工作以 [状态](../STATUS.md) 与 [路线图](../ROADMAP.md) 为准。
 
+- 0.4.2-alpha.1 · 可选的电脑操作功能包（Windows 应用与浏览器，默认关闭）：[Desktop](https://github.com/Palbudir/dsh-px/releases/tag/desktop-v0.4.2-alpha.1) · [Pack](https://github.com/Palbudir/dsh-px/releases/tag/pack-v0.4.2-alpha.1)
+- 0.4.1-alpha.1 · 客户端更新前检查安装登记，记录安装失败原因：[Desktop](https://github.com/Palbudir/dsh-px/releases/tag/desktop-v0.4.1-alpha.1) · [Pack](https://github.com/Palbudir/dsh-px/releases/tag/pack-v0.4.1-alpha.1)
 - 0.4.0-alpha.1 · 人格与记忆、长会话工作账本；功能成员由签名 Pack 清单声明：[Desktop](https://github.com/Palbudir/dsh-px/releases/tag/desktop-v0.4.0-alpha.1) · [Pack](https://github.com/Palbudir/dsh-px/releases/tag/pack-v0.4.0-alpha.1)
 - 0.3.3-alpha.1 · 客户端与整个 Pack 分别更新，客户端支持差分下载：[Desktop](https://github.com/Palbudir/dsh-px/releases/tag/desktop-v0.3.3-alpha.1) · [Pack](https://github.com/Palbudir/dsh-px/releases/tag/pack-v0.3.3-alpha.1)
 - 0.3.2-alpha.1 · 批注以紧凑标签加入输入框：[Desktop](https://github.com/Palbudir/dsh-px/releases/tag/desktop-v0.3.2-alpha.1) · [Pack](https://github.com/Palbudir/dsh-px/releases/tag/pack-v0.3.2-alpha.1)
