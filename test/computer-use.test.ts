@@ -711,7 +711,8 @@ test('signed-in browsing re-probes the page after actions that do not report whe
   assert.equal(currentTabUrl('### Result\n- 0: [A](https://a.example/)'), undefined)
   const redacted = redactTabTitles(list, (site) => site === 'docs.example.com')
   assert.ok(!redacted.includes('Inbox'))
-  assert.ok(redacted.includes('[（未获准的网站）](https://mail.example.com/u/0)'))
+  assert.ok(redacted.includes('[（未获准的网站）](https://mail.example.com/…)'))
+  assert.ok(!redacted.includes('/u/0'))
   assert.ok(redacted.includes('[Docs](https://docs.example.com/)'))
   for (const name of [
     'browser_find',
