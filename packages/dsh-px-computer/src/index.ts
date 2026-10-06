@@ -33,6 +33,7 @@ import {
   summarize,
   TOOL_OUTPUT_SCHEMA,
   type Agent,
+  type Capability,
   type ContentBlock,
   type Image,
   type ToolRun,
@@ -81,10 +82,11 @@ export function apply(ctx: any): void {
     const module: any = await import('@trycua/cua-driver')
     return module.CuaDriver.create(undefined)
   })
-  const launchOptions = (): BrowserLaunchOptions => {
+  const launchOptions = (): BrowserLaunchOptions | undefined => {
     const current = settings.read()
+    if (current.browser === 'off') return undefined
     return {
-      mode: current.browser === 'off' ? 'isolated' : current.browser,
+      mode: current.browser,
       headless: current.headless,
       // Resolved only when a browser starts, so a missing optional install never breaks the panel.
       get cli(): string {
@@ -112,13 +114,38 @@ export function apply(ctx: any): void {
     return { agent: run.agent, id: run.agent.session.id }
   }
 
-  const askOrRefuse = async (run: ToolRun, subject: string, zh: string, en: string, reason: string) => {
-    const outcome = await askUser(approval(), run, { toolName: run.name ?? name, reason, zh, en })
+  /** Ask on the call's combined signal; an answer that arrives after a pause or setting change is void. */
+  const askOrRefuse = async (
+    run: ToolRun,
+    signal: AbortSignal,
+    subject: string,
+    zh: string,
+    en: string,
+    reason: string
+  ) => {
+    const outcome = await askUser(approval(), run, signal, { toolName: run.name ?? name, reason, zh, en })
+    signal.throwIfAborted()
     if (outcome !== 'allowed-once') throw new AnswerRefusal(refusalText(outcome, subject))
   }
 
-  /** Wrap one provider call with the pause switch, the activity log and image projection. */
+  // The policy, drivers and browser channel are Windows-specific; other hosts keep the panel only.
+  const windows = process.platform === 'win32'
+  const enabled = (current: ComputerSettings) => windows && (current.desktop || current.browser !== 'off')
+  const available = (capability: Capability, current: ComputerSettings): boolean =>
+    capability === 'desktop'
+      ? windows && current.desktop
+      : capability === 'browser'
+        ? windows && current.browser !== 'off'
+        : enabled(current)
+  const CLOSED: Record<Capability, string> = {
+    desktop: '桌面应用操作已在「电脑操作」面板关闭，本次调用已中止。',
+    browser: '浏览器操作已在「电脑操作」面板关闭，本次调用已中止。',
+    confirm: '电脑操作已在「电脑操作」面板关闭，本次调用已中止。'
+  }
+
+  /** Wrap one provider call with its capability, the pause switch, the activity log and image projection. */
   const tool = (
+    capability: Capability,
     definition: { name: string; description: string; parameters: Record<string, unknown> },
     target: (args: Record<string, unknown>) => string,
     detail: readonly string[],
@@ -139,7 +166,9 @@ export function apply(ctx: any): void {
       const session = sessionOf(run)
       let label = target(args)
       try {
-        const result = await states.track(session.id, run.signal, (signal) =>
+        // A call the host dispatched before the setting changed still finds the capability off.
+        if (!available(capability, settings.read())) throw new ComputerUseRefusal(CLOSED[capability])
+        const result = await states.track(session.id, capability, run.signal, (signal) =>
           body(args, run, session, signal)
         )
         label = result.target ?? label
@@ -182,6 +211,7 @@ export function apply(ctx: any): void {
 
   const desktopTool = (spec: DesktopTool) =>
     tool(
+      'desktop',
       spec,
       (args) => (args.pid !== undefined ? `pid=${args.pid}` : spec.name),
       spec.log,
@@ -201,6 +231,7 @@ export function apply(ctx: any): void {
             if (states.granted(s.id, key) || settings.alwaysAllowsApp(key)) return
             await askOrRefuse(
               run,
+              signal,
               `操作「${display}」`,
               `允许 DSH 在本会话中读取和操作「${display}」吗？之后本会话对它的查看、点击和输入不再逐次询问；删除、发送、付款等敏感动作仍会单独确认。`,
               `Allow DSH to read and operate "${display}" in this session? Later views, clicks and typing in this app will not ask again; deleting, sending or paying still asks separately.`,
@@ -213,6 +244,7 @@ export function apply(ctx: any): void {
             if (!confirm && states.granted(s.id, key)) return
             await askOrRefuse(
               run,
+              signal,
               `启动「${display}」`,
               confirm
                 ? `即将${confirm}：${display}。允许吗？`
@@ -243,12 +275,12 @@ export function apply(ctx: any): void {
 
   const browserTool = (spec: (typeof BROWSER_TOOLS)[number]) =>
     tool(
+      'browser',
       spec,
       (args) => String(args.url ?? spec.name),
       ['url', 'action', 'element', 'text', 'key'],
       async (args, run, s, signal) => {
         const current = settings.read()
-        if (current.browser === 'off') throw new ComputerUseRefusal('浏览器操作已关闭')
         checkBrowserArgs(spec.name, args)
         if (spec.name === 'browser_take_screenshot' && !(await modelSeesImages(ctx, s.agent, signal)))
           throw new ComputerUseRefusal('当前模型不支持图片，请改用 browser_snapshot。')
@@ -272,6 +304,7 @@ export function apply(ctx: any): void {
           if (siteGranted(target)) return
           await askOrRefuse(
             run,
+            signal,
             `访问 ${target}`,
             landed
               ? `页面已跳转到 ${target}。允许 DSH 在本会话中使用${where[0]}读取并操作这个网站吗？该浏览器可能保留你的登录状态。`
@@ -287,6 +320,7 @@ export function apply(ctx: any): void {
           if (files.length)
             await askOrRefuse(
               run,
+              signal,
               '上传文件',
               `即将向 ${site ?? '当前网页'} 上传：${files.join('、')}。允许吗？`,
               `About to upload ${files.join(', ')} to ${site ?? 'the current page'}. Allow?`,
@@ -310,6 +344,7 @@ export function apply(ctx: any): void {
     )
 
   const confirmTool = tool(
+    'confirm',
     {
       name: 'computer_confirm',
       description:
@@ -335,11 +370,12 @@ export function apply(ctx: any): void {
     },
     (args) => String(args.category ?? 'confirm'),
     ['category', 'action'],
-    async (args, run) => {
+    async (args, run, _session, signal) => {
       const action = String(args.action ?? '').trim()
       if (!action) throw new ComputerUseRefusal('请写明要确认的具体动作')
       await askOrRefuse(
         run,
+        signal,
         '这一步',
         `即将执行：${action}。允许吗？`,
         `About to: ${action}. Allow?`,
@@ -351,10 +387,6 @@ export function apply(ctx: any): void {
       }
     }
   )
-
-  // The policy, drivers and browser channel are Windows-specific; other hosts keep the panel only.
-  const windows = process.platform === 'win32'
-  const enabled = (current: ComputerSettings) => windows && (current.desktop || current.browser !== 'off')
 
   ctx.inject(['tools'], (host: any) => {
     let registered: Array<() => void> = []
@@ -399,12 +431,30 @@ export function apply(ctx: any): void {
     )
   )
 
-  // Closing the browser when the browser setting changes keeps a running server from outliving its mode.
-  let browserShape = `${settings.read().browser}|${settings.read().headless}`
+  // A setting change ends what the old setting allowed: in-flight calls (including their pending
+  // confirmation cards) stop, the browser closes, and session grants made under the old mode lapse.
+  // Grants name the browser or the enabled capability they were asked for, so they never carry over.
+  let previous = settings.read()
   settings.subscribe((current) => {
-    const next = `${current.browser}|${current.headless}`
-    if (next !== browserShape) void browsers.closeAll().catch(() => undefined)
-    browserShape = next
+    const before = previous
+    previous = current
+    if (current.browser !== before.browser || current.headless !== before.headless) {
+      states.stop(
+        'browser',
+        new ComputerUseRefusal(
+          current.browser === 'off'
+            ? CLOSED.browser
+            : '浏览器模式已在「电脑操作」面板更改，本次调用已中止；如仍需要，请重新发起。'
+        )
+      )
+      void browsers.closeAll().catch(() => undefined)
+    }
+    if (current.browser !== before.browser) states.revokeAll((key) => key.startsWith('site|'))
+    if (before.desktop && !current.desktop) {
+      states.stop('desktop', new ComputerUseRefusal(CLOSED.desktop))
+      states.revokeAll((key) => !key.startsWith('site|'))
+    }
+    if (!enabled(current)) states.stop('confirm', new ComputerUseRefusal(CLOSED.confirm))
     if (!current.desktop) void driver.close().catch(() => undefined)
   })
 
