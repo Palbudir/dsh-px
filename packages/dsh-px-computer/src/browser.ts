@@ -160,13 +160,16 @@ export function currentTabUrl(text: string): string | undefined {
   return text.match(/^- \d+: \(current\) \[.*\]\((\S+)\)\s*$/m)?.[1]
 }
 
-/** Hide the titles of tabs on sites that are not granted; their URLs stay so the agent can ask. */
+/**
+ * Hide what tabs on ungranted sites show: the title and everything in the URL past the origin. The
+ * origin stays so the agent can name the site when it asks for access.
+ */
 export function redactTabTitles(text: string, granted: (site: string) => boolean): string {
   return text.replace(
     /^(- \d+: (?:\(current\) )?)\[.*\]\((\S+)\)\s*$/gm,
     (line, head: string, url: string) => {
       const site = siteOf(url)
-      return site && !granted(site) ? `${head}[（未获准的网站）](${url})` : line
+      return site && !granted(site) ? `${head}[（未获准的网站）](${new URL(url).origin}/…)` : line
     }
   )
 }
