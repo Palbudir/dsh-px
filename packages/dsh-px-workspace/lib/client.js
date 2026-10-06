@@ -166,6 +166,7 @@ var paths = {
   jobs: "M10 2a8 8 0 1 0 .01 0 M10 5v5l3 2",
   ledger: "M4 3h12v14H4z M7 7l1.5 1.5L11 6 M7 12h6 M7 15h4",
   persona: "M10 3a3 3 0 1 0 .01 0 M4 17c0-3.3 2.7-5 6-5s6 1.7 6 5",
+  computer: "M3 4h14v9H3z M8 16h4 M10 13v3",
   note: "M3 3h14v11H9l-4 3v-3H3z M6 7h8 M6 10h5",
   schedule: "M3 5h14v12H3z M6 2v5 M14 2v5 M3 9h14 M6 12h2 M11 12h2",
   pin: "M7 3h6l-1 5 3 3H5l3-3z M10 11v6",
@@ -474,7 +475,8 @@ var featureIcons = {
   "px-notes": "note",
   "px-schedules": "schedule",
   "dsh-px-taskflow": "ledger",
-  "dsh-px-memory": "persona"
+  "dsh-px-memory": "persona",
+  "dsh-px-computer": "computer"
 };
 function SessionBar({ ctx }) {
   const sessions = useSnapshot(ctx.sessions.list);

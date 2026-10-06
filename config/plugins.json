@@ -8,7 +8,8 @@
     "dsh-px-artifacts",
     "dsh-px-annotations",
     "dsh-px-schedules",
-    "dsh-px-memory"
+    "dsh-px-memory",
+    "dsh-px-computer"
   ],
   "deferredCommunity": ["dshmarket", "dsh-mermaid-render", "dsh-find-plugin"]
 }

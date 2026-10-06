@@ -12,6 +12,7 @@
 | 产物、引用批注、定时任务                   | artifacts / annotations / schedules | 功能插件分别启停，定时执行需要服务与调度插件运行                                 |
 | 执行记录、工作账本与按需证据               | dsh-px-taskflow                     | 多步骤任务记录由 Agent 保存，压缩后重新提供最近快照；工具返回不等于业务成功      |
 | 人格与独立记忆                             | dsh-px-memory                       | 角色配置和记忆分开保存；下轮生效，不改变模型或权限；明确写入，不自动提炼全部历史 |
+| 电脑操作（Windows 应用与浏览器）           | dsh-px-computer                     | 默认关闭；应用与登录态网站逐个授权，敏感动作确认，终端等始终禁止；仅 Windows     |
 | 运行诊断、工作区入口与活动快照             | dsh-px-workbench                    | 使用原生服务；未知任务状态不能视为空闲                                           |
 | 版本与更新                                 | Desktop 更新器与 dsh-px-updater     | Desktop 签名差分更新、完整下载回退；整个 Pack 独立更新；Web 原生安装             |
 

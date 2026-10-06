@@ -11,6 +11,8 @@ import { writeArtifact } from './write-artifact.mjs'
  * ## 依赖策略
  * semver 在构建期内联；交付物只保留 node: 内置模块引用，
  * 因而 link:/file: 安装不需要解析第三方运行时依赖。
+ * 例外只有包自身 package.json `dependencies` 中声明、无法内联的运行时依赖（如原生库），
+ * 由 DSH 插件管理器按精确版本安装，产物中只能以动态 import() 引用。
  *
  * ## 为什么构建期校验产物
  *
@@ -27,7 +29,14 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const HERE = dirname(fileURLToPath(import.meta.url))
 const PKG = process.argv[2] ? resolve(process.argv[2]) : resolve(HERE, '../../packages/dsh-px-updater')
-const pkgName = JSON.parse(readFileSync(join(PKG, 'package.json'), 'utf8')).name
+const pkgManifest = JSON.parse(readFileSync(join(PKG, 'package.json'), 'utf8'))
+const pkgName = pkgManifest.name
+// Declared runtime dependencies must be exact versions; they stay external and load on demand.
+const runtimeDeps = Object.entries(pkgManifest.dependencies ?? {})
+for (const [dep, version] of runtimeDeps)
+  if (!/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/.test(String(version)))
+    throw new Error(`${pkgName} 的运行时依赖 ${dep} 必须锁定精确版本，实际为 ${version}`)
+const external = runtimeDeps.map(([dep]) => dep)
 const ENTRY = join(PKG, 'src', 'index.ts')
 const OUT = join(PKG, 'lib', 'index.js')
 
@@ -43,6 +52,7 @@ const result = await build({
     js: `/*! Bundled semver (ISC)\n${readFileSync(join(PKG, '..', '..', 'node_modules', 'semver', 'LICENSE'), 'utf8')}\n*/`
   },
   legalComments: 'none',
+  external,
   logLevel: 'warning'
 })
 
@@ -58,6 +68,13 @@ const badImports = importSpecifiers.filter((s) => !s.startsWith('node:'))
 if (badImports.length > 0) {
   problems.push(`产物里出现了非 node: 的 import：${badImports.join(', ')}（用户机上会 ERR_MODULE_NOT_FOUND）`)
 }
+// 1b) 动态 import 只能指向 node: 或已声明的运行时依赖。
+const dynamicSpecifiers = [...code.matchAll(/\bimport\(\s*['"]([^'"]+)['"]\s*\)/g)].map((m) => m[1])
+const badDynamic = dynamicSpecifiers.filter((s) => !s.startsWith('node:') && !external.includes(s))
+if (badDynamic.length > 0) problems.push(`产物里出现了未声明的动态 import：${badDynamic.join(', ')}`)
+for (const dep of external)
+  if (!dynamicSpecifiers.includes(dep) && !code.includes(`'${dep}/`) && !code.includes(`"${dep}/`))
+    problems.push(`声明的运行时依赖 ${dep} 未被使用`)
 
 // 2) 真的 import 一次，验证导出面。
 let exportsFace = null
@@ -85,3 +102,4 @@ console.log(
 )
 console.log(`  导出：name=${String(exportsFace.name)} apply=函数 inject=[${exportsFace.inject.join(', ')}]`)
 console.log(`  import：${importSpecifiers.length > 0 ? importSpecifiers.join(', ') : '(无)'}`)
+if (external.length) console.log(`  运行时依赖：${runtimeDeps.map(([d, v]) => `${d}@${v}`).join(', ')}`)

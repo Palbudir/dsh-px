@@ -5,7 +5,8 @@ export const FEATURE_BUNDLES = [
   'dsh-px-artifacts',
   'dsh-px-annotations',
   'dsh-px-schedules',
-  'dsh-px-memory'
+  'dsh-px-memory',
+  'dsh-px-computer'
 ] as const
 /** Legacy receipts did not record the names a user had already been offered. */
 export const LEGACY_FEATURE_BUNDLES = [
