@@ -10,8 +10,10 @@ import {
   browserImages,
   browserText,
   checkBrowserArgs,
+  currentTabUrl,
   pageUrlOf,
   processAlive,
+  redactTabTitles,
   sweepOutput,
   siteOf,
   targetSite,
@@ -250,15 +252,24 @@ export function apply(ctx: any): void {
         checkBrowserArgs(spec.name, args)
         if (spec.name === 'browser_take_screenshot' && !(await modelSeesImages(ctx, s.agent, signal)))
           throw new ComputerUseRefusal('当前模型不支持图片，请改用 browser_snapshot。')
-        const site = targetSite(spec.name, args, browsers.currentUrl(s.id))
         // Profiles that carry sign-in state need a grant before any read or action on a site.
         const signedIn = current.browser !== 'isolated'
+        const cwd = s.agent.session.header.cwd,
+          label = driverSession(s.id)
+        // Typing or a key press can navigate without reporting where; find out before the next site check.
+        if (signedIn && browsers.pageUnknown(s.id)) {
+          const listed = await browsers.call(s.id, cwd, label, 'browser_tabs', { action: 'list' }, signal)
+          browsers.setUrl(s.id, currentTabUrl(browserText(listed)))
+        }
+        const site = targetSite(spec.name, args, browsers.currentUrl(s.id))
         const where =
           current.browser === 'extension'
             ? ['你的 Edge', 'your Edge']
             : ['PX 专用浏览器', 'the PX browser profile']
+        const siteGranted = (target: string): boolean =>
+          states.granted(s.id, `site|${target}`) || settings.alwaysAllowsSite(target)
         const grantSite = async (target: string, landed: boolean): Promise<void> => {
-          if (states.granted(s.id, `site|${target}`) || settings.alwaysAllowsSite(target)) return
+          if (siteGranted(target)) return
           await askOrRefuse(
             run,
             `访问 ${target}`,
@@ -282,19 +293,13 @@ export function apply(ctx: any): void {
               `browser use: upload ${files.length} file(s)`
             )
         }
-        const result = await browsers.call(
-          s.id,
-          s.agent.session.header.cwd,
-          driverSession(s.id),
-          spec.name,
-          args,
-          signal
-        )
-        const text = browserText(result)
+        const result = await browsers.call(s.id, cwd, label, spec.name, args, signal)
+        let text = browserText(result)
         if (result.isError) throw new Error(text || `${spec.name} 失败`)
         // A click or redirect can land on another site; its content is withheld until that site is granted.
         const landed = siteOf(pageUrlOf(text) ?? '')
         if (signedIn && landed && landed !== site) await grantSite(landed, true)
+        if (signedIn && spec.name === 'browser_tabs') text = redactTabTitles(text, siteGranted)
         const sees = browserImages(result).length > 0 && (await modelSeesImages(ctx, s.agent, signal))
         return {
           text: text || '完成。',

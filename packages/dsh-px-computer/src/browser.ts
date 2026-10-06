@@ -155,12 +155,43 @@ export function pageUrlOf(text: string): string | undefined {
   return text.match(/Page URL:\s*(\S+)/)?.[1]
 }
 
+/** The current tab's URL from a `browser_tabs` list result: `- 0: (current) [Title](url)`. */
+export function currentTabUrl(text: string): string | undefined {
+  return text.match(/^- \d+: \(current\) \[.*\]\((\S+)\)\s*$/m)?.[1]
+}
+
+/** Hide the titles of tabs on sites that are not granted; their URLs stay so the agent can ask. */
+export function redactTabTitles(text: string, granted: (site: string) => boolean): string {
+  return text.replace(
+    /^(- \d+: (?:\(current\) )?)\[.*\]\((\S+)\)\s*$/gm,
+    (line, head: string, url: string) => {
+      const site = siteOf(url)
+      return site && !granted(site) ? `${head}[（未获准的网站）](${url})` : line
+    }
+  )
+}
+
+/**
+ * Tools that never move the page. Every other tool whose result lacks a page URL (typing, key presses,
+ * dialogs, tab switches) may have navigated, so the page becomes unknown until it is probed.
+ */
+export function keepsPage(name: string, args: Record<string, unknown>): boolean {
+  return (
+    ['browser_find', 'browser_console_messages', 'browser_take_screenshot', 'browser_snapshot'].includes(
+      name
+    ) ||
+    (name === 'browser_tabs' && args.action === 'list')
+  )
+}
+
 interface Session {
   client: McpStdioClient
   ready: Promise<void>
   outputDir: string
   idle?: ReturnType<typeof setTimeout>
   url?: string
+  /** The last action may have navigated without reporting where. */
+  unknown?: boolean
 }
 
 const IDLE_MS = 20 * 60_000
@@ -181,6 +212,18 @@ export class BrowserSessions {
 
   currentUrl(sessionId: string): string | undefined {
     return this.sessions.get(sessionId)?.url
+  }
+
+  /** Whether the current page must be probed before the next site check. */
+  pageUnknown(sessionId: string): boolean {
+    return this.sessions.get(sessionId)?.unknown === true
+  }
+
+  setUrl(sessionId: string, url: string | undefined): void {
+    const session = this.sessions.get(sessionId)
+    if (!session) return
+    session.url = url
+    session.unknown = false
   }
 
   private open(sessionId: string, cwd: string | undefined, label: string, signal: AbortSignal): Session {
@@ -231,8 +274,14 @@ export class BrowserSessions {
           .map((c) => c.text)
           .join('\n')
       )
-      if (url) session.url = url
-      if (name === 'browser_close') session.url = undefined
+      if (url) {
+        session.url = url
+        session.unknown = false
+      } else if (!keepsPage(name, args)) session.unknown = true
+      if (name === 'browser_close') {
+        session.url = undefined
+        session.unknown = false
+      }
       return result
     } finally {
       if (this.sessions.get(sessionId) === session)
