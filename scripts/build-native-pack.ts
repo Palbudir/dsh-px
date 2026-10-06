@@ -66,10 +66,18 @@ mkdirSync(source)
 execFileSync('tar', ['-xzf', '../sidebar-source.tgz'], { cwd: source, windowsHide: true })
 const modules = join(bundle, 'node_modules')
 mkdirSync(modules)
+// Bundled members do not install their own dependencies, so the aggregate declares them.
+const memberDependencies: Record<string, string> = {}
 for (const name of MANAGED_PLUGIN_NAMES) {
   const directory = join(root, 'packages', name)
   const manifest = JSON.parse(readFileSync(join(directory, 'package.json'), 'utf8'))
   if (manifest.name !== name || manifest.version !== PACK_VERSION) throw new Error(`Wrong member: ${name}`)
+  for (const [dependency, version] of Object.entries<string>(manifest.dependencies ?? {})) {
+    const declared = memberDependencies[dependency] ?? catalog.dependencies[dependency]
+    if (declared !== undefined && declared !== version)
+      throw new Error(`Conflicting ${dependency} versions: ${declared} and ${version}`)
+    memberDependencies[dependency] = version
+  }
   copyBundlePayload(directory, join(modules, name))
 }
 const sidebarDirectory = join(modules, sidebar.name)
@@ -116,7 +124,7 @@ buildDistribution(bundle, PACK_VERSION, catalog.dependencies, {
   upstreamCommit: catalog.upstreamCommit,
   protocolGeneration: PRODUCT_CATALOG.protocolGeneration
 })
-const dependencies = { ...catalog.dependencies }
+const dependencies = { ...catalog.dependencies, ...memberDependencies }
 for (const name of MANAGED_PLUGIN_NAMES) dependencies[name] = PACK_VERSION
 dependencies[sidebar.name] = sidebar.version
 writeFileSync(

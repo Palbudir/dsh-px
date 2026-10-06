@@ -73,6 +73,14 @@ export function verifyPackOutput(directory, { products, nativePack, head, candid
   for (const member of manifest.bundledDependencies)
     if (!present.has(`package/node_modules/${member}/package.json`))
       throw new Error(`Pack archive is missing bundled member ${member}`)
+  // Bundled PX members do not install their own dependencies; the aggregate must declare them exactly.
+  for (const member of manifest.bundledDependencies.filter((name) => name.startsWith('dsh-px-'))) {
+    const own =
+      JSON.parse(tar('-xOzf', tgz, `package/node_modules/${member}/package.json`)).dependencies ?? {}
+    for (const [name, wanted] of Object.entries(own))
+      if (manifest.dependencies?.[name] !== wanted)
+        throw new Error(`Pack archive does not declare ${member} dependency ${name}@${wanted}`)
+  }
   if (products.protocolGeneration >= 3) {
     const distribution = JSON.parse(tar('-xOzf', tgz, 'package/distribution.json'))
     if (

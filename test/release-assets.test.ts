@@ -133,7 +133,8 @@ function packFixture(t: any, mutate: (manifest: any, artifact: any, distribution
     'dsh-px-artifacts',
     'dsh-px-annotations',
     'dsh-px-schedules',
-    'dsh-px-memory'
+    'dsh-px-memory',
+    'dsh-px-computer'
   ]
   mkdirSync(join(pkg, 'distribution'))
   const members = components.map((name) => {
