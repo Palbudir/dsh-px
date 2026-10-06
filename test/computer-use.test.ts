@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
@@ -11,7 +11,8 @@ import {
   deniedKeys,
   deniedUrl,
   deniedWindow,
-  launchDecision
+  launchDecision,
+  launchFolders
 } from '../packages/dsh-px-computer/src/policy'
 import {
   DESKTOP_TOOLS,
@@ -25,7 +26,9 @@ import {
   browserArgs,
   checkBrowserArgs,
   childEnv,
+  removeQuietly,
   shapeBrowserText,
+  sweepOutput,
   targetSite
 } from '../packages/dsh-px-computer/src/browser'
 import { McpStdioClient } from '../packages/dsh-px-computer/src/mcp-stdio'
@@ -82,8 +85,11 @@ test('Windows key chords and the secure attention sequence are refused', () => {
   assert.equal(deniedKeys(['return']), undefined)
 })
 
-test('launch checks deny shells and scripts and confirm installers and fresh downloads', () => {
-  const downloads = ['D:\\Profile\\Downloads']
+test('launch checks deny shells and scripts and confirm installers, fresh downloads and unknown folders', () => {
+  const downloads = {
+    downloads: ['D:\\Profile\\Downloads'],
+    trusted: ['C:\\Windows', 'C:\\Program Files', 'D:\\Profile\\AppData\\Local\\Programs']
+  }
   assert.equal(launchDecision({ name: 'cmd' }, downloads).kind, 'deny')
   assert.equal(launchDecision({ name: 'Windows Terminal' }, downloads).kind, 'deny')
   assert.equal(
@@ -97,8 +103,20 @@ test('launch checks deny shells and scripts and confirm installers and fresh dow
   )
   assert.equal(launchDecision({ path: 'D:\\tools\\setup.bat' }, downloads).kind, 'deny')
   assert.equal(launchDecision({ path: 'D:\\tools\\run.lnk' }, downloads).kind, 'deny')
-  assert.equal(launchDecision({ path: 'D:\\Profile\\Downloads\\tool.exe' }, downloads).kind, 'confirm')
+  assert.deepEqual(launchDecision({ path: 'D:\\Profile\\Downloads\\tool.exe' }, downloads), {
+    kind: 'confirm',
+    reason: '运行新下载的程序'
+  })
   assert.equal(launchDecision({ path: 'D:\\pkg\\app.msi' }, downloads).kind, 'confirm')
+  // A renamed copy of a denied binary is not recognizable by name, so its location decides.
+  assert.deepEqual(launchDecision({ path: 'D:\\Users\\Public\\mytool.exe' }, downloads), {
+    kind: 'confirm',
+    reason: '运行不在常用程序目录中的程序'
+  })
+  assert.equal(
+    launchDecision({ path: 'D:\\Profile\\AppData\\Local\\Programs\\Editor\\editor.exe' }, downloads).kind,
+    'allow'
+  )
   assert.equal(
     launchDecision(
       { launch_path: 'shell:appsFolder\\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App' },
@@ -110,8 +128,30 @@ test('launch checks deny shells and scripts and confirm installers and fresh dow
     launchDecision({ launch_path: '"C:\\Program Files\\App\\app.exe" --profile x' }, downloads).kind,
     'allow'
   )
+  const folders = launchFolders({
+    USERPROFILE: 'D:\\Profile',
+    LOCALAPPDATA: 'D:\\Profile\\AppData\\Local',
+    SystemRoot: 'C:\\Windows',
+    ProgramFiles: 'C:\\Program Files',
+    TEMP: 'D:\\Profile\\AppData\\Local\\Temp'
+  })
+  assert.ok(folders.downloads.includes('D:\\Profile\\Desktop'))
+  assert.ok(folders.trusted.includes('D:\\Profile\\AppData\\Local\\Programs'))
   assert.equal(commandProgram('"C:\\Program Files\\App\\app.exe" --x'), 'C:\\Program Files\\App\\app.exe')
   assert.equal(commandProgram('C:\\Apps\\tool.exe --x'), 'C:\\Apps\\tool.exe')
+})
+
+test('Start, search, the taskbar, the desktop and localized Run dialogs are shell surfaces', () => {
+  for (const window of [
+    { appName: 'StartMenuExperienceHost.exe', title: '开始' },
+    { appName: 'SearchHost.exe', title: '搜索' },
+    { appName: 'explorer.exe', title: '' },
+    { appName: 'explorer.exe', title: 'Program Manager' },
+    { appName: 'explorer.exe', title: 'Ausführen' },
+    { appName: 'explorer.exe', title: '実行' }
+  ])
+    assert.ok(deniedWindow(window), JSON.stringify(window))
+  assert.equal(deniedWindow({ appName: 'explorer.exe', title: '下载' }), undefined)
 })
 
 test('browser URLs are limited to web pages and never reach password managers', () => {
@@ -651,3 +691,12 @@ test(
     assert.equal(log[0].outcome, 'rejected')
   }
 )
+
+test('browser output cleanup never throws and sweeps only folders of exited hosts', (t) => {
+  const parent = temp(t, 'px-computer-sweep-')
+  for (const name of ['111', '222', 'notes']) mkdirSync(join(parent, name, 'inner'), { recursive: true })
+  sweepOutput(parent, (pid) => pid === 222)
+  assert.deepEqual(readdirSync(parent).sort(), ['222', 'notes'])
+  assert.doesNotThrow(() => removeQuietly(join(parent, 'missing', 'deeper')))
+  assert.doesNotThrow(() => sweepOutput(join(parent, 'absent'), () => false))
+})

@@ -8,7 +8,7 @@ import {
   appLabel,
   deniedKeys,
   deniedWindow,
-  downloadFolders,
+  launchFolders,
   FRAME_HOST,
   launchDecision,
   type LaunchRequest,
@@ -447,7 +447,7 @@ export async function runDesktopTool(
       const exe = app.bundle_id && /\.exe$/i.test(app.bundle_id) ? app.bundle_id : app.name
       return (
         !deniedWindow({ appName: String(exe ?? '') }) &&
-        launchDecision({ name: app.name }, []).kind !== 'deny'
+        launchDecision({ name: app.name }, { downloads: [], trusted: [] }).kind !== 'deny'
       )
     })
     const picked = query
@@ -475,7 +475,7 @@ export async function runDesktopTool(
     const request = driverArgs as LaunchRequest
     if (!request.launch_path && !request.aumid && !request.name && !request.path)
       throw new ComputerUseRefusal('需要 launch_path、aumid、name 或 path 之一')
-    const decision = launchDecision(request, downloadFolders(c.env))
+    const decision = launchDecision(request, launchFolders(c.env))
     if (decision.kind === 'deny') throw new ComputerUseRefusal(`不能启动该程序：${decision.reason}。`)
     const label = String(request.name ?? request.aumid ?? request.path ?? request.launch_path)
     await c.authorizeLaunch(label, decision.kind === 'confirm' ? decision.reason : undefined)

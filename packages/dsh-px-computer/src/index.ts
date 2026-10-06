@@ -10,6 +10,10 @@ import {
   browserImages,
   browserText,
   checkBrowserArgs,
+  pageUrlOf,
+  processAlive,
+  sweepOutput,
+  siteOf,
   targetSite,
   uploadSummary,
   type BrowserLaunchOptions
@@ -41,6 +45,11 @@ export const inject: string[] = []
 class AnswerRefusal extends ComputerUseRefusal {}
 
 const PLAYWRIGHT_EXTENSION = 'mmlmfjhmonkocbjadbfplnigmagldckm'
+const LAUNCH_REASON_EN: Record<string, string> = {
+  安装软件: 'install software',
+  运行新下载的程序: 'run a newly downloaded program',
+  运行不在常用程序目录中的程序: 'run a program outside the usual install folders'
+}
 const SESSION_ID = /^[A-Za-z0-9_.:-]{1,160}$/
 
 /** Whether the Playwright extension is present in any local Edge profile (folder check only). */
@@ -93,6 +102,7 @@ export function apply(ctx: any): void {
     join(tmpdir(), 'dsh-px-computer', String(process.pid)),
     process.env
   )
+  sweepOutput(join(tmpdir(), 'dsh-px-computer'), (pid) => pid === process.pid || processAlive(pid))
   const approval = (): any => ctx.get?.('approval') ?? ctx.approval
 
   const sessionOf = (run: ToolRun): { agent: Agent; id: string } => {
@@ -206,7 +216,7 @@ export function apply(ctx: any): void {
                 ? `即将${confirm}：${display}。允许吗？`
                 : `允许 DSH 启动「${display}」并在本会话中操作它吗？`,
               confirm
-                ? `About to ${confirm === '安装软件' ? 'install software' : 'run a newly downloaded program'}: ${display}. Allow?`
+                ? `About to ${LAUNCH_REASON_EN[confirm] ?? 'run a program'}: ${display}. Allow?`
                 : `Allow DSH to start "${display}" and operate it in this session?`,
               `computer use: launch ${display}`
             )
@@ -241,18 +251,26 @@ export function apply(ctx: any): void {
         if (spec.name === 'browser_take_screenshot' && !(await modelSeesImages(ctx, s.agent, signal)))
           throw new ComputerUseRefusal('当前模型不支持图片，请改用 browser_snapshot。')
         const site = targetSite(spec.name, args, browsers.currentUrl(s.id))
-        const needsSite =
-          current.browser !== 'isolated' && site && (spec.name === 'browser_navigate' || !spec.readOnly)
-        if (needsSite && !states.granted(s.id, `site|${site}`) && !settings.alwaysAllowsSite(site)) {
+        // Profiles that carry sign-in state need a grant before any read or action on a site.
+        const signedIn = current.browser !== 'isolated'
+        const where =
+          current.browser === 'extension'
+            ? ['你的 Edge', 'your Edge']
+            : ['PX 专用浏览器', 'the PX browser profile']
+        const grantSite = async (target: string, landed: boolean): Promise<void> => {
+          if (states.granted(s.id, `site|${target}`) || settings.alwaysAllowsSite(target)) return
           await askOrRefuse(
             run,
-            `访问 ${site}`,
-            `允许 DSH 在本会话中使用${current.browser === 'extension' ? '你的 Edge' : 'PX 专用浏览器'}访问并操作 ${site} 吗？该浏览器可能保留你的登录状态。`,
-            `Allow DSH to open and operate ${site} in ${current.browser === 'extension' ? 'your Edge' : 'the PX browser profile'} for this session? It may hold your signed-in state.`,
-            `browser use: site access ${site}`
+            `访问 ${target}`,
+            landed
+              ? `页面已跳转到 ${target}。允许 DSH 在本会话中使用${where[0]}读取并操作这个网站吗？该浏览器可能保留你的登录状态。`
+              : `允许 DSH 在本会话中使用${where[0]}访问并操作 ${target} 吗？该浏览器可能保留你的登录状态。`,
+            `${landed ? `The page moved to ${target}. ` : ''}Allow DSH to open and operate ${target} in ${where[1]} for this session? It may hold your signed-in state.`,
+            `browser use: site access ${target}`
           )
-          states.grant(s.id, `site|${site}`, site)
+          states.grant(s.id, `site|${target}`, target)
         }
+        if (signedIn && site) await grantSite(site, false)
         if (spec.name === 'browser_file_upload') {
           const files = uploadSummary(args)
           if (files.length)
@@ -274,11 +292,14 @@ export function apply(ctx: any): void {
         )
         const text = browserText(result)
         if (result.isError) throw new Error(text || `${spec.name} 失败`)
+        // A click or redirect can land on another site; its content is withheld until that site is granted.
+        const landed = siteOf(pageUrlOf(text) ?? '')
+        if (signedIn && landed && landed !== site) await grantSite(landed, true)
         const sees = browserImages(result).length > 0 && (await modelSeesImages(ctx, s.agent, signal))
         return {
           text: text || '完成。',
           images: sees ? browserImages(result) : [],
-          target: site ?? spec.name
+          target: landed ?? site ?? spec.name
         }
       }
     )
@@ -377,9 +398,9 @@ export function apply(ctx: any): void {
   let browserShape = `${settings.read().browser}|${settings.read().headless}`
   settings.subscribe((current) => {
     const next = `${current.browser}|${current.headless}`
-    if (next !== browserShape) void browsers.closeAll()
+    if (next !== browserShape) void browsers.closeAll().catch(() => undefined)
     browserShape = next
-    if (!current.desktop) void driver.close()
+    if (!current.desktop) void driver.close().catch(() => undefined)
   })
 
   ctx.on('agent/created', ({ agent }: { agent: any }) => {
@@ -496,14 +517,14 @@ export function apply(ctx: any): void {
         return
       case 'pause':
         states.pause(sessionId)
-        void browsers.close(sessionId)
+        void browsers.close(sessionId).catch(() => undefined)
         return
       case 'resume':
         states.resume(sessionId)
         return
       case 'release-browser': {
         const holder = browsers.holder()
-        if (holder) void browsers.close(holder)
+        if (holder) void browsers.close(holder).catch(() => undefined)
         return
       }
       default:

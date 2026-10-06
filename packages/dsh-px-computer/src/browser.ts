@@ -4,7 +4,7 @@
  * that carry login state (a PX-owned profile and the user's Edge through the Playwright extension)
  * serve one session at a time and ask before the agent works on each new site.
  */
-import { mkdirSync, rmSync } from 'node:fs'
+import { mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { McpStdioClient, type McpCallResult } from './mcp-stdio'
 import { BLOCKED_ORIGINS, deniedUrl, uploadNames } from './policy'
@@ -200,7 +200,9 @@ export class BrowserSessions {
     const client = new McpStdioClient({
       command: options.node,
       args: browserArgs(options, outputDir),
-      cwd: outputDir,
+      // Browser processes inherit this directory; keeping it outside the per-session folder lets that
+      // folder be removed while a browser is still exiting.
+      cwd: this.outputRoot,
       env: childEnv(this.env, options.electron),
       roots: cwd ? [cwd] : []
     })
@@ -244,7 +246,7 @@ export class BrowserSessions {
     this.sessions.delete(sessionId)
     clearTimeout(session.idle)
     await session.client.close().catch(() => undefined)
-    rmSync(session.outputDir, { recursive: true, force: true, maxRetries: 3 })
+    removeQuietly(session.outputDir)
   }
 
   private drop(sessionId: string): void {
@@ -261,6 +263,36 @@ export class BrowserSessions {
 
   get active(): string[] {
     return [...this.sessions.keys()]
+  }
+}
+
+/** Temporary browser output is disposable; a file still held by an exiting browser is left for the sweep. */
+export function removeQuietly(path: string): void {
+  try {
+    rmSync(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 })
+  } catch {
+    // Swept on a later start once no process holds it.
+  }
+}
+
+/** Remove output folders of host processes that have exited. */
+export function sweepOutput(parent: string, alive: (pid: number) => boolean): void {
+  let entries: string[]
+  try {
+    entries = readdirSync(parent)
+  } catch {
+    return
+  }
+  for (const entry of entries)
+    if (/^\d+$/.test(entry) && !alive(Number(entry))) removeQuietly(join(parent, entry))
+}
+
+export function processAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error: any) {
+    return error?.code === 'EPERM'
   }
 }
 
