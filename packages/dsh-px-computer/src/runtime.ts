@@ -156,7 +156,7 @@ export function refusalText(outcome: Outcome, subject: string): string {
   if (outcome === 'cancelled') return `${subject}的确认已取消，未执行。`
   if (outcome === 'unavailable')
     return `${subject}需要用户确认，但当前无法显示确认（会话可能处于无人值守模式）。未执行；请在回复中说明并等待用户。`
-  return `用户没有允许${subject}（若会话关闭了确认提示，确认会被自动拒绝；用户可在「电脑操作」面板中把应用设为始终允许）。未执行；不要换一种方式绕过，请在回复中说明。`
+  return `用户没有允许${subject}（若会话关闭了确认提示，确认会被自动拒绝；用户可在「电脑操作」面板中把应用或网站设为始终允许）。未执行；不要换一种方式绕过，请在回复中说明。`
 }
 
 /**
