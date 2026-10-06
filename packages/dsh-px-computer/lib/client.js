@@ -331,7 +331,16 @@ function ComputerPanel({ sessionId, visible }) {
             s.browser !== "off" && s.browser !== "isolated" && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-muted", children: "\u8FD9\u4E2A\u6A21\u5F0F\u5305\u542B\u767B\u5F55\u72B6\u6001\uFF1A\u6BCF\u4E2A\u4F1A\u8BDD\u7B2C\u4E00\u6B21\u8BBF\u95EE\u67D0\u4E2A\u7F51\u7AD9\u524D\u4F1A\u5148\u8BE2\u95EE\u3002" })
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-actions", children: [
-            view.session.paused ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { className: "px-primary", style: controlStyle, disabled: busy, onClick: () => void act({ action: "resume" }), children: "\u6062\u590D\u672C\u4F1A\u8BDD\u7684\u7535\u8111\u64CD\u4F5C" }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+            view.session.paused ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+              "button",
+              {
+                className: "px-primary",
+                style: controlStyle,
+                disabled: busy,
+                onClick: () => void act({ action: "resume" }),
+                children: "\u6062\u590D\u672C\u4F1A\u8BDD\u7684\u7535\u8111\u64CD\u4F5C"
+              }
+            ) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
               "button",
               {
                 className: "px-danger",
@@ -341,7 +350,15 @@ function ComputerPanel({ sessionId, visible }) {
                 children: "\u505C\u6B62\u5E76\u6682\u505C\u672C\u4F1A\u8BDD"
               }
             ),
-            view.status.browserHeldElsewhere && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { style: controlStyle, disabled: busy, onClick: () => void act({ action: "release-browser" }), children: "\u91CA\u653E\u88AB\u5176\u4ED6\u4F1A\u8BDD\u5360\u7528\u7684\u6D4F\u89C8\u5668" })
+            view.status.browserHeldElsewhere && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+              "button",
+              {
+                style: controlStyle,
+                disabled: busy,
+                onClick: () => void act({ action: "release-browser" }),
+                children: "\u91CA\u653E\u88AB\u5176\u4ED6\u4F1A\u8BDD\u5360\u7528\u7684\u6D4F\u89C8\u5668"
+              }
+            )
           ] }),
           view.session.paused && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { role: "status", children: "\u5DF2\u6682\u505C\uFF1Aagent \u5728\u672C\u4F1A\u8BDD\u4E2D\u7684\u7535\u8111\u548C\u6D4F\u89C8\u5668\u64CD\u4F5C\u90FD\u4F1A\u88AB\u62D2\u7EDD\u3002" }),
           (view.session.apps.length > 0 || view.session.sites.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { style: { ...cardStyle, margin: "12px 0" }, open: true, children: [
@@ -360,18 +377,42 @@ function ComputerPanel({ sessionId, visible }) {
             ] }, app.key)),
             view.session.sites.map((site) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-actions", children: [
               /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { style: { flex: 1 }, children: site }),
-              s.alwaysAllowSites.includes(site) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u59CB\u7EC8\u5141\u8BB8" }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { style: controlStyle, disabled: busy, onClick: () => void act({ action: "always-allow-site", site }), children: "\u8BBE\u4E3A\u59CB\u7EC8\u5141\u8BB8" })
+              s.alwaysAllowSites.includes(site) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u59CB\u7EC8\u5141\u8BB8" }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+                "button",
+                {
+                  style: controlStyle,
+                  disabled: busy,
+                  onClick: () => void act({ action: "always-allow-site", site }),
+                  children: "\u8BBE\u4E3A\u59CB\u7EC8\u5141\u8BB8"
+                }
+              )
             ] }, site))
           ] }),
           (s.alwaysAllowApps.length > 0 || s.alwaysAllowSites.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { style: { ...cardStyle, margin: "12px 0" }, children: [
             /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("summary", { children: "\u59CB\u7EC8\u5141\u8BB8\uFF08\u6240\u6709\u4F1A\u8BDD\uFF09" }),
             s.alwaysAllowApps.map((app) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-actions", children: [
               /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { style: { flex: 1 }, children: app.label }),
-              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { style: controlStyle, disabled: busy, onClick: () => void act({ action: "forget-app", key: app.key }), children: "\u64A4\u9500" })
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+                "button",
+                {
+                  style: controlStyle,
+                  disabled: busy,
+                  onClick: () => void act({ action: "forget-app", key: app.key }),
+                  children: "\u64A4\u9500"
+                }
+              )
             ] }, app.key)),
             s.alwaysAllowSites.map((site) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-actions", children: [
               /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { style: { flex: 1 }, children: site }),
-              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { style: controlStyle, disabled: busy, onClick: () => void act({ action: "forget-site", site }), children: "\u64A4\u9500" })
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+                "button",
+                {
+                  style: controlStyle,
+                  disabled: busy,
+                  onClick: () => void act({ action: "forget-site", site }),
+                  children: "\u64A4\u9500"
+                }
+              )
             ] }, site))
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h4", { children: "\u64CD\u4F5C\u8BB0\u5F55" }),

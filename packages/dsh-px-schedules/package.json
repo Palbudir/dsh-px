@@ -1,6 +1,6 @@
 {
   "name": "dsh-px-schedules",
-  "version": "0.4.1-alpha.1",
+  "version": "0.4.2-alpha.1",
   "private": true,
   "type": "module",
   "description": "DSH-PX 定时任务",
