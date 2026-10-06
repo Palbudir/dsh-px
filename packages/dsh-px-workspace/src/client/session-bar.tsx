@@ -19,7 +19,8 @@ const featureIcons: Record<string, string> = {
   'px-notes': 'note',
   'px-schedules': 'schedule',
   'dsh-px-taskflow': 'ledger',
-  'dsh-px-memory': 'persona'
+  'dsh-px-memory': 'persona',
+  'dsh-px-computer': 'computer'
 }
 export function SessionBar({ ctx }: { ctx: Client }): unknown {
   const sessions = useSnapshot(ctx.sessions.list)

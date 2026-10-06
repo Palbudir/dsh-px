@@ -37,6 +37,13 @@ DSH-PX Desktop 由锁定提交的 [DeepSeek Harness](https://github.com/deepseek
 
 DSH-PX Pack 随附 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 0.24.1（MIT，`Copyright (c) 2026 dsh-external`），并对其宿主入口应用版本及摘要限定的认证补丁；补丁来源与范围见 [插件合约](docs/PLUGINS.md)。
 
+“电脑操作”功能包不随 Pack 打包第三方代码，而是声明以下精确版本的运行时依赖，由 DSH 插件管理器从 npm 安装：
+
+- [@trycua/cua-driver](https://github.com/trycua/cua) 0.28.0（MIT）。其 Windows 原生包 `@trycua/cua-driver-win32-x64-msvc` 声明为 MIT AND MPL-2.0，其中 `cua_driver_node_runtime.node` 源自 `uniffi-bindgen-react-native`，按 MPL-2.0 提供，源码说明随该包附带。
+- [@playwright/mcp](https://github.com/microsoft/playwright-mcp) 0.0.80（Apache-2.0）及其依赖的 Playwright。浏览器使用本机已安装的 Microsoft Edge。
+
+“接管我的 Edge”模式使用微软发布的 Playwright Extension，由用户自行从扩展商店安装，PX 不分发该扩展。
+
 分发二进制前请逐一核对各上游许可要求。
 
 ## Markdown 引用解析
