@@ -18,7 +18,7 @@ IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
 
 // packages/dsh-px-computer/src/index.ts
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync as readdirSync2 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname as dirname2, join as join2 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,7 +77,7 @@ function rejectUntrustedRequest(req, res) {
 }
 
 // packages/dsh-px-computer/src/browser.ts
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 
 // packages/dsh-px-computer/src/mcp-stdio.ts
@@ -346,11 +346,19 @@ deny("DSH \u4E0E\u5176\u4ED6 agent \u5E94\u7528", [
   "codex.exe",
   "claude.exe"
 ]);
+deny("\u5F00\u59CB\u83DC\u5355\u4E0E\u7CFB\u7EDF\u641C\u7D22", [
+  "startmenuexperiencehost.exe",
+  "searchhost.exe",
+  "searchapp.exe",
+  "searchui.exe",
+  "shellexperiencehost.exe"
+]);
 var DENIED_TITLES = [
   [/^(windows\s*安全中心|windows\s*安全性|windows security|windows defender)/i, "\u8EAB\u4EFD\u9A8C\u8BC1\u4E0E\u5B89\u5168\u8F6F\u4EF6"],
   [/^(用户帐户控制|用户账户控制|user account control)$/i, "\u8EAB\u4EFD\u9A8C\u8BC1\u4E0E\u5B89\u5168\u8F6F\u4EF6"],
-  [/^(运行|run)$/i, "\u8FD0\u884C\u5BF9\u8BDD\u6846"]
+  [/^(运行|執行|run|ausführen|exécuter|ejecutar|esegui|executar|実行|실행|выполнить)$/i, "\u8FD0\u884C\u5BF9\u8BDD\u6846"]
 ];
+var SHELL_TITLES = /^(program manager|任务栏|工作列|taskbar)?$/i;
 var DENIED_LAUNCH_NAMES = {
   cmd: "\u7EC8\u7AEF\u4E0E\u547D\u4EE4\u89E3\u91CA\u5668",
   powershell: "\u7EC8\u7AEF\u4E0E\u547D\u4EE4\u89E3\u91CA\u5668",
@@ -401,9 +409,11 @@ function appLabel(window2) {
   return window2.title?.trim() ? `${window2.title.trim()}\uFF08${window2.appName}\uFF09` : window2.appName;
 }
 function deniedWindow(window2) {
-  const byProcess = DENIED_PROCESSES[fileName(window2.appName)];
+  const name2 = fileName(window2.appName);
+  const byProcess = DENIED_PROCESSES[name2];
   if (byProcess) return byProcess;
   const title = window2.title?.trim() ?? "";
+  if (name2 === "explorer.exe" && SHELL_TITLES.test(title)) return "\u4EFB\u52A1\u680F\u4E0E\u684C\u9762";
   for (const [pattern, reason] of DENIED_TITLES) if (pattern.test(title)) return reason;
   return void 0;
 }
@@ -441,7 +451,11 @@ function commandProgram(commandLine) {
   const exe = text2.search(/\.exe(\s|$)/i);
   return exe >= 0 ? text2.slice(0, exe + 4) : text2.split(/\s+/)[0] ?? "";
 }
-function launchDecision(request, downloads) {
+var inside = (target, folders) => folders.some((folder) => {
+  const root = win32.resolve(folder).toLowerCase();
+  return target.startsWith(root.endsWith("\\") ? root : root + "\\");
+});
+function launchDecision(request, folders) {
   const named = (request.name ?? "").trim().toLowerCase();
   if (named && DENIED_LAUNCH_NAMES[named]) return { kind: "deny", reason: DENIED_LAUNCH_NAMES[named] };
   const candidates = [request.path, request.launch_path && commandProgram(request.launch_path), request.name];
@@ -461,23 +475,32 @@ function launchDecision(request, downloads) {
   const program = request.path ?? (request.launch_path ? commandProgram(request.launch_path) : "");
   if (program && win32.isAbsolute(program)) {
     const target = win32.resolve(program).toLowerCase();
-    const fresh = downloads.some((folder) => {
-      const root = win32.resolve(folder).toLowerCase();
-      return target.startsWith(root.endsWith("\\") ? root : root + "\\");
-    });
-    if (fresh) return { kind: "confirm", reason: "\u8FD0\u884C\u65B0\u4E0B\u8F7D\u7684\u7A0B\u5E8F" };
+    if (inside(target, folders.downloads)) return { kind: "confirm", reason: "\u8FD0\u884C\u65B0\u4E0B\u8F7D\u7684\u7A0B\u5E8F" };
+    if (!inside(target, folders.trusted)) return { kind: "confirm", reason: "\u8FD0\u884C\u4E0D\u5728\u5E38\u7528\u7A0B\u5E8F\u76EE\u5F55\u4E2D\u7684\u7A0B\u5E8F" };
   }
   return { kind: "allow" };
 }
-function downloadFolders(env) {
-  const home = env.USERPROFILE;
-  const folders = [
-    home && win32.join(home, "Downloads"),
-    home && win32.join(home, "Desktop"),
-    env.TEMP,
-    env.TMP
+function launchFolders(env) {
+  const unique = (values) => [
+    ...new Set(values.filter((value) => !!value))
   ];
-  return [...new Set(folders.filter((value) => !!value))];
+  const home = env.USERPROFILE, local = env.LOCALAPPDATA;
+  return {
+    downloads: unique([
+      home && win32.join(home, "Downloads"),
+      home && win32.join(home, "Desktop"),
+      env.TEMP,
+      env.TMP
+    ]),
+    trusted: unique([
+      env.SystemRoot ?? env.windir,
+      env.ProgramFiles,
+      env["ProgramFiles(x86)"],
+      env.ProgramW6432,
+      local && win32.join(local, "Programs"),
+      local && win32.join(local, "Microsoft", "WindowsApps")
+    ])
+  };
 }
 var DENIED_HOSTS = [
   "passwords.google.com",
@@ -605,7 +628,7 @@ function refusalText(outcome, subject) {
   if (outcome === "cancelled") return `${subject}\u7684\u786E\u8BA4\u5DF2\u53D6\u6D88\uFF0C\u672A\u6267\u884C\u3002`;
   if (outcome === "unavailable")
     return `${subject}\u9700\u8981\u7528\u6237\u786E\u8BA4\uFF0C\u4F46\u5F53\u524D\u65E0\u6CD5\u663E\u793A\u786E\u8BA4\uFF08\u4F1A\u8BDD\u53EF\u80FD\u5904\u4E8E\u65E0\u4EBA\u503C\u5B88\u6A21\u5F0F\uFF09\u3002\u672A\u6267\u884C\uFF1B\u8BF7\u5728\u56DE\u590D\u4E2D\u8BF4\u660E\u5E76\u7B49\u5F85\u7528\u6237\u3002`;
-  return `\u7528\u6237\u6CA1\u6709\u5141\u8BB8${subject}\uFF08\u82E5\u4F1A\u8BDD\u5173\u95ED\u4E86\u786E\u8BA4\u63D0\u793A\uFF0C\u786E\u8BA4\u4F1A\u88AB\u81EA\u52A8\u62D2\u7EDD\uFF1B\u7528\u6237\u53EF\u5728\u300C\u7535\u8111\u64CD\u4F5C\u300D\u9762\u677F\u4E2D\u628A\u5E94\u7528\u8BBE\u4E3A\u59CB\u7EC8\u5141\u8BB8\uFF09\u3002\u672A\u6267\u884C\uFF1B\u4E0D\u8981\u6362\u4E00\u79CD\u65B9\u5F0F\u7ED5\u8FC7\uFF0C\u8BF7\u5728\u56DE\u590D\u4E2D\u8BF4\u660E\u3002`;
+  return `\u7528\u6237\u6CA1\u6709\u5141\u8BB8${subject}\uFF08\u82E5\u4F1A\u8BDD\u5173\u95ED\u4E86\u786E\u8BA4\u63D0\u793A\uFF0C\u786E\u8BA4\u4F1A\u88AB\u81EA\u52A8\u62D2\u7EDD\uFF1B\u7528\u6237\u53EF\u5728\u300C\u7535\u8111\u64CD\u4F5C\u300D\u9762\u677F\u4E2D\u628A\u5E94\u7528\u6216\u7F51\u7AD9\u8BBE\u4E3A\u59CB\u7EC8\u5141\u8BB8\uFF09\u3002\u672A\u6267\u884C\uFF1B\u4E0D\u8981\u6362\u4E00\u79CD\u65B9\u5F0F\u7ED5\u8FC7\uFF0C\u8BF7\u5728\u56DE\u590D\u4E2D\u8BF4\u660E\u3002`;
 }
 async function modelSeesImages(ctx, agent, signal) {
   if (!agent) return false;
@@ -1251,7 +1274,9 @@ var BrowserSessions = class {
     const client = new McpStdioClient({
       command: options.node,
       args: browserArgs(options, outputDir),
-      cwd: outputDir,
+      // Browser processes inherit this directory; keeping it outside the per-session folder lets that
+      // folder be removed while a browser is still exiting.
+      cwd: this.outputRoot,
       env: childEnv(this.env, options.electron),
       roots: cwd ? [cwd] : []
     });
@@ -1283,7 +1308,7 @@ var BrowserSessions = class {
     this.sessions.delete(sessionId);
     clearTimeout(session.idle);
     await session.client.close().catch(() => void 0);
-    rmSync(session.outputDir, { recursive: true, force: true, maxRetries: 3 });
+    removeQuietly(session.outputDir);
   }
   drop(sessionId) {
     const session = this.sessions.get(sessionId);
@@ -1299,6 +1324,30 @@ var BrowserSessions = class {
     return [...this.sessions.keys()];
   }
 };
+function removeQuietly(path) {
+  try {
+    rmSync(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+  } catch {
+  }
+}
+function sweepOutput(parent, alive) {
+  let entries;
+  try {
+    entries = readdirSync(parent);
+  } catch {
+    return;
+  }
+  for (const entry of entries)
+    if (/^\d+$/.test(entry) && !alive(Number(entry))) removeQuietly(join(parent, entry));
+}
+function processAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error?.code === "EPERM";
+  }
+}
 function checkBrowserArgs(name2, args) {
   for (const key of STRIPPED) if (args[key] !== void 0) throw new ComputerUseRefusal(`\u4E0D\u652F\u6301\u53C2\u6570 ${key}`);
   if (name2 === "browser_navigate") {
@@ -1660,7 +1709,7 @@ async function runDesktopTool(tool, rawArgs, c) {
     const query = typeof args.query === "string" ? args.query.trim().toLowerCase() : "";
     const allowed = apps.filter((app) => {
       const exe = app.bundle_id && /\.exe$/i.test(app.bundle_id) ? app.bundle_id : app.name;
-      return !deniedWindow({ appName: String(exe ?? "") }) && launchDecision({ name: app.name }, []).kind !== "deny";
+      return !deniedWindow({ appName: String(exe ?? "") }) && launchDecision({ name: app.name }, { downloads: [], trusted: [] }).kind !== "deny";
     });
     const picked = query ? allowed.filter(
       (app) => String(app.name ?? "").toLowerCase().includes(query)
@@ -1679,7 +1728,7 @@ async function runDesktopTool(tool, rawArgs, c) {
     const request = driverArgs;
     if (!request.launch_path && !request.aumid && !request.name && !request.path)
       throw new ComputerUseRefusal("\u9700\u8981 launch_path\u3001aumid\u3001name \u6216 path \u4E4B\u4E00");
-    const decision = launchDecision(request, downloadFolders(c.env));
+    const decision = launchDecision(request, launchFolders(c.env));
     if (decision.kind === "deny") throw new ComputerUseRefusal(`\u4E0D\u80FD\u542F\u52A8\u8BE5\u7A0B\u5E8F\uFF1A${decision.reason}\u3002`);
     const label2 = String(request.name ?? request.aumid ?? request.path ?? request.launch_path);
     await c.authorizeLaunch(label2, decision.kind === "confirm" ? decision.reason : void 0);
@@ -1880,12 +1929,17 @@ var inject = [];
 var AnswerRefusal = class extends ComputerUseRefusal {
 };
 var PLAYWRIGHT_EXTENSION = "mmlmfjhmonkocbjadbfplnigmagldckm";
+var LAUNCH_REASON_EN = {
+  \u5B89\u88C5\u8F6F\u4EF6: "install software",
+  \u8FD0\u884C\u65B0\u4E0B\u8F7D\u7684\u7A0B\u5E8F: "run a newly downloaded program",
+  \u8FD0\u884C\u4E0D\u5728\u5E38\u7528\u7A0B\u5E8F\u76EE\u5F55\u4E2D\u7684\u7A0B\u5E8F: "run a program outside the usual install folders"
+};
 var SESSION_ID = /^[A-Za-z0-9_.:-]{1,160}$/;
 function edgeExtensionInstalled(env) {
   const root = env.LOCALAPPDATA && join2(env.LOCALAPPDATA, "Microsoft", "Edge", "User Data");
   if (!root || !existsSync(root)) return false;
   try {
-    return readdirSync(root).filter((entry) => entry === "Default" || /^Profile \d+$/.test(entry)).some((profile) => existsSync(join2(root, profile, "Extensions", PLAYWRIGHT_EXTENSION)));
+    return readdirSync2(root).filter((entry) => entry === "Default" || /^Profile \d+$/.test(entry)).some((profile) => existsSync(join2(root, profile, "Extensions", PLAYWRIGHT_EXTENSION)));
   } catch {
     return false;
   }
@@ -1926,6 +1980,7 @@ function apply(ctx) {
     join2(tmpdir(), "dsh-px-computer", String(process.pid)),
     process.env
   );
+  sweepOutput(join2(tmpdir(), "dsh-px-computer"), (pid) => pid === process.pid || processAlive(pid));
   const approval = () => ctx.get?.("approval") ?? ctx.approval;
   const sessionOf = (run) => {
     if (!run.agent) throw new ComputerUseRefusal("\u7535\u8111\u64CD\u4F5C\u53EA\u80FD\u5728\u4F1A\u8BDD\u4E2D\u4F7F\u7528");
@@ -2017,7 +2072,7 @@ function apply(ctx) {
             run,
             `\u542F\u52A8\u300C${display}\u300D`,
             confirm ? `\u5373\u5C06${confirm}\uFF1A${display}\u3002\u5141\u8BB8\u5417\uFF1F` : `\u5141\u8BB8 DSH \u542F\u52A8\u300C${display}\u300D\u5E76\u5728\u672C\u4F1A\u8BDD\u4E2D\u64CD\u4F5C\u5B83\u5417\uFF1F`,
-            confirm ? `About to ${confirm === "\u5B89\u88C5\u8F6F\u4EF6" ? "install software" : "run a newly downloaded program"}: ${display}. Allow?` : `Allow DSH to start "${display}" and operate it in this session?`,
+            confirm ? `About to ${LAUNCH_REASON_EN[confirm] ?? "run a program"}: ${display}. Allow?` : `Allow DSH to start "${display}" and operate it in this session?`,
             `computer use: launch ${display}`
           );
           states.grant(s.id, key);
@@ -2049,17 +2104,20 @@ function apply(ctx) {
       if (spec.name === "browser_take_screenshot" && !await modelSeesImages(ctx, s.agent, signal))
         throw new ComputerUseRefusal("\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u56FE\u7247\uFF0C\u8BF7\u6539\u7528 browser_snapshot\u3002");
       const site = targetSite(spec.name, args, browsers.currentUrl(s.id));
-      const needsSite = current.browser !== "isolated" && site && (spec.name === "browser_navigate" || !spec.readOnly);
-      if (needsSite && !states.granted(s.id, `site|${site}`) && !settings.alwaysAllowsSite(site)) {
+      const signedIn = current.browser !== "isolated";
+      const where = current.browser === "extension" ? ["\u4F60\u7684 Edge", "your Edge"] : ["PX \u4E13\u7528\u6D4F\u89C8\u5668", "the PX browser profile"];
+      const grantSite = async (target, landed2) => {
+        if (states.granted(s.id, `site|${target}`) || settings.alwaysAllowsSite(target)) return;
         await askOrRefuse(
           run,
-          `\u8BBF\u95EE ${site}`,
-          `\u5141\u8BB8 DSH \u5728\u672C\u4F1A\u8BDD\u4E2D\u4F7F\u7528${current.browser === "extension" ? "\u4F60\u7684 Edge" : "PX \u4E13\u7528\u6D4F\u89C8\u5668"}\u8BBF\u95EE\u5E76\u64CD\u4F5C ${site} \u5417\uFF1F\u8BE5\u6D4F\u89C8\u5668\u53EF\u80FD\u4FDD\u7559\u4F60\u7684\u767B\u5F55\u72B6\u6001\u3002`,
-          `Allow DSH to open and operate ${site} in ${current.browser === "extension" ? "your Edge" : "the PX browser profile"} for this session? It may hold your signed-in state.`,
-          `browser use: site access ${site}`
+          `\u8BBF\u95EE ${target}`,
+          landed2 ? `\u9875\u9762\u5DF2\u8DF3\u8F6C\u5230 ${target}\u3002\u5141\u8BB8 DSH \u5728\u672C\u4F1A\u8BDD\u4E2D\u4F7F\u7528${where[0]}\u8BFB\u53D6\u5E76\u64CD\u4F5C\u8FD9\u4E2A\u7F51\u7AD9\u5417\uFF1F\u8BE5\u6D4F\u89C8\u5668\u53EF\u80FD\u4FDD\u7559\u4F60\u7684\u767B\u5F55\u72B6\u6001\u3002` : `\u5141\u8BB8 DSH \u5728\u672C\u4F1A\u8BDD\u4E2D\u4F7F\u7528${where[0]}\u8BBF\u95EE\u5E76\u64CD\u4F5C ${target} \u5417\uFF1F\u8BE5\u6D4F\u89C8\u5668\u53EF\u80FD\u4FDD\u7559\u4F60\u7684\u767B\u5F55\u72B6\u6001\u3002`,
+          `${landed2 ? `The page moved to ${target}. ` : ""}Allow DSH to open and operate ${target} in ${where[1]} for this session? It may hold your signed-in state.`,
+          `browser use: site access ${target}`
         );
-        states.grant(s.id, `site|${site}`, site);
-      }
+        states.grant(s.id, `site|${target}`, target);
+      };
+      if (signedIn && site) await grantSite(site, false);
       if (spec.name === "browser_file_upload") {
         const files = uploadSummary(args);
         if (files.length)
@@ -2081,11 +2139,13 @@ function apply(ctx) {
       );
       const text2 = browserText(result);
       if (result.isError) throw new Error(text2 || `${spec.name} \u5931\u8D25`);
+      const landed = siteOf(pageUrlOf(text2) ?? "");
+      if (signedIn && landed && landed !== site) await grantSite(landed, true);
       const sees = browserImages(result).length > 0 && await modelSeesImages(ctx, s.agent, signal);
       return {
         text: text2 || "\u5B8C\u6210\u3002",
         images: sees ? browserImages(result) : [],
-        target: site ?? spec.name
+        target: landed ?? site ?? spec.name
       };
     }
   );
@@ -2175,9 +2235,9 @@ function apply(ctx) {
   let browserShape = `${settings.read().browser}|${settings.read().headless}`;
   settings.subscribe((current) => {
     const next = `${current.browser}|${current.headless}`;
-    if (next !== browserShape) void browsers.closeAll();
+    if (next !== browserShape) void browsers.closeAll().catch(() => void 0);
     browserShape = next;
-    if (!current.desktop) void driver.close();
+    if (!current.desktop) void driver.close().catch(() => void 0);
   });
   ctx.on("agent/created", ({ agent }) => {
     agent?.ctx?.effect?.(
@@ -2284,14 +2344,14 @@ function apply(ctx) {
         return;
       case "pause":
         states.pause(sessionId);
-        void browsers.close(sessionId);
+        void browsers.close(sessionId).catch(() => void 0);
         return;
       case "resume":
         states.resume(sessionId);
         return;
       case "release-browser": {
         const holder = browsers.holder();
-        if (holder) void browsers.close(holder);
+        if (holder) void browsers.close(holder).catch(() => void 0);
         return;
       }
       default:

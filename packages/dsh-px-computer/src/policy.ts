@@ -115,13 +115,24 @@ deny('DSH 与其他 agent 应用', [
   'codex.exe',
   'claude.exe'
 ])
+// Start and search accept a typed program name and run it, which is a command line by another name.
+deny('开始菜单与系统搜索', [
+  'startmenuexperiencehost.exe',
+  'searchhost.exe',
+  'searchapp.exe',
+  'searchui.exe',
+  'shellexperiencehost.exe'
+])
 
 /** Window titles that identify denied surfaces hosted by shared processes (UWP frames, Explorer). */
 const DENIED_TITLES: Array<[RegExp, string]> = [
   [/^(windows\s*安全中心|windows\s*安全性|windows security|windows defender)/i, '身份验证与安全软件'],
   [/^(用户帐户控制|用户账户控制|user account control)$/i, '身份验证与安全软件'],
-  [/^(运行|run)$/i, '运行对话框']
+  [/^(运行|執行|run|ausführen|exécuter|ejecutar|esegui|executar|実行|실행|выполнить)$/i, '运行对话框']
 ]
+
+/** Explorer windows that are the shell itself (taskbar, desktop) rather than a folder view. */
+const SHELL_TITLES = /^(program manager|任务栏|工作列|taskbar)?$/i
 
 /** Names accepted by `launch_app` that resolve to denied programs without a path. */
 const DENIED_LAUNCH_NAMES: Record<string, string> = {
@@ -195,9 +206,11 @@ export function appLabel(window: WindowIdentity): string {
 
 /** Why a window must not be read or operated, or undefined when it is not on the hard deny list. */
 export function deniedWindow(window: WindowIdentity): string | undefined {
-  const byProcess = DENIED_PROCESSES[fileName(window.appName)]
+  const name = fileName(window.appName)
+  const byProcess = DENIED_PROCESSES[name]
   if (byProcess) return byProcess
   const title = window.title?.trim() ?? ''
+  if (name === 'explorer.exe' && SHELL_TITLES.test(title)) return '任务栏与桌面'
   for (const [pattern, reason] of DENIED_TITLES) if (pattern.test(title)) return reason
   return undefined
 }
@@ -258,11 +271,21 @@ export function commandProgram(commandLine: string): string {
   return exe >= 0 ? text.slice(0, exe + 4) : (text.split(/\s+/)[0] ?? '')
 }
 
-/**
- * Check one `launch_app` target. `downloads` lists folders whose programs count as newly acquired
- * software, which Codex requires to be confirmed before running.
- */
-export function launchDecision(request: LaunchRequest, downloads: readonly string[]): LaunchDecision {
+export interface LaunchFolders {
+  /** Programs here count as newly acquired software, which Codex requires to be confirmed. */
+  downloads: readonly string[]
+  /** System and standard install locations; other absolute paths are confirmed with their path. */
+  trusted: readonly string[]
+}
+
+const inside = (target: string, folders: readonly string[]): boolean =>
+  folders.some((folder) => {
+    const root = win32.resolve(folder).toLowerCase()
+    return target.startsWith(root.endsWith('\\') ? root : root + '\\')
+  })
+
+/** Check one `launch_app` target. */
+export function launchDecision(request: LaunchRequest, folders: LaunchFolders): LaunchDecision {
   const named = (request.name ?? '').trim().toLowerCase()
   if (named && DENIED_LAUNCH_NAMES[named]) return { kind: 'deny', reason: DENIED_LAUNCH_NAMES[named] }
   const candidates = [request.path, request.launch_path && commandProgram(request.launch_path), request.name]
@@ -282,25 +305,36 @@ export function launchDecision(request: LaunchRequest, downloads: readonly strin
   const program = request.path ?? (request.launch_path ? commandProgram(request.launch_path) : '')
   if (program && win32.isAbsolute(program)) {
     const target = win32.resolve(program).toLowerCase()
-    const fresh = downloads.some((folder) => {
-      const root = win32.resolve(folder).toLowerCase()
-      return target.startsWith(root.endsWith('\\') ? root : root + '\\')
-    })
-    if (fresh) return { kind: 'confirm', reason: '运行新下载的程序' }
+    if (inside(target, folders.downloads)) return { kind: 'confirm', reason: '运行新下载的程序' }
+    // A copied or renamed binary outside install locations is not recognizable by its name.
+    if (!inside(target, folders.trusted)) return { kind: 'confirm', reason: '运行不在常用程序目录中的程序' }
   }
   return { kind: 'allow' }
 }
 
-/** Folders whose executables are treated as newly acquired software. */
-export function downloadFolders(env: NodeJS.ProcessEnv): string[] {
-  const home = env.USERPROFILE
-  const folders = [
-    home && win32.join(home, 'Downloads'),
-    home && win32.join(home, 'Desktop'),
-    env.TEMP,
-    env.TMP
+/** Download and trusted install folders for this machine. */
+export function launchFolders(env: NodeJS.ProcessEnv): LaunchFolders {
+  const unique = (values: Array<string | undefined | false>): string[] => [
+    ...new Set(values.filter((value): value is string => !!value))
   ]
-  return [...new Set(folders.filter((value): value is string => !!value))]
+  const home = env.USERPROFILE,
+    local = env.LOCALAPPDATA
+  return {
+    downloads: unique([
+      home && win32.join(home, 'Downloads'),
+      home && win32.join(home, 'Desktop'),
+      env.TEMP,
+      env.TMP
+    ]),
+    trusted: unique([
+      env.SystemRoot ?? env.windir,
+      env.ProgramFiles,
+      env['ProgramFiles(x86)'],
+      env.ProgramW6432,
+      local && win32.join(local, 'Programs'),
+      local && win32.join(local, 'Microsoft', 'WindowsApps')
+    ])
+  }
 }
 
 /** Sites whose pages hold saved credentials; navigation there is refused in every browser mode. */
