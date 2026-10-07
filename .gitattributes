@@ -19,3 +19,7 @@
 
 # Generated runtime is never tracked, but be explicit if it is ever forced in.
 /runtime/** -text -diff
+
+# Plugin JavaScript is compiled from src/ and tracked for distribution.
+# Keep it in releases while excluding duplicate generated code from language stats.
+/packages/*/lib/** linguist-generated=true
