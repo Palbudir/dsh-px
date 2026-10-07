@@ -2,11 +2,11 @@
 
 ## 制品
 
-| 制品                                | 内容                                                      | 构建方式                                    |
-| ----------------------------------- | --------------------------------------------------------- | ------------------------------------------- |
-| `dsh-px-pack-<版本>.tgz`            | 八个自制组件、侧栏及基础/功能包的版本组合，含原生聚合入口 | `scripts/build-native-pack.ts`              |
-| `DSH-PX-Desktop-<版本>-win-x64.exe` | 官方 Desktop 源码 + PX 覆盖层 + 同提交的 Pack             | GitHub Windows runner 上的 electron-builder |
-| `artifact.json`                     | 版本、来源提交、宿主锁定、大小与 SHA-256/SHA-512          | 随对应制品生成                              |
+| 制品                                | 内容                                                  | 构建方式                                    |
+| ----------------------------------- | ----------------------------------------------------- | ------------------------------------------- |
+| `dsh-px-pack-<版本>.tgz`            | 自制组件、侧栏及基础/功能包的版本组合，含原生聚合入口 | `scripts/build-native-pack.ts`              |
+| `DSH-PX-Desktop-<版本>-win-x64.exe` | 官方 Desktop 源码 + PX 覆盖层 + 同提交的 Pack         | GitHub Windows runner 上的 electron-builder |
+| `artifact.json`                     | 版本、来源提交、宿主锁定、大小与 SHA-256/SHA-512      | 随对应制品生成                              |
 
 Pack 的依赖与 peer 固定在 [native-pack.json](../config/native-pack.json)。Desktop 的上游提交、编译产物与构建工厂摘要固定在 [native-desktop.json](../config/native-desktop.json)。
 

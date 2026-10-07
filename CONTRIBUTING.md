@@ -11,7 +11,7 @@ npm ci
 npm run build
 ```
 
-`npm run build` 重建八个自制插件的 `lib` 产物。需要完整 Pack 时运行 `npm run build:pack -- build-test/<新目录> --candidate`，输出目录必须不存在；`--candidate` 只用于隔离验证。本机 Desktop 验证与目录构建步骤见 [PACKAGING.md](docs/PACKAGING.md)。
+`npm run build` 重建自制插件的 `lib` 产物，清单以 `config/plugins.json` 为准。需要完整 Pack 时运行 `npm run build:pack -- build-test/<新目录> --candidate`，输出目录必须不存在；`--candidate` 只用于隔离验证。本机 Desktop 验证与目录构建步骤见 [PACKAGING.md](docs/PACKAGING.md)。
 
 隔离实例显式设置独立数据目录，不共享同一个 DSH_HOME。评测使用专用目录与会话，常规测试不写入日常数据。
 
