@@ -54,6 +54,27 @@ node scripts/run.mjs sign-release-manifest sign --product pack --channel preview
 
 ## 安装后复核与回退
 
+下载 Actions 制品后，在含 `release-manifest.json` 的目录执行只读核对（每个产品分别运行）：
+
+```powershell
+node scripts/verify-release.mjs desktop <制品目录> <完整来源SHA> <版本>
+node scripts/verify-release.mjs pack <制品目录> <完整来源SHA> <版本>
+```
+
+入口复用发布资产校验，检查来源、文件清单、大小及摘要；它不下载、不签名、不发布，也不替代运行验收。产品版本分别传入，不假定 Pack 与 Desktop 补丁号相同。
+
+安装后，从开始菜单打开的普通 PowerShell 运行以下只读清单：
+
+```powershell
+powershell -NoProfile -File scripts/inspect-desktop.ps1
+```
+
+输出程序版本、当前进程所见的安装登记、激活 Pack 和功能包版本，不读取凭据与会话正文。可用 `-InstallDirectory`、`-DshHome` 指定隔离验收目录。Pack 可以独立更新，不能要求其补丁号总与 Desktop 相同。
+
+打包应用的子进程可能看到重定向的注册表视图：即使程序已升级，它读到的 `DisplayVersion` 仍可能过时。遇到不一致时，先用普通桌面终端交叉核对，并结合安装器 `installed` 与客户端 `workspace-ready` 日志判断；不要据此自动改注册表或重装。
+
+电脑操作的界面回归按 [验收清单](ACCEPTANCE.md) 执行。CI 中的 `installer-acceptance.ps1` 会改写安装登记，仅允许在一次性 runner 上运行，不用于日常电脑。
+
 发布后通过正式更新通道升级，核对应用版本、Pack 版本与摘要，检查模型配置、历史会话、批注、定时配置和实际任务。手工替换插件或临时开发实例不能替代这一步。
 
 若需撤回已发布实现，发布版本号更高的修复版本；不要改小版本号、移动 tag 或静默替换已下载资产。安装恢复与插件预装恢复是不同层次，不能仅恢复清单就宣称整个安装已回滚。
