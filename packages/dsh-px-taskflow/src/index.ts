@@ -203,10 +203,11 @@ export function apply(ctx: Context): void {
             if (req.method !== 'GET') return send(405, { error: '请使用 GET' })
             const params = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams
             const id = params.get('sessionId')
+            // Session ids are opaque. Native persistence encodes path segments; this endpoint
+            // delegates lookup and never uses the supplied id as a filesystem path.
             if (
               !id ||
               id.length > 200 ||
-              !/^[a-zA-Z0-9_-]+$/.test(id) ||
               params.getAll('sessionId').length !== 1 ||
               [...params.keys()].some((k) => k !== 'sessionId')
             )
@@ -243,12 +244,7 @@ export function apply(ctx: Context): void {
               const id = params.get('sessionId')
               const invalid = (error: string): void =>
                 send(400, { error, code: 'INVALID_REQUEST', retryable: false })
-              if (
-                !id ||
-                id.length > 200 ||
-                params.getAll('sessionId').length !== 1 ||
-                !/^[a-zA-Z0-9_-]+$/.test(id)
-              )
+              if (!id || id.length > 200 || params.getAll('sessionId').length !== 1)
                 return invalid('会话标识无效')
               let select: (events: readonly Event[] | EvidenceIndex, live: boolean) => unknown
               try {

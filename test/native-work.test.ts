@@ -220,6 +220,17 @@ test('ordinary cold forks still work after parent removal; provider-owned childr
   assert.equal((await readNativeWork(f.host, 'child')).team.status, 'error')
 })
 
+test('loaded seeded sessions require a known inherited boundary just like stored reads', async () => {
+  const f = coldHost()
+  f.host.sessions.get = () => ({
+    header: { id: 'fork', isSeeded: true },
+    snapshotEvents: () => [{ type: 'subagent/descriptor' }]
+  })
+  const view = await readNativeWork(f.host, 'fork')
+  assert.equal(view.team.status, 'error')
+  if (view.team.status === 'error') assert.match(view.team.reason, /继承边界/)
+})
+
 test('provider-owned child does not gain an implicit Team; inherited descriptor in ordinary fork is ignored', async () => {
   const f = coldHost()
   f.records.fork.inherited = 1

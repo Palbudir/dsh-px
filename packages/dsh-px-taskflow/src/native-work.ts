@@ -123,7 +123,9 @@ async function readCut(host: any, id: string): Promise<StoredCut> {
   const projections = service(host, 'sessionProjections')
   if (!projections?.snapshot || !projections?.restore) throw Error('宿主未提供原生状态投影接口')
   const session = service(host, 'sessions')?.get(id)
-  if (session)
+  if (session) {
+    if (session.header?.isSeeded && !Number.isSafeInteger(session.inheritedEventCount))
+      throw Error('宿主未提供分叉会话的继承边界')
     return {
       header: session.header,
       values: projections.snapshot(session, ['goal', 'agentTeam']).values,
@@ -132,6 +134,7 @@ async function readCut(host: any, id: string): Promise<StoredCut> {
         .snapshotEvents(session.inheritedEventCount ?? 0)
         .some((event: any) => event.type === 'subagent/descriptor')
     }
+  }
   const persistence = service(host, 'sessionPersistence')
   if (!persistence?.open) throw Error('宿主未提供会话存储')
   const goals = service(host, 'goals'),

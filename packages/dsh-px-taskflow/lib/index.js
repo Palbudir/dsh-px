@@ -621,13 +621,16 @@ async function readCut(host, id) {
   const projections = service(host, "sessionProjections");
   if (!projections?.snapshot || !projections?.restore) throw Error("\u5BBF\u4E3B\u672A\u63D0\u4F9B\u539F\u751F\u72B6\u6001\u6295\u5F71\u63A5\u53E3");
   const session = service(host, "sessions")?.get(id);
-  if (session)
+  if (session) {
+    if (session.header?.isSeeded && !Number.isSafeInteger(session.inheritedEventCount))
+      throw Error("\u5BBF\u4E3B\u672A\u63D0\u4F9B\u5206\u53C9\u4F1A\u8BDD\u7684\u7EE7\u627F\u8FB9\u754C");
     return {
       header: session.header,
       values: projections.snapshot(session, ["goal", "agentTeam"]).values,
       goalFailure: projections.stateOf?.(session, "goal")?.failure ?? void 0,
       ownedSubagent: session.snapshotEvents(session.inheritedEventCount ?? 0).some((event) => event.type === "subagent/descriptor")
     };
+  }
   const persistence = service(host, "sessionPersistence");
   if (!persistence?.open) throw Error("\u5BBF\u4E3B\u672A\u63D0\u4F9B\u4F1A\u8BDD\u5B58\u50A8");
   const goals = service(host, "goals"), teams = service(host, "agentTeams");
@@ -974,7 +977,7 @@ function apply(ctx) {
           if (req.method !== "GET") return send(405, { error: "\u8BF7\u4F7F\u7528 GET" });
           const params = new URL(req.url ?? "/", "http://127.0.0.1").searchParams;
           const id = params.get("sessionId");
-          if (!id || id.length > 200 || !/^[a-zA-Z0-9_-]+$/.test(id) || params.getAll("sessionId").length !== 1 || [...params.keys()].some((k) => k !== "sessionId"))
+          if (!id || id.length > 200 || params.getAll("sessionId").length !== 1 || [...params.keys()].some((k) => k !== "sessionId"))
             return send(400, { error: "\u4F1A\u8BDD\u6807\u8BC6\u65E0\u6548", retryable: false });
           try {
             send(200, await readNativeWork(host, id));
@@ -1006,7 +1009,7 @@ function apply(ctx) {
             const params = new URL(req.url ?? "/", "http://127.0.0.1").searchParams;
             const id = params.get("sessionId");
             const invalid = (error) => send(400, { error, code: "INVALID_REQUEST", retryable: false });
-            if (!id || id.length > 200 || params.getAll("sessionId").length !== 1 || !/^[a-zA-Z0-9_-]+$/.test(id))
+            if (!id || id.length > 200 || params.getAll("sessionId").length !== 1)
               return invalid("\u4F1A\u8BDD\u6807\u8BC6\u65E0\u6548");
             let select;
             try {

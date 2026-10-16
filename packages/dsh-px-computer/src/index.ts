@@ -471,8 +471,10 @@ export function apply(ctx: any): void {
         'desktop',
         new ComputerUseRefusal(current.desktop ? '桌面操作模式已更改，本次调用已停止。' : CLOSED.desktop)
       )
-      states.revokeAll((key) => !key.startsWith('site|'))
     }
+    // App identity does not change with delivery mode. Keep its access grant; foreground still
+    // requires a new one-shot approval. Disabling the desktop capability revokes app access.
+    if (before.desktop && !current.desktop) states.revokeAll((key) => !key.startsWith('site|'))
     if (!enabled(current)) states.stop('confirm', new ComputerUseRefusal(CLOSED.confirm))
     if (!current.desktop) void driver.close().catch(() => undefined)
   })

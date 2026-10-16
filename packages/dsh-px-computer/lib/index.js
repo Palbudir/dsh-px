@@ -2492,8 +2492,8 @@ function apply(ctx) {
         "desktop",
         new ComputerUseRefusal(current.desktop ? "\u684C\u9762\u64CD\u4F5C\u6A21\u5F0F\u5DF2\u66F4\u6539\uFF0C\u672C\u6B21\u8C03\u7528\u5DF2\u505C\u6B62\u3002" : CLOSED.desktop)
       );
-      states.revokeAll((key) => !key.startsWith("site|"));
     }
+    if (before.desktop && !current.desktop) states.revokeAll((key) => !key.startsWith("site|"));
     if (!enabled(current)) states.stop("confirm", new ComputerUseRefusal(CLOSED.confirm));
     if (!current.desktop) void driver.close().catch(() => void 0);
   });

@@ -823,6 +823,47 @@ const agentRun = (name: string, callId: string) => ({
   callId
 })
 
+test(
+  'delivery-mode changes cancel a pending foreground action but retain already granted app access',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    const approval = fakeApproval(false),
+      { tools, request } = hostFixture(t, { approval })
+    let view = (
+      await request('POST', { action: 'settings', revision: 0, desktop: true, desktopForeground: true })
+    ).json
+    const launch = tools.get('computer_launch_app')
+    const first = launch.execute({ name: 'Notepad' }, agentRun('computer_launch_app', 'mode-1'))
+    await until(() => approval.pending.length === 1)
+    approval.pending[0].answer('allowed-once')
+    await until(() => approval.pending.length === 2)
+    assert.match(approval.pending[1].req.displayReason.zh, /前台/)
+    view = (
+      await request('POST', {
+        action: 'settings',
+        revision: view.settings.revision,
+        desktopForeground: false
+      })
+    ).json
+    approval.pending[1].answer('allowed-once') // A late answer cannot revive the cancelled call.
+    await assert.rejects(first, /桌面操作模式已更改/)
+    assert.equal((await request('GET')).json.status.driverLoaded, false)
+    view = (
+      await request('POST', { action: 'settings', revision: view.settings.revision, desktopForeground: true })
+    ).json
+    const next = launch.execute({ name: 'Notepad' }, agentRun('computer_launch_app', 'mode-2'))
+    await until(() => approval.pending.length === 3)
+    assert.match(
+      approval.pending[2].req.displayReason.zh,
+      /前台/,
+      'application access is retained, only the fresh foreground action asks'
+    )
+    approval.pending[2].answer('rejected')
+    await assert.rejects(next, /没有允许/)
+    assert.equal((await request('GET')).json.status.driverLoaded, false)
+  }
+)
+
 for (const [variant, honorsSignal] of [
   ['the host cancels the card', true],
   ['a late allow on the stale card', false]
