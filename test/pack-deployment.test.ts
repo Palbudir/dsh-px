@@ -61,7 +61,12 @@ function fixture(t: any, initialFeatures: readonly string[] = FEATURE_BUNDLES) {
   const pem = publicKey.export({ format: 'pem', type: 'spki' }).toString()
   const keyId = createHash('sha256').update(pem).digest('hex').slice(0, 24)
   const keys = { [keyId]: pem }
-  function pack(version: string, names: readonly string[] = FEATURE_BUNDLES, generation = 3) {
+  function pack(
+    version: string,
+    names: readonly string[] = FEATURE_BUNDLES,
+    generation = 3,
+    community: Array<{ name: string; version: string; defaults?: string }> = []
+  ) {
     const meta = {
       sourceCommit: 'a'.repeat(40),
       hostVersion: '0.2.0-rc.2',
@@ -82,16 +87,37 @@ function fixture(t: any, initialFeatures: readonly string[] = FEATURE_BUNDLES) {
     const files: Record<string, Buffer | string> = {
       'package.json': JSON.stringify({ name: 'dsh-px-pack', version, dshPx: record })
     }
-    const component = (name: string, bytes: Buffer) => {
-      const file = `distribution/${name}-${version}.tgz`
+    const component = (name: string, bytes: Buffer, componentVersion = version) => {
+      const file = `distribution/${encodeURIComponent(name)}-${componentVersion}.tgz`
       files[file] = bytes
-      return { name, version, file, sha256: sha256(bytes) }
+      return { name, version: componentVersion, file, sha256: sha256(bytes) }
     }
     const core = component('dsh-px-core', foundation)
     const features = names.map((name) =>
       component(name, tar({ 'package.json': JSON.stringify({ name, version }) }))
     )
-    files['distribution.json'] = JSON.stringify({ schemaVersion: 1, version, foundation: core, features })
+    const communityFiles = community.map((entry) => {
+      const archive = tar({
+        'package.json': JSON.stringify({
+          name: entry.name,
+          version: entry.version,
+          dsh: { bundle: { patch: './cordis.patch.yml' } }
+        }),
+        'cordis.patch.yml': '[]\n'
+      })
+      return {
+        ...component(entry.name, archive, entry.version),
+        integrity: 'sha512-' + createHash('sha512').update(archive).digest('base64'),
+        ...(entry.defaults ? { defaults: entry.defaults } : {})
+      }
+    })
+    files['distribution.json'] = JSON.stringify({
+      schemaVersion: generation >= 5 ? 2 : 1,
+      version,
+      foundation: core,
+      features,
+      ...(generation >= 5 ? { community: communityFiles } : {})
+    })
     const bytes = tar(files),
       digest = sha256(bytes),
       name = `dsh-px-pack-${version}.tgz`
@@ -141,8 +167,11 @@ function fixture(t: any, initialFeatures: readonly string[] = FEATURE_BUNDLES) {
         readFileSync(join(anchor, 'node_modules/dsh-px-core/package.json'), 'utf8')
       ).version
       const manifest = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8'))
-      for (const name of Object.keys(manifest.dependencies).filter((n) => n.startsWith('dsh-px-')))
+      for (const name of Object.keys(manifest.dependencies).filter(
+        (n) => n.startsWith('dsh-px-') || ['dsh-context', 'dsh-mnemon'].includes(n)
+      ))
         if (manifest.dependencies[name]) {
+          if (!manifest.dependencies[name].startsWith('file:')) continue
           // A real native install follows each archive, including rollback's prior lock/dependencies.
           const archive = readFileSync(manifest.dependencies[name].slice(5))
           const component = JSON.parse(unpackFiles(archive).get('package.json')!.toString())
@@ -168,6 +197,46 @@ function fixture(t: any, initialFeatures: readonly string[] = FEATURE_BUNDLES) {
     }
   }
 }
+test('generation 5 upgrades a generation 4 profile with original community versions and preserves user ownership and data', async (t) => {
+  const f = fixture(t),
+    four = f.pack('0.4.2-alpha.1', FEATURE_BUNDLES, 4)
+  const fourFile = join(f.root, 'four.tgz')
+  writeFileSync(fourFile, four.bytes)
+  const old = new PackDeployment({ ...f.deployment.options, bundled: four.receipt, bundledArchive: fourFile })
+  await old.activate()
+  old.confirm()
+  const file = join(f.profile, 'package.json'),
+    manifest = JSON.parse(readFileSync(file, 'utf8'))
+  delete manifest.dependencies['dsh-px-annotations']
+  manifest.dependencies['dsh-context'] = '0.70.0'
+  manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter(
+    (n: string) => n !== 'dsh-px-annotations'
+  )
+  writeFileSync(file, JSON.stringify(manifest))
+  const data = join(f.root, 'existing-conversation.json')
+  writeFileSync(data, '{"keep":true}')
+  const five = f.pack('0.5.0-alpha.1', FEATURE_BUNDLES, 5, [
+    { name: 'dsh-context', version: '0.72.0' },
+    { name: 'dsh-mnemon', version: '0.5.29', defaults: 'project-documents-v1' }
+  ])
+  const fiveFile = join(f.root, 'five.tgz')
+  writeFileSync(fiveFile, five.bytes)
+  const upgraded = new PackDeployment({ ...old.options, bundled: five.receipt, bundledArchive: fiveFile })
+  await upgraded.activate()
+  upgraded.confirm()
+  const result = JSON.parse(readFileSync(file, 'utf8'))
+  assert.equal(upgraded.read().active?.protocolGeneration, 5)
+  assert.equal(result.dependencies['dsh-context'], '0.70.0')
+  assert.ok(!result.dsh.profile.bundles.includes('dsh-context'))
+  assert.ok(result.dsh.profile.bundles.includes('dsh-mnemon'))
+  assert.equal(result.dependencies['dsh-px-annotations'], undefined)
+  assert.equal(
+    JSON.parse(readFileSync(join(f.profile, 'node_modules/dsh-mnemon/package.json'), 'utf8')).version,
+    '0.5.29'
+  )
+  assert.match(readFileSync(join(f.profile, 'cordis.patch.yml'), 'utf8'), /storageScope: workspaces/)
+  assert.equal(readFileSync(data, 'utf8'), '{"keep":true}')
+})
 test('Desktop generation 4 activates its six-feature Pack over a generation 3 receipt without changing business data', async (t) => {
   const f = fixture(t, LEGACY_FEATURE_BUNDLES)
   await f.deployment.activate()

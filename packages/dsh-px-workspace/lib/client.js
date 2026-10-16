@@ -234,6 +234,7 @@ var css = hostLayoutCss + `
 .px-bar .px-tab>button[role=tab]{max-width:196px;min-width:0;flex:1;justify-content:flex-start;gap:6px}
 .px-tools{display:flex;align-items:center;gap:4px;overflow-x:auto;scrollbar-width:thin}.px-tools>button{white-space:nowrap;flex:none;border-color:transparent;background:transparent;padding:4px 8px}
 .px-status{margin-left:auto;white-space:nowrap;color:var(--px-muted);font-size:12px;padding:0 5px}
+.px-tools-more{flex-wrap:wrap;overflow:visible;border-top:1px solid var(--px-border);padding-top:5px}
 .px-bar-error{position:absolute;right:12px;top:calc(100% + 2px);max-width:min(540px,calc(100vw - 24px));border:1px solid var(--px-error);background:var(--px-bg);padding:9px 12px;border-radius:9px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;box-shadow:0 4px 18px #0002;z-index:2}
 .px-dependency-warning{font-size:12px;line-height:1.5;color:var(--px-muted)}
 .px-panel{padding:16px;height:100%;overflow:auto;overflow-wrap:anywhere;box-sizing:border-box;animation:px-panel-in 130ms ease-out}
@@ -462,7 +463,7 @@ function usePanelCapabilities(ctx) {
 // packages/dsh-px-workspace/src/client/session-bar.tsx
 var import_jsx_runtime3 = require("react/jsx-runtime");
 var panels = [
-  ["editor", "\u6587\u4EF6", "file"],
+  ["editor", "\u5DE5\u4F5C\u533A", "file"],
   ["terminal", "\u7EC8\u7AEF", "terminal"],
   ["git", "\u6587\u4EF6\u53D8\u52A8", "git"],
   ["subagent", "\u540E\u53F0\u4EFB\u52A1", "jobs"]
@@ -483,9 +484,15 @@ function SessionBar({ ctx }) {
   const panelInfo = useSnapshot(ctx.layout?.panelInfo ?? defaultPanel);
   const capabilities = usePanelCapabilities(ctx);
   const [error, setError] = (0, import_react4.useState)("");
+  const [more, setMore] = (0, import_react4.useState)(false);
   const bar = (0, import_react4.useRef)(null);
-  (0, import_react4.useEffect)(() => bar.current ? attachToolbarLayout(bar.current) : void 0, []);
   const current = selectedSession(sessions, panelInfo.activePanelId), row = current ? sessions.byId[current] : void 0;
+  const shown = !!current && panelInfo.activePanelId === null;
+  (0, import_react4.useEffect)(() => shown && bar.current ? attachToolbarLayout(bar.current) : void 0, [shown]);
+  (0, import_react4.useEffect)(() => {
+    setError("");
+    setMore(false);
+  }, [current, shown]);
   const panel = (type) => {
     if (!current) return;
     try {
@@ -498,6 +505,7 @@ function SessionBar({ ctx }) {
       if (type === "terminal") live.terminal.openTabIn(current, "terminal", { revealIfOpened: true });
       else live.sidebar.openTab({ type }, { sessionId: current, cwd: row?.cwd });
       setError("");
+      setMore(false);
     } catch (e) {
       setError(errorText(e));
     }
@@ -520,33 +528,54 @@ function SessionBar({ ctx }) {
     ...panelAvailability(capabilities, type)
   }));
   const missingPanels = panelStates.filter((panel2) => panel2.state === "missing" || panel2.state === "unknown");
-  return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { ref: bar, className: "px-ui px-bar", "aria-label": "DSH-PX \u5DE5\u4F5C\u5DE5\u5177", children: [
-    /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-tools", children: [
-      panelStates.map(({ type, text, icon, enabled, reason }) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
-        "button",
-        {
-          disabled: !current || !enabled,
-          title: !current ? "\u8BF7\u5148\u9009\u62E9\u6216\u65B0\u5EFA\u4F1A\u8BDD" : enabled ? text : `${text}\u4E0D\u53EF\u7528\uFF1A${reason}`,
-          onClick: () => panel(type),
-          children: [
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: icon }),
-            text
-          ]
-        },
-        type
-      )),
-      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-status", children: current ? row?.origin === "subagent" ? "\u6B63\u5728\u67E5\u770B\u5B50 Agent \xB7 \u8FD4\u56DE\u4E0A\u7EA7\u53EF\u7EE7\u7EED\u4EFB\u52A1" : row?.running ? "Agent \u6267\u884C\u4E2D" : "\u53EF\u7EE7\u7EED\u5BF9\u8BDD" : "\u9009\u62E9\u6216\u65B0\u5EFA\u4F1A\u8BDD\u5F00\u59CB" })
-    ] }),
-    missingPanels.length ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { role: "status", className: "px-dependency-warning", children: [
-      "\u6682\u4E0D\u53EF\u7528\u7684\u9762\u677F\uFF1A",
-      missingPanels.map((panel2) => panel2.text).join("\u3001"),
-      "\u3002\u53EF\u5728\u201C\u63D2\u4EF6\u201D\u8BBE\u7F6E\u4E2D\u68C0\u67E5\u662F\u5426\u542F\u7528\uFF0C\u6216\u5230\u201C\u8FD0\u884C\u4E0E\u5E2E\u52A9\u201D\u67E5\u770B\u4F9D\u8D56\uFF1B\u4F1A\u8BDD\u4ECD\u53EF\u4F7F\u7528\u3002"
-    ] }) : null,
-    error ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-bar-error", role: "alert", children: [
-      error,
-      /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { "aria-label": "\u5173\u95ED\u63D0\u793A", onClick: () => setError(""), children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: "close" }) })
-    ] }) : null
-  ] });
+  const primary = ["editor", "dsh-px-taskflow", "dsh-px-memory", "dsh-px-computer"];
+  const primaryPanels = primary.flatMap((type) => panelStates.filter((p) => p.type === type));
+  const secondaryPanels = panelStates.filter((p) => !primary.includes(p.type));
+  if (!shown) return null;
+  const action = ({ type, text, icon, enabled, reason }) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
+    "button",
+    {
+      disabled: !enabled,
+      title: enabled ? text : `${text}\u4E0D\u53EF\u7528\uFF1A${reason}`,
+      onClick: () => panel(type),
+      children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: icon }),
+        text
+      ]
+    },
+    type
+  );
+  return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
+    "div",
+    {
+      ref: bar,
+      className: "px-ui px-bar",
+      "aria-label": "DSH-PX \u5DE5\u4F5C\u5DE5\u5177",
+      onKeyDown: (event) => {
+        if (event.key === "Escape") setMore(false);
+      },
+      children: [
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-tools", children: [
+          primaryPanels.map(action),
+          secondaryPanels.length > 0 && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("button", { "aria-expanded": more, "aria-controls": "px-more-tools", onClick: () => setMore(!more), children: [
+            "\u66F4\u591A",
+            more ? " \u25B4" : " \u25BE"
+          ] }),
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-status", children: current ? row?.origin === "subagent" ? "\u6B63\u5728\u67E5\u770B\u5B50 Agent \xB7 \u8FD4\u56DE\u4E0A\u7EA7\u53EF\u7EE7\u7EED\u4EFB\u52A1" : row?.running ? "Agent \u6267\u884C\u4E2D" : "\u4F1A\u8BDD\u7A7A\u95F2" : "\u9009\u62E9\u6216\u65B0\u5EFA\u4F1A\u8BDD\u5F00\u59CB" })
+        ] }),
+        more && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { id: "px-more-tools", className: "px-tools px-tools-more", "aria-label": "\u66F4\u591A\u5DE5\u4F5C\u5DE5\u5177", children: secondaryPanels.map(action) }),
+        more && missingPanels.length ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { role: "status", className: "px-dependency-warning", children: [
+          "\u6682\u4E0D\u53EF\u7528\u7684\u9762\u677F\uFF1A",
+          missingPanels.map((panel2) => panel2.text).join("\u3001"),
+          "\u3002\u53EF\u5728\u201C\u63D2\u4EF6\u201D\u8BBE\u7F6E\u4E2D\u68C0\u67E5\u662F\u5426\u542F\u7528\uFF0C\u6216\u5230\u201C\u8FD0\u884C\u4E0E\u5E2E\u52A9\u201D\u67E5\u770B\u4F9D\u8D56\uFF1B\u4F1A\u8BDD\u4ECD\u53EF\u4F7F\u7528\u3002"
+        ] }) : null,
+        error ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-bar-error", role: "alert", children: [
+          error,
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { "aria-label": "\u5173\u95ED\u63D0\u793A", onClick: () => setError(""), children: /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Icon, { name: "close" }) })
+        ] }) : null
+      ]
+    }
+  );
 }
 
 // packages/dsh-px-workspace/src/client.tsx

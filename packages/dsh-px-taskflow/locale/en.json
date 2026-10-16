@@ -1,6 +1,6 @@
 {
   "meta": {
-    "title": "Execution records",
-    "description": "Inspect the current work ledger and execution evidence; restore saved state after compaction."
+    "title": "Current task",
+    "description": "Inspect native goals, team tasks, the work ledger and recorded execution evidence."
   }
 }

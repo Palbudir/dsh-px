@@ -73,7 +73,13 @@ const dynamicSpecifiers = [...code.matchAll(/\bimport\(\s*['"]([^'"]+)['"]\s*\)/
 const badDynamic = dynamicSpecifiers.filter((s) => !s.startsWith('node:') && !external.includes(s))
 if (badDynamic.length > 0) problems.push(`产物里出现了未声明的动态 import：${badDynamic.join(', ')}`)
 for (const dep of external)
-  if (!dynamicSpecifiers.includes(dep) && !code.includes(`'${dep}/`) && !code.includes(`"${dep}/`))
+  if (
+    !dynamicSpecifiers.includes(dep) &&
+    !code.includes(`'${dep}/`) &&
+    !code.includes(`"${dep}/`) &&
+    !code.includes(`import.meta.resolve("${dep}")`) &&
+    !code.includes(`import.meta.resolve('${dep}')`)
+  )
     problems.push(`声明的运行时依赖 ${dep} 未被使用`)
 
 // 2) 真的 import 一次，验证导出面。

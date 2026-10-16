@@ -11,7 +11,15 @@ interface View {
   persona: Persona
   project: string | null
 }
-function MemoryPanel({ sessionId, visible }: { sessionId: string; visible: boolean }): unknown {
+function MemoryPanel({
+  sessionId,
+  visible,
+  openKnowledge
+}: {
+  sessionId: string
+  visible: boolean
+  openKnowledge: () => void
+}): unknown {
   const [view, setView] = useState<View | null>(null),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false)
@@ -94,7 +102,30 @@ function MemoryPanel({ sessionId, visible }: { sessionId: string; visible: boole
       className="px-ui"
       style={{ padding: 16, height: '100%', overflow: 'auto', overflowWrap: 'anywhere', fontSize: 13 }}
     >
-      <h3>人格与记忆</h3>
+      <h3>记忆与知识</h3>
+      <section style={{ ...cardStyle, marginBottom: 12 }}>
+        <strong>项目知识</strong>
+        <p>
+          同一工作区共享的参考资料，由社区 Mnemon 管理。按需检索和阅读，不随人格切换，也不自动从聊天提炼。
+        </p>
+        <button
+          style={controlStyle}
+          disabled={busy || dirty}
+          title={dirty ? '请先保存或放弃下方编辑' : '打开社区知识管理页面'}
+          onClick={() => {
+            try {
+              openKnowledge()
+            } catch {
+              setError(
+                '项目知识页面未加载。请在“插件”中安装或启用 dsh-mnemon；已有安装继续使用你自己的设置。'
+              )
+            }
+          }}
+        >
+          打开项目知识
+        </button>
+      </section>
+      <h4>人格私有记忆</h4>
       {dirty && (
         <p role="status" style={{ opacity: 0.7 }}>
           有未保存的编辑，自动刷新已暂停。可手动刷新记录，草稿会保留。
@@ -335,10 +366,19 @@ export function apply(ctx: any): void {
       () =>
         createNativeSidebar(host).registerTab({
           id: 'dsh-px-memory',
-          title: '人格与记忆',
+          title: '记忆与知识',
           order: 17,
           component: ({ scope, visible }) => (
-            <MemoryPanel key={scope.sessionId} sessionId={scope.sessionId} visible={visible} />
+            <MemoryPanel
+              key={scope.sessionId}
+              sessionId={scope.sessionId}
+              visible={visible}
+              openKnowledge={() => {
+                const layout = host.get?.('layout') ?? host.layout
+                if (!layout?.selectPanel) throw Error('原生页面导航不可用')
+                layout.selectPanel('mnemon')
+              }}
+            />
           )
         }),
       'memory: panel'

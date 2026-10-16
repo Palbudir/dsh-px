@@ -7,11 +7,13 @@
  *
  * Usage: node scripts/verify-native-pack-install.mjs <prepared upstream checkout> --pack=<tgz>
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { delimiter, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { sameArchiveSpec } from './native-pack-spec.mjs'
+import { validDistribution, componentFile } from '../src/shared/distribution.ts'
 
 const upstream = process.argv[2] && !process.argv[2].startsWith('--') ? resolve(process.argv[2]) : ''
 const packOption = process.argv.find((arg) => arg.startsWith('--pack='))
@@ -37,33 +39,63 @@ const profile = mkdtempSync(join(tmpdir(), 'dsh-px-pack-install-'))
 try {
   // Same plugin-manager context and environment as the Desktop overlay; the build runs on Node
   // instead of Electron, so the runtime node shims point at this executable.
-  const result = await runPluginCommand(
-    {
-      profile: 'desktop',
-      dir: profile,
-      installAnchor: join(dsh, 'node_modules/@deepseek-ai/dsh/package.json'),
-      cwd: profile
-    },
-    ['add', archive.replaceAll('\\', '/')],
-    {
-      execution: 'service',
-      command: process.execPath,
-      args: ['--expose-internals', pnpm],
-      outputBytes: 16384,
-      idleTimeoutMs: 120000,
-      // The same bound Desktop applies to native installs.
-      signal: AbortSignal.timeout(300000),
-      env: {
-        ELECTRON_RUN_AS_NODE: '1',
-        DSH_DESKTOP_NODE_EXECUTABLE: process.execPath,
-        PATH: bin + delimiter + (process.env.PATH || '')
+  const install = async (args) => {
+    const result = await runPluginCommand(
+      {
+        profile: 'web',
+        dir: profile,
+        installAnchor: join(dsh, 'node_modules/@deepseek-ai/dsh/package.json'),
+        cwd: profile
+      },
+      args,
+      {
+        execution: 'service',
+        command: process.execPath,
+        args: ['--expose-internals', pnpm],
+        outputBytes: 16384,
+        idleTimeoutMs: 120000,
+        // The same bound Desktop applies to native installs.
+        signal: AbortSignal.timeout(300000),
+        env: {
+          ELECTRON_RUN_AS_NODE: '1',
+          DSH_DESKTOP_NODE_EXECUTABLE: process.execPath,
+          PATH: bin + delimiter + (process.env.PATH || '')
+        }
       }
-    }
-  )
-  if (result.exitCode !== 0 || result.timedOut)
-    throw Error(
-      `Pack install through the packaged plugin manager failed (exit ${result.exitCode}):\n${result.output ?? ''}`
     )
+    if (result.exitCode !== 0 || result.timedOut)
+      throw Error(
+        `Pack install through the packaged plugin manager failed (exit ${result.exitCode}):\n${result.output ?? ''}`
+      )
+  }
+  const distribution = JSON.parse(
+    execFileSync('tar', ['-xOf', archive, 'package/distribution.json'], {
+      encoding: 'utf8',
+      windowsHide: true
+    })
+  )
+  if (!validDistribution(distribution)) throw Error('Invalid Pack distribution')
+  const community = distribution.community ?? []
+  const archives = new Map()
+  for (const item of community) {
+    if (item.file !== componentFile(item)) throw Error('Invalid community archive path')
+    const destination = join(profile, item.file.split('/').at(-1))
+    writeFileSync(
+      destination,
+      execFileSync('tar', ['-xOf', archive, 'package/' + item.file], {
+        windowsHide: true,
+        maxBuffer: 64 * 1024 * 1024
+      }),
+      { flag: 'wx' }
+    )
+    archives.set(item.name, destination)
+  }
+  // All sources live outside node_modules: pnpm may replace the installed dependency tree.
+  await install([
+    'add',
+    archive.replaceAll('\\', '/'),
+    ...[...archives.values()].map((file) => file.replaceAll('\\', '/'))
+  ])
   // The profile must name exactly this archive; another spec form would leave the Pack unmanaged.
   const spec = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8')).dependencies?.['dsh-px-pack']
   if (!sameArchiveSpec(spec, archive, profile))
@@ -80,8 +112,21 @@ try {
     if (version !== pack.dependencies?.[member])
       throw Error(`Bundled member ${member} is ${version}, expected ${pack.dependencies?.[member]}`)
   }
+  if (community.length) {
+    const current = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8'))
+    for (const item of community) {
+      if (
+        !sameArchiveSpec(current.dependencies?.[item.name], archives.get(item.name), profile) ||
+        !current.dsh?.profile?.bundles?.includes(item.name)
+      )
+        throw Error(`Community bundle is not independently registered: ${item.name}`)
+      const pkg = JSON.parse(readFileSync(join(profile, 'node_modules', item.name, 'package.json'), 'utf8'))
+      if (pkg.name !== item.name || pkg.version !== item.version)
+        throw Error('Wrong community package identity')
+    }
+  }
   console.log(
-    `Pack install verified through the packaged plugin manager: ${pack.version}, members ${members.join(', ')}`
+    `Pack install verified through the packaged plugin manager: ${pack.version}, members ${members.join(', ')}, independent community ${community.map((item) => item.name + '@' + item.version).join(', ')}`
   )
 } finally {
   try {

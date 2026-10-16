@@ -31,7 +31,7 @@ const BROWSER_LABEL: Record<string, string> = {
   extension: '接管我的 Edge（需 Playwright 扩展）'
 }
 const OUTCOME: Record<ActivityEntry['outcome'], string> = {
-  ok: '完成',
+  ok: '工具已返回',
   error: '失败',
   denied: '已拦截',
   rejected: '未获允许'
@@ -114,6 +114,26 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
               />{' '}
               操作桌面应用
             </label>
+            {s.desktop && (
+              <label style={{ display: 'block', margin: '8px 0 12px' }}>
+                桌面操作方式
+                <select
+                  aria-label="桌面操作方式"
+                  style={{ ...controlStyle, width: '100%', marginTop: 6 }}
+                  disabled={busy}
+                  value={s.desktopForeground ? 'ask' : 'background'}
+                  onChange={(e: any) =>
+                    void act({ action: 'settings', desktopForeground: e.target.value === 'ask' })
+                  }
+                >
+                  <option value="background">仅后台操作</option>
+                  <option value="ask">允许询问前台操作（每次确认）</option>
+                </select>
+                <small className="px-muted">
+                  后台不支持的动作会停止，不会自动抢占前台。最小化窗口和自绘界面的可用能力因应用而异。
+                </small>
+              </label>
+            )}
             <label style={{ display: 'block' }}>
               浏览器
               <select
@@ -277,7 +297,7 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
                   </div>
                   <div>{entry.target}</div>
                   {entry.detail && <div className="px-muted">{entry.detail}</div>}
-                  {entry.message && entry.outcome !== 'ok' && <div className="px-muted">{entry.message}</div>}
+                  {entry.message && <div className="px-muted">{entry.message}</div>}
                 </li>
               ))}
             </ol>

@@ -135,7 +135,10 @@ test('任务插件使用当前会话与只读持久句柄；错误也关闭句�
     inject: (_: unknown, fn: (ctx: any) => void) => fn(ctx),
     systemPrompt: { section: () => () => {} },
     tools: { register: (tool: any) => tools.set(tool.name, tool) },
-    sessions: { get: (id: string) => (id === 'live' ? { snapshotEvents: () => [] } : undefined) },
+    sessions: {
+      get: (id: string) =>
+        ['live', 'live.imported.1', '工作会话:一'].includes(id) ? { snapshotEvents: () => [] } : undefined
+    },
     sessionPersistence: {
       open: async (_: string, mode: string) => {
         assert.equal(mode, 'read')
@@ -159,10 +162,10 @@ test('任务插件使用当前会话与只读持久句柄；错误也关闭句�
     }
   }
   apply(ctx)
-  const request = async (method: string, id: string): Promise<number> => {
+  const request = async (method: string, id: string, kind = 'review'): Promise<number> => {
     let status = 0
-    await routes.get('/dsh-px-taskflow/review')(
-      { method, url: `/review?sessionId=${id}` },
+    await routes.get('/dsh-px-taskflow/' + kind)(
+      { method, url: `/${kind}?sessionId=${encodeURIComponent(id)}` },
       {
         writeHead: (n: number) => {
           status = n
@@ -173,8 +176,12 @@ test('任务插件使用当前会话与只读持久句柄；错误也关闭句�
     return status
   }
   assert.equal(await request('POST', 'live'), 405)
-  assert.equal(await request('GET', '../outside'), 400)
+  assert.equal(await request('GET', ''), 400)
   assert.equal(await request('GET', 'live'), 200)
+  assert.equal(await request('GET', 'live.imported.1'), 200)
+  assert.equal(await request('GET', '工作会话:一'), 200)
+  assert.equal(await request('GET', 'live.imported.1', 'state'), 200)
+  assert.equal(await request('GET', '工作会话:一', 'state'), 200)
   assert.equal(await request('GET', 'cold'), 422)
   assert.equal(closed, 1)
   await assert.rejects(

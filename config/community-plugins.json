@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "bundles": [
+    {
+      "name": "dsh-context",
+      "version": "0.72.0",
+      "url": "https://registry.npmjs.org/dsh-context/-/dsh-context-0.72.0.tgz",
+      "integrity": "sha512-supPJgAYJ6wLZkaZRhAbWolPPZU33Scdw/wtWarj6k81wZPQwVDO82VGz+MAO2XQWNPU4apds1ccaxY99nvW6A==",
+      "license": "Apache-2.0",
+      "source": "https://github.com/bowenliang123/dsh-context"
+    },
+    {
+      "name": "dsh-mnemon",
+      "version": "0.5.29",
+      "url": "https://registry.npmjs.org/dsh-mnemon/-/dsh-mnemon-0.5.29.tgz",
+      "integrity": "sha512-NDVMDataHJnUzCbIkSvjsqfUU9/wyoy6LWf/2Kw7Hjy1O1W8NQNANvavCsqAQffMJ2j5MLkogG24rgkfF0YRag==",
+      "license": "MIT",
+      "source": "https://github.com/omdsh-dev/dsh-mnemon",
+      "defaults": "project-documents-v1"
+    }
+  ]
+}

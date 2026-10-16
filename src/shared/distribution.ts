@@ -41,8 +41,55 @@ export interface DistributionFile {
   sha256: string
 }
 export interface PackDistribution {
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   version: string
   foundation: DistributionFile
   features: DistributionFile[]
+  community?: CommunityBundle[]
 }
+
+export interface CommunityBundle extends DistributionFile {
+  integrity: string
+  defaults?: 'project-documents-v1'
+}
+export const bundleFileStem = (name: string): string => encodeURIComponent(name)
+export function isCommunityName(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    /^(?:@[a-z0-9][a-z0-9._-]{0,60}\/)?[a-z0-9][a-z0-9._-]{0,80}$/.test(value) &&
+    !value.startsWith('dsh-px-')
+  )
+}
+export const isCompositionName = (value: unknown): value is string =>
+  isFeatureName(value) || isCommunityName(value)
+export function validCommunityList(value: unknown): value is CommunityBundle[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= 16 &&
+    value.every(
+      (item) =>
+        item &&
+        isCommunityName(item.name) &&
+        /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(item.version) &&
+        /^sha512-[A-Za-z0-9+/]{86}==$/.test(item.integrity) &&
+        (item.defaults === undefined ||
+          (item.name === 'dsh-mnemon' && item.defaults === 'project-documents-v1'))
+    ) &&
+    new Set(value.map((item) => item.name)).size === value.length
+  )
+}
+export function validDistribution(value: PackDistribution): boolean {
+  return (
+    value?.foundation?.name === 'dsh-px-core' &&
+    validFeatureList(value.features) &&
+    (value.schemaVersion === 1
+      ? value.community === undefined
+      : value.schemaVersion === 2 && validCommunityList(value.community))
+  )
+}
+export const compositionMembers = (value: PackDistribution): DistributionFile[] => [
+  ...value.features,
+  ...(value.community ?? [])
+]
+export const componentFile = (value: Pick<DistributionFile, 'name' | 'version'>): string =>
+  `distribution/${bundleFileStem(value.name)}-${value.version}.tgz`

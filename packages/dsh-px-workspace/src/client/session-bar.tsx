@@ -7,7 +7,7 @@ import { panelAvailability, usePanelCapabilities } from './panel-availability'
 import { selectedSession } from '../../../shared/native-navigation'
 
 const panels = [
-  ['editor', '文件', 'file'],
+  ['editor', '工作区', 'file'],
   ['terminal', '终端', 'terminal'],
   ['git', '文件变动', 'git'],
   ['subagent', '后台任务', 'jobs']
@@ -27,10 +27,16 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
   const panelInfo = useSnapshot(ctx.layout?.panelInfo ?? defaultPanel)
   const capabilities = usePanelCapabilities(ctx)
   const [error, setError] = useState('')
+  const [more, setMore] = useState(false)
   const bar = useRef<HTMLDivElement | null>(null)
-  useEffect(() => (bar.current ? attachToolbarLayout(bar.current) : undefined), [])
   const current = selectedSession(sessions, panelInfo.activePanelId),
     row = current ? sessions.byId[current] : undefined
+  const shown = !!current && panelInfo.activePanelId === null
+  useEffect(() => (shown && bar.current ? attachToolbarLayout(bar.current) : undefined), [shown])
+  useEffect(() => {
+    setError('')
+    setMore(false)
+  }, [current, shown])
   const panel = (type: string): void => {
     if (!current) return
     try {
@@ -43,6 +49,7 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
       if (type === 'terminal') live.terminal!.openTabIn(current, 'terminal', { revealIfOpened: true })
       else live.sidebar!.openTab({ type }, { sessionId: current, cwd: row?.cwd })
       setError('')
+      setMore(false)
     } catch (e) {
       setError(errorText(e))
     }
@@ -66,31 +73,53 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
     ...panelAvailability(capabilities, type)
   }))
   const missingPanels = panelStates.filter((panel) => panel.state === 'missing' || panel.state === 'unknown')
+  const primary = ['editor', 'dsh-px-taskflow', 'dsh-px-memory', 'dsh-px-computer']
+  const primaryPanels = primary.flatMap((type) => panelStates.filter((p) => p.type === type))
+  const secondaryPanels = panelStates.filter((p) => !primary.includes(p.type))
+  if (!shown) return null
+  const action = ({ type, text, icon, enabled, reason }: (typeof panelStates)[number]) => (
+    <button
+      key={type}
+      disabled={!enabled}
+      title={enabled ? text : `${text}不可用：${reason}`}
+      onClick={() => panel(type)}
+    >
+      <Icon name={icon} />
+      {text}
+    </button>
+  )
   return (
-    <div ref={bar} className="px-ui px-bar" aria-label="DSH-PX 工作工具">
+    <div
+      ref={bar}
+      className="px-ui px-bar"
+      aria-label="DSH-PX 工作工具"
+      onKeyDown={(event: any) => {
+        if (event.key === 'Escape') setMore(false)
+      }}
+    >
       <div className="px-tools">
-        {panelStates.map(({ type, text, icon, enabled, reason }) => (
-          <button
-            key={type}
-            disabled={!current || !enabled}
-            title={!current ? '请先选择或新建会话' : enabled ? text : `${text}不可用：${reason}`}
-            onClick={() => panel(type)}
-          >
-            <Icon name={icon} />
-            {text}
+        {primaryPanels.map(action)}
+        {secondaryPanels.length > 0 && (
+          <button aria-expanded={more} aria-controls="px-more-tools" onClick={() => setMore(!more)}>
+            更多{more ? ' ▴' : ' ▾'}
           </button>
-        ))}
+        )}
         <span className="px-status">
           {current
             ? row?.origin === 'subagent'
               ? '正在查看子 Agent · 返回上级可继续任务'
               : row?.running
                 ? 'Agent 执行中'
-                : '可继续对话'
+                : '会话空闲'
             : '选择或新建会话开始'}
         </span>
       </div>
-      {missingPanels.length ? (
+      {more && (
+        <div id="px-more-tools" className="px-tools px-tools-more" aria-label="更多工作工具">
+          {secondaryPanels.map(action)}
+        </div>
+      )}
+      {more && missingPanels.length ? (
         <div role="status" className="px-dependency-warning">
           暂不可用的面板：{missingPanels.map((panel) => panel.text).join('、')}
           。可在“插件”设置中检查是否启用，或到“运行与帮助”查看依赖；会话仍可使用。

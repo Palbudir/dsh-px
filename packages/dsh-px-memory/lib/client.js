@@ -210,7 +210,11 @@ async function requestJson(path, init = {}) {
 // packages/dsh-px-memory/src/client.tsx
 var import_jsx_runtime3 = require("react/jsx-runtime");
 var inject = [];
-function MemoryPanel({ sessionId, visible }) {
+function MemoryPanel({
+  sessionId,
+  visible,
+  openKnowledge
+}) {
   const [view, setView] = (0, import_react2.useState)(null), [error, setError] = (0, import_react2.useState)(""), [busy, setBusy] = (0, import_react2.useState)(false);
   const [name, setName] = (0, import_react2.useState)(""), [instructions, setInstructions] = (0, import_react2.useState)(""), [enabled, setEnabled] = (0, import_react2.useState)(true);
   const [newName, setNewName] = (0, import_react2.useState)(""), [note, setNote] = (0, import_react2.useState)(""), [editing, setEditing] = (0, import_react2.useState)(void 0);
@@ -281,7 +285,30 @@ function MemoryPanel({ sessionId, visible }) {
       className: "px-ui",
       style: { padding: 16, height: "100%", overflow: "auto", overflowWrap: "anywhere", fontSize: 13 },
       children: [
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h3", { children: "\u4EBA\u683C\u4E0E\u8BB0\u5FC6" }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h3", { children: "\u8BB0\u5FC6\u4E0E\u77E5\u8BC6" }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("section", { style: { ...cardStyle, marginBottom: 12 }, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("strong", { children: "\u9879\u76EE\u77E5\u8BC6" }),
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: "\u540C\u4E00\u5DE5\u4F5C\u533A\u5171\u4EAB\u7684\u53C2\u8003\u8D44\u6599\uFF0C\u7531\u793E\u533A Mnemon \u7BA1\u7406\u3002\u6309\u9700\u68C0\u7D22\u548C\u9605\u8BFB\uFF0C\u4E0D\u968F\u4EBA\u683C\u5207\u6362\uFF0C\u4E5F\u4E0D\u81EA\u52A8\u4ECE\u804A\u5929\u63D0\u70BC\u3002" }),
+          /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+            "button",
+            {
+              style: controlStyle,
+              disabled: busy || dirty,
+              title: dirty ? "\u8BF7\u5148\u4FDD\u5B58\u6216\u653E\u5F03\u4E0B\u65B9\u7F16\u8F91" : "\u6253\u5F00\u793E\u533A\u77E5\u8BC6\u7BA1\u7406\u9875\u9762",
+              onClick: () => {
+                try {
+                  openKnowledge();
+                } catch {
+                  setError(
+                    "\u9879\u76EE\u77E5\u8BC6\u9875\u9762\u672A\u52A0\u8F7D\u3002\u8BF7\u5728\u201C\u63D2\u4EF6\u201D\u4E2D\u5B89\u88C5\u6216\u542F\u7528 dsh-mnemon\uFF1B\u5DF2\u6709\u5B89\u88C5\u7EE7\u7EED\u4F7F\u7528\u4F60\u81EA\u5DF1\u7684\u8BBE\u7F6E\u3002"
+                  );
+                }
+              },
+              children: "\u6253\u5F00\u9879\u76EE\u77E5\u8BC6"
+            }
+          )
+        ] }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h4", { children: "\u4EBA\u683C\u79C1\u6709\u8BB0\u5FC6" }),
         dirty && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { role: "status", style: { opacity: 0.7 }, children: "\u6709\u672A\u4FDD\u5B58\u7684\u7F16\u8F91\uFF0C\u81EA\u52A8\u5237\u65B0\u5DF2\u6682\u505C\u3002\u53EF\u624B\u52A8\u5237\u65B0\u8BB0\u5F55\uFF0C\u8349\u7A3F\u4F1A\u4FDD\u7559\u3002" }),
         /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("button", { style: controlStyle, disabled: busy, onClick: () => void act(), children: "\u5237\u65B0\u8BB0\u5F55" }),
         /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: "\u6BCF\u4E2A\u4EBA\u683C\u6709\u72EC\u7ACB\u7684\u534F\u4F5C\u65B9\u5F0F\u548C\u8BB0\u5FC6\u3002\u5207\u6362\u6216\u4FEE\u6539\u4ECE\u4E0B\u4E00\u8F6E\u751F\u6548\uFF0C\u6A21\u578B\u4E0E\u6743\u9650\u6CBF\u7528\u5F53\u524D\u4F1A\u8BDD\u3002" }),
@@ -512,9 +539,21 @@ function apply(ctx) {
     (host) => host.effect(
       () => createNativeSidebar(host).registerTab({
         id: "dsh-px-memory",
-        title: "\u4EBA\u683C\u4E0E\u8BB0\u5FC6",
+        title: "\u8BB0\u5FC6\u4E0E\u77E5\u8BC6",
         order: 17,
-        component: ({ scope, visible }) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(MemoryPanel, { sessionId: scope.sessionId, visible }, scope.sessionId)
+        component: ({ scope, visible }) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+          MemoryPanel,
+          {
+            sessionId: scope.sessionId,
+            visible,
+            openKnowledge: () => {
+              const layout = host.get?.("layout") ?? host.layout;
+              if (!layout?.selectPanel) throw Error("\u539F\u751F\u9875\u9762\u5BFC\u822A\u4E0D\u53EF\u7528");
+              layout.selectPanel("mnemon");
+            }
+          },
+          scope.sessionId
+        )
       }),
       "memory: panel"
     )
