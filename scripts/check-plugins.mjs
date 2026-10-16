@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import assert from 'node:assert/strict'
 import { assertNativeHostPins, validateProductCatalog } from '../src/shared/product-contract.ts'
+import { validCommunityList } from '../src/shared/distribution.ts'
 
 const repo = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (file) => JSON.parse(readFileSync(join(repo, file), 'utf8'))
@@ -10,6 +11,24 @@ const root = read('package.json'),
   catalog = read('config/plugins.json')
 const lock = read('package-lock.json')
 const products = read('config/products.json')
+const community = read('config/community-plugins.json')
+assert.equal(community.schemaVersion, 1)
+assert.ok(
+  validCommunityList(community.bundles),
+  'Community bundles require original identities and exact source integrity'
+)
+for (const item of community.bundles) {
+  assert.ok(
+    typeof item.license === 'string' &&
+      item.license &&
+      typeof item.source === 'string' &&
+      item.source.startsWith('https://')
+  )
+  assert.equal(
+    item.url,
+    `https://registry.npmjs.org/${item.name}/-/${item.name.split('/').at(-1)}-${item.version}.tgz`
+  )
+}
 const nativePack = read('config/native-pack.json'),
   nativeDesktop = read('config/native-desktop.json')
 validateProductCatalog(products)

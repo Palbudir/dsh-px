@@ -1,5 +1,5 @@
 /**
- * Windows desktop tools backed by an in-process Cua Driver. PX exposes a reviewed subset with short
+ * Windows desktop tools backed by an isolated Cua Driver. PX exposes a reviewed subset with short
  * descriptions; every call names an exact pid + window, resolves that window's owner, applies the
  * hard deny list and the per-session app grant, then reaches the driver through one serial queue.
  */
@@ -38,11 +38,14 @@ export interface DriverResult {
 export class DesktopDriver {
   private driver: Promise<DriverLike> | undefined
   private tail: Promise<unknown> = Promise.resolve()
+  private epoch = 0
   constructor(private readonly load: LoadDriver) {}
 
   call(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<DriverResult> {
+    const epoch = this.epoch
     const run = this.tail.then(async () => {
       signal.throwIfAborted()
+      if (epoch !== this.epoch) throw new Error('驱动已关闭，已排队的动作未执行；请重新观察后发起')
       this.driver ??= this.load().catch((error) => {
         this.driver = undefined
         throw new Error(`无法加载 Cua Driver：${error instanceof Error ? error.message : String(error)}`)
@@ -61,9 +64,11 @@ export class DesktopDriver {
 
   async close(): Promise<void> {
     const pending = this.driver
+    const calls = this.tail
+    this.epoch++
     this.driver = undefined
-    await this.tail.catch(() => undefined)
     if (pending) await (await pending.catch(() => undefined))?.shutdown().catch(() => undefined)
+    await calls.catch(() => undefined)
   }
 }
 
@@ -93,7 +98,8 @@ const ELEMENT = int('最近一次 computer_get_window_state 中的元素编号 [
 const DELIVERY = {
   type: 'string',
   enum: ['background', 'foreground'],
-  description: '默认 background（不抢焦点）。只有工具返回 background_unavailable 时才改用 foreground 重试'
+  description:
+    '默认 background。后台不可用就停止；foreground 仅在面板允许询问且用户批准本次操作后使用，不自动回退'
 }
 
 export type DesktopKind = 'discover' | 'read' | 'act' | 'launch'
@@ -328,7 +334,7 @@ export const DESKTOP_TOOLS: readonly DesktopTool[] = [
     name: 'computer_bring_to_front',
     driver: 'bring_to_front',
     kind: 'act',
-    description: '把窗口切到前台。一般不需要：动作会自动处理；只有远程桌面等必须保持前台的界面才使用。',
+    description: '把窗口切到前台。只在确实需要前台且用户批准本次操作后使用；后台模式会拒绝。',
     parameters: window({}),
     pass: ['pid', 'window_id'],
     log: []
@@ -358,6 +364,9 @@ export interface DesktopContext {
   sessionId: string
   signal: AbortSignal
   seesImages: boolean
+  foregroundAllowed?: boolean
+  authorizeForeground?: (label: string) => Promise<void>
+  onUnexpectedForeground?: () => void
   /** Latest snapshot id per `pid:window`, owned by this DSH session. */
   snapshots: Map<string, string>
   /** Resolve and authorize a window before reading or acting on it. */
@@ -375,6 +384,7 @@ export interface DesktopOutcome {
   text: string
   images: Image[]
   target: string
+  receipt?: string
 }
 
 function argsFor(tool: DesktopTool, args: Record<string, unknown>): Record<string, unknown> {
@@ -422,6 +432,17 @@ export async function runDesktopTool(
 ): Promise<DesktopOutcome> {
   const args = (rawArgs && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>
   const driverArgs = argsFor(tool, args)
+  if (args.delivery_mode !== undefined && !['background', 'foreground'].includes(String(args.delivery_mode)))
+    throw new ComputerUseRefusal('delivery_mode 必须为 background 或 foreground')
+  // Menu traversal and launching have no verified no-focus contract in the pinned driver.
+  const needsForeground =
+    args.delivery_mode === 'foreground' ||
+    ['bring_to_front', 'invoke_menu', 'launch_app'].includes(tool.driver)
+  if (needsForeground && (!c.foregroundAllowed || !c.authorizeForeground))
+    throw new ComputerUseRefusal(
+      '当前仅允许后台操作。此操作可能占用前台；请让用户在电脑操作面板选择「允许询问前台操作」，再逐次确认。不会自动切换。'
+    )
+  if (tool.pass.includes('delivery_mode')) driverArgs.delivery_mode = args.delivery_mode ?? 'background'
   if (tool.vision && !c.seesImages)
     throw new ComputerUseRefusal(
       '当前模型不支持图片，无法使用这个工具；请改用元素树，或请用户切换到支持图片的模型。'
@@ -479,6 +500,7 @@ export async function runDesktopTool(
     if (decision.kind === 'deny') throw new ComputerUseRefusal(`不能启动该程序：${decision.reason}。`)
     const label = String(request.name ?? request.aumid ?? request.path ?? request.launch_path)
     await c.authorizeLaunch(label, decision.kind === 'confirm' ? decision.reason : undefined)
+    await c.authorizeForeground!(label)
     const result = await c.driver.call('launch_app', driverArgs, c.signal)
     if (result.isError) throw new Error(textOf(result) || '启动失败')
     const pid = result.structuredContent?.pid
@@ -497,7 +519,7 @@ export async function runDesktopTool(
     const lines = launched.map((w) => windowsLine({ ...w, pid, app_name: identities[0]?.appName ?? '' }))
     return {
       text: [
-        `已在后台启动 ${label}（pid=${pid}）。`,
+        `已请求启动 ${label}（pid=${pid}）；请观察窗口确认结果。`,
         ...lines,
         lines.length ? '' : '窗口尚未出现，稍后调用 computer_list_windows。'
       ]
@@ -528,6 +550,7 @@ export async function runDesktopTool(
     throw new ComputerUseRefusal('无法识别这个商店应用窗口，请重新列出窗口后再试。')
   const label = appLabel(identity)
   await c.authorize(identity, label)
+  if (needsForeground) await c.authorizeForeground!(label)
 
   const key = `${pid}:${windowId}`
   if (ELEMENT_ADDRESSED.has(tool.driver) && args.element_index !== undefined) {
@@ -537,7 +560,7 @@ export async function runDesktopTool(
     driverArgs.snapshot_id = snapshot
   }
   if (tool.session) driverArgs.session = driverSession(c.sessionId)
-  if (tool.kind === 'act') await c.beginSession()
+  if (tool.kind === 'act' && needsForeground) await c.beginSession()
 
   if (tool.driver === 'get_window_state') {
     const screenshot = c.seesImages && args.include_screenshot !== false && !identity.minimized
@@ -555,7 +578,7 @@ export async function runDesktopTool(
     const notes: string[] = []
     if (s.degraded && s.degraded_reason) notes.push(`注意：${String(s.degraded_reason).split('.')[0]}`)
     if (identity.minimized)
-      notes.push('窗口已最小化，无法截图；需要截图时先用 computer_bring_to_front 恢复。')
+      notes.push('窗口已最小化，无法截图；可先读取元素树，需要恢复到前台时必须另行确认。')
     else if (!c.seesImages) notes.push('当前模型不支持图片，只返回元素树。')
     const tree = String(s.tree_markdown ?? '').trim()
     return {
@@ -567,11 +590,26 @@ export async function runDesktopTool(
 
   const result = await c.driver.call(tool.driver, driverArgs, c.signal)
   const text = textOf(result)
+  if (result.isError && result.structuredContent?.code === 'background_unavailable')
+    throw new ComputerUseRefusal(
+      `此窗口不支持 ${tool.name} 的后台投递。操作已停止，不会自动切到前台。可检查元素支持的语义动作；确实需要前台时，由用户在面板开启询问后逐次确认。`
+    )
   if (result.isError) throw new Error(text || `${tool.name} 失败`)
   if (tool.kind === 'act') c.snapshots.delete(key)
+  const mode = result.structuredContent?.delivery?.mode
+  const actual = mode === 'background' ? '后台' : mode === 'foreground' ? '前台' : '未知'
+  const receipt =
+    tool.kind === 'act'
+      ? `请求：${needsForeground ? '前台（本次已确认）' : '后台'} · 驱动回报：${actual} · 效果待重新观察`
+      : undefined
+  if (!needsForeground && mode === 'foreground') {
+    c.onUnexpectedForeground?.()
+    throw new Error('驱动回报使用了前台，与后台请求不符；请停止操作并检查窗口。动作可能已生效。')
+  }
   return {
-    text: (text.length > 3000 ? text.slice(0, 3000) + '…' : text) || '完成。',
+    text: `${receipt ? receipt + '\n' : ''}${(text.length > 3000 ? text.slice(0, 3000) + '…' : text) || '驱动已返回。'}`,
     images: c.seesImages ? imagesOf(result) : [],
-    target: label
+    target: label,
+    receipt
   }
 }

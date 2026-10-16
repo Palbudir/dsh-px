@@ -3,7 +3,12 @@ import { join, relative } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyBundlePayload } from '../src/shared/bundle-payload'
-import { FOUNDATION_PLUGINS, FEATURE_BUNDLES } from '../src/shared/distribution'
+import {
+  FOUNDATION_PLUGINS,
+  FEATURE_BUNDLES,
+  componentFile,
+  type CommunityBundle
+} from '../src/shared/distribution'
 import { SIDEBAR_AUTH_SOURCE } from '../src/shared/sidebar-auth-compatibility'
 
 export const FOUNDATION = FOUNDATION_PLUGINS
@@ -14,7 +19,8 @@ export function buildDistribution(
   bundle: string,
   version: string,
   dependencies: Record<string, string>,
-  identity: Record<string, unknown>
+  identity: Record<string, unknown>,
+  community: Array<{ metadata: Omit<CommunityBundle, 'file' | 'sha256'>; archive: Buffer }> = []
 ) {
   const directory = join(bundle, 'distribution')
   mkdirSync(directory)
@@ -116,7 +122,20 @@ export function buildDistribution(
         .digest('hex')
     })
   }
-  const distribution = { schemaVersion: 1, version, foundation: entries[0], features: entries.slice(1) }
+  const communityEntries = community.map(({ metadata, archive }) => {
+    if ('sha512-' + createHash('sha512').update(archive).digest('base64') !== metadata.integrity)
+      throw Error(`Community archive integrity mismatch: ${metadata.name}`)
+    const file = componentFile(metadata)
+    writeFileSync(join(bundle, file), archive, { flag: 'wx' })
+    return { ...metadata, file, sha256: createHash('sha256').update(archive).digest('hex') }
+  })
+  const distribution = {
+    schemaVersion: 2,
+    version,
+    foundation: entries[0],
+    features: entries.slice(1),
+    community: communityEntries
+  }
   writeFileSync(join(bundle, 'distribution.json'), JSON.stringify(distribution, null, 2) + '\n')
   return distribution
 }

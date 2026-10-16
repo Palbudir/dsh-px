@@ -36,7 +36,10 @@ const {
   asarEntries
 } = await load('release-package.mjs')
 const { verifyReleaseFiles, releaseCreateBody, releasePublishBody } = await load('release-assets.mjs')
-const { verifyPackOutput } = await load('release-quality.mjs')
+const { verifyPackOutput: verifyPackOutputWithPins } = await load('release-quality.mjs')
+const fixturePins = new Map<string, unknown[]>()
+const verifyPackOutput = (directory: string, options: any) =>
+  verifyPackOutputWithPins(directory, { ...options, communityPins: fixturePins.get(directory) })
 const head = 'a'.repeat(40),
   controllerSha = 'b'.repeat(40)
 const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
@@ -145,7 +148,34 @@ function packFixture(t: any, mutate: (manifest: any, artifact: any, distribution
     execFileSync('tar', ['-czf', '../package/' + file, 'package'], { cwd: dir, windowsHide: true })
     return { name, version, file, sha256: hash(readFileSync(join(pkg, file))) }
   })
-  const distribution = { schemaVersion: 1, version, foundation: members[0], features: members.slice(1) }
+  const community = [
+    { name: 'dsh-context', version: '0.72.0' },
+    { name: 'dsh-mnemon', version: '0.5.29' }
+  ].map((entry) => {
+    const dir = join(root, entry.name)
+    mkdirSync(join(dir, 'package'), { recursive: true })
+    writeFileSync(
+      join(dir, 'package/package.json'),
+      JSON.stringify({ ...entry, dsh: { bundle: { patch: './cordis.patch.yml' } } })
+    )
+    const file = `distribution/${entry.name}-${entry.version}.tgz`
+    execFileSync('tar', ['-czf', '../package/' + file, 'package'], { cwd: dir, windowsHide: true })
+    const bytes = readFileSync(join(pkg, file))
+    return {
+      ...entry,
+      file,
+      sha256: hash(bytes),
+      integrity: 'sha512-' + createHash('sha512').update(bytes).digest('base64')
+    }
+  })
+  fixturePins.set(root, structuredClone(community))
+  const distribution = {
+    schemaVersion: products.protocolGeneration >= 5 ? 2 : 1,
+    version,
+    foundation: members[0],
+    features: members.slice(1),
+    ...(products.protocolGeneration >= 5 ? { community } : {})
+  }
   const manifest = {
     name: 'dsh-px-pack',
     version,
@@ -186,6 +216,16 @@ test('Pack verification binds artifact.json, archive bytes and the embedded mani
   const expected = { products, nativePack, head, candidate: false }
   const verified = verifyPackOutput(packFixture(t), expected)
   assert.equal(verified.file, `dsh-px-pack-${products.pack.version}.tgz`)
+  assert.throws(
+    () =>
+      verifyPackOutput(
+        packFixture(t, (_m, _a, d) => {
+          d.community[0].version = '9.9.9'
+        }),
+        expected
+      ),
+    /community composition/
+  )
   assert.throws(
     () =>
       verifyPackOutput(

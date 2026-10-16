@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { gt } from 'semver'
 import { verifySignedRelease, type ReleaseManifest } from '../shared/signed-release'
@@ -207,6 +207,7 @@ export class PackDeployment {
         profile: options.profile,
         directory: this.directory(receipt),
         version: receipt.version,
+        knowledgeDirectory: resolve(options.profile, '..', '..', 'storages', 'dsh-px-knowledge'),
         install: (args) => options.install(runtime, args)
       })
       if (result === 'failed') throw Error('Pack 安装失败，原生依赖已恢复')

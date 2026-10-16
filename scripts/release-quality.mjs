@@ -4,13 +4,18 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSyn
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { FEATURE_BUNDLES } from '../src/shared/distribution.ts'
+import {
+  FEATURE_BUNDLES,
+  validDistribution,
+  compositionMembers,
+  componentFile
+} from '../src/shared/distribution.ts'
 
 /**
  * Verify a build-native-pack output directory against its own archive bytes and the pinned products.
  * Candidate builds are isolated validation only; release builds must be clean and bound to `head`.
  */
-export function verifyPackOutput(directory, { products, nativePack, head, candidate }) {
+export function verifyPackOutput(directory, { products, nativePack, communityPins, head, candidate }) {
   if (!/^[a-f0-9]{40}$/.test(head ?? '')) throw new Error('Exact Pack source commit required')
   const version = products.pack.version
   const tgz = `dsh-px-pack-${version}.tgz`
@@ -84,15 +89,35 @@ export function verifyPackOutput(directory, { products, nativePack, head, candid
   if (products.protocolGeneration >= 3) {
     const distribution = JSON.parse(tar('-xOzf', tgz, 'package/distribution.json'))
     if (
-      distribution.schemaVersion !== 1 ||
+      !validDistribution(distribution) ||
+      distribution.schemaVersion !== (products.protocolGeneration >= 5 ? 2 : 1) ||
       distribution.version !== version ||
       distribution.foundation?.name !== 'dsh-px-core' ||
       distribution.features?.length !== FEATURE_BUNDLES.length ||
       !FEATURE_BUNDLES.every((name) => distribution.features.filter((f) => f.name === name).length === 1)
     )
       throw Error('Pack distribution does not contain the foundation and declared feature bundles')
-    for (const entry of [distribution.foundation, ...distribution.features]) {
-      if (entry.version !== version || entry.file !== `distribution/${entry.name}-${version}.tgz`)
+    const community = new Map((distribution.community ?? []).map((item) => [item.name, item]))
+    if (products.protocolGeneration >= 5) {
+      const pins =
+        communityPins ??
+        JSON.parse(readFileSync(new URL('../config/community-plugins.json', import.meta.url), 'utf8')).bundles
+      if (
+        community.size !== pins.length ||
+        pins.some((pin) => {
+          const included = community.get(pin.name)
+          return (
+            !included ||
+            included.version !== pin.version ||
+            included.integrity !== pin.integrity ||
+            included.defaults !== pin.defaults
+          )
+        })
+      )
+        throw Error('Pack community composition differs from the pinned catalog')
+    }
+    for (const entry of [distribution.foundation, ...compositionMembers(distribution)]) {
+      if ((!community.has(entry.name) && entry.version !== version) || entry.file !== componentFile(entry))
         throw Error('Invalid distribution member')
       const member = execFileSync('tar', ['-xOzf', tgz, 'package/' + entry.file], {
         cwd: directory,
@@ -101,6 +126,12 @@ export function verifyPackOutput(directory, { products, nativePack, head, candid
       })
       if (createHash('sha256').update(member).digest('hex') !== entry.sha256)
         throw Error('Distribution member digest mismatch')
+      if (
+        community.has(entry.name) &&
+        'sha512-' + createHash('sha512').update(member).digest('base64') !==
+          community.get(entry.name).integrity
+      )
+        throw Error('Community source integrity mismatch')
       const metadata = JSON.parse(
         execFileSync('tar', ['-xOzf', '-', 'package/package.json'], {
           input: member,
@@ -108,7 +139,7 @@ export function verifyPackOutput(directory, { products, nativePack, head, candid
           windowsHide: true
         })
       )
-      if (metadata.name !== entry.name || metadata.version !== version)
+      if (metadata.name !== entry.name || metadata.version !== entry.version)
         throw Error('Distribution member identity mismatch')
     }
   }

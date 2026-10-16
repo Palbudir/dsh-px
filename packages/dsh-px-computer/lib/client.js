@@ -217,7 +217,7 @@ var BROWSER_LABEL = {
   extension: "\u63A5\u7BA1\u6211\u7684 Edge\uFF08\u9700 Playwright \u6269\u5C55\uFF09"
 };
 var OUTCOME = {
-  ok: "\u5B8C\u6210",
+  ok: "\u5DE5\u5177\u5DF2\u8FD4\u56DE",
   error: "\u5931\u8D25",
   denied: "\u5DF2\u62E6\u622A",
   rejected: "\u672A\u83B7\u5141\u8BB8"
@@ -295,6 +295,24 @@ function ComputerPanel({ sessionId, visible }) {
               ),
               " ",
               "\u64CD\u4F5C\u684C\u9762\u5E94\u7528"
+            ] }),
+            s.desktop && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { style: { display: "block", margin: "8px 0 12px" }, children: [
+              "\u684C\u9762\u64CD\u4F5C\u65B9\u5F0F",
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
+                "select",
+                {
+                  "aria-label": "\u684C\u9762\u64CD\u4F5C\u65B9\u5F0F",
+                  style: { ...controlStyle, width: "100%", marginTop: 6 },
+                  disabled: busy,
+                  value: s.desktopForeground ? "ask" : "background",
+                  onChange: (e) => void act({ action: "settings", desktopForeground: e.target.value === "ask" }),
+                  children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "background", children: "\u4EC5\u540E\u53F0\u64CD\u4F5C" }),
+                    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "ask", children: "\u5141\u8BB8\u8BE2\u95EE\u524D\u53F0\u64CD\u4F5C\uFF08\u6BCF\u6B21\u786E\u8BA4\uFF09" })
+                  ]
+                }
+              ),
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("small", { className: "px-muted", children: "\u540E\u53F0\u4E0D\u652F\u6301\u7684\u52A8\u4F5C\u4F1A\u505C\u6B62\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u62A2\u5360\u524D\u53F0\u3002\u6700\u5C0F\u5316\u7A97\u53E3\u548C\u81EA\u7ED8\u754C\u9762\u7684\u53EF\u7528\u80FD\u529B\u56E0\u5E94\u7528\u800C\u5F02\u3002" })
             ] }),
             /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { style: { display: "block" }, children: [
               "\u6D4F\u89C8\u5668",
@@ -428,7 +446,7 @@ function ComputerPanel({ sessionId, visible }) {
                 ] }),
                 /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { children: entry.target }),
                 entry.detail && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "px-muted", children: entry.detail }),
-                entry.message && entry.outcome !== "ok" && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "px-muted", children: entry.message })
+                entry.message && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("div", { className: "px-muted", children: entry.message })
               ]
             },
             `${entry.at}-${index}`

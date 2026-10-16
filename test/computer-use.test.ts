@@ -263,6 +263,8 @@ function context(driver: DesktopDriver, overrides: Partial<DesktopContext> = {})
     sessionId: 'session-a',
     signal: new AbortController().signal,
     seesImages: true,
+    foregroundAllowed: true,
+    authorizeForeground: async () => {},
     snapshots: new Map(),
     env: { USERPROFILE: 'D:\\Profile', TEMP: 'D:\\Profile\\AppData\\Local\\Temp' },
     authorize: async (_window, label) => {
@@ -278,6 +280,49 @@ function context(driver: DesktopDriver, overrides: Partial<DesktopContext> = {})
   return { c, authorized, launches }
 }
 const tool = (name: string) => DESKTOP_TOOLS.find((t) => t.name === name)!
+
+test('background-only forces explicit delivery and never falls back or focuses', async () => {
+  const { driver, calls } = fakeDriver([{ pid: 20, window_id: 2, app_name: 'notepad.exe', title: 'x' }], {
+    click: () => ({ isError: true, content: [{ type: 'text', text: 'background_unavailable' }] })
+  })
+  const { c } = context(driver, { foregroundAllowed: false })
+  await assert.rejects(
+    runDesktopTool(tool('computer_click'), { pid: 20, window_id: 2, x: 1, y: 2 }, c),
+    /background_unavailable/
+  )
+  assert.equal(calls.find((v) => v.name === 'click')?.args.delivery_mode, 'background')
+  for (const name of ['computer_bring_to_front', 'computer_invoke_menu', 'computer_launch_app'])
+    await assert.rejects(runDesktopTool(tool(name), {}, c), /仅允许后台/)
+  await assert.rejects(
+    runDesktopTool(tool('computer_click'), { pid: 20, window_id: 2, delivery_mode: 'foreground' }, c),
+    /仅允许后台/
+  )
+  assert.equal(calls.filter((v) => v.name === 'click').length, 1)
+  assert.ok(
+    !calls.some((v) => ['bring_to_front', 'start_session', 'invoke_menu', 'launch_app'].includes(v.name))
+  )
+})
+
+test('foreground always asks separately; denied foreground never reaches driver action', async () => {
+  const { driver, calls } = fakeDriver([{ pid: 20, window_id: 2, app_name: 'notepad.exe', title: 'x' }])
+  let approvals = 0
+  const { c } = context(driver, {
+    authorizeForeground: async () => {
+      approvals++
+      throw Error('foreground declined')
+    }
+  })
+  await assert.rejects(
+    runDesktopTool(
+      tool('computer_click'),
+      { pid: 20, window_id: 2, x: 1, y: 2, delivery_mode: 'foreground' },
+      c
+    ),
+    /declined/
+  )
+  assert.equal(approvals, 1)
+  assert.ok(!calls.some((v) => v.name === 'click'))
+})
 
 test('desktop actions resolve the exact window, refuse protected apps and never touch them', async () => {
   const { driver, calls } = fakeDriver([
@@ -788,7 +833,7 @@ for (const [variant, honorsSignal] of [
     async (t) => {
       const approval = fakeApproval(honorsSignal)
       const { tools, request } = hostFixture(t, { approval })
-      await request('POST', { action: 'settings', revision: 0, desktop: true })
+      await request('POST', { action: 'settings', revision: 0, desktop: true, desktopForeground: true })
       const launch = tools.get('computer_launch_app')
       const first = launch.execute({ name: 'Notepad' }, agentRun('computer_launch_app', 'c1'))
       await until(() => approval.pending.length === 1)
@@ -883,18 +928,23 @@ test(
   async (t) => {
     const approval = fakeApproval()
     const { tools, request } = hostFixture(t, { approval })
-    let view = (await request('POST', { action: 'settings', revision: 0, desktop: true })).json
+    let view = (
+      await request('POST', { action: 'settings', revision: 0, desktop: true, desktopForeground: true })
+    ).json
     // Granted, then the driver itself cannot load in this test environment.
     const granted = tools
       .get('computer_launch_app')
       .execute({ name: 'Notepad' }, agentRun('computer_launch_app', 'c1'))
     await until(() => approval.pending.length === 1)
     approval.pending[0].answer('allowed-once')
+    await until(() => approval.pending.length === 2)
+    assert.match(approval.pending[1].req.displayReason.zh, /前台/)
+    approval.pending[1].answer('allowed-once')
     await assert.rejects(granted, /Cua Driver/)
     const waiting = tools
       .get('computer_launch_app')
       .execute({ name: 'Paint' }, agentRun('computer_launch_app', 'c2'))
-    await until(() => approval.pending.length === 2)
+    await until(() => approval.pending.length === 3)
     view = (await request('POST', { action: 'settings', revision: view.settings.revision, desktop: false }))
       .json
     await assert.rejects(waiting, /桌面应用操作已在「电脑操作」面板关闭/)
@@ -904,8 +954,8 @@ test(
     const again = tools
       .get('computer_launch_app')
       .execute({ name: 'Notepad' }, agentRun('computer_launch_app', 'c3'))
-    await until(() => approval.pending.length === 3)
-    approval.pending[2].answer('rejected')
+    await until(() => approval.pending.length === 4)
+    approval.pending[3].answer('rejected')
     await assert.rejects(again, /没有允许/)
   }
 )

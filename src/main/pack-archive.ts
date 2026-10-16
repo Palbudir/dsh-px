@@ -2,7 +2,12 @@ import { createHash } from 'node:crypto'
 import { gunzipSync } from 'node:zlib'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { validFeatureList, type PackDistribution } from '../shared/distribution'
+import {
+  validDistribution,
+  compositionMembers,
+  componentFile,
+  type PackDistribution
+} from '../shared/distribution'
 
 export const sha256 = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
 
@@ -108,21 +113,33 @@ export function extractPack(
     throw Error('Pack archive does not match the release contract')
   const distribution: PackDistribution = JSON.parse(files.get('distribution.json')?.toString('utf8') ?? '{}')
   if (
-    distribution.schemaVersion !== 1 ||
+    !validDistribution(distribution) ||
+    distribution.schemaVersion !== (expected.protocolGeneration >= 5 ? 2 : 1) ||
     distribution.version !== expected.version ||
     distribution.foundation?.name !== 'dsh-px-core' ||
-    !validFeatureList(distribution.features)
+    !Array.isArray(distribution.features)
   )
     throw Error('Invalid Pack distribution')
   const coreFiles = new Map<string, Buffer>()
-  for (const item of [distribution.foundation, ...distribution.features]) {
-    if (
-      item.version !== expected.version ||
-      item.file !== `distribution/${item.name}-${expected.version}.tgz`
-    )
+  const community = new Map((distribution.community ?? []).map((item) => [item.name, item]))
+  const members = [distribution.foundation, ...compositionMembers(distribution)]
+  for (const item of members) {
+    if ((!community.has(item.name) && item.version !== expected.version) || item.file !== componentFile(item))
       throw Error('Invalid Pack component identity')
     const content = files.get(item.file)
     if (!content || sha256(content) !== item.sha256) throw Error('Pack component checksum mismatch')
+    const origin = community.get(item.name)
+    if (origin) {
+      if ('sha512-' + createHash('sha512').update(content).digest('base64') !== origin.integrity)
+        throw Error('Community source checksum mismatch')
+      const pkg = JSON.parse(unpackFiles(content).get('package.json')?.toString('utf8') ?? '{}')
+      if (
+        pkg.name !== item.name ||
+        pkg.version !== item.version ||
+        typeof pkg.dsh?.bundle?.patch !== 'string'
+      )
+        throw Error('Community bundle identity mismatch')
+    }
     if (item === distribution.foundation)
       for (const [name, data] of unpackFiles(content)) coreFiles.set(name, data)
   }
@@ -131,7 +148,6 @@ export function extractPack(
     writeFileSync(file, content, { flag: 'wx' })
   }
   write(join(destination, 'distribution.json'), files.get('distribution.json')!)
-  for (const item of [distribution.foundation, ...distribution.features])
-    write(join(destination, item.file), files.get(item.file)!)
+  for (const item of members) write(join(destination, item.file), files.get(item.file)!)
   for (const [name, data] of coreFiles) write(join(destination, 'foundation', name), data)
 }

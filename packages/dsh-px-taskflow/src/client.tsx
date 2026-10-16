@@ -5,6 +5,7 @@ import { RequestError, requestJson } from '../../shared/client-http'
 import type { EvidenceDetail, Execution, TaskReview } from './evidence'
 import { appendToDraft, type DraftInputContext } from '../../shared/client-input'
 import { commandRetryDraft } from './command-retry-draft'
+import { NativeWorkPanel } from './client/native-work-panel'
 
 export const inject: string[] = []
 const card = { ...cardStyle, marginBottom: 12 }
@@ -233,8 +234,9 @@ function SessionTaskPanel({
         lineHeight: 1.6
       }}
     >
-      <h3 style={{ marginTop: 0 }}>执行记录</h3>
-      <p style={{ opacity: 0.65 }}>记录随会话保存。列表显示摘要，展开执行可按需读取输出。</p>
+      <h3 style={{ marginTop: 0 }}>当前任务</h3>
+      <p style={{ opacity: 0.65 }}>原生目标与团队负责实际状态，工作账本补充进展与证据。</p>
+      <NativeWorkPanel sessionId={scope.sessionId} visible={visible} />
       {error ? (
         <p role="alert">
           {error} {data ? '下方是上次读取的记录。' : null}{' '}
@@ -275,6 +277,23 @@ function SessionTaskPanel({
                   <p>{data.checkpoint.summary}</p>
                 )}
                 <p>下一步：{data.checkpoint.nextStep || '检查修改与验证结果'}</p>
+                {data.checkpoint.native && (
+                  <details>
+                    <summary>保存时关联的原生任务</summary>
+                    {data.checkpoint.native.goal && (
+                      <p>
+                        Goal：{data.checkpoint.native.goal.id} · revision{' '}
+                        {data.checkpoint.native.goal.revision}
+                      </p>
+                    )}
+                    {data.checkpoint.native.team?.tasks.map((task) => (
+                      <p key={task.id}>
+                        Team：{data.checkpoint!.native!.team!.id} / {task.id} · revision {task.revision}
+                      </p>
+                    ))}
+                    <small>仅记录保存时的版本；当前状态以上方原生目标和任务为准。</small>
+                  </details>
+                )}
                 <small style={{ opacity: 0.65 }}>
                   Agent 工作摘要 · {new Date(data.checkpoint.time).toLocaleString()}
                 </small>
@@ -303,7 +322,11 @@ function SessionTaskPanel({
                 ) : null}
               </>
             </section>
-          ) : null}
+          ) : (
+            <p className="px-empty">
+              尚未保存工作账本。可在对话中要求 Agent 保存当前目标、约束、进展和下一步；简单问答无需记账。
+            </p>
+          )}
           {data.changedFiles.length ? (
             <section style={card}>
               <strong>已记录的文件写入 · 共 {data.changedFilesTotal} 个路径</strong>
@@ -384,7 +407,7 @@ export function apply(ctx: {
       () =>
         createNativeSidebar(host).registerTab({
           id: 'dsh-px-taskflow',
-          title: '执行记录',
+          title: '当前任务',
           order: 15,
           component: (props: { scope: { sessionId: string }; visible: boolean }) => (
             <TaskPanel {...props} inputContext={host} />

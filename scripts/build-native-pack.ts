@@ -8,6 +8,7 @@ import { copyBundlePayload } from '../src/shared/bundle-payload'
 import { MANAGED_PLUGIN_NAMES, PACK_VERSION, PRODUCT_CATALOG } from '../src/shared/plugin-catalog'
 import { patchSidebarAuthentication, SIDEBAR_AUTH_SOURCE } from '../src/shared/sidebar-auth-compatibility'
 import { buildDistribution } from './pack-distribution'
+import { validCommunityList, type CommunityBundle } from '../src/shared/distribution'
 
 const root = repoRoot()
 const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
@@ -41,6 +42,9 @@ if (!candidate) {
   if (!expectedHead || !/^[a-f0-9]{40}$/.test(expectedHead) || expectedHead !== sourceCommit)
     throw new Error('Release Pack requires --expect-head=<exact SHA> equal to the checked-out HEAD')
 }
+const communityCatalog = JSON.parse(readFileSync(join(root, 'config/community-plugins.json'), 'utf8'))
+if (communityCatalog.schemaVersion !== 1 || !validCommunityList(communityCatalog.bundles))
+  throw Error('Invalid community bundle catalog')
 const output = resolve(destination)
 // Fail instead of overwriting artifacts or another test run.
 mkdirSync(output, { recursive: false })
@@ -101,7 +105,7 @@ writeFileSync(
   JSON.stringify({
     meta: {
       title: 'DSH-PX 插件整合包',
-      description: '为 DSH 提供工作区、执行记录、产物、引用批注和定时任务。'
+      description: '工作区、原生任务与账本、记忆与知识、电脑操作、产物、批注及定时任务。'
     }
   }) + '\n'
 )
@@ -110,20 +114,47 @@ writeFileSync(
   JSON.stringify({
     meta: {
       title: 'DSH-PX Pack',
-      description: 'Workspace tools, execution records, artifacts, annotations and scheduled tasks.'
+      description:
+        'Workspace, native tasks and ledger, memory and knowledge, computer use, artifacts, annotations and schedules.'
     }
   }) + '\n'
 )
 copyFileSync(join(modules, 'dsh-px-workspace/icon.svg'), join(bundle, 'icon.svg'))
 copyFileSync(join(root, 'LICENSE'), join(bundle, 'LICENSE'))
-buildDistribution(bundle, PACK_VERSION, catalog.dependencies, {
-  candidate,
-  sourceCommit,
-  sourceDirty,
-  hostVersion: catalog.hostVersion,
-  upstreamCommit: catalog.upstreamCommit,
-  protocolGeneration: PRODUCT_CATALOG.protocolGeneration
-})
+const community = await Promise.all(
+  communityCatalog.bundles.map(async (entry: CommunityBundle & { url: string }) => {
+    const expected = `https://registry.npmjs.org/${entry.name}/-/${entry.name.split('/').at(-1)}-${entry.version}.tgz`
+    if (entry.url !== expected) throw Error('Unexpected community archive source')
+    const response = await fetch(entry.url, { signal: AbortSignal.timeout(60000) })
+    if (!response.ok) throw Error(`Community download failed: ${entry.name} ${response.status}`)
+    const archive = Buffer.from(await response.arrayBuffer())
+    if ('sha512-' + createHash('sha512').update(archive).digest('base64') !== entry.integrity)
+      throw Error(`Community archive integrity mismatch: ${entry.name}`)
+    return {
+      archive,
+      metadata: {
+        name: entry.name,
+        version: entry.version,
+        integrity: entry.integrity,
+        ...(entry.defaults ? { defaults: entry.defaults } : {})
+      }
+    }
+  })
+)
+buildDistribution(
+  bundle,
+  PACK_VERSION,
+  catalog.dependencies,
+  {
+    candidate,
+    sourceCommit,
+    sourceDirty,
+    hostVersion: catalog.hostVersion,
+    upstreamCommit: catalog.upstreamCommit,
+    protocolGeneration: PRODUCT_CATALOG.protocolGeneration
+  },
+  community
+)
 const dependencies = { ...catalog.dependencies, ...memberDependencies }
 for (const name of MANAGED_PLUGIN_NAMES) dependencies[name] = PACK_VERSION
 dependencies[sidebar.name] = sidebar.version
@@ -137,7 +168,8 @@ writeFileSync(
       type: 'module',
       main: 'index.js',
       license: 'MIT',
-      description: 'DSH-PX: sessions, files, execution evidence and scheduled work for native DSH hosts.',
+      description:
+        'DSH-PX: workspace, task continuity, memory, knowledge and computer use for native DSH hosts.',
       icon: './icon.svg',
       exports,
       dependencies,
@@ -163,10 +195,13 @@ writeFileSync(
 // The native manager refreshes package resolution before the next Host boot.
 writeFileSync(
   join(bundle, 'cordis.patch.yml'),
-  '- insert:\n' +
-    members
-      .map((name) => `    - id: ${name === sidebar.name ? 'better-sidebar' : name}\n      name: ${name}\n`)
-      .join('')
+  members
+    .map((name) =>
+      name === sidebar.name
+        ? `- insert:\n    - id: better-sidebar\n      name: ${name}\n`
+        : readFileSync(join(modules, name, 'cordis.patch.yml'), 'utf8').trimEnd() + '\n'
+    )
+    .join('\n')
 )
 writeFileSync(join(bundle, 'index.js'), 'export function apply() {}\n')
 copyFileSync(join(root, 'LICENSE'), join(bundle, 'LICENSE'))

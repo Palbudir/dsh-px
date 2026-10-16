@@ -1440,9 +1440,12 @@ var DesktopDriver = class {
   }
   driver;
   tail = Promise.resolve();
+  epoch = 0;
   call(name2, args, signal) {
+    const epoch = this.epoch;
     const run = this.tail.then(async () => {
       signal.throwIfAborted();
+      if (epoch !== this.epoch) throw new Error("\u9A71\u52A8\u5DF2\u5173\u95ED\uFF0C\u5DF2\u6392\u961F\u7684\u52A8\u4F5C\u672A\u6267\u884C\uFF1B\u8BF7\u91CD\u65B0\u89C2\u5BDF\u540E\u53D1\u8D77");
       this.driver ??= this.load().catch((error) => {
         this.driver = void 0;
         throw new Error(`\u65E0\u6CD5\u52A0\u8F7D Cua Driver\uFF1A${error instanceof Error ? error.message : String(error)}`);
@@ -1459,9 +1462,11 @@ var DesktopDriver = class {
   }
   async close() {
     const pending = this.driver;
+    const calls = this.tail;
+    this.epoch++;
     this.driver = void 0;
-    await this.tail.catch(() => void 0);
     if (pending) await (await pending.catch(() => void 0))?.shutdown().catch(() => void 0);
+    await calls.catch(() => void 0);
   }
 };
 function textOf(result) {
@@ -1481,7 +1486,7 @@ var ELEMENT = int("\u6700\u8FD1\u4E00\u6B21 computer_get_window_state \u4E2D\u76
 var DELIVERY = {
   type: "string",
   enum: ["background", "foreground"],
-  description: "\u9ED8\u8BA4 background\uFF08\u4E0D\u62A2\u7126\u70B9\uFF09\u3002\u53EA\u6709\u5DE5\u5177\u8FD4\u56DE background_unavailable \u65F6\u624D\u6539\u7528 foreground \u91CD\u8BD5"
+  description: "\u9ED8\u8BA4 background\u3002\u540E\u53F0\u4E0D\u53EF\u7528\u5C31\u505C\u6B62\uFF1Bforeground \u4EC5\u5728\u9762\u677F\u5141\u8BB8\u8BE2\u95EE\u4E14\u7528\u6237\u6279\u51C6\u672C\u6B21\u64CD\u4F5C\u540E\u4F7F\u7528\uFF0C\u4E0D\u81EA\u52A8\u56DE\u9000"
 };
 var window = (extra, required = []) => ({
   type: "object",
@@ -1690,7 +1695,7 @@ var DESKTOP_TOOLS = [
     name: "computer_bring_to_front",
     driver: "bring_to_front",
     kind: "act",
-    description: "\u628A\u7A97\u53E3\u5207\u5230\u524D\u53F0\u3002\u4E00\u822C\u4E0D\u9700\u8981\uFF1A\u52A8\u4F5C\u4F1A\u81EA\u52A8\u5904\u7406\uFF1B\u53EA\u6709\u8FDC\u7A0B\u684C\u9762\u7B49\u5FC5\u987B\u4FDD\u6301\u524D\u53F0\u7684\u754C\u9762\u624D\u4F7F\u7528\u3002",
+    description: "\u628A\u7A97\u53E3\u5207\u5230\u524D\u53F0\u3002\u53EA\u5728\u786E\u5B9E\u9700\u8981\u524D\u53F0\u4E14\u7528\u6237\u6279\u51C6\u672C\u6B21\u64CD\u4F5C\u540E\u4F7F\u7528\uFF1B\u540E\u53F0\u6A21\u5F0F\u4F1A\u62D2\u7EDD\u3002",
     parameters: window({}),
     pass: ["pid", "window_id"],
     log: []
@@ -1742,6 +1747,14 @@ function windowsLine(w) {
 async function runDesktopTool(tool, rawArgs, c) {
   const args = rawArgs && typeof rawArgs === "object" ? rawArgs : {};
   const driverArgs = argsFor(tool, args);
+  if (args.delivery_mode !== void 0 && !["background", "foreground"].includes(String(args.delivery_mode)))
+    throw new ComputerUseRefusal("delivery_mode \u5FC5\u987B\u4E3A background \u6216 foreground");
+  const needsForeground = args.delivery_mode === "foreground" || ["bring_to_front", "invoke_menu", "launch_app"].includes(tool.driver);
+  if (needsForeground && (!c.foregroundAllowed || !c.authorizeForeground))
+    throw new ComputerUseRefusal(
+      "\u5F53\u524D\u4EC5\u5141\u8BB8\u540E\u53F0\u64CD\u4F5C\u3002\u6B64\u64CD\u4F5C\u53EF\u80FD\u5360\u7528\u524D\u53F0\uFF1B\u8BF7\u8BA9\u7528\u6237\u5728\u7535\u8111\u64CD\u4F5C\u9762\u677F\u9009\u62E9\u300C\u5141\u8BB8\u8BE2\u95EE\u524D\u53F0\u64CD\u4F5C\u300D\uFF0C\u518D\u9010\u6B21\u786E\u8BA4\u3002\u4E0D\u4F1A\u81EA\u52A8\u5207\u6362\u3002"
+    );
+  if (tool.pass.includes("delivery_mode")) driverArgs.delivery_mode = args.delivery_mode ?? "background";
   if (tool.vision && !c.seesImages)
     throw new ComputerUseRefusal(
       "\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u56FE\u7247\uFF0C\u65E0\u6CD5\u4F7F\u7528\u8FD9\u4E2A\u5DE5\u5177\uFF1B\u8BF7\u6539\u7528\u5143\u7D20\u6811\uFF0C\u6216\u8BF7\u7528\u6237\u5207\u6362\u5230\u652F\u6301\u56FE\u7247\u7684\u6A21\u578B\u3002"
@@ -1787,6 +1800,7 @@ async function runDesktopTool(tool, rawArgs, c) {
     if (decision.kind === "deny") throw new ComputerUseRefusal(`\u4E0D\u80FD\u542F\u52A8\u8BE5\u7A0B\u5E8F\uFF1A${decision.reason}\u3002`);
     const label2 = String(request.name ?? request.aumid ?? request.path ?? request.launch_path);
     await c.authorizeLaunch(label2, decision.kind === "confirm" ? decision.reason : void 0);
+    await c.authorizeForeground(label2);
     const result2 = await c.driver.call("launch_app", driverArgs, c.signal);
     if (result2.isError) throw new Error(textOf(result2) || "\u542F\u52A8\u5931\u8D25");
     const pid2 = result2.structuredContent?.pid;
@@ -1803,7 +1817,7 @@ async function runDesktopTool(tool, rawArgs, c) {
     const lines = launched.map((w) => windowsLine({ ...w, pid: pid2, app_name: identities[0]?.appName ?? "" }));
     return {
       text: [
-        `\u5DF2\u5728\u540E\u53F0\u542F\u52A8 ${label2}\uFF08pid=${pid2}\uFF09\u3002`,
+        `\u5DF2\u8BF7\u6C42\u542F\u52A8 ${label2}\uFF08pid=${pid2}\uFF09\uFF1B\u8BF7\u89C2\u5BDF\u7A97\u53E3\u786E\u8BA4\u7ED3\u679C\u3002`,
         ...lines,
         lines.length ? "" : "\u7A97\u53E3\u5C1A\u672A\u51FA\u73B0\uFF0C\u7A0D\u540E\u8C03\u7528 computer_list_windows\u3002"
       ].join("\n").trim(),
@@ -1830,6 +1844,7 @@ async function runDesktopTool(tool, rawArgs, c) {
     throw new ComputerUseRefusal("\u65E0\u6CD5\u8BC6\u522B\u8FD9\u4E2A\u5546\u5E97\u5E94\u7528\u7A97\u53E3\uFF0C\u8BF7\u91CD\u65B0\u5217\u51FA\u7A97\u53E3\u540E\u518D\u8BD5\u3002");
   const label = appLabel(identity);
   await c.authorize(identity, label);
+  if (needsForeground) await c.authorizeForeground(label);
   const key = `${pid}:${windowId}`;
   if (ELEMENT_ADDRESSED.has(tool.driver) && args.element_index !== void 0) {
     const snapshot = c.snapshots.get(key);
@@ -1838,7 +1853,7 @@ async function runDesktopTool(tool, rawArgs, c) {
     driverArgs.snapshot_id = snapshot;
   }
   if (tool.session) driverArgs.session = driverSession(c.sessionId);
-  if (tool.kind === "act") await c.beginSession();
+  if (tool.kind === "act" && needsForeground) await c.beginSession();
   if (tool.driver === "get_window_state") {
     const screenshot = c.seesImages && args.include_screenshot !== false && !identity.minimized;
     driverArgs.include_screenshot = screenshot;
@@ -1855,7 +1870,7 @@ async function runDesktopTool(tool, rawArgs, c) {
     const notes = [];
     if (s.degraded && s.degraded_reason) notes.push(`\u6CE8\u610F\uFF1A${String(s.degraded_reason).split(".")[0]}`);
     if (identity.minimized)
-      notes.push("\u7A97\u53E3\u5DF2\u6700\u5C0F\u5316\uFF0C\u65E0\u6CD5\u622A\u56FE\uFF1B\u9700\u8981\u622A\u56FE\u65F6\u5148\u7528 computer_bring_to_front \u6062\u590D\u3002");
+      notes.push("\u7A97\u53E3\u5DF2\u6700\u5C0F\u5316\uFF0C\u65E0\u6CD5\u622A\u56FE\uFF1B\u53EF\u5148\u8BFB\u53D6\u5143\u7D20\u6811\uFF0C\u9700\u8981\u6062\u590D\u5230\u524D\u53F0\u65F6\u5FC5\u987B\u53E6\u884C\u786E\u8BA4\u3002");
     else if (!c.seesImages) notes.push("\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u56FE\u7247\uFF0C\u53EA\u8FD4\u56DE\u5143\u7D20\u6811\u3002");
     const tree = String(s.tree_markdown ?? "").trim();
     return {
@@ -1866,14 +1881,153 @@ async function runDesktopTool(tool, rawArgs, c) {
   }
   const result = await c.driver.call(tool.driver, driverArgs, c.signal);
   const text2 = textOf(result);
+  if (result.isError && result.structuredContent?.code === "background_unavailable")
+    throw new ComputerUseRefusal(
+      `\u6B64\u7A97\u53E3\u4E0D\u652F\u6301 ${tool.name} \u7684\u540E\u53F0\u6295\u9012\u3002\u64CD\u4F5C\u5DF2\u505C\u6B62\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u5207\u5230\u524D\u53F0\u3002\u53EF\u68C0\u67E5\u5143\u7D20\u652F\u6301\u7684\u8BED\u4E49\u52A8\u4F5C\uFF1B\u786E\u5B9E\u9700\u8981\u524D\u53F0\u65F6\uFF0C\u7531\u7528\u6237\u5728\u9762\u677F\u5F00\u542F\u8BE2\u95EE\u540E\u9010\u6B21\u786E\u8BA4\u3002`
+    );
   if (result.isError) throw new Error(text2 || `${tool.name} \u5931\u8D25`);
   if (tool.kind === "act") c.snapshots.delete(key);
+  const mode = result.structuredContent?.delivery?.mode;
+  const actual = mode === "background" ? "\u540E\u53F0" : mode === "foreground" ? "\u524D\u53F0" : "\u672A\u77E5";
+  const receipt = tool.kind === "act" ? `\u8BF7\u6C42\uFF1A${needsForeground ? "\u524D\u53F0\uFF08\u672C\u6B21\u5DF2\u786E\u8BA4\uFF09" : "\u540E\u53F0"} \xB7 \u9A71\u52A8\u56DE\u62A5\uFF1A${actual} \xB7 \u6548\u679C\u5F85\u91CD\u65B0\u89C2\u5BDF` : void 0;
+  if (!needsForeground && mode === "foreground") {
+    c.onUnexpectedForeground?.();
+    throw new Error("\u9A71\u52A8\u56DE\u62A5\u4F7F\u7528\u4E86\u524D\u53F0\uFF0C\u4E0E\u540E\u53F0\u8BF7\u6C42\u4E0D\u7B26\uFF1B\u8BF7\u505C\u6B62\u64CD\u4F5C\u5E76\u68C0\u67E5\u7A97\u53E3\u3002\u52A8\u4F5C\u53EF\u80FD\u5DF2\u751F\u6548\u3002");
+  }
   return {
-    text: (text2.length > 3e3 ? text2.slice(0, 3e3) + "\u2026" : text2) || "\u5B8C\u6210\u3002",
+    text: `${receipt ? receipt + "\n" : ""}${(text2.length > 3e3 ? text2.slice(0, 3e3) + "\u2026" : text2) || "\u9A71\u52A8\u5DF2\u8FD4\u56DE\u3002"}`,
     images: c.seesImages ? imagesOf(result) : [],
-    target: label
+    target: label,
+    receipt
   };
 }
+
+// packages/dsh-px-computer/src/driver-process.ts
+import { spawn as spawn2 } from "node:child_process";
+var WORKER = String.raw`
+process.on('disconnect', () => process.exit(0));
+const { CuaDriver } = await import(process.argv[1]);
+const driver = await CuaDriver.create(undefined);
+process.on('message', async message => {
+  if (!message || message.kind !== 'call') return;
+  try {
+    const result = await driver.callTool(message.name, message.args);
+    process.send?.({ id: message.id, result });
+  } catch (error) {
+    process.send?.({ id: message.id, error: String(error?.message ?? error) });
+  }
+});
+process.send?.({ ready: true });
+`;
+var DriverProcess = class {
+  constructor(moduleUrl, reset = () => {
+  }, timeoutMs = 45e3) {
+    this.moduleUrl = moduleUrl;
+    this.reset = reset;
+    this.timeoutMs = timeoutMs;
+  }
+  child;
+  ready;
+  sequence = 0;
+  pending = /* @__PURE__ */ new Map();
+  closed = false;
+  start() {
+    if (this.closed) return Promise.reject(Error("\u7535\u8111\u64CD\u4F5C\u8FDB\u7A0B\u5DF2\u5173\u95ED"));
+    if (this.ready) return this.ready;
+    const child = spawn2(process.execPath, ["--input-type=module", "-e", WORKER, this.moduleUrl], {
+      windowsHide: true,
+      env: { ...process.env, ...process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {} },
+      stdio: ["ignore", "ignore", "pipe", "ipc"]
+    });
+    this.child = child;
+    let stderr = "";
+    child.stderr?.on("data", (chunk) => {
+      stderr = (stderr + String(chunk)).slice(-2e3);
+    });
+    const ready = new Promise((resolve, reject) => {
+      const timer = setTimeout(() => fail(Error("\u7535\u8111\u64CD\u4F5C\u8FDB\u7A0B\u542F\u52A8\u8D85\u65F6")), this.timeoutMs);
+      const fail = (error) => {
+        clearTimeout(timer);
+        reject(error);
+        if (this.child === child) this.terminate(error);
+      };
+      child.once("error", fail);
+      child.once(
+        "exit",
+        (code, signal) => fail(Error(`\u7535\u8111\u64CD\u4F5C\u8FDB\u7A0B\u5DF2\u9000\u51FA\uFF08${signal ?? code}\uFF09${stderr ? ": " + stderr : ""}`))
+      );
+      child.on("message", (message) => {
+        if (this.child !== child) return;
+        if (message?.ready) {
+          clearTimeout(timer);
+          resolve(child);
+          return;
+        }
+        const item = this.pending.get(message?.id);
+        if (!item) return;
+        this.pending.delete(message.id);
+        if (typeof message.error === "string") item.reject(Error(message.error));
+        else if (typeof message.result?.rawJson === "string") item.resolve(message.result);
+        else item.reject(Error("\u7535\u8111\u64CD\u4F5C\u8FDB\u7A0B\u8FD4\u56DE\u4E86\u65E0\u6548\u7ED3\u679C"));
+      });
+    });
+    this.ready = ready;
+    return ready;
+  }
+  terminate(error) {
+    const child = this.child;
+    this.child = void 0;
+    this.ready = void 0;
+    for (const item of this.pending.values()) item.reject(error);
+    this.pending.clear();
+    if (child) {
+      child.kill();
+      this.reset();
+    }
+  }
+  async callTool(name2, args, options) {
+    const signal = options?.signal;
+    signal?.throwIfAborted();
+    let cancel;
+    const cancelled = new Promise((_, reject) => {
+      cancel = reject;
+    });
+    const stop = (error) => {
+      this.terminate(error);
+      cancel(error);
+    };
+    const abort = () => stop(Error("\u7535\u8111\u64CD\u4F5C\u5DF2\u53D6\u6D88\uFF1B\u52A8\u4F5C\u53EF\u80FD\u5DF2\u7ECF\u751F\u6548\uFF0C\u8BF7\u91CD\u65B0\u89C2\u5BDF\u540E\u518D\u51B3\u5B9A\u4E0B\u4E00\u6B65"));
+    signal?.addEventListener("abort", abort, { once: true });
+    const timer = setTimeout(
+      () => stop(Error("\u7535\u8111\u64CD\u4F5C\u8D85\u65F6\uFF0C\u5DF2\u505C\u6B62\u9A71\u52A8\u8FDB\u7A0B\uFF1B\u52A8\u4F5C\u7ED3\u679C\u672A\u77E5\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u91CD\u8BD5")),
+      this.timeoutMs
+    );
+    try {
+      return await Promise.race([
+        cancelled,
+        (async () => {
+          const child = await this.start();
+          signal?.throwIfAborted();
+          if (this.child !== child) throw Error("\u7535\u8111\u64CD\u4F5C\u8FDB\u7A0B\u5DF2\u91CD\u7F6E\uFF0C\u8BF7\u91CD\u65B0\u89C2\u5BDF\u7A97\u53E3");
+          const id = ++this.sequence;
+          return await new Promise((resolve, reject) => {
+            this.pending.set(id, { resolve, reject });
+            child.send({ kind: "call", id, name: name2, args }, (error) => {
+              if (error && this.child === child) this.terminate(error);
+            });
+          });
+        })()
+      ]);
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+    }
+  }
+  async shutdown() {
+    this.closed = true;
+    this.terminate(Error("\u7535\u8111\u64CD\u4F5C\u8FDB\u7A0B\u5DF2\u5173\u95ED\uFF0C\u672A\u5B8C\u6210\u52A8\u4F5C\u7684\u7ED3\u679C\u672A\u77E5"));
+  }
+};
 
 // packages/dsh-px-computer/src/guidance.ts
 var MODE = {
@@ -1895,6 +2049,7 @@ function guidance(settings) {
 - \u4F18\u5148\u7528\u5143\u7D20\u7F16\u53F7\u6216 ref\uFF1B\u5143\u7D20\u6811\u91CC\u6CA1\u6709\u76EE\u6807\u65F6\u624D\u7528\u622A\u56FE\u50CF\u7D20\u5750\u6807\u3002\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u56FE\u7247\u65F6\u53EA\u4F9D\u9760\u5143\u7D20\u6811\uFF0C\u9700\u8981\u6309\u50CF\u7D20\u64CD\u4F5C\u5C31\u544A\u8BC9\u7528\u6237\u5207\u6362\u5230\u652F\u6301\u56FE\u7247\u7684\u6A21\u578B\u3002
 - \u8F93\u5165\u524D\u5148\u786E\u8BA4\u7126\u70B9\uFF1B\u56DE\u8F66\u3001Tab \u7B49\u7528\u6309\u952E\u5DE5\u5177\uFF0C\u4E0D\u8981\u5199\u8FDB\u6587\u5B57\u3002
 - \u52A8\u4F5C\u8D85\u65F6\u6216\u62A5\u9519\u65F6\u7ED3\u679C\u672A\u77E5\uFF1A\u5148\u91CD\u65B0\u89C2\u5BDF\uFF0C\u4E0D\u8981\u76F4\u63A5\u91CD\u590D\u6709\u526F\u4F5C\u7528\u7684\u52A8\u4F5C\u3002
+- \u684C\u9762\u6295\u9012\u6A21\u5F0F\uFF1A${settings.desktopForeground ? "\u5141\u8BB8\u8BF7\u6C42\u524D\u53F0\u64CD\u4F5C\uFF0C\u4F46\u6BCF\u6B21\u90FD\u987B\u5355\u72EC\u6279\u51C6\uFF1B\u5E94\u7528\u8BBF\u95EE\u6388\u6743\u4E0D\u4EE3\u8868\u524D\u53F0\u6388\u6743" : "\u4EC5\u540E\u53F0\u64CD\u4F5C\uFF1B\u540E\u53F0\u4E0D\u53EF\u7528\u5C31\u505C\u6B62\uFF0C\u4E0D\u5F97\u6539\u7528 foreground \u6216\u5207\u5230\u524D\u53F0"}\u3002\u4E0D\u628A\u5DE5\u5177\u8FD4\u56DE\u6210\u529F\u5F53\u4F5C\u754C\u9762\u5DF2\u6539\u53D8\u3002\u6700\u5C0F\u5316\u3001\u906E\u6321\u548C\u9501\u5C4F\u662F\u4E0D\u540C\u72B6\u6001\u3002
 - \u9996\u6B21\u8BFB\u53D6\u6216\u64CD\u4F5C\u67D0\u4E2A\u5E94\u7528\uFF08\u4EE5\u53CA\u767B\u5F55\u6001\u6D4F\u89C8\u5668\u4E2D\u7684\u65B0\u7F51\u7AD9\uFF09\u4F1A\u8BF7\u7528\u6237\u5141\u8BB8\u3002\u88AB\u62D2\u7EDD\u5C31\u505C\u6B62\uFF0C\u4E0D\u8981\u6362\u5E94\u7528\u3001\u6362\u7A97\u53E3\u6216\u6362\u65B9\u5F0F\u7ED5\u8FC7\u3002
 
 ## \u5148\u786E\u8BA4\u518D\u6267\u884C
@@ -1931,7 +2086,7 @@ var SettingsError = class extends Error {
 };
 var text = (value, max) => typeof value === "string" && value.length > 0 && value.length <= max;
 function valid(value) {
-  return value?.schemaVersion === 1 && Number.isInteger(value.revision) && value.revision >= 0 && typeof value.desktop === "boolean" && (value.browser === "off" || BROWSER_MODES.includes(value.browser)) && typeof value.headless === "boolean" && Array.isArray(value.alwaysAllowApps) && value.alwaysAllowApps.length <= 200 && value.alwaysAllowApps.every((app) => text(app?.key, 300) && text(app?.label, 300)) && Array.isArray(value.alwaysAllowSites) && value.alwaysAllowSites.length <= 200 && value.alwaysAllowSites.every((site) => text(site, 253));
+  return value?.schemaVersion === 1 && Number.isInteger(value.revision) && value.revision >= 0 && typeof value.desktop === "boolean" && (value.desktopForeground === void 0 || typeof value.desktopForeground === "boolean") && (value.browser === "off" || BROWSER_MODES.includes(value.browser)) && typeof value.headless === "boolean" && Array.isArray(value.alwaysAllowApps) && value.alwaysAllowApps.length <= 200 && value.alwaysAllowApps.every((app) => text(app?.key, 300) && text(app?.label, 300)) && Array.isArray(value.alwaysAllowSites) && value.alwaysAllowSites.length <= 200 && value.alwaysAllowSites.every((site) => text(site, 253));
 }
 var SettingsStore = class {
   constructor(file) {
@@ -2009,8 +2164,11 @@ function apply(ctx) {
   const cursors = /* @__PURE__ */ new Set();
   const projections = /* @__PURE__ */ new WeakMap();
   const driver = new DesktopDriver(async () => {
-    const module = await import("@trycua/cua-driver");
-    return module.CuaDriver.create(void 0);
+    return new DriverProcess(import.meta.resolve("@trycua/cua-driver"), () => {
+      for (const observed of snapshots.values()) observed.clear();
+      snapshots.clear();
+      cursors.clear();
+    });
   });
   const launchOptions = () => {
     const current = settings.read();
@@ -2083,7 +2241,8 @@ function apply(ctx) {
           tool: definition.name,
           target: label,
           detail: summarize(args, detail),
-          outcome: "ok"
+          outcome: "ok",
+          message: result.receipt
         });
         return { text: result.text };
       } catch (error) {
@@ -2119,6 +2278,16 @@ function apply(ctx) {
         sessionId: s.id,
         signal,
         seesImages: await modelSeesImages(ctx, s.agent, signal),
+        foregroundAllowed: settings.read().desktopForeground === true,
+        onUnexpectedForeground: () => states.pause(s.id),
+        authorizeForeground: (display) => askOrRefuse(
+          run,
+          signal,
+          `\u5360\u7528\u524D\u53F0\u64CD\u4F5C\u300C${display}\u300D`,
+          `\u672C\u6B21 ${spec.name} \u53EF\u80FD\u5207\u6362\u5230\u300C${display}\u300D\u5E76\u5360\u7528\u9F20\u6807\u6216\u952E\u76D8\u3002\u5141\u8BB8\u8FD9\u4E00\u6B21\u524D\u53F0\u64CD\u4F5C\u5417\uFF1F`,
+          `This ${spec.name} action may focus "${display}" and use the mouse or keyboard. Allow this one foreground action?`,
+          "computer use: foreground action"
+        ),
         snapshots: sessionSnapshots,
         env: process.env,
         authorize: async (window2, display) => {
@@ -2318,8 +2487,11 @@ function apply(ctx) {
       void browsers.closeAll().catch(() => void 0);
     }
     if (current.browser !== before.browser) states.revokeAll((key) => key.startsWith("site|"));
-    if (before.desktop && !current.desktop) {
-      states.stop("desktop", new ComputerUseRefusal(CLOSED.desktop));
+    if (before.desktop && !current.desktop || before.desktopForeground !== current.desktopForeground) {
+      states.stop(
+        "desktop",
+        new ComputerUseRefusal(current.desktop ? "\u684C\u9762\u64CD\u4F5C\u6A21\u5F0F\u5DF2\u66F4\u6539\uFF0C\u672C\u6B21\u8C03\u7528\u5DF2\u505C\u6B62\u3002" : CLOSED.desktop)
+      );
       states.revokeAll((key) => !key.startsWith("site|"));
     }
     if (!enabled(current)) states.stop("confirm", new ComputerUseRefusal(CLOSED.confirm));
@@ -2393,6 +2565,7 @@ function apply(ctx) {
       case "settings":
         settings.change(body.revision, (next) => {
           if (typeof body.desktop === "boolean") next.desktop = body.desktop;
+          if (typeof body.desktopForeground === "boolean") next.desktopForeground = body.desktopForeground;
           if (typeof body.browser === "string") next.browser = body.browser;
           if (typeof body.headless === "boolean") next.headless = body.headless;
         });

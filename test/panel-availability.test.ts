@@ -63,7 +63,7 @@ function sidebarFixture(ids = panelIds) {
     'px-artifacts': '产物',
     'px-notes': '引用与批注',
     'px-schedules': '定时任务',
-    'dsh-px-taskflow': '执行记录'
+    'dsh-px-taskflow': '当前任务'
   }
   const descriptor = (id: string) => ({ id, kind: id, title: () => labels[id] ?? id })
   const descriptors = new Map(ids.map((id) => [id, descriptor(id)])),
@@ -175,6 +175,7 @@ function fixture(name: keyof typeof entries, sidebar = sidebarFixture()) {
   })
   const quotes = createQuoteRequests(),
     notifications: string[] = []
+  const layout = createCapabilities({ activePanelId: null as string | null })
   const sessions = createCapabilities({
     current: 's',
     phase: 'ready',
@@ -184,6 +185,7 @@ function fixture(name: keyof typeof entries, sidebar = sidebarFixture()) {
   })
   const ctx: any = {
     capabilities,
+    layout: { panelInfo: layout },
     sessions: { list: sessions, scope: () => ({ sessionId: 's' }), clear: () => {} },
     uiWorkspace: { openSession: () => {}, startSession: () => {} },
     conversation: {
@@ -312,6 +314,7 @@ function fixture(name: keyof typeof entries, sidebar = sidebarFixture()) {
           : ''
   return {
     ctx,
+    layout,
     sidebar,
     native,
     quotes,
@@ -335,11 +338,11 @@ test('SessionBar uses actual descriptors and reacts to registration alone, unloa
   t.after(f.destroy)
   f.flush()
   assert.equal(side.service.isTabEnabled('dsh-px-taskflow'), true)
-  assert.equal(f.button('执行记录'), undefined, 'absent optional feature contributes no toolbar action')
-  assert.equal(f.button('文件').props.disabled, false)
+  assert.equal(f.button('当前任务'), undefined, 'absent optional feature contributes no toolbar action')
+  assert.equal(f.button('工作区').props.disabled, false)
   side.register('dsh-px-taskflow')
   f.flush()
-  const stale = f.button('执行记录')
+  const stale = f.button('当前任务')
   assert.equal(stale.props.disabled, false)
   assert.equal(f.warning(), '')
   stale.props.onClick()
@@ -348,20 +351,20 @@ test('SessionBar uses actual descriptors and reacts to registration alone, unloa
   stale.props.onClick() // A callback captured before unload must recheck the live provider.
   f.flush()
   assert.equal(side.calls.length, 1)
-  assert.equal(f.button('执行记录'), undefined)
+  assert.equal(f.button('当前任务'), undefined)
   side.register('dsh-px-taskflow')
   f.flush()
-  f.button('执行记录').props.onClick()
+  f.button('当前任务').props.onClick()
   f.flush()
   assert.equal(side.calls.length, 2)
   assert.equal(f.warning(), '')
   side.setEnabled('dsh-px-taskflow', false)
   f.flush()
-  assert.equal(f.button('执行记录').props.disabled, true)
-  assert.match(f.button('执行记录').props.title, /已.*禁用/)
+  assert.equal(f.button('当前任务').props.disabled, true)
+  assert.match(f.button('当前任务').props.title, /已.*禁用/)
   side.setEnabled('dsh-px-taskflow', true)
   f.flush()
-  assert.equal(f.button('执行记录').props.disabled, false)
+  assert.equal(f.button('当前任务').props.disabled, false)
 })
 
 test('SessionBar observes service replacement and releases both registry and preference subscriptions', (t) => {
@@ -374,13 +377,13 @@ test('SessionBar observes service replacement and releases both registry and pre
   f.flush()
   assert.equal(f.sidebar.registry.size, 0)
   assert.equal(f.sidebar.state.size, 0)
-  assert.equal(f.button('文件').props.disabled, true)
+  assert.equal(f.button('工作区').props.disabled, true)
   const next = sidebarFixture()
   f.capabilities.set({ sidebar: next.service })
   f.flush()
   assert.equal(next.registry.size, 1)
   assert.equal(next.state.size, 1)
-  f.button('文件').props.onClick()
+  f.button('工作区').props.onClick()
   assert.equal(next.calls.length, 1)
   assert.equal(f.sidebar.calls.length, 0)
   f.destroy()
@@ -393,12 +396,17 @@ test('terminal requires a real native kind and retains the targeted native fallb
   const f = fixture('SessionBar')
   t.after(f.destroy)
   f.flush()
+  f.button('更多 ▾').props.onClick()
+  f.flush()
   f.sidebar.unregister('terminal')
   f.flush()
   assert.equal(f.button('终端').props.disabled, false, 'another registered native terminal remains usable')
   f.button('终端').props.onClick()
   assert.deepEqual(JSON.parse(JSON.stringify(f.native.calls[0])), ['s', 'terminal', { revealIfOpened: true }])
   assert.equal(f.sidebar.calls.length, 0)
+  f.flush()
+  f.button('更多 ▾').props.onClick()
+  f.flush()
   f.sidebar.setEnabled('terminal', false)
   f.flush()
   assert.equal(f.button('终端').props.disabled, true)
@@ -423,6 +431,24 @@ test('terminal requires a real native kind and retains the targeted native fallb
   f.capabilities.set({ terminal: undefined })
   f.flush()
   assert.equal(f.button('终端').props.disabled, true)
+})
+
+test('conversation shortcuts disappear on global panels and return without reopening secondary tools', (t) => {
+  const f = fixture('SessionBar')
+  t.after(f.destroy)
+  f.flush()
+  assert.ok(f.button('工作区'))
+  assert.equal(f.button('终端'), undefined)
+  f.button('更多 ▾').props.onClick()
+  f.flush()
+  assert.ok(f.button('终端'))
+  f.layout.set({ activePanelId: 'plugins' })
+  f.flush()
+  assert.equal(f.allText(), '')
+  f.layout.set({ activePanelId: null })
+  f.flush()
+  assert.ok(f.button('工作区'))
+  assert.equal(f.button('终端'), undefined)
 })
 
 test('footer quote actions never enqueue or open a disabled/missing notes provider and recover when registered', (t) => {

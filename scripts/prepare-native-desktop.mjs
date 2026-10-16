@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto'
 import { build } from 'esbuild'
 import { releaseAssetNames } from './release-version.mjs'
 import { nsisAppGuid } from './nsis-guid.mjs'
+import { validDistribution, compositionMembers, componentFile } from '../src/shared/distribution.ts'
 const root = fileURLToPath(new URL('../', import.meta.url))
 if (!process.argv[2] || process.argv[2].startsWith('--'))
   throw Error(
@@ -57,7 +58,8 @@ const distribution = JSON.parse(
   })
 )
 if (
-  distribution.schemaVersion !== 1 ||
+  !validDistribution(distribution) ||
+  distribution.schemaVersion !== (products.protocolGeneration >= 5 ? 2 : 1) ||
   distribution.version !== products.pack.version ||
   distribution.foundation?.name !== 'dsh-px-core'
 )
@@ -65,10 +67,11 @@ if (
 const distributionDir = join(output, 'distribution-' + packSha256)
 mkdirSync(distributionDir, { recursive: true })
 writeFileSync(join(distributionDir, 'distribution.json'), JSON.stringify(distribution, null, 2) + '\n')
-for (const entry of [distribution.foundation, ...distribution.features]) {
+for (const entry of [distribution.foundation, ...compositionMembers(distribution)]) {
+  if (entry.file !== componentFile(entry)) throw Error('Invalid distribution component path')
   if (
-    entry.file !== `distribution/${entry.name}-${products.pack.version}.tgz` ||
-    !/^[a-z0-9-]+$/.test(entry.name)
+    !distribution.community?.some((item) => item.name === entry.name) &&
+    entry.version !== products.pack.version
   )
     throw Error('Invalid distribution file')
   const bytes = execFileSync('tar', ['-xOf', packArchive, 'package/' + entry.file], {

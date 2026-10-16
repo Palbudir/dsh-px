@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { provisionNativeComposition } from '../src/main/native-composition'
 import { FEATURE_BUNDLES } from '../src/shared/distribution'
+import { projectKnowledgeDefaults } from '../src/main/community-defaults'
 
 function fixture(t: any) {
   const root = mkdtempSync(join(tmpdir(), 'px-composition-'))
@@ -50,6 +51,101 @@ function fixture(t: any) {
   }
   return { profile, directory, version, install, manifest, save, calls: () => calls, log: () => {} }
 }
+
+function withCommunity(f: ReturnType<typeof fixture>, version = '0.5.29') {
+  const file = `distribution/dsh-mnemon-${version}.tgz`,
+    bytes = Buffer.from('original-community-' + version)
+  writeFileSync(join(f.directory, file), bytes)
+  const distribution = JSON.parse(readFileSync(join(f.directory, 'distribution.json'), 'utf8'))
+  distribution.schemaVersion = 2
+  distribution.community = [
+    {
+      name: 'dsh-mnemon',
+      version,
+      file,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      integrity: 'sha512-' + createHash('sha512').update(bytes).digest('base64'),
+      defaults: 'project-documents-v1'
+    }
+  ]
+  writeFileSync(join(f.directory, 'distribution.json'), JSON.stringify(distribution))
+  return {
+    ...f,
+    knowledgeDirectory: join(f.profile, 'knowledge'),
+    install: async (args: string[]) => {
+      await f.install()
+      if (f.manifest().dependencies['dsh-mnemon']?.startsWith('file:')) {
+        mkdirSync(join(f.profile, 'node_modules/dsh-mnemon'), { recursive: true })
+        writeFileSync(
+          join(f.profile, 'node_modules/dsh-mnemon/package.json'),
+          JSON.stringify({ name: 'dsh-mnemon', version })
+        )
+      }
+    }
+  }
+}
+
+test('community members keep original versions and get project defaults once; user changes survive upgrade and removal', async (t) => {
+  const f = fixture(t),
+    first = withCommunity(f)
+  assert.equal(await provisionNativeComposition(first), 'installed')
+  assert.ok(f.manifest().dsh.profile.bundles.includes('dsh-mnemon'))
+  const patch = join(f.profile, 'cordis.patch.yml')
+  assert.match(readFileSync(patch, 'utf8'), /storageScope: workspaces/)
+  const custom = readFileSync(patch, 'utf8').replace('lifecycleEnabled: false', 'lifecycleEnabled: true')
+  writeFileSync(patch, custom)
+  assert.equal(await provisionNativeComposition(withCommunity(f, '0.5.30')), 'installed')
+  assert.equal(readFileSync(patch, 'utf8'), custom)
+  const manifest = f.manifest()
+  delete manifest.dependencies['dsh-mnemon']
+  manifest.dsh.profile.bundles = manifest.dsh.profile.bundles.filter((n: string) => n !== 'dsh-mnemon')
+  f.save(manifest)
+  await provisionNativeComposition(withCommunity(f, '0.5.31'))
+  assert.equal(f.manifest().dependencies['dsh-mnemon'], undefined)
+})
+
+test('user-installed community version, disabled selection and configuration are never taken over', async (t) => {
+  const f = fixture(t),
+    options = withCommunity(f),
+    manifest = f.manifest()
+  manifest.dependencies['dsh-mnemon'] = '0.5.20'
+  f.save(manifest)
+  const patch = join(f.profile, 'cordis.patch.yml'),
+    original = readFileSync(patch, 'utf8')
+  assert.equal(await provisionNativeComposition(options), 'installed')
+  assert.equal(f.manifest().dependencies['dsh-mnemon'], '0.5.20')
+  assert.ok(!f.manifest().dsh.profile.bundles.includes('dsh-mnemon'))
+  assert.equal(readFileSync(patch, 'utf8'), original)
+})
+
+test('a failed native community installation restores both manifest and default configuration', async (t) => {
+  const f = fixture(t),
+    options = withCommunity(f),
+    original = f.manifest()
+  const patch = join(f.profile, 'cordis.patch.yml'),
+    text = readFileSync(patch, 'utf8')
+  let first = true
+  const install = async (args: string[]) => {
+    if (first) {
+      first = false
+      throw Error('dependency install failed')
+    }
+    await options.install(args)
+  }
+  assert.equal(await provisionNativeComposition({ ...options, install }), 'failed')
+  assert.deepEqual(f.manifest(), original)
+  assert.equal(readFileSync(patch, 'utf8'), text)
+})
+
+test('community defaults reject malformed patches and respect any existing Mnemon configuration', () => {
+  const directory = join(tmpdir(), 'px-knowledge-test')
+  const explicit = '# user scope\n- id: mnemon\n  config:\n    storageScope: global\n'
+  assert.equal(projectKnowledgeDefaults(explicit, directory), explicit)
+  const disabled = '- id: mnemon-source-runtime\n  disabled: false\n'
+  assert.equal(projectKnowledgeDefaults(disabled, directory), disabled)
+  assert.throws(() => projectKnowledgeDefaults('not: a sequence', directory), /Invalid profile/)
+  assert.throws(() => projectKnowledgeDefaults('', 'relative'), /absolute/)
+})
 test('composition installs once, preserves disabled features and never restores user removals', async (t) => {
   const f = fixture(t)
   assert.equal(await provisionNativeComposition(f), 'installed')

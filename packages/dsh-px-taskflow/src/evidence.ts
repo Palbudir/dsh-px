@@ -14,6 +14,11 @@ export interface Checkpoint {
   evidence: string[]
   constraints?: string
   decisions?: string
+  /** Captured by the host, not model-supplied status. References a native owner at save time only. */
+  native?: {
+    goal?: { id: string; revision: number }
+    team?: { id: string; tasks: Array<{ id: string; revision: number }> }
+  }
 }
 export type Outcome = 'returned' | 'error' | 'cancelled' | 'interrupted' | 'running'
 export interface Execution {
@@ -70,11 +75,21 @@ const reads = new Set([
   'job_output',
   'job_list',
   'task_review',
+  'task_state',
   'task_evidence'
 ])
 const writes = new Set(['write', 'edit'])
 const commands = new Set(['pwsh', 'bash', 'shell'])
-const internal = new Set(['task_review', 'task_evidence', 'task_checkpoint'])
+const internal = new Set(['task_state', 'task_review', 'task_evidence', 'task_checkpoint'])
+/** Native state changes and teammate receipts can obsolete a ledger without a lead tool call. */
+export function nativeWorkChanged(event: Event): boolean {
+  return (
+    ['goal/change', 'team/task', 'team/member', 'team/message/queued', 'team/message/delivered'].includes(
+      event.type
+    ) ||
+    (event.type === 'user/message' && event.data?.source?.kind === 'team-message')
+  )
+}
 const clip = (value: unknown, length: number): string =>
   typeof value === 'string' ? value.slice(0, length) : ''
 function parse(value: string): any {
@@ -106,6 +121,29 @@ export function readCheckpoint(value: unknown): Checkpoint | null {
   if ([v.constraints, v.decisions].some((x) => x !== undefined && (typeof x !== 'string' || x.length > 2000)))
     return null
   if (v.state !== 'ready_for_review' && !v.nextStep.trim()) return null
+  const ref = (x: any): boolean =>
+    x &&
+    typeof x.id === 'string' &&
+    x.id.length > 0 &&
+    x.id.length <= 200 &&
+    Number.isSafeInteger(x.revision) &&
+    x.revision >= 0
+  if (
+    v.native !== undefined &&
+    (!v.native ||
+      typeof v.native !== 'object' ||
+      Array.isArray(v.native) ||
+      (v.native.goal !== undefined && !ref(v.native.goal)) ||
+      (v.native.team !== undefined &&
+        (!v.native.team ||
+          typeof v.native.team.id !== 'string' ||
+          !v.native.team.id.trim() ||
+          v.native.team.id.length > 200 ||
+          !Array.isArray(v.native.team.tasks) ||
+          v.native.team.tasks.length > 10 ||
+          !v.native.team.tasks.every(ref))))
+  )
+    return null
   return {
     goal: v.goal,
     summary: v.summary,
@@ -113,7 +151,22 @@ export function readCheckpoint(value: unknown): Checkpoint | null {
     state: v.state,
     evidence: [...new Set(v.evidence)],
     ...(v.constraints === undefined ? {} : { constraints: v.constraints }),
-    ...(v.decisions === undefined ? {} : { decisions: v.decisions })
+    ...(v.decisions === undefined ? {} : { decisions: v.decisions }),
+    ...(v.native === undefined
+      ? {}
+      : {
+          native: {
+            ...(v.native.goal ? { goal: { id: v.native.goal.id, revision: v.native.goal.revision } } : {}),
+            ...(v.native.team
+              ? {
+                  team: {
+                    id: v.native.team.id,
+                    tasks: v.native.team.tasks.map(({ id, revision }) => ({ id, revision }))
+                  }
+                }
+              : {})
+          }
+        })
   }
 }
 function effectOf(tool: string, args: any): Execution['effect'] {
@@ -202,6 +255,7 @@ export class EvidenceIndex {
       const event = events[i]
       this.processedEvents++
       const data = event.data ?? {}
+      if (nativeWorkChanged(event)) this.folded.lastNonReadSeq = event.seq
       if (event.type === 'user/message' && data.source?.kind === 'user') {
         const text = (data.content ?? [])
           .filter((b: any) => b.type === 'text')

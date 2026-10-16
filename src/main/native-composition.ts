@@ -8,13 +8,19 @@ import {
   LEGACY_FEATURE_BUNDLES,
   isFeatureName,
   validFeatureList,
+  validDistribution,
+  compositionMembers,
+  isCompositionName,
+  bundleFileStem,
+  componentFile,
   type PackDistribution
 } from '../shared/distribution'
 import { assertRegularOrAbsent, renameWithRetry, writeAtomic } from './native-atomic'
+import { projectKnowledgeDefaults } from './community-defaults'
 
 type Files = Record<string, string | null>
 interface State {
-  schemaVersion: 1
+  schemaVersion: 1 | 2
   phase: 'pending' | 'installed' | 'failed'
   version: string
   specs: Record<string, string>
@@ -26,6 +32,7 @@ export interface CompositionOptions {
   version: string
   install: (args: string[]) => Promise<void>
   log?: (message: string) => void
+  knowledgeDirectory?: string
 }
 const TRACKED = ['package.json', 'pnpm-lock.yaml', 'cordis.patch.yml', 'cordis.yml']
 const hash = (bytes: Buffer | string) => createHash('sha256').update(bytes).digest('hex')
@@ -62,15 +69,17 @@ function restore(profile: string, files: Files): void {
 }
 function validState(value: any): value is State {
   return (
-    value?.schemaVersion === 1 &&
+    [1, 2].includes(value?.schemaVersion) &&
     ['pending', 'installed', 'failed'].includes(value.phase) &&
     typeof value.version === 'string' &&
     value.specs &&
     typeof value.specs === 'object' &&
     !Array.isArray(value.specs) &&
-    Object.entries(value.specs).every(([name, spec]) => isFeatureName(name) && typeof spec === 'string') &&
+    Object.entries(value.specs).every(
+      ([name, spec]) => isCompositionName(name) && typeof spec === 'string'
+    ) &&
     (value.seenFeatures === undefined ||
-      (Array.isArray(value.seenFeatures) && value.seenFeatures.every(isFeatureName)))
+      (Array.isArray(value.seenFeatures) && value.seenFeatures.every(isCompositionName)))
   )
 }
 function ownedFeatureSpec(profile: string, own: string, name: string, spec: unknown): spec is string {
@@ -78,7 +87,10 @@ function ownedFeatureSpec(profile: string, own: string, name: string, spec: unkn
   const path = resolve(profile, spec.slice(5))
   return (
     dirname(path).toLowerCase() === resolve(own).toLowerCase() &&
-    new RegExp(`^${name}-[a-f0-9]{64}\\.tgz$`).test(path.replaceAll('\\', '/').split('/').at(-1) ?? '')
+    (path.replaceAll('\\', '/').split('/').at(-1) ?? '').startsWith(bundleFileStem(name) + '-') &&
+    /^[a-f0-9]{64}\.tgz$/.test(
+      (path.replaceAll('\\', '/').split('/').at(-1) ?? '').slice(bundleFileStem(name).length + 1)
+    )
   )
 }
 function migratePatch(text: string, bundles: string[], owned: Set<string>, packEnabled: boolean): string {
@@ -163,7 +175,7 @@ export async function provisionNativeComposition(
           seenFeatures: [...FEATURE_BUNDLES],
           specs: Object.fromEntries(
             Object.keys(current.dependencies ?? {})
-              .filter(isFeatureName)
+              .filter(isCompositionName)
               .flatMap((name) =>
                 ownedFeatureSpec(options.profile, own, name, current.dependencies?.[name])
                   ? [[name, current.dependencies[name]]]
@@ -201,7 +213,7 @@ export async function provisionNativeComposition(
     !legacy &&
     ((manifest.dsh?.profile?.bundles ?? []).includes('dsh-px-core') ||
       Object.keys(manifest.dependencies ?? {})
-        .filter(isFeatureName)
+        .filter(isCompositionName)
         .some((name) => ownedFeatureSpec(options.profile, own, name, manifest.dependencies?.[name])))
   ) {
     state = {
@@ -211,7 +223,7 @@ export async function provisionNativeComposition(
       seenFeatures: [...FEATURE_BUNDLES],
       specs: Object.fromEntries(
         Object.keys(manifest.dependencies ?? {})
-          .filter(isFeatureName)
+          .filter(isCompositionName)
           .flatMap((name) =>
             ownedFeatureSpec(options.profile, own, name, manifest.dependencies?.[name])
               ? [[name, manifest.dependencies[name]]]
@@ -246,13 +258,16 @@ export async function provisionNativeComposition(
   }
   const distribution: PackDistribution = readJson(join(options.directory, 'distribution.json'))
   if (
-    distribution.schemaVersion !== 1 ||
+    !validDistribution(distribution) ||
     distribution.version !== options.version ||
     distribution.foundation?.name !== 'dsh-px-core' ||
     !validFeatureList(distribution.features)
   )
     throw Error('Wrong Pack composition')
   const selected: string[] = manifest.dsh?.profile?.bundles ?? []
+  const members = compositionMembers(distribution)
+  const community = new Map((distribution.community ?? []).map((entry) => [entry.name, entry]))
+  const versions = new Map(members.map((entry) => [entry.name, entry.version]))
   const wasEnabled = !legacy || selected.includes('dsh-px-pack')
   const next = structuredClone(manifest)
   next.dependencies ??= {}
@@ -262,26 +277,38 @@ export async function provisionNativeComposition(
   const specs: Record<string, string> = {}
   const seen = new Set(
     state?.version === 'recovered'
-      ? [...distribution.features.map((f) => f.name), ...Object.keys(state.specs)]
+      ? [...members.map((f) => f.name), ...Object.keys(state.specs)]
       : (state?.seenFeatures ?? (state ? [...LEGACY_FEATURE_BUNDLES, ...Object.keys(state.specs)] : []))
   )
   if (!state && !bundles.includes('dsh-px-core')) bundles.push('dsh-px-core')
-  for (const feature of distribution.features) {
+  for (const feature of members) {
     if (
-      feature.version !== options.version ||
-      feature.file !== `distribution/${feature.name}-${options.version}.tgz` ||
+      (!community.has(feature.name) && feature.version !== options.version) ||
+      feature.file !== componentFile(feature) ||
       !/^[a-f0-9]{64}$/.test(feature.sha256)
     )
       throw Error('Invalid feature artifact')
     const bytes = readFileSync(join(options.directory, feature.file))
     if (hash(bytes) !== feature.sha256) throw Error('Feature artifact digest mismatch')
+    const communityMember = community.get(feature.name)
+    if (
+      communityMember &&
+      'sha512-' + createHash('sha512').update(bytes).digest('base64') !== communityMember.integrity
+    )
+      throw Error('Community source integrity mismatch')
     const current = manifest.dependencies?.[feature.name],
       previous = state?.specs[feature.name]
     const newlyOffered = !!state && !seen.has(feature.name) && current === undefined
-    if (state ? !newlyOffered && (!previous || current !== previous) : current !== undefined) continue
+    if (
+      state
+        ? !newlyOffered &&
+          (!ownedFeatureSpec(options.profile, own, feature.name, previous) || current !== previous)
+        : current !== undefined
+    )
+      continue
     // A directly installed community sidebar remains user-owned and is not shadowed.
     if (feature.name === 'dsh-px-files' && manifest.dependencies?.['dsh-better-sidebar']) continue
-    const cached = join(own, `${feature.name}-${feature.sha256}.tgz`)
+    const cached = join(own, `${bundleFileStem(feature.name)}-${feature.sha256}.tgz`)
     assertRegularOrAbsent(cached, 'Feature archive')
     if (!existsSync(cached) || hash(readFileSync(cached)) !== feature.sha256) writeAtomic(cached, bytes)
     const spec = 'file:' + cached.replaceAll('\\', '/')
@@ -293,14 +320,28 @@ export async function provisionNativeComposition(
   next.dsh.profile.bundles = bundles
   const patchPath = join(options.profile, 'cordis.patch.yml')
   const patch = existsSync(patchPath) ? readFileSync(patchPath, 'utf8') : ''
-  const migrated = legacy ? migratePatch(patch, bundles, new Set(Object.keys(specs)), wasEnabled) : patch
-  const identities = Object.keys(specs).every((name) => {
+  let migrated = legacy ? migratePatch(patch, bundles, new Set(Object.keys(specs)), wasEnabled) : patch
+  if (
+    (distribution.community ?? []).some(
+      (entry) =>
+        entry.defaults === 'project-documents-v1' &&
+        specs[entry.name] &&
+        !seen.has(entry.name) &&
+        manifest.dependencies?.[entry.name] === undefined
+    )
+  ) {
+    if (!options.knowledgeDirectory) throw Error('Project knowledge storage must be explicitly scoped')
+    migrated = projectKnowledgeDefaults(migrated, options.knowledgeDirectory)
+  }
+  const identityMatches = (name: string): boolean => {
     try {
-      return readJson(join(options.profile, 'node_modules', name, 'package.json')).version === options.version
+      const pkg = readJson(join(options.profile, 'node_modules', name, 'package.json'))
+      return pkg.name === name && pkg.version === versions.get(name)
     } catch {
       return false
     }
-  })
+  }
+  const identities = Object.keys(specs).every(identityMatches)
   if (
     state?.phase === 'installed' &&
     state.version === options.version &&
@@ -312,11 +353,11 @@ export async function provisionNativeComposition(
   const before = snapshot(options.profile)
   writeAtomic(backupPath, JSON.stringify({ files: before, previousState: state ?? null }))
   const pending: State = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     phase: 'pending',
     version: options.version,
     specs,
-    seenFeatures: [...new Set([...seen, ...distribution.features.map((f) => f.name)])]
+    seenFeatures: [...new Set([...seen, ...members.map((f) => f.name)])]
   }
   writeAtomic(statePath, JSON.stringify(pending))
   try {
@@ -324,8 +365,7 @@ export async function provisionNativeComposition(
     if (migrated !== patch) writeAtomic(patchPath, migrated)
     await options.install(['install'])
     for (const name of Object.keys(specs))
-      if (readJson(join(options.profile, 'node_modules', name, 'package.json')).version !== options.version)
-        throw Error('Feature installation did not produce the expected version')
+      if (!identityMatches(name)) throw Error('Feature installation did not produce the expected version')
     writeAtomic(statePath, JSON.stringify({ ...pending, phase: 'installed' }, null, 2) + '\n')
     return 'installed'
   } catch {

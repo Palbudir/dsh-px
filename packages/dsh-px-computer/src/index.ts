@@ -21,6 +21,7 @@ import {
   type BrowserLaunchOptions
 } from './browser'
 import { DESKTOP_TOOLS, DesktopDriver, driverSession, runDesktopTool, type DesktopTool } from './desktop'
+import { DriverProcess } from './driver-process'
 import { guidance } from './guidance'
 import { appKey, appLabel, type WindowIdentity } from './policy'
 import {
@@ -78,9 +79,12 @@ export function apply(ctx: any): void {
   const cursors = new Set<string>()
   const projections = new WeakMap<object, ContentBlock[]>()
   const driver = new DesktopDriver(async () => {
-    // Resolved from the profile's installed dependencies; the bundle inlines nothing native.
-    const module: any = await import('@trycua/cua-driver')
-    return module.CuaDriver.create(undefined)
+    // Resolve in the profile, load only in the disposable child process. No native code in DSH.
+    return new DriverProcess(import.meta.resolve('@trycua/cua-driver'), () => {
+      for (const observed of snapshots.values()) observed.clear()
+      snapshots.clear()
+      cursors.clear()
+    })
   })
   const launchOptions = (): BrowserLaunchOptions | undefined => {
     const current = settings.read()
@@ -154,7 +158,7 @@ export function apply(ctx: any): void {
       run: ToolRun,
       session: { agent: Agent; id: string },
       signal: AbortSignal
-    ) => Promise<{ text: string; images: Image[]; target?: string }>
+    ) => Promise<{ text: string; images: Image[]; target?: string; receipt?: string }>
   ) => ({
     ...definition,
     output: {
@@ -181,7 +185,8 @@ export function apply(ctx: any): void {
           tool: definition.name,
           target: label,
           detail: summarize(args, detail),
-          outcome: 'ok'
+          outcome: 'ok',
+          message: result.receipt
         })
         return { text: result.text }
       } catch (error) {
@@ -224,6 +229,17 @@ export function apply(ctx: any): void {
           sessionId: s.id,
           signal,
           seesImages: await modelSeesImages(ctx, s.agent, signal),
+          foregroundAllowed: settings.read().desktopForeground === true,
+          onUnexpectedForeground: () => states.pause(s.id),
+          authorizeForeground: (display: string) =>
+            askOrRefuse(
+              run,
+              signal,
+              `占用前台操作「${display}」`,
+              `本次 ${spec.name} 可能切换到「${display}」并占用鼠标或键盘。允许这一次前台操作吗？`,
+              `This ${spec.name} action may focus "${display}" and use the mouse or keyboard. Allow this one foreground action?`,
+              'computer use: foreground action'
+            ),
           snapshots: sessionSnapshots,
           env: process.env,
           authorize: async (window: WindowIdentity, display: string) => {
@@ -450,8 +466,11 @@ export function apply(ctx: any): void {
       void browsers.closeAll().catch(() => undefined)
     }
     if (current.browser !== before.browser) states.revokeAll((key) => key.startsWith('site|'))
-    if (before.desktop && !current.desktop) {
-      states.stop('desktop', new ComputerUseRefusal(CLOSED.desktop))
+    if ((before.desktop && !current.desktop) || before.desktopForeground !== current.desktopForeground) {
+      states.stop(
+        'desktop',
+        new ComputerUseRefusal(current.desktop ? '桌面操作模式已更改，本次调用已停止。' : CLOSED.desktop)
+      )
       states.revokeAll((key) => !key.startsWith('site|'))
     }
     if (!enabled(current)) states.stop('confirm', new ComputerUseRefusal(CLOSED.confirm))
@@ -531,6 +550,7 @@ export function apply(ctx: any): void {
       case 'settings':
         settings.change(body.revision, (next) => {
           if (typeof body.desktop === 'boolean') next.desktop = body.desktop
+          if (typeof body.desktopForeground === 'boolean') next.desktopForeground = body.desktopForeground
           if (typeof body.browser === 'string') next.browser = body.browser
           if (typeof body.headless === 'boolean') next.headless = body.headless
         })
