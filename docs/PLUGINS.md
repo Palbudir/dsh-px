@@ -4,7 +4,7 @@
 
 ## 能力所有者
 
-Desktop 将 updater、workbench、workspace 装配为 installation 层的 `dsh-px-core` 基础包；文件与终端（`dsh-px-files`）、当前任务、产物、引用与批注、定时任务、记忆与知识、电脑操作作为七个 profile 功能包安装；社区清单中的原包另外独立安装。基础包和文件包是组合包，不代表另写执行服务。成员继续使用下表的职责、组件 ID 和业务存储。
+Desktop 将 updater、workbench、workspace 装配为 installation 层的 `dsh-px-core` 基础包；文件与终端（`dsh-px-files`）、当前任务、产物、引用与批注、定时任务、人格与经历、电脑操作作为七个 profile 功能包安装；社区清单中的原包另外独立安装。基础包和文件包是组合包，不代表另写执行服务。成员继续使用下表的职责、组件 ID 和业务存储。
 
 “插件”主页管理七个 PX 可选能力与独立社区成员；基础组件通过真实部署进入内置运行清单。版本与诊断使用常规设置页。独立 `dsh web` 安装聚合 Pack 时仍显示一个可展开成员的整合包；它与 Desktop 使用同一份插件实现。
 
@@ -17,7 +17,7 @@ Desktop 将 updater、workbench、workspace 装配为 installation 层的 `dsh-p
 | dsh-px-artifacts   | 会话产物列表与预览入口                                         | workspace 与原生侧栏／文件面板                                             |
 | dsh-px-annotations | 会话选句、内容引用、批注与草稿插入                             | workspace 与原生会话视图、结构化输入引用、侧栏服务                         |
 | dsh-px-schedules   | 定时任务配置与调度启停                                         | workspace 与原生会话输入服务；停用会停止新的调度                           |
-| dsh-px-memory      | 人格私有记忆，以及 Mnemon 项目知识组合                         | 原生 systemPrompt、工具、会话与侧栏；默认不启用自动记忆模型请求            |
+| dsh-px-memory      | 固定人格、接续与原生历史检索，以及 Mnemon 项目知识入口         | 原生 systemPrompt、工具、会话与侧栏；默认不启用自动记忆模型请求            |
 | dsh-px-computer    | 经授权操作 Windows 应用与浏览器，默认关闭                      | 原生工具、确认与侧栏；npm 安装的 Cua Driver、Playwright MCP 与本机 Edge    |
 | dsh-better-sidebar | 文件、编辑器、终端、文件变动与任务视图                         | 原生终端及对应工具依赖；随 Pack 提供已认证补丁的固定版本                   |
 
