@@ -55,6 +55,7 @@ export type Capability = 'desktop' | 'browser' | 'confirm'
 
 export class SessionStates {
   private readonly grants = new Map<string, Map<string, string>>()
+  private readonly foreground = new Map<string, Map<string, { key: string; appKey: string; label: string }>>()
   private readonly logs = new Map<string, ActivityEntry[]>()
   private readonly paused = new Set<string>()
   private readonly running = new Map<string, Map<AbortController, Capability>>()
@@ -73,11 +74,54 @@ export class SessionStates {
   }
   revoke(sessionId: string, key: string): void {
     this.grants.get(sessionId)?.delete(key)
+    for (const [target, grant] of this.foreground.get(sessionId) ?? [])
+      if (grant.appKey === key) this.foreground.get(sessionId)?.delete(target)
+  }
+  foregroundGranted(sessionId: string, key: string): boolean {
+    return this.foreground.get(sessionId)?.has(key) ?? false
+  }
+  async authorizeForeground(
+    sessionId: string,
+    key: string,
+    appKey: string,
+    label: string,
+    signal: AbortSignal,
+    ask: () => Promise<void>
+  ): Promise<void> {
+    signal.throwIfAborted()
+    if (this.foregroundGranted(sessionId, key)) return
+    await ask()
+    signal.throwIfAborted()
+    if (this.isPaused(sessionId)) throw new ComputerUseRefusal('用户已停止电脑操作')
+    this.grant(sessionId, appKey, label)
+    this.grantForeground(sessionId, key, appKey, label)
+  }
+  grantForeground(sessionId: string, key: string, appKey: string, label: string): void {
+    const grants = this.foreground.get(sessionId) ?? new Map()
+    grants.set(key, { key, appKey, label })
+    this.foreground.set(sessionId, grants)
+  }
+  foregroundWindows(sessionId: string): Array<{ key: string; appKey: string; label: string }> {
+    return [...(this.foreground.get(sessionId)?.values() ?? [])]
+  }
+  revokeForeground(sessionId: string, key?: string): void {
+    if (key === undefined) this.foreground.delete(sessionId)
+    else this.foreground.get(sessionId)?.delete(key)
+  }
+  clearForeground(): void {
+    this.foreground.clear()
+  }
+  forgetForegroundWindow(sessionId: string, pid: number, windowId: number): void {
+    const prefix = `window|${pid}|${windowId}|`
+    for (const key of this.foreground.get(sessionId)?.keys() ?? [])
+      if (key.startsWith(prefix)) this.foreground.get(sessionId)?.delete(key)
   }
   /** Revoke matching grants in every session. */
   revokeAll(matches: (key: string) => boolean): void {
     for (const map of this.grants.values())
       for (const key of [...map.keys()]) if (matches(key)) map.delete(key)
+    for (const map of this.foreground.values())
+      for (const [key, grant] of map) if (matches(grant.appKey)) map.delete(key)
   }
   record(sessionId: string, entry: ActivityEntry): void {
     const log = this.logs.get(sessionId) ?? []
@@ -94,6 +138,7 @@ export class SessionStates {
   /** Pause a session and abort its in-flight computer actions, including pending confirmations. */
   pause(sessionId: string): number {
     this.paused.add(sessionId)
+    this.revokeForeground(sessionId)
     const active = this.running.get(sessionId)
     for (const controller of active?.keys() ?? [])
       controller.abort(new ComputerUseRefusal('用户已停止电脑操作'))
@@ -138,6 +183,7 @@ export class SessionStates {
   /** Drop everything a finished session owned. */
   forget(sessionId: string): void {
     this.grants.delete(sessionId)
+    this.revokeForeground(sessionId)
     this.logs.delete(sessionId)
     this.paused.delete(sessionId)
     this.running.delete(sessionId)

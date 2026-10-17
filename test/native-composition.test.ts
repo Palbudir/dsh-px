@@ -246,7 +246,18 @@ test('failed install restores the old profile, invokes native repair, then permi
     repairs++
     await f.install()
   }
-  assert.equal(await provisionNativeComposition({ ...f, install }), 'failed')
+  let reported: unknown
+  assert.equal(
+    await provisionNativeComposition({
+      ...f,
+      install,
+      onFailure: (error) => {
+        reported = error
+      }
+    }),
+    'failed'
+  )
+  assert.equal((reported as Error).message, 'failure injection')
   assert.equal(readFileSync(join(f.profile, 'package.json'), 'utf8'), before)
   assert.equal(repairs, 1)
   assert.ok(!existsSync(join(f.profile, '.dsh-px/composition-state.json')))

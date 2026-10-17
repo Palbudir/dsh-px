@@ -115,13 +115,22 @@ deny('DSH 与其他 agent 应用', [
   'codex.exe',
   'claude.exe'
 ])
+deny('电脑操作驱动与提示层', [
+  'codex-computer-use.exe',
+  'cua-driver.exe',
+  'cua-driver-uia.exe',
+  'cua-cursor-theme.exe',
+  'px-windows-input.exe'
+])
 // Start and search accept a typed program name and run it, which is a command line by another name.
 deny('开始菜单与系统搜索', [
   'startmenuexperiencehost.exe',
   'searchhost.exe',
   'searchapp.exe',
   'searchui.exe',
-  'shellexperiencehost.exe'
+  'shellexperiencehost.exe',
+  'microsoft.cmdpal.ui.exe',
+  'powertoys.powerlauncher.exe'
 ])
 
 /** Window titles that identify denied surfaces hosted by shared processes (UWP frames, Explorer). */

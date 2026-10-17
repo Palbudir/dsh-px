@@ -8,6 +8,7 @@ import { build } from 'esbuild'
 import { releaseAssetNames } from './release-version.mjs'
 import { nsisAppGuid } from './nsis-guid.mjs'
 import { validDistribution, compositionMembers, componentFile } from '../src/shared/distribution.ts'
+import { patchNativeModelGuard, patchNativeCompactionBudget } from '../src/shared/native-model-guard.ts'
 const root = fileURLToPath(new URL('../', import.meta.url))
 if (!process.argv[2] || process.argv[2].startsWith('--'))
   throw Error(
@@ -147,7 +148,17 @@ await build({
   legalComments: 'none'
 })
 const runtimeInventory = JSON.parse(readFileSync(join(nativeRuntime, 'desktop-runtime.json'), 'utf8'))
-for (const path of [hostRelative, helperRelative]) {
+const modelControllerRelative = 'node_modules/@deepseek-ai/dsh-api-session-controller/lib/index.js'
+writeFileSync(
+  join(pxRuntime, modelControllerRelative),
+  patchNativeModelGuard(readFileSync(join(nativeRuntime, modelControllerRelative), 'utf8'))
+)
+const compactionRelative = 'node_modules/@deepseek-ai/dsh-compaction-basic/lib/index.js'
+writeFileSync(
+  join(pxRuntime, compactionRelative),
+  patchNativeCompactionBudget(readFileSync(join(nativeRuntime, compactionRelative), 'utf8'))
+)
+for (const path of [hostRelative, helperRelative, modelControllerRelative, compactionRelative]) {
   const bytes = readFileSync(join(pxRuntime, path)),
     record = {
       path,

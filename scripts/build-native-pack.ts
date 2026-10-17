@@ -9,9 +9,11 @@ import { MANAGED_PLUGIN_NAMES, PACK_VERSION, PRODUCT_CATALOG } from '../src/shar
 import {
   patchSidebarAuthentication,
   patchSidebarClientTransport,
+  patchSidebarHtmlRenderer,
   SIDEBAR_AUTH_SOURCE
 } from '../src/shared/sidebar-auth-compatibility'
 import { buildDistribution } from './pack-distribution'
+import { stageComputerDriver } from './stage-computer-driver'
 import { validCommunityList, type CommunityBundle } from '../src/shared/distribution'
 
 const root = repoRoot()
@@ -88,6 +90,13 @@ for (const name of MANAGED_PLUGIN_NAMES) {
   }
   copyBundlePayload(directory, join(modules, name))
 }
+await stageComputerDriver(
+  join(modules, 'dsh-px-computer'),
+  join(output, 'computer-driver-source'),
+  process.argv
+    .find((arg) => arg.startsWith('--computer-driver-archive='))
+    ?.slice('--computer-driver-archive='.length)
+)
 const sidebarDirectory = join(modules, sidebar.name)
 renameSync(join(source, 'package'), sidebarDirectory)
 const sidebarManifest = JSON.parse(readFileSync(join(sidebarDirectory, 'package.json'), 'utf8'))
@@ -98,6 +107,10 @@ writeFileSync(join(sidebarDirectory, 'lib/index.js'), patched.code)
 writeFileSync(
   join(sidebarDirectory, 'lib/client.js'),
   patchSidebarClientTransport(readFileSync(join(sidebarDirectory, 'lib/client.js'), 'utf8')).code
+)
+writeFileSync(
+  join(sidebarDirectory, 'lib/client-editor.js'),
+  patchSidebarHtmlRenderer(readFileSync(join(sidebarDirectory, 'lib/client-editor.js'), 'utf8')).code
 )
 const members = [...MANAGED_PLUGIN_NAMES, sidebar.name]
 // Native module discovery requires exact package names for client halves.

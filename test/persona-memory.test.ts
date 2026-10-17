@@ -108,6 +108,9 @@ test('native prompt context fixes identity before first request and refreshes pr
   const contexts: any[] = [],
     tools: any[] = []
   const host: any = {
+    provide: (name: string, value: any) => {
+      host[name] = value
+    },
     on: () => {},
     effect: (fn: any) => {
       const d = fn()
@@ -168,6 +171,7 @@ test('HTTP memory saves preserve UTF-8 split across network chunks and reject st
   })
   let handler: any
   const host = {
+    provide: () => {},
     on: () => {},
     effect: (fn: any) => {
       const d = fn()

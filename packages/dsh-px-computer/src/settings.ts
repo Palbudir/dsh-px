@@ -11,7 +11,7 @@ export interface ComputerSettings {
   schemaVersion: 1
   revision: number
   desktop: boolean
-  /** Missing in older settings means background only; foreground requires a fresh one-shot approval. */
+  /** Missing in older settings means background only; foreground requires session/window control permission. */
   desktopForeground?: boolean
   browser: 'off' | BrowserMode
   headless: boolean

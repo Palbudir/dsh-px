@@ -40,6 +40,7 @@ test('网页检查路由拒绝外部简单 POST 和自定目标；并发点击�
     release = resolve
   })
   const host: any = {
+    provide: () => {},
     effect: (fn: any) => {
       cleanups.push(fn())
     },
@@ -58,7 +59,7 @@ test('网页检查路由拒绝外部简单 POST 和自定目标；并发点击�
       }
     }
   }
-  apply({ inject: (_: unknown, fn: any) => fn(host) })
+  apply({ provide: () => {}, on: () => {}, inject: (_: unknown, fn: any) => fn(host) })
   const handler = routes.get('/dsh-px-workbench/network-check')
   async function request(
     method: string,

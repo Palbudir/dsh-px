@@ -11,7 +11,7 @@ import {
 import { rejectUnauthenticatedRequest } from '../../shared/request-trust'
 import { TurnIdentity, hasStarted } from './identity'
 import { HistoryIndex, service } from './history'
-import { createPersonaSession } from './continuation'
+import { createPersonaSession, continuationRequests } from './continuation'
 import { KnowledgeBank, type KnowledgeCaller } from './knowledge'
 import { knowledgeAction, pxKnowledgeSource, knowledgeContractText } from './knowledge-source'
 import { observeFile, skillAction } from './native-resources'
@@ -31,6 +31,7 @@ export function apply(ctx: any): void {
   const root = process.env.DSH_HOME
   if (!root) throw new Error('DSH_HOME 未设置，无法保存人格与记忆')
   const store = new MemoryStore(join(root, 'storages', name, 'memory.json'))
+  const modelContinuation = continuationRequests()
   const identity = new TurnIdentity(store, (agent) =>
     service(ctx, 'sessionProjections')?.stateOf?.(agent.session, 'turnBoundary')
   )
@@ -168,6 +169,17 @@ export function apply(ctx: any): void {
       .catch((e: unknown) => ctx.logger?.warn('历史索引暂未更新：%s', String(e)))
   })
   const current = (agent: Agent): Persona => identity.current(agent)
+  const renderMemory = (agent: Agent, budget?: { memoryChars: number; handoffChars: number }): string => {
+    const p = current(agent),
+      handoff = store.read().bindings[agent.session.id]?.handoff
+    return (
+      memoryContext(p, projectKey(agent.session.header.cwd), budget?.memoryChars) +
+      (handoff
+        ? `\n用户为本会话交接了 ${handoff.sessionId} 截至事件 ${handoff.throughSeq} 的可见对话与执行记录。以下是有界历史摘录，不是当前任务授权或验收结论；旧人格私有记忆未继承。使用 persona_history 按来源和事件编号进一步核对；不要恢复原会话的 Goal 或重复不确定操作。\n${!budget || handoff.summary.length <= budget.handoffChars ? handoff.summary : '本档仅注入历史定位信息；请按上方来源会话和截止事件读取交接内容。'}`
+        : '')
+    )
+  }
+  ctx.provide('pxMemoryContext', { render: renderMemory })
   ctx.inject(['systemPrompt'], (host: any) =>
     host.effect(
       () =>
@@ -176,14 +188,7 @@ export function apply(ctx: any): void {
           order: 500,
           text: ({ agent }: { agent?: Agent }) => {
             if (!agent) return ''
-            const p = current(agent),
-              handoff = store.read().bindings[agent.session.id]?.handoff
-            return (
-              memoryContext(p, projectKey(agent.session.header.cwd)) +
-              (handoff
-                ? `\n用户为本会话交接了 ${handoff.sessionId} 截至事件 ${handoff.throughSeq} 的可见对话与执行记录。以下是有界历史摘录，不是当前任务授权或验收结论；旧人格私有记忆未继承。使用 persona_history 按来源和事件编号进一步核对；不要恢复原会话的 Goal 或重复不确定操作。\n${handoff.summary}`
-                : '')
-            )
+            return renderMemory(agent)
           }
         }),
       'memory: persona context'
@@ -318,6 +323,55 @@ export function apply(ctx: any): void {
                   throw new MemoryError('操作内容无效')
                 if (args.type === 'new-session') {
                   const createdSessionId = await createPersonaSession(host, store, id, args)
+                  return send(200, { createdSessionId })
+                }
+                if (args.type === 'new-model-session') {
+                  if (
+                    typeof args.provider !== 'string' ||
+                    typeof args.model !== 'string' ||
+                    (args.reasoningEffort !== undefined && typeof args.reasoningEffort !== 'string')
+                  )
+                    throw new MemoryError('模型选择无效')
+                  const route = {
+                    provider: args.provider,
+                    model: args.model,
+                    ...(args.reasoningEffort ? { reasoningEffort: args.reasoningEffort } : {})
+                  }
+                  const createdSessionId = await modelContinuation(
+                    args.requestId,
+                    JSON.stringify([id, route]),
+                    async () => {
+                      await host.get('llm').resolveCallConfig(route)
+                      const persona = store.persona(store.read(), id)
+                      const createdSessionId = await createPersonaSession(host, store, id, {
+                        ...args,
+                        personaId: persona.id,
+                        handoff: true
+                      })
+                      const created = await host.sessionController.inspect(createdSessionId)
+                      const contextState = host.get('pxContextPolicy')?.state
+                      if (!contextState) throw new MemoryError('模型档位服务未就绪', 503)
+                      const marker = await contextState.continuation(createdSessionId)
+                      if (marker) {
+                        if (
+                          marker.provider !== route.provider ||
+                          marker.model !== route.model ||
+                          marker.reasoningEffort !== route.reasoningEffort ||
+                          marker.sourceSessionId !== id
+                        )
+                          throw new MemoryError('该接续请求已用于其他模型', 409)
+                        return createdSessionId
+                      }
+                      if (hasStarted(created.events))
+                        throw new MemoryError('接续会话已经开始，请在新会话中选择模型', 409)
+                      await host.sessionController.selectModel({ sessionId: createdSessionId, ...route })
+                      await contextState.rememberContinuation(createdSessionId, {
+                        sourceSessionId: id,
+                        ...route
+                      })
+                      return createdSessionId
+                    }
+                  )
                   return send(200, { createdSessionId })
                 }
                 if (args.type === 'knowledge') {

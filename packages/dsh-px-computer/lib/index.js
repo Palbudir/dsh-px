@@ -18,7 +18,7 @@ IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
 
 // packages/dsh-px-computer/src/index.ts
-import { existsSync, readdirSync as readdirSync2 } from "node:fs";
+import { existsSync, readdirSync as readdirSync2, readFileSync as readFileSync2 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname as dirname2, join as join2 } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -346,12 +346,21 @@ deny("DSH \u4E0E\u5176\u4ED6 agent \u5E94\u7528", [
   "codex.exe",
   "claude.exe"
 ]);
+deny("\u7535\u8111\u64CD\u4F5C\u9A71\u52A8\u4E0E\u63D0\u793A\u5C42", [
+  "codex-computer-use.exe",
+  "cua-driver.exe",
+  "cua-driver-uia.exe",
+  "cua-cursor-theme.exe",
+  "px-windows-input.exe"
+]);
 deny("\u5F00\u59CB\u83DC\u5355\u4E0E\u7CFB\u7EDF\u641C\u7D22", [
   "startmenuexperiencehost.exe",
   "searchhost.exe",
   "searchapp.exe",
   "searchui.exe",
-  "shellexperiencehost.exe"
+  "shellexperiencehost.exe",
+  "microsoft.cmdpal.ui.exe",
+  "powertoys.powerlauncher.exe"
 ]);
 var DENIED_TITLES = [
   [/^(windows\s*安全中心|windows\s*安全性|windows security|windows defender)/i, "\u8EAB\u4EFD\u9A8C\u8BC1\u4E0E\u5B89\u5168\u8F6F\u4EF6"],
@@ -546,6 +555,7 @@ var LOG_LIMIT = 200;
 var MEDIA = /* @__PURE__ */ new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 var SessionStates = class {
   grants = /* @__PURE__ */ new Map();
+  foreground = /* @__PURE__ */ new Map();
   logs = /* @__PURE__ */ new Map();
   paused = /* @__PURE__ */ new Set();
   running = /* @__PURE__ */ new Map();
@@ -563,11 +573,47 @@ var SessionStates = class {
   }
   revoke(sessionId, key) {
     this.grants.get(sessionId)?.delete(key);
+    for (const [target, grant] of this.foreground.get(sessionId) ?? [])
+      if (grant.appKey === key) this.foreground.get(sessionId)?.delete(target);
+  }
+  foregroundGranted(sessionId, key) {
+    return this.foreground.get(sessionId)?.has(key) ?? false;
+  }
+  async authorizeForeground(sessionId, key, appKey2, label, signal, ask) {
+    signal.throwIfAborted();
+    if (this.foregroundGranted(sessionId, key)) return;
+    await ask();
+    signal.throwIfAborted();
+    if (this.isPaused(sessionId)) throw new ComputerUseRefusal("\u7528\u6237\u5DF2\u505C\u6B62\u7535\u8111\u64CD\u4F5C");
+    this.grant(sessionId, appKey2, label);
+    this.grantForeground(sessionId, key, appKey2, label);
+  }
+  grantForeground(sessionId, key, appKey2, label) {
+    const grants = this.foreground.get(sessionId) ?? /* @__PURE__ */ new Map();
+    grants.set(key, { key, appKey: appKey2, label });
+    this.foreground.set(sessionId, grants);
+  }
+  foregroundWindows(sessionId) {
+    return [...this.foreground.get(sessionId)?.values() ?? []];
+  }
+  revokeForeground(sessionId, key) {
+    if (key === void 0) this.foreground.delete(sessionId);
+    else this.foreground.get(sessionId)?.delete(key);
+  }
+  clearForeground() {
+    this.foreground.clear();
+  }
+  forgetForegroundWindow(sessionId, pid, windowId) {
+    const prefix = `window|${pid}|${windowId}|`;
+    for (const key of this.foreground.get(sessionId)?.keys() ?? [])
+      if (key.startsWith(prefix)) this.foreground.get(sessionId)?.delete(key);
   }
   /** Revoke matching grants in every session. */
   revokeAll(matches) {
     for (const map of this.grants.values())
       for (const key of [...map.keys()]) if (matches(key)) map.delete(key);
+    for (const map of this.foreground.values())
+      for (const [key, grant] of map) if (matches(grant.appKey)) map.delete(key);
   }
   record(sessionId, entry) {
     const log = this.logs.get(sessionId) ?? [];
@@ -584,6 +630,7 @@ var SessionStates = class {
   /** Pause a session and abort its in-flight computer actions, including pending confirmations. */
   pause(sessionId) {
     this.paused.add(sessionId);
+    this.revokeForeground(sessionId);
     const active = this.running.get(sessionId);
     for (const controller of active?.keys() ?? [])
       controller.abort(new ComputerUseRefusal("\u7528\u6237\u5DF2\u505C\u6B62\u7535\u8111\u64CD\u4F5C"));
@@ -623,6 +670,7 @@ var SessionStates = class {
   /** Drop everything a finished session owned. */
   forget(sessionId) {
     this.grants.delete(sessionId);
+    this.revokeForeground(sessionId);
     this.logs.delete(sessionId);
     this.paused.delete(sessionId);
     this.running.delete(sessionId);
@@ -1434,6 +1482,71 @@ function browserText(result) {
 
 // packages/dsh-px-computer/src/desktop.ts
 import { createHash } from "node:crypto";
+
+// packages/dsh-px-computer/src/bounded-input.ts
+var KEYS = {
+  backspace: 8,
+  tab: 9,
+  enter: 13,
+  return: 13,
+  shift: 16,
+  shift_l: 16,
+  ctrl: 17,
+  control: 17,
+  control_l: 17,
+  alt: 18,
+  alt_l: 18,
+  escape: 27,
+  esc: 27,
+  space: 32,
+  pageup: 33,
+  pagedown: 34,
+  end: 35,
+  home: 36,
+  left: 37,
+  up: 38,
+  right: 39,
+  down: 40,
+  insert: 45,
+  delete: 46
+};
+function boundedInputPlan(args) {
+  if (args.delivery_mode !== "foreground") throw Error("\u6709\u65F6\u957F\u8F93\u5165\u5FC5\u987B\u663E\u5F0F\u4F7F\u7528 foreground\uFF1B\u4E0D\u652F\u6301\u540E\u53F0\u56DE\u9000");
+  const integer2 = (value, name2, min, max) => {
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max)
+      throw Error(`${name2} \u5FC5\u987B\u4E3A ${min}\uFF5E${max} \u7684\u6574\u6570`);
+    return value;
+  };
+  const keyNames = args.keys ?? [];
+  const buttons = args.buttons ?? [];
+  if (!Array.isArray(keyNames) || keyNames.length > 6 || keyNames.some((key) => typeof key !== "string"))
+    throw Error("keys \u6700\u591A\u5305\u542B 6 \u4E2A\u6309\u952E\u540D\u79F0");
+  if (!Array.isArray(buttons) || buttons.length > 2 || buttons.some((button) => !["left", "right", "middle"].includes(button)))
+    throw Error("buttons \u6700\u591A\u5305\u542B\u4E24\u4E2A\u4E0D\u540C\u9F20\u6807\u6309\u952E");
+  const denied = deniedKeys(keyNames);
+  if (denied) throw Error(denied);
+  const keys = keyNames.map((key) => {
+    const normalized = key.trim().toLowerCase();
+    const code = /^[a-z0-9]$/.test(normalized) ? normalized.toUpperCase().charCodeAt(0) : /^f([1-9]|1[0-2])$/.test(normalized) ? 111 + Number(normalized.slice(1)) : KEYS[normalized];
+    if (!code) throw Error(`\u4E0D\u652F\u6301\u7684\u6301\u7EED\u6309\u952E\uFF1A${key}`);
+    return code;
+  });
+  if (new Set(keys).size !== keys.length || new Set(buttons).size !== buttons.length)
+    throw Error("\u4E0D\u80FD\u91CD\u590D\u6307\u5B9A\u540C\u4E00\u4E2A\u6309\u952E");
+  const plan = {
+    pid: integer2(args.pid, "pid", 1, 4294967295),
+    window_id: integer2(args.window_id, "window_id", 1, Number.MAX_SAFE_INTEGER),
+    keys,
+    buttons,
+    duration_ms: integer2(args.duration_ms, "duration_ms", 10, 1e4),
+    dx: integer2(args.dx ?? 0, "dx", -2e3, 2e3),
+    dy: integer2(args.dy ?? 0, "dy", -2e3, 2e3)
+  };
+  if (!keys.length && !buttons.length && !plan.dx && !plan.dy) throw Error("\u81F3\u5C11\u6307\u5B9A\u6309\u952E\u3001\u9F20\u6807\u6309\u4F4F\u6216\u76F8\u5BF9\u79FB\u52A8");
+  return plan;
+}
+
+// packages/dsh-px-computer/src/desktop.ts
 var DesktopDriver = class {
   constructor(load) {
     this.load = load;
@@ -1441,7 +1554,7 @@ var DesktopDriver = class {
   driver;
   tail = Promise.resolve();
   epoch = 0;
-  call(name2, args, signal) {
+  call(name2, args, signal, scope) {
     const epoch = this.epoch;
     const run = this.tail.then(async () => {
       signal.throwIfAborted();
@@ -1451,7 +1564,7 @@ var DesktopDriver = class {
         throw new Error(`\u65E0\u6CD5\u52A0\u8F7D Cua Driver\uFF1A${error instanceof Error ? error.message : String(error)}`);
       });
       const driver = await this.driver;
-      const raw = await driver.callTool(name2, JSON.stringify(args), { signal });
+      const raw = await driver.callTool(name2, JSON.stringify(args), { signal, scope });
       return JSON.parse(raw.rawJson);
     });
     this.tail = run.catch(() => void 0);
@@ -1459,6 +1572,12 @@ var DesktopDriver = class {
   }
   get loaded() {
     return this.driver !== void 0;
+  }
+  forSession(scope) {
+    return { call: (name2, args, signal) => this.call(name2, args, signal, scope) };
+  }
+  async releaseSession(scope) {
+    if (this.driver) await this.call("__px_close_scope", {}, AbortSignal.timeout(3e3), scope);
   }
   async close() {
     const pending = this.driver;
@@ -1486,7 +1605,7 @@ var ELEMENT = int("\u6700\u8FD1\u4E00\u6B21 computer_get_window_state \u4E2D\u76
 var DELIVERY = {
   type: "string",
   enum: ["background", "foreground"],
-  description: "\u9ED8\u8BA4 background\u3002\u540E\u53F0\u4E0D\u53EF\u7528\u5C31\u505C\u6B62\uFF1Bforeground \u4EC5\u5728\u9762\u677F\u5141\u8BB8\u8BE2\u95EE\u4E14\u7528\u6237\u6279\u51C6\u672C\u6B21\u64CD\u4F5C\u540E\u4F7F\u7528\uFF0C\u4E0D\u81EA\u52A8\u56DE\u9000"
+  description: "\u9ED8\u8BA4 background\u3002\u540E\u53F0\u4E0D\u53EF\u7528\u5C31\u505C\u6B62\uFF1Bforeground \u9700\u8981\u9762\u677F\u5141\u8BB8\u5E76\u53D6\u5F97\u672C\u4F1A\u8BDD\u5BF9\u6B64\u7A97\u53E3\u7684\u524D\u53F0\u6388\u6743\uFF0C\u4E0D\u81EA\u52A8\u56DE\u9000"
 };
 var window = (extra, required = []) => ({
   type: "object",
@@ -1533,9 +1652,13 @@ var DESKTOP_TOOLS = [
     parameters: window({
       query: { type: "string", description: "\u53EA\u8FD4\u56DE\u6807\u7B7E\u6216\u503C\u5305\u542B\u8BE5\u6587\u5B57\u7684\u5143\u7D20\uFF08\u53CA\u5176\u4E0A\u7EA7\uFF09" },
       max_elements: { type: "integer", minimum: 20, maximum: 600, description: "\u6700\u591A\u8FD4\u56DE\u7684\u5143\u7D20\u6570\uFF0C\u9ED8\u8BA4 200" },
+      include_accessibility_tree: {
+        type: "boolean",
+        description: "\u662F\u5426\u6784\u5EFA UIA \u5143\u7D20\u6811\uFF1B\u6E38\u620F\u6216 3D \u754C\u9762\u53EF\u8BBE\u4E3A false\uFF0C\u8DF3\u8FC7 UIA \u5E76\u76F4\u63A5\u622A\u56FE"
+      },
       include_screenshot: { type: "boolean", description: "\u662F\u5426\u9644\u622A\u56FE\uFF0C\u9ED8\u8BA4\u5728\u652F\u6301\u56FE\u7247\u7684\u6A21\u578B\u4E0A\u9644\u5E26" }
     }),
-    pass: ["pid", "window_id", "query", "max_elements", "include_screenshot"],
+    pass: ["pid", "window_id", "query", "max_elements", "include_screenshot", "include_accessibility_tree"],
     log: ["query"]
   },
   {
@@ -1543,7 +1666,7 @@ var DESKTOP_TOOLS = [
     driver: "zoom",
     kind: "read",
     vision: true,
-    description: "\u653E\u5927\u6700\u8FD1\u4E00\u6B21\u7A97\u53E3\u622A\u56FE\u4E2D\u7684\u77E9\u5F62\u533A\u57DF\uFF08\u5BBD\u4E0D\u8D85\u8FC7 500 \u50CF\u7D20\uFF09\u4EE5\u770B\u6E05\u5C0F\u5B57\u6216\u56FE\u6807\u3002\u4EC5\u652F\u6301\u56FE\u7247\u7684\u6A21\u578B\u53EF\u7528\u3002",
+    description: "\u653E\u5927\u6700\u8FD1\u4E00\u6B21\u7A97\u53E3\u622A\u56FE\u4E2D\u7684\u77E9\u5F62\u533A\u57DF\uFF08\u5BBD\u4E0D\u8D85\u8FC7 500 \u50CF\u7D20\uFF09\u4EE5\u770B\u6E05\u5C0F\u5B57\u6216\u56FE\u6807\uFF0C\u6700\u591A\u653E\u5927 4 \u500D\u3002\u70B9\u51FB\u653E\u5927\u56FE\u4F7F\u7528 computer_click \u7684 from_zoom:true\uFF1B\u65B0\u89C2\u5BDF\u6216\u52A8\u4F5C\u540E\u9700\u91CD\u65B0\u653E\u5927\u3002",
     parameters: window({ x1: num("\u5DE6"), y1: num("\u4E0A"), x2: num("\u53F3"), y2: num("\u4E0B") }, [
       "x1",
       "y1",
@@ -1565,9 +1688,13 @@ var DESKTOP_TOOLS = [
       y: num("\u622A\u56FE\u4E2D\u7684 Y \u50CF\u7D20"),
       button: { type: "string", enum: ["left", "right", "middle"], description: "\u9ED8\u8BA4 left" },
       count: { type: "integer", minimum: 1, maximum: 3, description: "\u70B9\u51FB\u6B21\u6570\uFF0C\u9ED8\u8BA4 1" },
+      from_zoom: {
+        type: "boolean",
+        description: "x/y \u662F\u5426\u6765\u81EA\u6700\u8FD1\u4E00\u6B21 computer_zoom \u653E\u5927\u56FE\uFF1B\u4E0D\u80FD\u540C\u65F6\u6307\u5B9A\u5143\u7D20\u7F16\u53F7"
+      },
       delivery_mode: DELIVERY
     }),
-    pass: ["pid", "window_id", "element_index", "x", "y", "button", "count", "delivery_mode"],
+    pass: ["pid", "window_id", "element_index", "x", "y", "button", "count", "from_zoom", "delivery_mode"],
     log: ["element_index", "x", "y", "button", "count"]
   },
   {
@@ -1592,7 +1719,7 @@ var DESKTOP_TOOLS = [
     driver: "press_key",
     kind: "act",
     session: true,
-    description: "\u6309\u4E00\u4E2A\u952E\uFF0C\u53EF\u5E26\u4FEE\u9970\u952E\u3002\u952E\u540D\uFF1Areturn\u3001tab\u3001escape\u3001up\u3001down\u3001left\u3001right\u3001space\u3001delete\u3001home\u3001end\u3001pageup\u3001pagedown\u3001f1\u2013f12\u3001\u5B57\u6BCD\u6216\u6570\u5B57\u3002\u4E0D\u5141\u8BB8 Windows \u952E\u3002",
+    description: "\u6309\u4E00\u4E2A\u952E\uFF0C\u53EF\u5E26\u4FEE\u9970\u952E\u3002\u4FEE\u9970\u952E\u4E0E\u7EC4\u5408\u952E\u53EA\u652F\u6301\u5DF2\u6388\u6743\u7684 foreground \u6295\u9012\u3002\u952E\u540D\uFF1Areturn\u3001tab\u3001escape\u3001up\u3001down\u3001left\u3001right\u3001space\u3001delete\u3001home\u3001end\u3001pageup\u3001pagedown\u3001f1\u2013f12\u3001\u5B57\u6BCD\u6216\u6570\u5B57\u3002\u4E0D\u5141\u8BB8 Windows \u952E\u3002",
     parameters: window(
       {
         key: { type: "string", description: "\u952E\u540D" },
@@ -1610,7 +1737,7 @@ var DESKTOP_TOOLS = [
     driver: "hotkey",
     kind: "act",
     session: true,
-    description: '\u6309\u7EC4\u5408\u952E\uFF0C\u4F8B\u5982 ["ctrl","s"]\u3002\u4E0D\u5141\u8BB8 Windows \u952E\u3002',
+    description: '\u6309\u7EC4\u5408\u952E\uFF0C\u4F8B\u5982 ["ctrl","s"]\u3002\u53EA\u652F\u6301\u5DF2\u6388\u6743\u7684 foreground \u6295\u9012\uFF1B\u540E\u53F0\u7EC4\u5408\u952E\u4E0D\u4F1A\u53D1\u9001\u3002\u4E0D\u5141\u8BB8 Windows \u952E\u3002',
     parameters: window(
       {
         keys: { type: "array", items: { type: "string" }, minItems: 2, description: "\u4FEE\u9970\u952E\u52A0\u4E00\u4E2A\u666E\u901A\u952E" },
@@ -1677,7 +1804,7 @@ var DESKTOP_TOOLS = [
     name: "computer_launch_app",
     driver: "launch_app",
     kind: "launch",
-    description: "\u5728\u540E\u53F0\u542F\u52A8\u5E94\u7528\uFF08\u4E0D\u62A2\u7126\u70B9\uFF09\u3002\u4F18\u5148\u4F7F\u7528 computer_list_apps \u8FD4\u56DE\u7684 launch_path\uFF0C\u6216\u5546\u5E97\u5E94\u7528\u7684 aumid\uFF1B\u4E5F\u53EF\u7ED9\u51FA\u540D\u79F0\u6216 .exe \u5B8C\u6574\u8DEF\u5F84\u3002\u4E0D\u80FD\u9644\u5E26\u547D\u4EE4\u884C\u53C2\u6570\u3002",
+    description: "\u542F\u52A8\u5E94\u7528\uFF0C\u53EF\u80FD\u5207\u6362\u524D\u53F0\u3002\u4F18\u5148\u4F7F\u7528 computer_list_apps \u8FD4\u56DE\u7684 launch_path\uFF0C\u6216\u5546\u5E97\u5E94\u7528\u7684 aumid\uFF1B\u4E5F\u53EF\u7ED9\u51FA\u540D\u79F0\u6216 .exe \u5B8C\u6574\u8DEF\u5F84\u3002\u4E0D\u80FD\u9644\u5E26\u547D\u4EE4\u884C\u53C2\u6570\u3002",
     parameters: {
       type: "object",
       additionalProperties: false,
@@ -1692,10 +1819,80 @@ var DESKTOP_TOOLS = [
     log: ["name", "aumid", "launch_path", "path"]
   },
   {
+    name: "computer_move_pointer",
+    driver: "move_pointer",
+    kind: "act",
+    vision: true,
+    description: "\u79FB\u52A8\u771F\u5B9E\u9F20\u6807\u6307\u9488\u5E76\u60AC\u505C\uFF0C\u4E0D\u70B9\u51FB\u3002\u7528\u4E8E\u67E5\u770B\u63D0\u793A\u6587\u5B57\u3002\u76EE\u6807\u7A97\u53E3\u987B\u5DF2\u5904\u4E8E\u524D\u53F0\uFF1Bx/y \u6765\u81EA\u6700\u8FD1\u4E00\u6B21\u5B8C\u6574\u7A97\u53E3\u622A\u56FE\uFF0C\u4E0D\u662F\u653E\u5927\u56FE\u6216\u5C4F\u5E55\u7EDD\u5BF9\u5750\u6807\u3002\u79FB\u52A8\u540E\u91CD\u65B0\u89C2\u5BDF\uFF1B\u5728\u9501\u5B9A\u9F20\u6807\u7684 3D \u89C6\u56FE\u4E2D\u5E94\u6539\u7528\u76F8\u5BF9\u8F93\u5165\u3002",
+    parameters: window(
+      {
+        x: num("\u5B8C\u6574\u7A97\u53E3\u622A\u56FE\u4E2D\u7684 X"),
+        y: num("\u5B8C\u6574\u7A97\u53E3\u622A\u56FE\u4E2D\u7684 Y"),
+        delivery_mode: {
+          type: "string",
+          enum: ["foreground"],
+          description: "\u663E\u5F0F\u524D\u53F0\u64CD\u4F5C\uFF0C\u590D\u7528\u672C\u4F1A\u8BDD\u7684\u7A97\u53E3\u6388\u6743"
+        }
+      },
+      ["x", "y", "delivery_mode"]
+    ),
+    pass: ["pid", "window_id", "x", "y", "delivery_mode"],
+    log: ["x", "y"]
+  },
+  {
+    name: "computer_bounded_input",
+    driver: "bounded_input",
+    kind: "act",
+    vision: true,
+    description: "\u5728\u5DF2\u6388\u6743\u4E14\u5DF2\u5904\u4E8E\u524D\u53F0\u7684\u7A97\u53E3\u6301\u7EED\u6309\u952E\u3001\u6309\u4F4F\u9F20\u6807\u6216\u76F8\u5BF9\u79FB\u52A8\uFF0C\u53EF\u7EC4\u5408\u4F7F\u7528\u3002\u5355\u6B21\u6700\u957F 10 \u79D2\uFF0C\u9ED8\u8BA4\u4F18\u5148\u77ED\u52A8\u4F5C\uFF1B\u5B8C\u6210\u3001\u5931\u7126\u3001Esc\u3001\u53D6\u6D88\u6216\u63A7\u5236\u7AEF\u5931\u8054\u540E\u91CA\u653E\u3002\u9002\u7528\u4E8E\u6E38\u620F\u30013D \u89C6\u56FE\u7B49\u8FDE\u7EED\u64CD\u4F5C\uFF1B\u4E0D\u4F1A\u81EA\u52A8\u6FC0\u6D3B\u7A97\u53E3\u3002\u6267\u884C\u540E\u5FC5\u987B\u91CD\u65B0\u89C2\u5BDF\u3002",
+    parameters: window(
+      {
+        keys: {
+          type: "array",
+          items: { type: "string" },
+          maxItems: 6,
+          description: '\u540C\u65F6\u6309\u4F4F\u7684\u952E\uFF0C\u4F8B\u5982 ["w", "space"]\uFF1B\u652F\u6301\u5B57\u6BCD\u3001\u6570\u5B57\u3001\u65B9\u5411\u952E\u3001\u4FEE\u9970\u952E\u53CA F1\uFF5EF12'
+        },
+        buttons: {
+          type: "array",
+          items: { type: "string", enum: ["left", "right", "middle"] },
+          maxItems: 2,
+          description: "\u540C\u65F6\u6309\u4F4F\u7684\u9F20\u6807\u6309\u94AE"
+        },
+        duration_ms: {
+          type: "integer",
+          minimum: 10,
+          maximum: 1e4,
+          description: "\u6301\u7EED\u6BEB\u79D2\u6570\uFF1B\u521D\u6B21\u64CD\u4F5C\u5EFA\u8BAE 100\uFF5E300"
+        },
+        dx: {
+          type: "integer",
+          minimum: -2e3,
+          maximum: 2e3,
+          description: "\u8FD9\u6BB5\u65F6\u95F4\u5185\u9F20\u6807\u76F8\u5BF9\u5411\u53F3\u4F4D\u79FB\uFF1B\u8D1F\u6570\u5411\u5DE6"
+        },
+        dy: {
+          type: "integer",
+          minimum: -2e3,
+          maximum: 2e3,
+          description: "\u8FD9\u6BB5\u65F6\u95F4\u5185\u9F20\u6807\u76F8\u5BF9\u5411\u4E0B\u4F4D\u79FB\uFF1B\u8D1F\u6570\u5411\u4E0A"
+        },
+        delivery_mode: {
+          type: "string",
+          enum: ["foreground"],
+          description: "\u5FC5\u987B\u663E\u5F0F\u4E3A foreground\uFF0C\u590D\u7528\u672C\u4F1A\u8BDD\u5BF9\u6B64\u7A97\u53E3\u7684\u524D\u53F0\u6388\u6743"
+        }
+      },
+      ["duration_ms", "delivery_mode"]
+    ),
+    pass: ["pid", "window_id", "keys", "buttons", "duration_ms", "dx", "dy", "delivery_mode"],
+    log: ["keys", "buttons", "duration_ms", "dx", "dy"]
+  },
+  {
     name: "computer_bring_to_front",
     driver: "bring_to_front",
     kind: "act",
-    description: "\u628A\u7A97\u53E3\u5207\u5230\u524D\u53F0\u3002\u53EA\u5728\u786E\u5B9E\u9700\u8981\u524D\u53F0\u4E14\u7528\u6237\u6279\u51C6\u672C\u6B21\u64CD\u4F5C\u540E\u4F7F\u7528\uFF1B\u540E\u53F0\u6A21\u5F0F\u4F1A\u62D2\u7EDD\u3002",
+    description: "\u628A\u7A97\u53E3\u5207\u5230\u524D\u53F0\u3002\u590D\u7528\u672C\u4F1A\u8BDD\u5BF9\u6B64\u7A97\u53E3\u7684\u524D\u53F0\u6388\u6743\uFF1B\u540E\u53F0\u6A21\u5F0F\u4F1A\u62D2\u7EDD\u3002",
     parameters: window({}),
     pass: ["pid", "window_id"],
     log: []
@@ -1741,20 +1938,30 @@ async function identify(driver, pid, windowId, signal) {
   return { appName: String(found.app_name ?? ""), title: found.title, minimized: found.minimized };
 }
 function windowsLine(w) {
-  const state = w.minimized ? "\u6700\u5C0F\u5316" : w.is_on_screen === false ? "\u4E0D\u5728\u5C4F\u5E55\u4E0A" : "\u53EF\u89C1";
+  const state = w.minimized ? "\u6700\u5C0F\u5316" : w.is_on_screen === false ? "\u4E0D\u5728\u53EF\u89C1\u533A\u57DF" : "\u5DF2\u6253\u5F00\uFF08\u524D\u53F0\u4E0E\u684C\u9762\u72B6\u6001\u9700\u89C2\u5BDF\uFF09";
   return `- pid=${w.pid} window_id=${w.window_id} | ${w.app_name} | ${JSON.stringify(w.title ?? "")} | ${state}`;
 }
 async function runDesktopTool(tool, rawArgs, c) {
   const args = rawArgs && typeof rawArgs === "object" ? rawArgs : {};
   const driverArgs = argsFor(tool, args);
+  if (tool.driver === "bounded_input") {
+    try {
+      const plan = boundedInputPlan(args);
+      for (const key2 of Object.keys(driverArgs)) delete driverArgs[key2];
+      Object.assign(driverArgs, plan);
+    } catch (error) {
+      throw new ComputerUseRefusal(error instanceof Error ? error.message : String(error));
+    }
+  }
   if (args.delivery_mode !== void 0 && !["background", "foreground"].includes(String(args.delivery_mode)))
     throw new ComputerUseRefusal("delivery_mode \u5FC5\u987B\u4E3A background \u6216 foreground");
   const needsForeground = args.delivery_mode === "foreground" || ["bring_to_front", "invoke_menu", "launch_app"].includes(tool.driver);
   if (needsForeground && (!c.foregroundAllowed || !c.authorizeForeground))
     throw new ComputerUseRefusal(
-      "\u5F53\u524D\u4EC5\u5141\u8BB8\u540E\u53F0\u64CD\u4F5C\u3002\u6B64\u64CD\u4F5C\u53EF\u80FD\u5360\u7528\u524D\u53F0\uFF1B\u8BF7\u8BA9\u7528\u6237\u5728\u7535\u8111\u64CD\u4F5C\u9762\u677F\u9009\u62E9\u300C\u5141\u8BB8\u8BE2\u95EE\u524D\u53F0\u64CD\u4F5C\u300D\uFF0C\u518D\u9010\u6B21\u786E\u8BA4\u3002\u4E0D\u4F1A\u81EA\u52A8\u5207\u6362\u3002"
+      "\u5F53\u524D\u4EC5\u5141\u8BB8\u540E\u53F0\u64CD\u4F5C\u3002\u6B64\u64CD\u4F5C\u53EF\u80FD\u5360\u7528\u524D\u53F0\uFF1B\u8BF7\u5728\u7535\u8111\u64CD\u4F5C\u9762\u677F\u542F\u7528\u524D\u53F0\u64CD\u4F5C\uFF0C\u518D\u6388\u6743\u672C\u4F1A\u8BDD\u63A7\u5236\u6307\u5B9A\u7A97\u53E3\u3002\u4E0D\u4F1A\u81EA\u52A8\u5207\u6362\u3002"
     );
-  if (tool.pass.includes("delivery_mode")) driverArgs.delivery_mode = args.delivery_mode ?? "background";
+  if (tool.pass.includes("delivery_mode") && tool.driver !== "bounded_input")
+    driverArgs.delivery_mode = args.delivery_mode ?? "background";
   if (tool.vision && !c.seesImages)
     throw new ComputerUseRefusal(
       "\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u56FE\u7247\uFF0C\u65E0\u6CD5\u4F7F\u7528\u8FD9\u4E2A\u5DE5\u5177\uFF1B\u8BF7\u6539\u7528\u5143\u7D20\u6811\uFF0C\u6216\u8BF7\u7528\u6237\u5207\u6362\u5230\u652F\u6301\u56FE\u7247\u7684\u6A21\u578B\u3002"
@@ -1800,7 +2007,6 @@ async function runDesktopTool(tool, rawArgs, c) {
     if (decision.kind === "deny") throw new ComputerUseRefusal(`\u4E0D\u80FD\u542F\u52A8\u8BE5\u7A0B\u5E8F\uFF1A${decision.reason}\u3002`);
     const label2 = String(request.name ?? request.aumid ?? request.path ?? request.launch_path);
     await c.authorizeLaunch(label2, decision.kind === "confirm" ? decision.reason : void 0);
-    await c.authorizeForeground(label2);
     const result2 = await c.driver.call("launch_app", driverArgs, c.signal);
     if (result2.isError) throw new Error(textOf(result2) || "\u542F\u52A8\u5931\u8D25");
     const pid2 = result2.structuredContent?.pid;
@@ -1811,9 +2017,9 @@ async function runDesktopTool(tool, rawArgs, c) {
       const own = new Set(launched.map((w) => w.window_id));
       for (const w of listed.structuredContent?.windows ?? [])
         if (own.has(w.window_id) && !deniedWindow({ appName: String(w.app_name ?? ""), title: w.title }))
-          identities.push({ appName: String(w.app_name ?? ""), title: w.title });
+          identities.push({ appName: String(w.app_name ?? ""), title: w.title, pid: pid2, windowId: w.window_id });
     }
-    c.grantLaunched(identities);
+    c.grantLaunched(identities, decision.kind === "allow");
     const lines = launched.map((w) => windowsLine({ ...w, pid: pid2, app_name: identities[0]?.appName ?? "" }));
     return {
       text: [
@@ -1837,14 +2043,33 @@ async function runDesktopTool(tool, rawArgs, c) {
     const reason = deniedKeys(Array.isArray(args.keys) ? args.keys.map(String) : []);
     if (reason) throw new ComputerUseRefusal(reason);
   }
-  const identity = await identify(c.driver, pid, windowId, c.signal);
+  const modifiedKey = tool.driver === "press_key" && (Array.isArray(args.modifiers) && args.modifiers.length > 0 || String(args.key ?? "").includes("+") || /^(ctrl|control|shift|alt|menu)([_ -]?(left|right|l|r))?$/i.test(String(args.key ?? "").trim()));
+  if (!needsForeground && (tool.driver === "hotkey" || modifiedKey))
+    throw new ComputerUseRefusal(
+      "\u540E\u53F0\u7EC4\u5408\u952E\u548C\u4FEE\u9970\u952E\u65E0\u6CD5\u53EF\u9760\u6295\u9012\uFF0C\u64CD\u4F5C\u672A\u53D1\u9001\u3002\u53EF\u7528 computer_set_value \u66FF\u6362\u652F\u6301\u7684\u6587\u672C\u63A7\u4EF6\uFF1B\u9700\u8981\u5FEB\u6377\u952E\u65F6\uFF0C\u660E\u786E\u4F7F\u7528 foreground \u5E76\u53D6\u5F97\u672C\u4F1A\u8BDD\u7A97\u53E3\u6388\u6743\u3002"
+    );
+  let identity;
+  try {
+    identity = await identify(c.driver, pid, windowId, c.signal);
+  } catch (error) {
+    c.onWindowGone?.(pid, windowId);
+    throw error;
+  }
   const denied = deniedWindow(identity);
   if (denied) throw new ComputerUseRefusal(`\u4E0D\u80FD\u8BFB\u53D6\u6216\u64CD\u4F5C\u8BE5\u7A97\u53E3\uFF1A${denied}\u3002`);
   if (identity.appName.toLowerCase() === FRAME_HOST && !identity.title)
     throw new ComputerUseRefusal("\u65E0\u6CD5\u8BC6\u522B\u8FD9\u4E2A\u5546\u5E97\u5E94\u7528\u7A97\u53E3\uFF0C\u8BF7\u91CD\u65B0\u5217\u51FA\u7A97\u53E3\u540E\u518D\u8BD5\u3002");
   const label = appLabel(identity);
-  await c.authorize(identity, label);
-  if (needsForeground) await c.authorizeForeground(label);
+  if (needsForeground) await c.authorizeForeground(label, { pid, windowId, identity });
+  else await c.authorize(identity, label, { pid, windowId });
+  try {
+    const current = await identify(c.driver, pid, windowId, c.signal);
+    if (appKey(current) !== appKey(identity) || deniedWindow(current))
+      throw new ComputerUseRefusal("\u76EE\u6807\u7A97\u53E3\u5728\u6388\u6743\u671F\u95F4\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u89C2\u5BDF\u5E76\u6388\u6743\u3002");
+  } catch (error) {
+    c.onWindowGone?.(pid, windowId);
+    throw error;
+  }
   const key = `${pid}:${windowId}`;
   if (ELEMENT_ADDRESSED.has(tool.driver) && args.element_index !== void 0) {
     const snapshot = c.snapshots.get(key);
@@ -1856,9 +2081,32 @@ async function runDesktopTool(tool, rawArgs, c) {
   if (tool.kind === "act" && needsForeground) await c.beginSession();
   if (tool.driver === "get_window_state") {
     const screenshot = c.seesImages && args.include_screenshot !== false && !identity.minimized;
+    const treeRequested = args.include_accessibility_tree !== false;
+    if (!treeRequested && !screenshot)
+      throw new ComputerUseRefusal("\u8DF3\u8FC7 UIA \u65F6\u9700\u8981\u53EF\u7528\u622A\u56FE\uFF1B\u8BF7\u4F7F\u7528\u652F\u6301\u56FE\u7247\u7684\u6A21\u578B\u5E76\u786E\u8BA4\u7A97\u53E3\u672A\u6700\u5C0F\u5316\u3002");
+    c.snapshots.delete(key);
     driverArgs.include_screenshot = screenshot;
+    driverArgs.include_accessibility_tree = treeRequested;
     driverArgs.max_elements = args.max_elements ?? 200;
-    const result2 = await c.driver.call("get_window_state", driverArgs, c.signal);
+    let result2;
+    let pixelFallback = false;
+    try {
+      result2 = await c.driver.call("get_window_state", driverArgs, c.signal);
+      if (result2.isError) throw Error(textOf(result2) || "\u65E0\u6CD5\u8BFB\u53D6\u7A97\u53E3");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!treeRequested || !screenshot || !/^(?:\[1\] )?(?:Error: )?get_window_state timed out after 4s \(UIA provider unresponsive on hwnd /.test(
+        message
+      ))
+        throw error;
+      c.signal.throwIfAborted();
+      result2 = await c.driver.call(
+        "get_window_state",
+        { ...driverArgs, include_accessibility_tree: false },
+        c.signal
+      );
+      pixelFallback = true;
+    }
     if (result2.isError) throw new Error(textOf(result2) || "\u65E0\u6CD5\u8BFB\u53D6\u7A97\u53E3");
     const s = result2.structuredContent ?? {};
     if (typeof s.snapshot_id === "string") c.snapshots.set(key, s.snapshot_id);
@@ -1867,7 +2115,27 @@ async function runDesktopTool(tool, rawArgs, c) {
       `pid=${pid} window_id=${windowId} snapshot=${s.snapshot_id ?? "-"} \u5E94\u7528=${identity.appName} \u6807\u9898=${JSON.stringify(identity.title ?? "")}`,
       `\u5143\u7D20 ${s.returned_element_count ?? s.element_count ?? 0}/${s.total_element_count ?? s.element_count ?? 0}${args.query ? `\uFF08query=${JSON.stringify(args.query)}\uFF09` : ""}`
     ];
+    if (screenshot && s.screenshot_frame_valid !== false && imagesOf(result2).length > 0 && Number.isInteger(s.screenshot_width) && Number.isInteger(s.screenshot_height) && s.screenshot_width > 0 && s.screenshot_height > 0)
+      head.push(
+        `\u622A\u56FE ${s.screenshot_width}\xD7${s.screenshot_height}\uFF1B\u70B9\u51FB\u548C\u653E\u5927\u4F7F\u7528\u8FD9\u5F20\u56FE\u7684\u50CF\u7D20\u5750\u6807\uFF08x: 0\uFF5E${s.screenshot_width - 1}\uFF0Cy: 0\uFF5E${s.screenshot_height - 1}\uFF09\uFF0C\u4E0D\u662F\u5C4F\u5E55\u7EDD\u5BF9\u5750\u6807\u3002`
+      );
     const notes = [];
+    if (pixelFallback)
+      notes.push(
+        "UIA \u5143\u7D20\u6811\u672A\u54CD\u5E94\uFF0C\u5DF2\u901A\u8FC7\u72EC\u7ACB\u622A\u56FE\u8DEF\u5F84\u91CD\u65B0\u89C2\u5BDF\u3002\u6CA1\u6709\u65B0\u7684\u5143\u7D20\u7F16\u53F7\u65F6\uFF0C\u8BF7\u6309\u5F53\u524D\u622A\u56FE\u64CD\u4F5C\uFF0C\u4E0D\u590D\u7528\u65E7\u7F16\u53F7\u3002"
+      );
+    else if (!treeRequested) notes.push("\u672C\u6B21\u5DF2\u8DF3\u8FC7 UIA \u5143\u7D20\u6811\uFF0C\u4F7F\u7528\u5F53\u524D\u622A\u56FE\u89C2\u5BDF\u3002");
+    if (s.px_window) {
+      const placement = s.px_window.current_desktop === false ? "\u53E6\u4E00\u4E2A\u865A\u62DF\u684C\u9762" : s.px_window.current_desktop === true ? "\u5F53\u524D\u865A\u62DF\u684C\u9762" : "\u684C\u9762\u5F52\u5C5E\u672A\u77E5";
+      notes.push(
+        `\u7A97\u53E3\u72B6\u6001\uFF1A${placement}\uFF1B${s.px_window.foreground ? "\u524D\u53F0" : "\u540E\u53F0"}${s.px_window.cloaked ? "\uFF1B\u7CFB\u7EDF\u6682\u65F6\u9690\u85CF\u7A97\u53E3" : ""}\u3002\u622A\u56FE\u53EF\u7528\u4E0D\u4EE3\u8868\u540E\u53F0\u952E\u9F20\u6295\u9012\u53EF\u7528\u3002`
+      );
+    }
+    const validFrame = s.screenshot_frame_valid !== false;
+    if (!validFrame)
+      notes.push(
+        "\u9A71\u52A8\u672A\u80FD\u786E\u8BA4\u622A\u56FE\u4E0E\u76EE\u6807\u7A97\u53E3\u5339\u914D\uFF0C\u672C\u6B21\u4E0D\u63D0\u4F9B\u56FE\u7247\u3002\u8BF7\u4F7F\u7528\u53EF\u8BBF\u95EE\u6027\u5143\u7D20\u6216\u91CD\u65B0\u83B7\u53D6\u6709\u6548\u7A97\u53E3\u753B\u9762\uFF0C\u4E0D\u8981\u6309\u65E7\u622A\u56FE\u5750\u6807\u64CD\u4F5C\u3002"
+      );
     if (s.degraded && s.degraded_reason) notes.push(`\u6CE8\u610F\uFF1A${String(s.degraded_reason).split(".")[0]}`);
     if (identity.minimized)
       notes.push("\u7A97\u53E3\u5DF2\u6700\u5C0F\u5316\uFF0C\u65E0\u6CD5\u622A\u56FE\uFF1B\u53EF\u5148\u8BFB\u53D6\u5143\u7D20\u6811\uFF0C\u9700\u8981\u6062\u590D\u5230\u524D\u53F0\u65F6\u5FC5\u987B\u53E6\u884C\u786E\u8BA4\u3002");
@@ -1875,21 +2143,27 @@ async function runDesktopTool(tool, rawArgs, c) {
     const tree = String(s.tree_markdown ?? "").trim();
     return {
       text: [...head, "", tree || "\uFF08\u6CA1\u6709\u53EF\u8BC6\u522B\u7684\u5143\u7D20\uFF09", ...notes.length ? ["", ...notes] : []].join("\n"),
-      images: screenshot ? imagesOf(result2) : [],
+      images: screenshot && validFrame ? imagesOf(result2) : [],
       target: label
     };
   }
-  const result = await c.driver.call(tool.driver, driverArgs, c.signal);
+  let result;
+  try {
+    result = await c.driver.call(tool.driver, driverArgs, c.signal);
+  } catch (error) {
+    if (error?.code === "driver_unexpected_foreground") c.onUnexpectedForeground?.();
+    throw error;
+  }
   const text2 = textOf(result);
   if (result.isError && result.structuredContent?.code === "background_unavailable")
     throw new ComputerUseRefusal(
-      `\u6B64\u7A97\u53E3\u4E0D\u652F\u6301 ${tool.name} \u7684\u540E\u53F0\u6295\u9012\u3002\u64CD\u4F5C\u5DF2\u505C\u6B62\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u5207\u5230\u524D\u53F0\u3002\u53EF\u68C0\u67E5\u5143\u7D20\u652F\u6301\u7684\u8BED\u4E49\u52A8\u4F5C\uFF1B\u786E\u5B9E\u9700\u8981\u524D\u53F0\u65F6\uFF0C\u7531\u7528\u6237\u5728\u9762\u677F\u5F00\u542F\u8BE2\u95EE\u540E\u9010\u6B21\u786E\u8BA4\u3002`
+      `\u6B64\u7A97\u53E3\u4E0D\u652F\u6301 ${tool.name} \u7684\u540E\u53F0\u6295\u9012\u3002\u64CD\u4F5C\u5DF2\u505C\u6B62\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u5207\u5230\u524D\u53F0\u3002\u53EF\u68C0\u67E5\u5143\u7D20\u652F\u6301\u7684\u8BED\u4E49\u52A8\u4F5C\uFF1B\u9700\u8981\u524D\u53F0\u65F6\uFF0C\u5728\u9762\u677F\u5F00\u542F\u5E76\u6388\u6743\u672C\u4F1A\u8BDD\u63A7\u5236\u6307\u5B9A\u7A97\u53E3\u3002`
     );
   if (result.isError) throw new Error(text2 || `${tool.name} \u5931\u8D25`);
   if (tool.kind === "act") c.snapshots.delete(key);
   const mode = result.structuredContent?.delivery?.mode;
   const actual = mode === "background" ? "\u540E\u53F0" : mode === "foreground" ? "\u524D\u53F0" : "\u672A\u77E5";
-  const receipt = tool.kind === "act" ? `\u8BF7\u6C42\uFF1A${needsForeground ? "\u524D\u53F0\uFF08\u672C\u6B21\u5DF2\u786E\u8BA4\uFF09" : "\u540E\u53F0"} \xB7 \u9A71\u52A8\u56DE\u62A5\uFF1A${actual} \xB7 \u6548\u679C\u5F85\u91CD\u65B0\u89C2\u5BDF` : void 0;
+  const receipt = tool.kind === "act" ? `\u8BF7\u6C42\uFF1A${needsForeground ? "\u524D\u53F0\uFF08\u672C\u4F1A\u8BDD\u7A97\u53E3\u5DF2\u6388\u6743\uFF09" : "\u540E\u53F0"} \xB7 \u9A71\u52A8\u56DE\u62A5\uFF1A${actual} \xB7 \u6548\u679C\u5F85\u91CD\u65B0\u89C2\u5BDF` : void 0;
   if (!needsForeground && mode === "foreground") {
     c.onUnexpectedForeground?.();
     throw new Error("\u9A71\u52A8\u56DE\u62A5\u4F7F\u7528\u4E86\u524D\u53F0\uFF0C\u4E0E\u540E\u53F0\u8BF7\u6C42\u4E0D\u7B26\uFF1B\u8BF7\u505C\u6B62\u64CD\u4F5C\u5E76\u68C0\u67E5\u7A97\u53E3\u3002\u52A8\u4F5C\u53EF\u80FD\u5DF2\u751F\u6548\u3002");
@@ -1906,39 +2180,287 @@ async function runDesktopTool(tool, rawArgs, c) {
 import { spawn as spawn2 } from "node:child_process";
 var WORKER = String.raw`
 process.on('disconnect', () => process.exit(0));
-const { CuaDriver } = await import(process.argv[1]);
-const driver = await CuaDriver.create(undefined);
+const sdk = await import(process.argv[1]);
+const native = JSON.parse(process.argv[2] || 'null');
+const guards = new Map();
+const scopeClients = new Map();
+const controlSnapshots = new Map();
+const frames = new Map();
+const zooms = new Map();
+let controlSequence = 0;
+const controlKey = args => String(args.__px_scope ?? args.session ?? '') + ':' + args.pid + ':' + args.window_id;
+async function clientFor(scope) {
+  if (!scope) return driver;
+  if (!scopeClients.has(scope)) scopeClients.set(scope, Promise.resolve().then(() => native ? sdk.CuaDriver.connect(socketPath) : sdk.CuaDriver.create(undefined)));
+  return scopeClients.get(scope);
+}
+const unavailable = text => ({rawJson:JSON.stringify({isError:true,content:[{type:'text',text}],structuredContent:{code:'background_unavailable',effect:'refused'}})});
+async function verifiedInputPath() {
+  if (!native?.input) throw Error('当前安装缺少有时长输入执行器，请更新电脑操作功能包');
+  const { readFile } = await import('node:fs/promises');
+  const { createHash } = await import('node:crypto');
+  if (createHash('sha256').update(await readFile(native.input.binaryPath)).digest('hex') !== native.input.sha256)
+    throw Error('有时长输入执行器校验失败');
+  return native.input.binaryPath;
+}
+async function helperCall(args, strict = false) {
+  const { spawn } = await import('node:child_process');
+  const child = spawn(await verifiedInputPath(), args, {windowsHide:true,stdio:['ignore','pipe','ignore']});
+  let output = '';
+  child.stdout.on('data', chunk => { output = (output + chunk).slice(-1048576); });
+  const timer = setTimeout(() => child.kill(), 5000);
+  try {
+    const code = await new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',resolve);});
+    let result; try {result = JSON.parse(output.trim());} catch {}
+    if(code !== 0 || !result) {if(strict)throw Object.assign(Error(result?.error || '原生窗口操作未完成；效果未知，请重新观察'),{code:result?.code});return null;}
+    return result;
+  } finally {clearTimeout(timer);}
+}
+const inspectWindow = args => helperCall(['--inspect', String(args.pid), String(args.window_id)]);
+function observedFrame(args) {
+  const frame = frames.get(args.pid);
+  if (!frame || frame.scope !== args.__px_scope || frame.windowId !== args.window_id)
+    throw Error('请先重新观察这个窗口；其他窗口或会话的观察不能用于本次像素操作');
+  return frame;
+}
+async function magnifyZoom(raw, args) {
+  const image = raw.content?.find(item => item.type === 'image' && typeof item.data === 'string');
+  if (!image || raw.isError) return raw;
+  const { mkdtemp, writeFile, readFile, rm, realpath } = await import('node:fs/promises');
+  const { join, sep } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const temporaryRoot = await realpath(tmpdir());
+  const directory = await mkdtemp(join(temporaryRoot, 'dsh-px-zoom-'));
+  try {
+    const input = join(directory,'input.image'), output = join(directory,'zoom.png');
+    await writeFile(input,Buffer.from(image.data,'base64'),{flag:'wx'});
+    const size = await helperCall(['--magnify',input,output],true);
+    image.data = (await readFile(output)).toString('base64'); image.mimeType = 'image/png';
+    zooms.set(args.pid,{scope:args.__px_scope,windowId:args.window_id,width:size.width,height:size.height,scaleX:size.width/size.source_width,scaleY:size.height/size.source_height});
+    raw.content = raw.content.filter(item=>item.type !== 'text');
+    raw.content.push({type:'text',text:'已放大到 '+size.width+'×'+size.height+'。需要点击此图时使用 computer_click(from_zoom:true)，坐标按本张放大图；仅最近一次放大有效。原生截图范围含边缘留白，勿自行猜偏移。'});
+    raw.structuredContent = {...raw.structuredContent,width:size.width,height:size.height,mime_type:'image/png',format:'png'};
+    return raw;
+  } finally {if(!directory.startsWith(temporaryRoot+sep))throw Error('Invalid zoom cleanup path');await rm(directory,{recursive:true,force:true});}
+}
+async function dispatch(name, args, json, id, client) {
+  if (native?.input && name === 'move_pointer') {
+    if(args.delivery_mode !== 'foreground')throw Error('真实指针移动必须显式使用 foreground');
+    const frame=observedFrame(args);
+    const request={pid:args.pid,window_id:args.window_id,x:args.x,y:args.y,image_width:frame.width,image_height:frame.height,window_width:frame.bounds.width,window_height:frame.bounds.height};
+    zooms.delete(args.pid); controlSnapshots.delete(controlKey(args));
+    const result=await helperCall(['--pointer',Buffer.from(JSON.stringify(request)).toString('base64')],true);
+    return {rawJson:JSON.stringify({content:[{type:'text',text:'已移动真实鼠标指针，未点击。请重新观察悬停提示或界面变化。'}],structuredContent:{delivery:{mode:'foreground'},effect:'unverifiable',position:result}})};
+  }
+  if (native?.input && name === 'get_window_state') {frames.delete(args.pid);zooms.delete(args.pid);}
+  if (native?.input && name === 'zoom') {
+    const frame=observedFrame(args), current=await inspectWindow(args), bounds=current?.bounds;
+    if(!bounds || bounds.right-bounds.left !== frame.bounds.width || bounds.bottom-bounds.top !== frame.bounds.height)
+      throw Error('窗口尺寸已变化，请重新观察后再放大');
+    zooms.delete(args.pid);
+  }
+  if (native?.input && name === 'click' && args.from_zoom === true) {
+    const zoom=zooms.get(args.pid);
+    if(!zoom || zoom.scope !== args.__px_scope || zoom.windowId !== args.window_id)throw Error('放大视图已失效或属于其他窗口，请重新放大');
+    if(args.element_index !== undefined || !Number.isFinite(args.x) || !Number.isFinite(args.y) || args.x<0 || args.y<0 || args.x>=zoom.width || args.y>=zoom.height)
+      throw Error('放大图点击必须使用图内的 x/y，不能同时指定元素编号');
+    const input=JSON.parse(json);input.x=args.x/zoom.scaleX;input.y=args.y/zoom.scaleY;json=JSON.stringify(input);
+  } else if (native?.input && ['click','scroll','drag'].includes(name) && (args.x !== undefined || args.from_x !== undefined) && args.element_index === undefined) observedFrame(args);
+  if (['click','type_text','set_value','press_key','hotkey','scroll','drag','bring_to_front','invoke_menu','bounded_input'].includes(name)) {
+    zooms.delete(args.pid);
+    const previous=frames.get(args.pid);if(previous && (previous.scope !== args.__px_scope || previous.windowId !== args.window_id))frames.delete(args.pid);
+  }
+  if (name === 'bounded_input') {controlSnapshots.delete(controlKey(args));return boundedInput(id, json);}
+  let beforeForeground;
+  if (native?.input && ['click','type_text','set_value','press_key','hotkey','scroll','drag'].includes(name) && (args.delivery_mode !== 'foreground' || args.element_index >= 100000)) {
+    const stored = controlSnapshots.get(controlKey(args));
+    if (Number.isInteger(args.element_index) && args.element_index >= 100000) {
+      if (!stored || args.snapshot_id !== stored.snapshot) throw Error('原生控件快照已失效，请重新观察');
+      const control = stored.controls[args.element_index - 100000];
+      if (!control) throw Error('原生控件编号无效');
+      if (!['click','type_text','set_value'].includes(name) || (name === 'click' && (control.role !== 'Button' || args.button !== undefined && args.button !== 'left' || args.count !== undefined && args.count !== 1 || args.modifier?.length)) || (name !== 'click' && control.role !== 'Edit'))
+        return unavailable('此控件不支持请求的后台操作；只支持按钮点击或文本值设置。');
+      controlSnapshots.delete(controlKey(args));
+      const request = {pid:args.pid,window_id:args.window_id,child_id:control.child_id,class_name:control.class_name,expected_text:control.text,
+        action:name === 'click' ? 'click' : 'set_value',value:name === 'type_text' ? control.text + args.text : args.value};
+      const receipt = await helperCall(['--control', Buffer.from(JSON.stringify(request)).toString('base64')], true);
+      return {rawJson:JSON.stringify({content:[{type:'text',text:'已投递原生控件消息；请重新观察核对结果。'}],structuredContent:{delivery:{mode:'background'},effect:receipt.effect,route:'native_control'}})};
+    }
+    const state = await inspectWindow(args);
+    if (!state || state.current_desktop === false || state.cloaked)
+      return unavailable('跨虚拟桌面仅支持最近一次观察列出的原生按钮和文本框；其他操作需要前台或应用专用接口。');
+    beforeForeground = state.foreground_window_id;
+  }
+  if (['click','type_text','set_value','press_key','hotkey','scroll','drag','bring_to_front','invoke_menu'].includes(name)) controlSnapshots.delete(controlKey(args));
+  const result = await client.callTool(name, json);
+  if (beforeForeground !== undefined) {
+    const after = await helperCall(['--foreground'], true);
+    if (after.window_id !== beforeForeground) throw Object.assign(Error('Foreground changed during background delivery; inspect before continuing'),{code:'unexpected_foreground'});
+  }
+  return result;
+}
+async function boundedInput(id, args) {
+  const binaryPath = await verifiedInputPath();
+  const { spawn } = await import('node:child_process');
+  const child = spawn(binaryPath, ['--guard', String(process.pid), Buffer.from(args).toString('base64')], {
+    windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']
+  });
+  guards.set(id, child);
+  let output = '', errors = '';
+  child.stdout.on('data', chunk => { output = (output + chunk).slice(-16000); });
+  child.stderr.on('data', chunk => { errors = (errors + chunk).slice(-2000); });
+  child.stdin.on('error', () => {});
+  try {
+    const code = await new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', resolve);
+      if (child.pid) process.send?.({ inputGuard: id, pid: child.pid });
+    });
+    const final = output.trim().split(/\r?\n/).map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(item => item?.finished).at(-1);
+    if (code !== 0 || !final?.ok) throw Error(final?.error || errors || '有时长输入中断；请重新观察目标');
+    return { rawJson: JSON.stringify({ content: [{type:'text',text:'已执行有时长输入并释放按键；请重新观察目标确认实际效果。'}], structuredContent:{delivery:{mode:'foreground'},effect:'unverifiable',elapsed_ms:final.elapsed_ms,release_attempted:final.release_attempted} }) };
+  } finally {
+    guards.delete(id);
+    process.send?.({ inputGuardEnded: id, pid: child.pid });
+  }
+}
+let host, driver, socketPath;
+if (native) {
+  const { readFile } = await import('node:fs/promises');
+  const { dirname, join } = await import('node:path');
+  const { createHash } = await import('node:crypto');
+  for (const [file, digest] of Object.entries(native.files)) {
+    const bytes = await readFile(join(dirname(native.binaryPath), file));
+    if (createHash('sha256').update(bytes).digest('hex') !== digest)
+      throw Error('电脑操作原生驱动校验失败：' + file);
+  }
+  host = sdk.EmbeddedCuaDriverHost.withOptions(sdk.EmbeddedDriverHostOptions.create({
+    binaryPath: native.binaryPath, hostBundleId: 'org.dsh-px.desktop',
+    approveCapabilityManifest: false, approveSessionPolicy: false,
+    dangerouslyBypassApprovals: false, permissionMode: sdk.EmbeddedPermissionMode.Standard,
+    environment: [{ name: 'CUA_DRIVER_RS_TELEMETRY_ENABLED', value: 'false' }],
+    inheritStderr: true, noOverlay: false
+  }));
+  const connection = await host.start();
+  socketPath = connection.socketPath;
+  if (connection.driverVersion !== native.version) {
+    await host.stop();
+    throw Error('电脑操作原生驱动版本不匹配');
+  }
+  driver = sdk.CuaDriver.connect(connection.socketPath);
+  host.waitForExit(connection.generation).then(() => process.exit(20), () => process.exit(21));
+} else driver = await sdk.CuaDriver.create(undefined);
 process.on('message', async message => {
+  if (message?.kind === 'input-start') { guards.get(message.id)?.stdin.end('start\n'); return; }
   if (!message || message.kind !== 'call') return;
   try {
-    const result = await driver.callTool(message.name, message.args);
+    const scope = typeof message.scope === 'string' ? message.scope : '';
+    if (message.name === '__px_close_scope') {
+      const previous = scopeClients.get(scope); scopeClients.delete(scope);
+      for (const key of controlSnapshots.keys()) if(key.startsWith(scope + ':'))controlSnapshots.delete(key);
+      for(const [pid,frame]of frames)if(frame.scope===scope){frames.delete(pid);zooms.delete(pid);}
+      if(previous)(await previous).uniffiDestroy?.();
+      process.send?.({id:message.id,result:{rawJson:'{"content":[]}'}}); return;
+    }
+    const client = await clientFor(scope);
+    const callArgs = {...JSON.parse(message.args),__px_scope:scope};
+    let result = await dispatch(message.name, callArgs, message.args, message.id, client);
+    if(native?.input && message.name === 'zoom') result={rawJson:JSON.stringify(await magnifyZoom(JSON.parse(result.rawJson),callArgs))};
+    if (native?.input && ['get_window_state', 'bring_to_front'].includes(message.name)) {
+      const raw = JSON.parse(result.rawJson), args = callArgs;
+      let state = await inspectWindow(args);
+      if (message.name === 'get_window_state') {
+        const key = controlKey(args);
+        controlSnapshots.delete(key);
+        const shot=raw.structuredContent;
+        if(!raw.isError && shot?.screenshot_frame_valid!==false && shot?.window_bounds && shot.screenshot_width>0 && shot.screenshot_height>0 && raw.content?.some(item=>item.type==='image'))
+          frames.set(args.pid,{scope:args.__px_scope,windowId:args.window_id,width:shot.screenshot_width,height:shot.screenshot_height,bounds:shot.window_bounds});
+        if (!raw.isError && state && (state.current_desktop === false || state.cloaked)) {
+          const observed = await helperCall(['--controls', String(args.pid), String(args.window_id)]);
+          const controls = observed?.controls ?? [];
+          const snapshot = 'px-native-' + (++controlSequence);
+          controlSnapshots.set(key,{snapshot,controls});
+          const clipped = text => text.length > 512 ? text.slice(0,512) + '…（显示已截短）' : text;
+          const rows = controls.map((control,index)=>({element_index:100000+index,role:control.role,label:control.role === 'Button' ? clipped(control.text) : '文本框',value:control.role === 'Edit' ? clipped(control.text) : undefined,actions:[control.role === 'Button'?'invoke':'set_value']}));
+          const tree = '- 跨虚拟桌面原生控件（只列出支持后台操作的按钮和文本框；其他内容请看截图）\n' + rows.map(row=>'  - ['+row.element_index+'] '+row.role+' '+JSON.stringify(row.label)+(row.value !== undefined ? ' value='+JSON.stringify(row.value) : '')).join('\n');
+          raw.structuredContent = {...raw.structuredContent,snapshot_id:snapshot,elements:rows,tree_markdown:tree,element_count:rows.length,total_element_count:rows.length,returned_element_count:rows.length,elements_complete:false};
+          raw.content = (raw.content ?? []).filter(item=>item.type !== 'text');
+          raw.content.unshift({type:'text',text:tree});
+        }
+      }
+      if (message.name === 'bring_to_front' && raw.isError) {
+        const deadline = Date.now() + 800;
+        while (state && (!state.foreground || state.cloaked !== 0) && Date.now() < deadline) {
+          await new Promise(resolve => setTimeout(resolve, 50));
+          state = await inspectWindow(args);
+        }
+        if (state?.foreground && state.cloaked === 0) {
+          raw.isError = false;
+          raw.content = [{type:'text',text:'窗口已处于前台（已核对 Windows 完成异步激活）。'}];
+          raw.structuredContent = {landed_on_target:true,delivery:{mode:'foreground'},effect:'confirmed'};
+        }
+      }
+      if (state) raw.structuredContent = {...raw.structuredContent,px_window:state};
+      if (message.name === 'bring_to_front' && !raw.isError)
+        raw.structuredContent = {...raw.structuredContent,delivery:{mode:'foreground'}};
+      result = {rawJson:JSON.stringify(raw)};
+    }
     process.send?.({ id: message.id, result });
   } catch (error) {
-    process.send?.({ id: message.id, error: String(error?.message ?? error) });
+    const detail = error?.inner?.message ?? error?.inner?.reason ?? error?.message ?? error;
+    const code = typeof error?.inner?.errorCode === 'string' ? error.inner.errorCode : typeof error?.code === 'string' ? error.code : undefined;
+    const sessionEnded = /^session 'sdk-[0-9a-f-]+' has ended; tool call '[a-z_]+' was rejected\./.test(String(detail));
+    process.send?.({ id: message.id, error: (code ? '[' + code + '] ' : '') + String(detail).slice(0,2000), driverErrorCode: code, sessionEnded });
   }
 });
 process.send?.({ ready: true });
 `;
 var DriverProcess = class {
   constructor(moduleUrl, reset = () => {
-  }, timeoutMs = 45e3) {
+  }, timeoutMs = 45e3, native) {
     this.moduleUrl = moduleUrl;
     this.reset = reset;
     this.timeoutMs = timeoutMs;
+    this.native = native;
   }
   child;
   ready;
   sequence = 0;
   pending = /* @__PURE__ */ new Map();
   closed = false;
+  inputGuards = /* @__PURE__ */ new Set();
+  async waitForInputRelease() {
+    const deadline = Date.now() + 3e3;
+    while (this.inputGuards.size) {
+      for (const pid of this.inputGuards) {
+        try {
+          process.kill(pid, 0);
+        } catch (error) {
+          if (error.code === "ESRCH") this.inputGuards.delete(pid);
+          else throw Error("\u65E0\u6CD5\u786E\u8BA4\u8F93\u5165\u76D1\u62A4\u8FDB\u7A0B\u5DF2\u9000\u51FA\uFF1B\u6682\u4E0D\u6267\u884C\u4E0B\u4E00\u6B65");
+        }
+      }
+      if (!this.inputGuards.size) return;
+      if (Date.now() >= deadline) throw Error("\u8F93\u5165\u91CA\u653E\u4ECD\u672A\u786E\u8BA4\uFF1B\u6682\u4E0D\u6267\u884C\u4E0B\u4E00\u6B65\uFF0C\u8BF7\u68C0\u67E5\u76EE\u6807\u7A97\u53E3");
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
   start() {
     if (this.closed) return Promise.reject(Error("\u7535\u8111\u64CD\u4F5C\u8FDB\u7A0B\u5DF2\u5173\u95ED"));
     if (this.ready) return this.ready;
-    const child = spawn2(process.execPath, ["--input-type=module", "-e", WORKER, this.moduleUrl], {
-      windowsHide: true,
-      env: { ...process.env, ...process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {} },
-      stdio: ["ignore", "ignore", "pipe", "ipc"]
-    });
+    const child = spawn2(
+      process.execPath,
+      ["--input-type=module", "-e", WORKER, this.moduleUrl, JSON.stringify(this.native ?? null)],
+      {
+        windowsHide: true,
+        env: {
+          ...process.env,
+          CUA_DRIVER_RS_TELEMETRY_ENABLED: "false",
+          ...process.versions.electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}
+        },
+        stdio: ["ignore", "ignore", "pipe", "ipc"]
+      }
+    );
     this.child = child;
     let stderr = "";
     child.stderr?.on("data", (chunk) => {
@@ -1963,10 +2485,30 @@ var DriverProcess = class {
           resolve(child);
           return;
         }
+        if (Number.isSafeInteger(message?.pid) && message.pid > 0) {
+          if (message.inputGuard !== void 0) {
+            this.inputGuards.add(message.pid);
+            child.send({ kind: "input-start", id: message.inputGuard });
+            return;
+          }
+          if (message.inputGuardEnded !== void 0) {
+            this.inputGuards.delete(message.pid);
+            return;
+          }
+        }
         const item = this.pending.get(message?.id);
         if (!item) return;
         this.pending.delete(message.id);
-        if (typeof message.error === "string") item.reject(Error(message.error));
+        if (typeof message.error === "string")
+          item.reject(
+            message.sessionEnded ? Object.assign(
+              Error("\u5E95\u5C42\u7535\u8111\u63A7\u5236\u4F1A\u8BDD\u5DF2\u7ED3\u675F\uFF0C\u5DF2\u6682\u505C\u672C\u4F1A\u8BDD\u3002\u8BF7\u5728\u7535\u8111\u64CD\u4F5C\u9762\u677F\u70B9\u51FB\u6062\u590D\uFF0C\u518D\u91CD\u65B0\u6388\u6743\u7A97\u53E3\u3002"),
+              { code: "driver_session_ended", nativeDetail: message.error }
+            ) : message.driverErrorCode === "unexpected_foreground" ? Object.assign(
+              Error("\u540E\u53F0\u52A8\u4F5C\u671F\u95F4\u524D\u53F0\u7A97\u53E3\u53D1\u751F\u53D8\u5316\uFF0C\u5DF2\u505C\u6B62\u672C\u4F1A\u8BDD\u63A7\u5236\uFF1B\u52A8\u4F5C\u53EF\u80FD\u5DF2\u751F\u6548\uFF0C\u8BF7\u91CD\u65B0\u89C2\u5BDF\u3002"),
+              { code: "driver_unexpected_foreground", nativeDetail: message.error }
+            ) : Error(message.error)
+          );
         else if (typeof message.result?.rawJson === "string") item.resolve(message.result);
         else item.reject(Error("\u7535\u8111\u64CD\u4F5C\u8FDB\u7A0B\u8FD4\u56DE\u4E86\u65E0\u6548\u7ED3\u679C"));
       });
@@ -1988,6 +2530,10 @@ var DriverProcess = class {
   async callTool(name2, args, options) {
     const signal = options?.signal;
     signal?.throwIfAborted();
+    if (name2 === "__px_close_scope" && !this.child) {
+      await this.waitForInputRelease();
+      return { rawJson: '{"content":[]}' };
+    }
     let cancel;
     const cancelled = new Promise((_, reject) => {
       cancel = reject;
@@ -2006,13 +2552,14 @@ var DriverProcess = class {
       return await Promise.race([
         cancelled,
         (async () => {
+          await this.waitForInputRelease();
           const child = await this.start();
           signal?.throwIfAborted();
           if (this.child !== child) throw Error("\u7535\u8111\u64CD\u4F5C\u8FDB\u7A0B\u5DF2\u91CD\u7F6E\uFF0C\u8BF7\u91CD\u65B0\u89C2\u5BDF\u7A97\u53E3");
           const id = ++this.sequence;
           return await new Promise((resolve, reject) => {
             this.pending.set(id, { resolve, reject });
-            child.send({ kind: "call", id, name: name2, args }, (error) => {
+            child.send({ kind: "call", id, name: name2, args, scope: options?.scope }, (error) => {
               if (error && this.child === child) this.terminate(error);
             });
           });
@@ -2021,11 +2568,26 @@ var DriverProcess = class {
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener("abort", abort);
+      await this.waitForInputRelease();
     }
   }
   async shutdown() {
     this.closed = true;
     this.terminate(Error("\u7535\u8111\u64CD\u4F5C\u8FDB\u7A0B\u5DF2\u5173\u95ED\uFF0C\u672A\u5B8C\u6210\u52A8\u4F5C\u7684\u7ED3\u679C\u672A\u77E5"));
+    await this.waitForInputRelease();
+  }
+};
+
+// config/computer-driver.json
+var computer_driver_default = {
+  version: "0.28.0",
+  platform: "win32-x64",
+  url: "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.28.0/cua-driver-rs-0.28.0-windows-x86_64-binary.zip",
+  sha256: "9db2096df8d80da4e73ffb797947dcdfab2a362faddd9d1b77682c77aace5aa9",
+  files: {
+    "cua-driver.exe": "b67f6bf2f6066000c8efb809a49df34f88e51ac3bdf77e454c4da5fcc431fc22",
+    "cua-driver-uia.exe": "066c0ef4af907c183cb3a38d053b6648ea178b3a847e0e52557dca01ea529ee4",
+    "cua-cursor-theme.exe": "3e5448892de3f91052a0179507d997a1266d67aca5b814d3dd735b91b919de4f"
   }
 };
 
@@ -2047,9 +2609,16 @@ function guidance(settings) {
 ## \u5DE5\u4F5C\u65B9\u5F0F
 - \u5148\u89C2\u5BDF\u518D\u52A8\u4F5C\uFF1Acomputer_get_window_state \u6216 browser_snapshot\u3002\u6BCF\u6B21\u53EA\u505A\u4E00\u4E2A\u52A8\u4F5C\uFF0C\u7136\u540E\u91CD\u65B0\u89C2\u5BDF\u786E\u8BA4\u7ED3\u679C\uFF1B\u5143\u7D20\u7F16\u53F7 [N] \u4E0E ref \u53EA\u5BF9\u6700\u8FD1\u4E00\u6B21\u89C2\u5BDF\u6709\u6548\u3002
 - \u4F18\u5148\u7528\u5143\u7D20\u7F16\u53F7\u6216 ref\uFF1B\u5143\u7D20\u6811\u91CC\u6CA1\u6709\u76EE\u6807\u65F6\u624D\u7528\u622A\u56FE\u50CF\u7D20\u5750\u6807\u3002\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u56FE\u7247\u65F6\u53EA\u4F9D\u9760\u5143\u7D20\u6811\uFF0C\u9700\u8981\u6309\u50CF\u7D20\u64CD\u4F5C\u5C31\u544A\u8BC9\u7528\u6237\u5207\u6362\u5230\u652F\u6301\u56FE\u7247\u7684\u6A21\u578B\u3002
+- \u6E38\u620F\u30013D \u89C6\u56FE\u7B49\u5F31\u65E0\u969C\u788D\u754C\u9762\u53EF\u5728 computer_get_window_state \u4E2D\u8BBE\u7F6E include_accessibility_tree:false\uFF0C\u76F4\u63A5\u8BFB\u53D6\u622A\u56FE\uFF0C\u907F\u514D\u7B49\u5F85 UIA\u3002\u4E00\u6B21\u5DF2\u660E\u786E\u62A5\u544A UIA \u8D85\u65F6\u540E\uFF0C\u540E\u7EED\u89C2\u5BDF\u4F18\u5148\u4F7F\u7528\u8FD9\u4E2A\u6A21\u5F0F\u3002
 - \u8F93\u5165\u524D\u5148\u786E\u8BA4\u7126\u70B9\uFF1B\u56DE\u8F66\u3001Tab \u7B49\u7528\u6309\u952E\u5DE5\u5177\uFF0C\u4E0D\u8981\u5199\u8FDB\u6587\u5B57\u3002
+- \u540E\u53F0\u7EC4\u5408\u952E\u4E0D\u80FD\u53EF\u9760\u5F62\u6210\u4FEE\u9970\u952E\u72B6\u6001\uFF0C\u7CFB\u7EDF\u4F1A\u5728\u6295\u9012\u524D\u62D2\u7EDD\u3002\u66FF\u6362\u6587\u672C\u4F18\u5148\u7528\u652F\u6301\u7684 computer_set_value\uFF1B\u786E\u5B9E\u9700\u8981 Ctrl+A \u7B49\u5FEB\u6377\u952E\u65F6\uFF0C\u4F7F\u7528\u5DF2\u6388\u6743\u7684 foreground\uFF0C\u4E0D\u628A\u62D2\u7EDD\u6539\u5199\u6210\u5355\u4E2A\u5B57\u6BCD\u8F93\u5165\u3002
+- \u6301\u7EED\u6309\u952E\u3001\u9F20\u6807\u6309\u4F4F\u548C\u76F8\u5BF9\u79FB\u52A8\u7528 computer_bounded_input\u3002\u5148\u786E\u8BA4\u76EE\u6807\u5728\u524D\u53F0\uFF1B\u9F20\u6807\u52A8\u4F5C\u8FD8\u8981\u6C42\u6307\u9488\u4F4D\u4E8E\u76EE\u6807\u7A97\u53E3\u3002\u9ED8\u8BA4\u5148\u505A 100\uFF5E500 ms \u77ED\u52A8\u4F5C\uFF0C\u6301\u7EED\u6316\u6398\u7B49\u786E\u5B9E\u9700\u8981\u65F6\u518D\u5EF6\u957F\uFF0C\u6700\u957F 10 \u79D2\u3002\u76F8\u5BF9\u4F4D\u79FB\u4E0D\u662F\u4FDD\u8BC1\u7684\u5C4F\u5E55\u50CF\u7D20\u6216\u8F6C\u89D2\uFF0C\u6309\u5B9E\u9645\u7ED3\u679C\u6821\u51C6\uFF0C\u4E0D\u8981\u76F4\u63A5\u628A\u5355\u6B21\u91CF\u63A8\u5230\u4E0A\u9650\u3002
+- \u8BFB\u4E0D\u6E05\u7684\u5C0F\u5B57\u6216\u6570\u503C\u5148\u7528 computer_zoom\uFF0C\u4E0D\u8981\u731C\u6570\u30023D \u671D\u5411\u53EF\u80FD\u8DE8\u8D8A 0/360 \u5EA6\uFF0C\u4E0D\u80FD\u628A\u9996\u5C3E\u8BFB\u6570\u7684\u7EDD\u5BF9\u5DEE\u76F4\u63A5\u5F53\u4F5C\u5B9E\u9645\u8F6C\u52A8\u91CF\u3002\u6BCF\u6BB5\u52A8\u4F5C\u540E\u68C0\u67E5\u753B\u9762\u3001\u65B9\u5411\u4E0E\u72B6\u6001\u3002
+- \u56FE\u6807\u6216\u7269\u54C1\u79CD\u7C7B\u4E0D\u660E\u786E\u65F6\uFF0C\u7528 computer_move_pointer \u60AC\u505C\u8BFB\u53D6\u5E94\u7528\u81EA\u5DF1\u7684\u6587\u5B57\u63D0\u793A\uFF0C\u6216\u4F7F\u7528\u5E94\u7528\u63D0\u4F9B\u7684\u540D\u79F0\u663E\u793A\uFF1B\u4E0D\u8981\u51ED\u7EB9\u7406\u731C\u6D4B\u3002\u653E\u5927\u56FE\u70B9\u51FB\u5FC5\u987B\u6807\u660E from_zoom:true\uFF0C\u53EA\u5BF9\u6700\u65B0\u653E\u5927\u56FE\u6709\u6548\uFF1B\u60AC\u505C\u79FB\u52A8\u4F7F\u7528\u5B8C\u6574\u622A\u56FE\u5750\u6807\u3002
+- \u9884\u7559\u6700\u7EC8\u89C2\u5BDF\uFF1A\u6709\u5DE5\u5177\u8C03\u7528\u6570\u91CF\u9650\u5236\u65F6\u63D0\u524D\u505C\u6B62\u65B0\u589E\u52A8\u4F5C\uFF0C\u786E\u8BA4\u6700\u540E\u72B6\u6001\u540E\u518D\u62A5\u544A\u3002\u628A\u5DF2\u6267\u884C\u3001\u5B9E\u9645\u5DF2\u89C2\u5BDF\u751F\u6548\u548C\u672A\u9A8C\u8BC1\u5206\u522B\u8BF4\u660E\u3002
+- \u4F7F\u7528\u539F\u751F PTC \u6A21\u5F0F\u65F6\uFF0C\u53EF\u7528\u751F\u6210 SDK \u987A\u5E8F await \u65E0\u9700\u4E2D\u95F4\u5224\u65AD\u7684\u77ED\u52A8\u4F5C\uFF0C\u518D\u8BFB\u53D6\u622A\u56FE\uFF1B\u6709\u4F9D\u8D56\u7684\u7535\u8111\u8F93\u5165\u4E0D\u8981 Promise.all\u3002\u4EFB\u4E00\u6B65\u5931\u8D25\u5C31\u505C\u6B62\u540E\u7EED\u8F93\u5165\uFF0C\u4E0D\u541E\u6389\u9519\u8BEF\u7EE7\u7EED\u64CD\u4F5C\u3002\u6301\u7EED\u8F93\u5165\u7684\u9F20\u6807\u6309\u4F4F\u5B57\u6BB5\u662F buttons\uFF0C\u76F8\u5BF9\u603B\u4F4D\u79FB\u5B57\u6BB5\u662F dx\u3001dy\uFF1B\u53C2\u6570\u4EE5\u5F53\u524D SDK \u58F0\u660E\u4E3A\u51C6\uFF0C\u4E0D\u731C\u6D4B\u6216\u5047\u8BBE\u4E0D\u5B58\u5728\u3002
 - \u52A8\u4F5C\u8D85\u65F6\u6216\u62A5\u9519\u65F6\u7ED3\u679C\u672A\u77E5\uFF1A\u5148\u91CD\u65B0\u89C2\u5BDF\uFF0C\u4E0D\u8981\u76F4\u63A5\u91CD\u590D\u6709\u526F\u4F5C\u7528\u7684\u52A8\u4F5C\u3002
-- \u684C\u9762\u6295\u9012\u6A21\u5F0F\uFF1A${settings.desktopForeground ? "\u5141\u8BB8\u8BF7\u6C42\u524D\u53F0\u64CD\u4F5C\uFF0C\u4F46\u6BCF\u6B21\u90FD\u987B\u5355\u72EC\u6279\u51C6\uFF1B\u5E94\u7528\u8BBF\u95EE\u6388\u6743\u4E0D\u4EE3\u8868\u524D\u53F0\u6388\u6743" : "\u4EC5\u540E\u53F0\u64CD\u4F5C\uFF1B\u540E\u53F0\u4E0D\u53EF\u7528\u5C31\u505C\u6B62\uFF0C\u4E0D\u5F97\u6539\u7528 foreground \u6216\u5207\u5230\u524D\u53F0"}\u3002\u4E0D\u628A\u5DE5\u5177\u8FD4\u56DE\u6210\u529F\u5F53\u4F5C\u754C\u9762\u5DF2\u6539\u53D8\u3002\u6700\u5C0F\u5316\u3001\u906E\u6321\u548C\u9501\u5C4F\u662F\u4E0D\u540C\u72B6\u6001\u3002
+- \u684C\u9762\u6295\u9012\u6A21\u5F0F\uFF1A${settings.desktopForeground ? "\u6309\u672C\u4F1A\u8BDD\u4E0E\u5177\u4F53\u7A97\u53E3\u53D6\u5F97\u524D\u53F0\u63A7\u5236\u6388\u6743\u540E\uFF0C\u666E\u901A\u67E5\u770B\u3001\u70B9\u51FB\u3001\u8F93\u5165\u548C\u6309\u952E\u4E0D\u518D\u9010\u6B21\u8BE2\u95EE\uFF1B\u6682\u505C\u6216\u64A4\u9500\u540E\u987B\u91CD\u65B0\u6388\u6743\uFF0C\u5220\u9664\u3001\u53D1\u9001\u3001\u4ED8\u6B3E\u7B49\u654F\u611F\u52A8\u4F5C\u4ECD\u5355\u72EC\u786E\u8BA4" : "\u4EC5\u540E\u53F0\u64CD\u4F5C\uFF1B\u540E\u53F0\u4E0D\u53EF\u7528\u5C31\u505C\u6B62\uFF0C\u4E0D\u5F97\u6539\u7528 foreground \u6216\u5207\u5230\u524D\u53F0"}\u3002\u4E0D\u628A\u5DE5\u5177\u8FD4\u56DE\u6210\u529F\u5F53\u4F5C\u754C\u9762\u5DF2\u6539\u53D8\u3002\u6700\u5C0F\u5316\u3001\u906E\u6321\u548C\u9501\u5C4F\u662F\u4E0D\u540C\u72B6\u6001\u3002
 - \u9996\u6B21\u8BFB\u53D6\u6216\u64CD\u4F5C\u67D0\u4E2A\u5E94\u7528\uFF08\u4EE5\u53CA\u767B\u5F55\u6001\u6D4F\u89C8\u5668\u4E2D\u7684\u65B0\u7F51\u7AD9\uFF09\u4F1A\u8BF7\u7528\u6237\u5141\u8BB8\u3002\u88AB\u62D2\u7EDD\u5C31\u505C\u6B62\uFF0C\u4E0D\u8981\u6362\u5E94\u7528\u3001\u6362\u7A97\u53E3\u6216\u6362\u65B9\u5F0F\u7ED5\u8FC7\u3002
 
 ## \u5148\u786E\u8BA4\u518D\u6267\u884C
@@ -2064,6 +2633,43 @@ function guidance(settings) {
 
 ## \u505C\u6B62
 \u7528\u6237\u505C\u6B62\u6216\u6682\u505C\u540E\u4E0D\u518D\u64CD\u4F5C\u3002\u684C\u9762\u88AB\u9501\u5B9A\u65F6\u505C\u6B62\u5E76\u8BF7\u7528\u6237\u89E3\u9501\u3002`;
+}
+
+// packages/dsh-px-computer/src/tool-schema.ts
+var BOUNDS = ["minimum", "maximum", "minItems", "maxItems", "minLength", "maxLength"];
+function nativeToolParameters(schema) {
+  const result = { ...schema };
+  delete result.$schema;
+  const limits = [];
+  for (const name2 of BOUNDS) {
+    if (schema[name2] === void 0) continue;
+    limits.push(`${name2}=${schema[name2]}`);
+    delete result[name2];
+  }
+  if (limits.length)
+    result.description = [schema.description, `\u9650\u5236\uFF1A${limits.join(", ")}`].filter(Boolean).join("\uFF1B");
+  if (schema.properties)
+    result.properties = Object.fromEntries(
+      Object.entries(schema.properties).map(([key, value]) => [key, nativeToolParameters(value)])
+    );
+  if (schema.items) result.items = nativeToolParameters(schema.items);
+  return result;
+}
+function enforceToolBounds(schema, value, path = "arguments") {
+  if (value === void 0) return;
+  for (const name2 of BOUNDS) {
+    const bound = schema[name2];
+    if (bound === void 0) continue;
+    const measured = name2 === "minimum" || name2 === "maximum" ? typeof value === "number" && Number.isFinite(value) ? value : void 0 : name2 === "minItems" || name2 === "maxItems" ? Array.isArray(value) ? value.length : void 0 : typeof value === "string" ? Array.from(value).length : void 0;
+    const lower = name2 === "minimum" || name2 === "minItems" || name2 === "minLength";
+    if (measured === void 0 || (lower ? measured < bound : measured > bound))
+      throw Error(`${path} \u4E0D\u6EE1\u8DB3 ${name2}=${bound}`);
+  }
+  if (schema.properties && value && typeof value === "object" && !Array.isArray(value))
+    for (const [key, child] of Object.entries(schema.properties))
+      enforceToolBounds(child, value[key], `${path}.${key}`);
+  if (schema.items && Array.isArray(value))
+    value.forEach((item, index) => enforceToolBounds(schema.items, item, `${path}[${index}]`));
 }
 
 // packages/dsh-px-computer/src/settings.ts
@@ -2164,11 +2770,30 @@ function apply(ctx) {
   const cursors = /* @__PURE__ */ new Set();
   const projections = /* @__PURE__ */ new WeakMap();
   const driver = new DesktopDriver(async () => {
-    return new DriverProcess(import.meta.resolve("@trycua/cua-driver"), () => {
-      for (const observed of snapshots.values()) observed.clear();
-      snapshots.clear();
-      cursors.clear();
-    });
+    const nativeDirectory = fileURLToPath(new URL("../native/win32-x64/", import.meta.url));
+    const manifest = JSON.parse(readFileSync2(join2(nativeDirectory, "manifest.json"), "utf8"));
+    if (!/^[a-f0-9]{64}$/.test(manifest.input?.sha256 ?? ""))
+      throw Error("\u7535\u8111\u64CD\u4F5C\u6267\u884C\u5668\u6E05\u5355\u4E0D\u5B8C\u6574\uFF0C\u8BF7\u66F4\u65B0\u63D2\u4EF6\u5305");
+    return new DriverProcess(
+      import.meta.resolve("@trycua/cua-driver"),
+      () => {
+        for (const observed of snapshots.values()) observed.clear();
+        snapshots.clear();
+        cursors.clear();
+        states.clearForeground();
+        states.stop(
+          "desktop",
+          new ComputerUseRefusal("\u7535\u8111\u9A71\u52A8\u5DF2\u91CD\u7F6E\uFF0C\u5F85\u6267\u884C\u7684\u684C\u9762\u64CD\u4F5C\u5DF2\u4E2D\u6B62\u3002\u8BF7\u91CD\u65B0\u89C2\u5BDF\u5E76\u53D6\u5F97\u7A97\u53E3\u63A7\u5236\u6388\u6743\u3002")
+        );
+      },
+      45e3,
+      {
+        binaryPath: join2(nativeDirectory, "cua-driver.exe"),
+        version: computer_driver_default.version,
+        files: computer_driver_default.files,
+        input: { binaryPath: join2(nativeDirectory, "px-windows-input.exe"), sha256: manifest.input.sha256 }
+      }
+    );
   });
   const launchOptions = () => {
     const current = settings.read();
@@ -2215,6 +2840,7 @@ function apply(ctx) {
   };
   const tool = (capability, definition, target, detail, body) => ({
     ...definition,
+    parameters: nativeToolParameters(definition.parameters),
     output: {
       schema: TOOL_OUTPUT_SCHEMA,
       render: (_args, value) => [{ type: "text", text: value.text }]
@@ -2225,6 +2851,7 @@ function apply(ctx) {
       let label = target(args);
       try {
         if (!available(capability, settings.read())) throw new ComputerUseRefusal(CLOSED[capability]);
+        enforceToolBounds(definition.parameters, args);
         const result = await states.track(
           session.id,
           capability,
@@ -2246,6 +2873,12 @@ function apply(ctx) {
         });
         return { text: result.text };
       } catch (error) {
+        if (capability === "desktop" && ["driver_session_ended", "driver_unexpected_foreground"].includes(error?.code)) {
+          states.pause(session.id);
+          snapshots.delete(session.id);
+          cursors.delete(driverSession(session.id));
+          ctx.logger?.warn?.("dsh-px-computer: session ended: %s", error.nativeDetail);
+        }
         const message = error instanceof Error ? error.message : String(error);
         states.record(session.id, {
           at: Date.now(),
@@ -2274,57 +2907,75 @@ function apply(ctx) {
       const sessionSnapshots = snapshots.get(s.id) ?? /* @__PURE__ */ new Map();
       snapshots.set(s.id, sessionSnapshots);
       return runDesktopTool(spec, args, {
-        driver,
+        driver: driver.forSession(s.id),
         sessionId: s.id,
         signal,
         seesImages: await modelSeesImages(ctx, s.agent, signal),
         foregroundAllowed: settings.read().desktopForeground === true,
         onUnexpectedForeground: () => states.pause(s.id),
-        authorizeForeground: (display) => askOrRefuse(
-          run,
-          signal,
-          `\u5360\u7528\u524D\u53F0\u64CD\u4F5C\u300C${display}\u300D`,
-          `\u672C\u6B21 ${spec.name} \u53EF\u80FD\u5207\u6362\u5230\u300C${display}\u300D\u5E76\u5360\u7528\u9F20\u6807\u6216\u952E\u76D8\u3002\u5141\u8BB8\u8FD9\u4E00\u6B21\u524D\u53F0\u64CD\u4F5C\u5417\uFF1F`,
-          `This ${spec.name} action may focus "${display}" and use the mouse or keyboard. Allow this one foreground action?`,
-          "computer use: foreground action"
-        ),
+        onWindowGone: (pid, windowId) => states.forgetForegroundWindow(s.id, pid, windowId),
+        authorizeForeground: async (display, target) => {
+          const app = appKey(target.identity);
+          const key = `window|${target.pid}|${target.windowId}|${app}`;
+          await states.authorizeForeground(
+            s.id,
+            key,
+            app,
+            display,
+            signal,
+            () => askOrRefuse(
+              run,
+              signal,
+              `\u5728\u672C\u4F1A\u8BDD\u4E2D\u63A7\u5236\u300C${display}\u300D`,
+              `\u5141\u8BB8\u672C\u4F1A\u8BDD\u8FDE\u7EED\u8BFB\u53D6\u548C\u64CD\u4F5C\u300C${display}\u300D\u8FD9\u4E2A\u7A97\u53E3\uFF0C\u5E76\u6309\u4EFB\u52A1\u9700\u8981\u5360\u7528\u524D\u53F0\u9F20\u6807\u548C\u952E\u76D8\u5417\uFF1F\u666E\u901A\u52A8\u4F5C\u4E0D\u518D\u9010\u6B21\u8BE2\u95EE\uFF1B\u6682\u505C\u3001\u64A4\u9500\u6216\u5173\u95ED\u684C\u9762\u80FD\u529B\u540E\u7ED3\u675F\u6388\u6743\u3002\u5220\u9664\u3001\u53D1\u9001\u3001\u4ED8\u6B3E\u7B49\u654F\u611F\u52A8\u4F5C\u4ECD\u5355\u72EC\u786E\u8BA4\u3002`,
+              `Allow this session to read, operate and focus this exact "${display}" window? Ordinary actions will not ask again. Pause, revoke or disable desktop control to end the grant. Sensitive actions still need confirmation.`,
+              "computer use: session window control"
+            )
+          );
+        },
         snapshots: sessionSnapshots,
         env: process.env,
-        authorize: async (window2, display) => {
+        authorize: async (window2, display, target) => {
           const key = appKey(window2);
           if (states.granted(s.id, key) || settings.alwaysAllowsApp(key)) return;
           await askOrRefuse(
             run,
             signal,
             `\u64CD\u4F5C\u300C${display}\u300D`,
-            `\u5141\u8BB8 DSH \u5728\u672C\u4F1A\u8BDD\u4E2D\u8BFB\u53D6\u548C\u64CD\u4F5C\u300C${display}\u300D\u5417\uFF1F\u4E4B\u540E\u672C\u4F1A\u8BDD\u5BF9\u5B83\u7684\u67E5\u770B\u3001\u70B9\u51FB\u548C\u8F93\u5165\u4E0D\u518D\u9010\u6B21\u8BE2\u95EE\uFF1B\u5220\u9664\u3001\u53D1\u9001\u3001\u4ED8\u6B3E\u7B49\u654F\u611F\u52A8\u4F5C\u4ECD\u4F1A\u5355\u72EC\u786E\u8BA4\u3002`,
-            `Allow DSH to read and operate "${display}" in this session? Later views, clicks and typing in this app will not ask again; deleting, sending or paying still asks separately.`,
+            `\u5141\u8BB8 DSH \u5728\u672C\u4F1A\u8BDD\u4E2D\u8BFB\u53D6\u548C\u64CD\u4F5C\u300C${display}\u300D\u5417\uFF1F${settings.read().desktopForeground ? "\u5305\u62EC\u6309\u4EFB\u52A1\u9700\u8981\u5360\u7528\u8FD9\u4E2A\u7A97\u53E3\u7684\u524D\u53F0\u9F20\u6807\u548C\u952E\u76D8\u3002" : ""}\u4E4B\u540E\u666E\u901A\u64CD\u4F5C\u4E0D\u518D\u9010\u6B21\u8BE2\u95EE\uFF1B\u5220\u9664\u3001\u53D1\u9001\u3001\u4ED8\u6B3E\u7B49\u654F\u611F\u52A8\u4F5C\u4ECD\u4F1A\u5355\u72EC\u786E\u8BA4\u3002`,
+            `Allow DSH to read and operate "${display}" in this session? ${settings.read().desktopForeground ? "This includes focusing this window for mouse and keyboard actions. " : ""}Ordinary operations will not ask again; sensitive actions still ask separately.`,
             `computer use: app access ${window2.appName}`
           );
           states.grant(s.id, key, display);
+          if (settings.read().desktopForeground && target)
+            states.grantForeground(s.id, `window|${target.pid}|${target.windowId}|${key}`, key, display);
         },
         authorizeLaunch: async (display, confirm) => {
           const key = `launch|${display.toLowerCase()}`;
-          if (!confirm && states.granted(s.id, key)) return;
           await askOrRefuse(
             run,
             signal,
             `\u542F\u52A8\u300C${display}\u300D`,
-            confirm ? `\u5373\u5C06${confirm}\uFF1A${display}\u3002\u5141\u8BB8\u5417\uFF1F` : `\u5141\u8BB8 DSH \u542F\u52A8\u300C${display}\u300D\u5E76\u5728\u672C\u4F1A\u8BDD\u4E2D\u64CD\u4F5C\u5B83\u5417\uFF1F`,
-            confirm ? `About to ${LAUNCH_REASON_EN[confirm] ?? "run a program"}: ${display}. Allow?` : `Allow DSH to start "${display}" and operate it in this session?`,
+            confirm ? `\u5373\u5C06${confirm}\uFF1A${display}\u3002\u5141\u8BB8\u5417\uFF1F` : `\u5141\u8BB8 DSH \u542F\u52A8\u300C${display}\u300D\u5E76\u5728\u672C\u4F1A\u8BDD\u4E2D\u8FDE\u7EED\u64CD\u4F5C\u5B83\u521B\u5EFA\u7684\u7A97\u53E3\u5417\uFF1F\u8FD9\u53EF\u80FD\u5360\u7528\u524D\u53F0\u9F20\u6807\u548C\u952E\u76D8\uFF0C\u666E\u901A\u64CD\u4F5C\u4E0D\u518D\u9010\u6B21\u8BE2\u95EE\u3002`,
+            confirm ? `About to ${LAUNCH_REASON_EN[confirm] ?? "run a program"}: ${display}. Allow?` : `Allow DSH to launch "${display}" and control its new windows in this session, including foreground mouse and keyboard actions?`,
             `computer use: launch ${display}`
           );
           states.grant(s.id, key);
         },
-        grantLaunched: (windows2) => {
-          for (const window2 of windows2) states.grant(s.id, appKey(window2), appLabel(window2));
+        grantLaunched: (windows2, allowForeground) => {
+          for (const window2 of windows2) {
+            const key = appKey(window2), label2 = appLabel(window2);
+            states.grant(s.id, key, label2);
+            if (allowForeground)
+              states.grantForeground(s.id, `window|${window2.pid}|${window2.windowId}|${key}`, key, label2);
+          }
         },
         beginSession: async () => {
           if (cursors.has(label)) return;
           cursors.add(label);
           try {
-            await driver.call("start_session", { session: label }, signal);
-            await driver.call("set_agent_cursor_enabled", { session: label, enabled: true }, signal);
+            await driver.call("start_session", { session: label }, signal, s.id);
+            await driver.call("set_agent_cursor_enabled", { session: label, enabled: true }, signal, s.id);
           } catch (error) {
             ctx.logger?.warn?.("dsh-px-computer: agent cursor unavailable: %s", String(error));
           }
@@ -2488,6 +3139,7 @@ function apply(ctx) {
     }
     if (current.browser !== before.browser) states.revokeAll((key) => key.startsWith("site|"));
     if (before.desktop && !current.desktop || before.desktopForeground !== current.desktopForeground) {
+      states.clearForeground();
       states.stop(
         "desktop",
         new ComputerUseRefusal(current.desktop ? "\u684C\u9762\u64CD\u4F5C\u6A21\u5F0F\u5DF2\u66F4\u6539\uFF0C\u672C\u6B21\u8C03\u7528\u5DF2\u505C\u6B62\u3002" : CLOSED.desktop)
@@ -2504,7 +3156,8 @@ function apply(ctx) {
         await browsers.close(id).catch(() => void 0);
         const label = driverSession(id);
         if (cursors.delete(label) && driver.loaded)
-          await driver.call("end_session", { session: label }, AbortSignal.timeout(5e3)).catch(() => void 0);
+          await driver.call("end_session", { session: label }, AbortSignal.timeout(5e3), id).catch(() => void 0);
+        await driver.releaseSession(id).catch(() => void 0);
         snapshots.delete(id);
         states.forget(id);
       },
@@ -2547,7 +3200,7 @@ function apply(ctx) {
                 chunks.push(Buffer.from(chunk));
               }
               const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
-              act(sessionId, body);
+              await act(sessionId, body);
             } else if (req.method !== "GET") throw new SettingsError("\u8BF7\u4F7F\u7528 GET \u6216 POST", 405);
             send(200, view(sessionId));
           } catch (error) {
@@ -2560,7 +3213,7 @@ function apply(ctx) {
       "computer: panel route"
     )
   );
-  function act(sessionId, body) {
+  async function act(sessionId, body) {
     switch (body?.action) {
       case "settings":
         settings.change(body.revision, (next) => {
@@ -2586,6 +3239,10 @@ function apply(ctx) {
         });
         states.revoke(sessionId, String(body.key ?? ""));
         return;
+      case "revoke-window-control":
+        states.pause(sessionId);
+        await driver.releaseSession(sessionId);
+        return;
       case "always-allow-site": {
         const site = String(body.site ?? "");
         if (!states.grantedApps(sessionId).some((app) => app.key === `site|${site}`))
@@ -2604,8 +3261,12 @@ function apply(ctx) {
       case "pause":
         states.pause(sessionId);
         void browsers.close(sessionId).catch(() => void 0);
+        await driver.releaseSession(sessionId);
         return;
       case "resume":
+        await driver.releaseSession(sessionId);
+        snapshots.delete(sessionId);
+        cursors.delete(driverSession(sessionId));
         states.resume(sessionId);
         return;
       case "release-browser": {
@@ -2626,6 +3287,7 @@ function apply(ctx) {
       session: {
         paused: states.isPaused(sessionId),
         apps: granted.filter((app) => !app.key.startsWith("launch|") && !app.key.startsWith("site|")),
+        foreground: states.foregroundWindows(sessionId),
         sites: granted.filter((app) => app.key.startsWith("site|")).map((app) => app.key.slice(5)),
         log: states.log(sessionId).slice(-80).reverse()
       },

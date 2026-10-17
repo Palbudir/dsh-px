@@ -7,7 +7,31 @@ import { randomUUID } from 'node:crypto'
 import { MemoryStore } from '../packages/dsh-px-memory/src/store'
 import { TurnIdentity } from '../packages/dsh-px-memory/src/identity'
 import { HistoryIndex, historyRecord, type HistoryEvent } from '../packages/dsh-px-memory/src/history'
-import { handoffFrom, createPersonaSession } from '../packages/dsh-px-memory/src/continuation'
+import {
+  handoffFrom,
+  createPersonaSession,
+  continuationRequests
+} from '../packages/dsh-px-memory/src/continuation'
+
+test('model continuation coalesces concurrent retries and rejects a changed target before mutation', async () => {
+  const once = continuationRequests()
+  let release!: () => void,
+    calls = 0
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const run = async () => {
+    calls++
+    await pending
+    return 'new-session'
+  }
+  const a = once('request', 'model-a', run),
+    b = once('request', 'model-a', run)
+  await assert.rejects(once('request', 'model-b', run), /另一项操作/)
+  release()
+  assert.deepEqual(await Promise.all([a, b]), ['new-session', 'new-session'])
+  assert.equal(calls, 1)
+})
 
 function fixture(t: any) {
   const dir = mkdtempSync(join(tmpdir(), 'px-persona-ab-')),

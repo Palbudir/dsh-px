@@ -5,6 +5,8 @@ import type { LocalStatus } from './status'
 import type { NetworkCheck } from './network'
 import { requestJson } from '../../shared/client-http'
 import { createCapabilities, pageCarrier } from '../../shared/client-capabilities'
+import { installHtmlPreview } from './html-preview'
+import { installContextModelSelect } from './context-model-select'
 
 export const inject = ['slots', 'locale']
 const prefix = '/dsh-px-workbench'
@@ -343,6 +345,8 @@ export function apply(
   ctx: ClientContext & { inject: (services: string[], callback: (host: any) => void) => unknown }
 ): void {
   installUiStyles(ctx)
+  installHtmlPreview(ctx)
+  installContextModelSelect(ctx)
   const capabilities = createCapabilities<Record<string, boolean>>({})
   for (const name of Object.keys(dependencyLabels))
     ctx.inject([name], (host) => {

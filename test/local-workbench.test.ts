@@ -59,8 +59,11 @@ test('workbench diagnostics never read secrets and never claim host lifecycle co
   const created: string[] = []
   const mod = await import(pathToFileURL(resolve('packages/dsh-px-workbench/lib/index.js')).href)
   mod.apply({
+    provide: () => {},
+    on: () => {},
     inject: (_: unknown, callback: (ctx: unknown) => void) =>
       callback({
+        provide: () => {},
         connection: { requestRejection: () => undefined },
         webServer: {
           register: (r: { path: string; handler: (req: unknown, res: unknown) => void }) => {

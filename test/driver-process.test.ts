@@ -4,6 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { createHash } from 'node:crypto'
 import { DriverProcess } from '../packages/dsh-px-computer/src/driver-process'
 import { DesktopDriver } from '../packages/dsh-px-computer/src/desktop'
 
@@ -70,6 +71,47 @@ test('timeout reports unknown result without automatic replay', async (t) => {
   assert.equal(f.resets(), 1)
 })
 
+test('native SDK error variants preserve their actionable code and reason', async (t) => {
+  const { worker } = fixture(
+    t,
+    3000,
+    `export const CuaDriver={async create(){return {async callTool(){const error=Error('DriverError.Tool');error.inner={tool:'list_windows',errorCode:'session_expired',message:'The transport session is no longer active'};throw error;}}}}`
+  )
+  await assert.rejects(
+    worker.callTool('list_windows', '{}'),
+    /\[session_expired\] The transport session is no longer active/
+  )
+})
+
+test('ending one session transport cannot poison another; reopening requires explicit release', async (t) => {
+  const { worker } = fixture(
+    t,
+    3000,
+    `let next=0;
+    export const CuaDriver={async create(){const id=++next;let ended=false;return {
+      uniffiDestroy(){ended=true},
+      async callTool(name){
+        if(ended){const error=Error('DriverError.Tool');error.inner={tool:name,errorCode:'1',message:"session 'sdk-11111111-1111-1111-1111-111111111111' has ended; tool call 'list_windows' was rejected. Call start_session to revive it."};throw error;}
+        if(name==='end-transport')ended=true;
+        return {rawJson:JSON.stringify({id})};
+      }
+    }}};
+  `
+  )
+  const read = async (scope: string) =>
+    JSON.parse((await worker.callTool('list_windows', '{}', { scope })).rawJson).id
+  const first = await read('session-a'),
+    second = await read('session-b')
+  assert.notEqual(first, second)
+  await worker.callTool('end-transport', '{}', { scope: 'session-a' })
+  await assert.rejects(read('session-a'), (error: any) => error.code === 'driver_session_ended')
+  assert.equal(await read('session-b'), second)
+  await assert.rejects(read('session-a'), /恢复/)
+  await worker.callTool('__px_close_scope', '{}', { scope: 'session-a' })
+  assert.notEqual(await read('session-a'), first)
+  assert.equal(await read('session-b'), second)
+})
+
 test('close stops a blocked driver rather than waiting for the call to finish', async (t) => {
   const f = fixture(t)
   const driver = new DesktopDriver(async () => f.worker)
@@ -87,4 +129,62 @@ test('abort during native initialization also settles promptly', async (t) => {
   const call = f.worker.callTool('read', '{}', { signal: ac.signal })
   setTimeout(() => ac.abort(), 30)
   await assert.rejects(call, /取消/)
+})
+
+test('native mode verifies binaries and connects only to its owned daemon endpoint', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'px-native-driver-test-'))
+  const binaryPath = join(dir, 'cua-driver.exe')
+  writeFileSync(binaryPath, 'verified test fixture')
+  const digest = createHash('sha256').update('verified test fixture').digest('hex')
+  writeFileSync(
+    join(dir, 'sdk.mjs'),
+    `
+    let options;
+    export const EmbeddedPermissionMode = { Standard: 0 };
+    export const EmbeddedDriverHostOptions = { create: value => value };
+    export const EmbeddedCuaDriverHost = { withOptions(value) {
+      options=value;
+      return { async start(){return {socketPath:'owned-private-endpoint',driverVersion:'0.28.0',generation:'one'}},
+        async stop(){}, waitForExit(){return new Promise(()=>{})} };
+    }};
+    export const CuaDriver = {
+      create(){throw Error('must not use DPI-virtualized in-process runtime')},
+      connect(endpoint){
+        if(endpoint!=='owned-private-endpoint')throw Error('must not attach shared daemon');
+        return {async callTool(){return {rawJson:JSON.stringify({endpoint,options})}}};
+      }
+    };
+  `
+  )
+  const worker = new DriverProcess(pathToFileURL(join(dir, 'sdk.mjs')).href, () => {}, 3000, {
+    binaryPath,
+    version: '0.28.0',
+    files: { 'cua-driver.exe': digest }
+  })
+  t.after(async () => {
+    await worker.shutdown()
+    rmSync(dir, { recursive: true, force: true })
+  })
+  const result = JSON.parse((await worker.callTool('read', '{}')).rawJson)
+  assert.equal(result.endpoint, 'owned-private-endpoint')
+  assert.equal(result.options.binaryPath, binaryPath)
+  assert.equal(result.options.dangerouslyBypassApprovals, false)
+  assert.equal(result.options.permissionMode, 0)
+  assert.deepEqual(result.options.environment, [{ name: 'CUA_DRIVER_RS_TELEMETRY_ENABLED', value: 'false' }])
+})
+
+test('tampered native executable is rejected before starting or attaching a daemon', async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), 'px-native-integrity-test-'))
+  writeFileSync(join(dir, 'fake.mjs'), fake)
+  writeFileSync(join(dir, 'cua-driver.exe'), 'changed')
+  const worker = new DriverProcess(pathToFileURL(join(dir, 'fake.mjs')).href, () => {}, 3000, {
+    binaryPath: join(dir, 'cua-driver.exe'),
+    version: '0.28.0',
+    files: { 'cua-driver.exe': '0'.repeat(64) }
+  })
+  t.after(async () => {
+    await worker.shutdown()
+    rmSync(dir, { recursive: true, force: true })
+  })
+  await assert.rejects(worker.callTool('read', '{}'), /原生驱动校验失败/)
 })
