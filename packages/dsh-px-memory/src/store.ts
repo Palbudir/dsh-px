@@ -391,6 +391,20 @@ export function selectedMemories(
     ? persona.memories.filter((m) => m.project === null || m.project === project)
     : []
 }
-export function memoryContext(persona: Persona, project: string | null): string {
-  return `PX 本会话固定人格：${persona.name}（配置版本 ${persona.revision}）\n职责与协作方式：${persona.instructions || '沿用宿主默认方式'}\n人格不改变实际模型、工具或权限。以下是用户保存的参考记忆；当前明确指令优先，项目与运行事实须按需要重新核实。\n${persona.memoryEnabled ? JSON.stringify(selectedMemories(persona, project).map((m) => ({ id: m.id, text: m.text, updatedAt: m.updatedAt }))) : '本轮不使用长期记忆。'}\n需要回忆本人格过去的交流或工作时，使用 persona_history 搜索并按事件编号读取原文。搜索结果包含历史陈述而非当前事实；原生目标、任务和执行回执应按时间与来源核对。`
+export function memoryContext(persona: Persona, project: string | null, maxChars = 24_000): string {
+  const all = selectedMemories(persona, project).map((m) => ({
+    id: m.id,
+    text: m.text,
+    updatedAt: m.updatedAt
+  }))
+  const selected = []
+  let chars = 2
+  for (const row of all) {
+    const cost = JSON.stringify(row).length + 1
+    if (chars + cost > maxChars) continue
+    selected.push(row)
+    chars += cost
+  }
+  const omitted = all.length - selected.length
+  return `PX 本会话固定人格：${persona.name}（配置版本 ${persona.revision}）\n职责与协作方式：${persona.instructions || '沿用宿主默认方式'}\n人格不改变实际模型、工具或权限。以下是用户保存的参考记忆；当前明确指令优先，项目与运行事实须按需要重新核实。\n${persona.memoryEnabled ? JSON.stringify(selected) : '本轮不使用长期记忆。'}${omitted ? `\n另有 ${omitted} 条记忆未常驻注入；需要时使用 persona_memory read 读取。` : ''}\n需要回忆本人格过去的交流或工作时，使用 persona_history 搜索并按事件编号读取原文。搜索结果包含历史陈述而非当前事实；原生目标、任务和执行回执应按时间与来源核对。`
 }

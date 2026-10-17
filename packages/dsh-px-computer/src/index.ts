@@ -1,5 +1,5 @@
 /// <reference path="./modules.d.ts" />
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,6 +22,7 @@ import {
 } from './browser'
 import { DESKTOP_TOOLS, DesktopDriver, driverSession, runDesktopTool, type DesktopTool } from './desktop'
 import { DriverProcess } from './driver-process'
+import computerDriver from '../../../config/computer-driver.json'
 import { guidance } from './guidance'
 import { appKey, appLabel, type WindowIdentity } from './policy'
 import {
@@ -80,11 +81,30 @@ export function apply(ctx: any): void {
   const projections = new WeakMap<object, ContentBlock[]>()
   const driver = new DesktopDriver(async () => {
     // Resolve in the profile, load only in the disposable child process. No native code in DSH.
-    return new DriverProcess(import.meta.resolve('@trycua/cua-driver'), () => {
-      for (const observed of snapshots.values()) observed.clear()
-      snapshots.clear()
-      cursors.clear()
-    })
+    const nativeDirectory = fileURLToPath(new URL('../native/win32-x64/', import.meta.url))
+    const manifest = JSON.parse(readFileSync(join(nativeDirectory, 'manifest.json'), 'utf8'))
+    if (!/^[a-f0-9]{64}$/.test(manifest.input?.sha256 ?? ''))
+      throw Error('电脑操作执行器清单不完整，请更新插件包')
+    return new DriverProcess(
+      import.meta.resolve('@trycua/cua-driver'),
+      () => {
+        for (const observed of snapshots.values()) observed.clear()
+        snapshots.clear()
+        cursors.clear()
+        states.clearForeground()
+        states.stop(
+          'desktop',
+          new ComputerUseRefusal('电脑驱动已重置，待执行的桌面操作已中止。请重新观察并取得窗口控制授权。')
+        )
+      },
+      45000,
+      {
+        binaryPath: join(nativeDirectory, 'cua-driver.exe'),
+        version: computerDriver.version,
+        files: computerDriver.files,
+        input: { binaryPath: join(nativeDirectory, 'px-windows-input.exe'), sha256: manifest.input.sha256 }
+      }
+    )
   })
   const launchOptions = (): BrowserLaunchOptions | undefined => {
     const current = settings.read()
@@ -190,6 +210,15 @@ export function apply(ctx: any): void {
         })
         return { text: result.text }
       } catch (error) {
+        if (
+          capability === 'desktop' &&
+          ['driver_session_ended', 'driver_unexpected_foreground'].includes((error as any)?.code)
+        ) {
+          states.pause(session.id)
+          snapshots.delete(session.id)
+          cursors.delete(driverSession(session.id))
+          ctx.logger?.warn?.('dsh-px-computer: session ended: %s', (error as any).nativeDetail)
+        }
         const message = error instanceof Error ? error.message : String(error)
         states.record(session.id, {
           at: Date.now(),
@@ -225,62 +254,75 @@ export function apply(ctx: any): void {
         const sessionSnapshots = snapshots.get(s.id) ?? new Map<string, string>()
         snapshots.set(s.id, sessionSnapshots)
         return runDesktopTool(spec, args, {
-          driver,
+          driver: driver.forSession(s.id),
           sessionId: s.id,
           signal,
           seesImages: await modelSeesImages(ctx, s.agent, signal),
           foregroundAllowed: settings.read().desktopForeground === true,
           onUnexpectedForeground: () => states.pause(s.id),
-          authorizeForeground: (display: string) =>
-            askOrRefuse(
-              run,
-              signal,
-              `占用前台操作「${display}」`,
-              `本次 ${spec.name} 可能切换到「${display}」并占用鼠标或键盘。允许这一次前台操作吗？`,
-              `This ${spec.name} action may focus "${display}" and use the mouse or keyboard. Allow this one foreground action?`,
-              'computer use: foreground action'
-            ),
+          onWindowGone: (pid, windowId) => states.forgetForegroundWindow(s.id, pid, windowId),
+          authorizeForeground: async (display, target) => {
+            const app = appKey(target.identity)
+            const key = `window|${target.pid}|${target.windowId}|${app}`
+            await states.authorizeForeground(s.id, key, app, display, signal, () =>
+              askOrRefuse(
+                run,
+                signal,
+                `在本会话中控制「${display}」`,
+                `允许本会话连续读取和操作「${display}」这个窗口，并按任务需要占用前台鼠标和键盘吗？普通动作不再逐次询问；暂停、撤销或关闭桌面能力后结束授权。删除、发送、付款等敏感动作仍单独确认。`,
+                `Allow this session to read, operate and focus this exact "${display}" window? Ordinary actions will not ask again. Pause, revoke or disable desktop control to end the grant. Sensitive actions still need confirmation.`,
+                'computer use: session window control'
+              )
+            )
+          },
           snapshots: sessionSnapshots,
           env: process.env,
-          authorize: async (window: WindowIdentity, display: string) => {
+          authorize: async (window: WindowIdentity, display: string, target) => {
             const key = appKey(window)
             if (states.granted(s.id, key) || settings.alwaysAllowsApp(key)) return
             await askOrRefuse(
               run,
               signal,
               `操作「${display}」`,
-              `允许 DSH 在本会话中读取和操作「${display}」吗？之后本会话对它的查看、点击和输入不再逐次询问；删除、发送、付款等敏感动作仍会单独确认。`,
-              `Allow DSH to read and operate "${display}" in this session? Later views, clicks and typing in this app will not ask again; deleting, sending or paying still asks separately.`,
+              `允许 DSH 在本会话中读取和操作「${display}」吗？${settings.read().desktopForeground ? '包括按任务需要占用这个窗口的前台鼠标和键盘。' : ''}之后普通操作不再逐次询问；删除、发送、付款等敏感动作仍会单独确认。`,
+              `Allow DSH to read and operate "${display}" in this session? ${settings.read().desktopForeground ? 'This includes focusing this window for mouse and keyboard actions. ' : ''}Ordinary operations will not ask again; sensitive actions still ask separately.`,
               `computer use: app access ${window.appName}`
             )
             states.grant(s.id, key, display)
+            if (settings.read().desktopForeground && target)
+              states.grantForeground(s.id, `window|${target.pid}|${target.windowId}|${key}`, key, display)
           },
           authorizeLaunch: async (display: string, confirm?: string) => {
             const key = `launch|${display.toLowerCase()}`
-            if (!confirm && states.granted(s.id, key)) return
             await askOrRefuse(
               run,
               signal,
               `启动「${display}」`,
               confirm
                 ? `即将${confirm}：${display}。允许吗？`
-                : `允许 DSH 启动「${display}」并在本会话中操作它吗？`,
+                : `允许 DSH 启动「${display}」并在本会话中连续操作它创建的窗口吗？这可能占用前台鼠标和键盘，普通操作不再逐次询问。`,
               confirm
                 ? `About to ${LAUNCH_REASON_EN[confirm] ?? 'run a program'}: ${display}. Allow?`
-                : `Allow DSH to start "${display}" and operate it in this session?`,
+                : `Allow DSH to launch "${display}" and control its new windows in this session, including foreground mouse and keyboard actions?`,
               `computer use: launch ${display}`
             )
             states.grant(s.id, key)
           },
-          grantLaunched: (windows) => {
-            for (const window of windows) states.grant(s.id, appKey(window), appLabel(window))
+          grantLaunched: (windows, allowForeground) => {
+            for (const window of windows) {
+              const key = appKey(window),
+                label = appLabel(window)
+              states.grant(s.id, key, label)
+              if (allowForeground)
+                states.grantForeground(s.id, `window|${window.pid}|${window.windowId}|${key}`, key, label)
+            }
           },
           beginSession: async () => {
             if (cursors.has(label)) return
             cursors.add(label)
             try {
-              await driver.call('start_session', { session: label }, signal)
-              await driver.call('set_agent_cursor_enabled', { session: label, enabled: true }, signal)
+              await driver.call('start_session', { session: label }, signal, s.id)
+              await driver.call('set_agent_cursor_enabled', { session: label, enabled: true }, signal, s.id)
             } catch (error) {
               ctx.logger?.warn?.('dsh-px-computer: agent cursor unavailable: %s', String(error))
             }
@@ -467,13 +509,13 @@ export function apply(ctx: any): void {
     }
     if (current.browser !== before.browser) states.revokeAll((key) => key.startsWith('site|'))
     if ((before.desktop && !current.desktop) || before.desktopForeground !== current.desktopForeground) {
+      states.clearForeground()
       states.stop(
         'desktop',
         new ComputerUseRefusal(current.desktop ? '桌面操作模式已更改，本次调用已停止。' : CLOSED.desktop)
       )
     }
-    // App identity does not change with delivery mode. Keep its access grant; foreground still
-    // requires a new one-shot approval. Disabling the desktop capability revokes app access.
+    // Read access may remain when delivery mode changes; window control must be authorized again.
     if (before.desktop && !current.desktop) states.revokeAll((key) => !key.startsWith('site|'))
     if (!enabled(current)) states.stop('confirm', new ComputerUseRefusal(CLOSED.confirm))
     if (!current.desktop) void driver.close().catch(() => undefined)
@@ -487,8 +529,9 @@ export function apply(ctx: any): void {
         const label = driverSession(id)
         if (cursors.delete(label) && driver.loaded)
           await driver
-            .call('end_session', { session: label }, AbortSignal.timeout(5000))
+            .call('end_session', { session: label }, AbortSignal.timeout(5000), id)
             .catch(() => undefined)
+        await driver.releaseSession(id).catch(() => undefined)
         snapshots.delete(id)
         states.forget(id)
       },
@@ -533,7 +576,7 @@ export function apply(ctx: any): void {
                   chunks.push(Buffer.from(chunk))
                 }
                 const body = JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}')
-                act(sessionId, body)
+                await act(sessionId, body)
               } else if (req.method !== 'GET') throw new SettingsError('请使用 GET 或 POST', 405)
               send(200, view(sessionId))
             } catch (error) {
@@ -547,7 +590,7 @@ export function apply(ctx: any): void {
     )
   )
 
-  function act(sessionId: string, body: any): void {
+  async function act(sessionId: string, body: any): Promise<void> {
     switch (body?.action) {
       case 'settings':
         settings.change(body.revision, (next) => {
@@ -577,6 +620,10 @@ export function apply(ctx: any): void {
         })
         states.revoke(sessionId, String(body.key ?? ''))
         return
+      case 'revoke-window-control':
+        states.pause(sessionId)
+        await driver.releaseSession(sessionId)
+        return
       case 'always-allow-site': {
         const site = String(body.site ?? '')
         if (!states.grantedApps(sessionId).some((app) => app.key === `site|${site}`))
@@ -595,8 +642,12 @@ export function apply(ctx: any): void {
       case 'pause':
         states.pause(sessionId)
         void browsers.close(sessionId).catch(() => undefined)
+        await driver.releaseSession(sessionId)
         return
       case 'resume':
+        await driver.releaseSession(sessionId)
+        snapshots.delete(sessionId)
+        cursors.delete(driverSession(sessionId))
         states.resume(sessionId)
         return
       case 'release-browser': {
@@ -618,6 +669,7 @@ export function apply(ctx: any): void {
       session: {
         paused: states.isPaused(sessionId),
         apps: granted.filter((app) => !app.key.startsWith('launch|') && !app.key.startsWith('site|')),
+        foreground: states.foregroundWindows(sessionId),
         sites: granted.filter((app) => app.key.startsWith('site|')).map((app) => app.key.slice(5)),
         log: states.log(sessionId).slice(-80).reverse()
       },

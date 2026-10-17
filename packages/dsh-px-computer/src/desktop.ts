@@ -6,6 +6,7 @@
 import { createHash } from 'node:crypto'
 import {
   appLabel,
+  appKey,
   deniedKeys,
   deniedWindow,
   launchFolders,
@@ -15,13 +16,14 @@ import {
   type WindowIdentity
 } from './policy'
 import { ComputerUseRefusal, UNTRUSTED, type Image } from './runtime'
+import { boundedInputPlan } from './bounded-input'
 
 /** The subset of `@trycua/cua-driver` this module uses. */
 export interface DriverLike {
   callTool(
     name: string,
     argumentsJson: string,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal; scope?: string }
   ): Promise<{ rawJson: string }>
   shutdown(): Promise<void>
 }
@@ -33,6 +35,9 @@ export interface DriverResult {
   structuredContent?: any
   isError?: boolean
 }
+export interface DesktopCaller {
+  call(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<DriverResult>
+}
 
 /** Serializes every driver call; desktop input from two sessions must not interleave. */
 export class DesktopDriver {
@@ -41,7 +46,12 @@ export class DesktopDriver {
   private epoch = 0
   constructor(private readonly load: LoadDriver) {}
 
-  call(name: string, args: Record<string, unknown>, signal: AbortSignal): Promise<DriverResult> {
+  call(
+    name: string,
+    args: Record<string, unknown>,
+    signal: AbortSignal,
+    scope?: string
+  ): Promise<DriverResult> {
     const epoch = this.epoch
     const run = this.tail.then(async () => {
       signal.throwIfAborted()
@@ -51,7 +61,7 @@ export class DesktopDriver {
         throw new Error(`无法加载 Cua Driver：${error instanceof Error ? error.message : String(error)}`)
       })
       const driver = await this.driver
-      const raw = await driver.callTool(name, JSON.stringify(args), { signal })
+      const raw = await driver.callTool(name, JSON.stringify(args), { signal, scope })
       return JSON.parse(raw.rawJson) as DriverResult
     })
     this.tail = run.catch(() => undefined)
@@ -60,6 +70,12 @@ export class DesktopDriver {
 
   get loaded(): boolean {
     return this.driver !== undefined
+  }
+  forSession(scope: string): DesktopCaller {
+    return { call: (name, args, signal) => this.call(name, args, signal, scope) }
+  }
+  async releaseSession(scope: string): Promise<void> {
+    if (this.driver) await this.call('__px_close_scope', {}, AbortSignal.timeout(3000), scope)
   }
 
   async close(): Promise<void> {
@@ -99,7 +115,7 @@ const DELIVERY = {
   type: 'string',
   enum: ['background', 'foreground'],
   description:
-    '默认 background。后台不可用就停止；foreground 仅在面板允许询问且用户批准本次操作后使用，不自动回退'
+    '默认 background。后台不可用就停止；foreground 需要面板允许并取得本会话对此窗口的前台授权，不自动回退'
 }
 
 export type DesktopKind = 'discover' | 'read' | 'act' | 'launch'
@@ -167,9 +183,13 @@ export const DESKTOP_TOOLS: readonly DesktopTool[] = [
     parameters: window({
       query: { type: 'string', description: '只返回标签或值包含该文字的元素（及其上级）' },
       max_elements: { type: 'integer', minimum: 20, maximum: 600, description: '最多返回的元素数，默认 200' },
+      include_accessibility_tree: {
+        type: 'boolean',
+        description: '是否构建 UIA 元素树；游戏或 3D 界面可设为 false，跳过 UIA 并直接截图'
+      },
       include_screenshot: { type: 'boolean', description: '是否附截图，默认在支持图片的模型上附带' }
     }),
-    pass: ['pid', 'window_id', 'query', 'max_elements', 'include_screenshot'],
+    pass: ['pid', 'window_id', 'query', 'max_elements', 'include_screenshot', 'include_accessibility_tree'],
     log: ['query']
   },
   {
@@ -178,7 +198,7 @@ export const DESKTOP_TOOLS: readonly DesktopTool[] = [
     kind: 'read',
     vision: true,
     description:
-      '放大最近一次窗口截图中的矩形区域（宽不超过 500 像素）以看清小字或图标。仅支持图片的模型可用。',
+      '放大最近一次窗口截图中的矩形区域（宽不超过 500 像素）以看清小字或图标，最多放大 4 倍。点击放大图使用 computer_click 的 from_zoom:true；新观察或动作后需重新放大。',
     parameters: window({ x1: num('左'), y1: num('上'), x2: num('右'), y2: num('下') }, [
       'x1',
       'y1',
@@ -201,9 +221,13 @@ export const DESKTOP_TOOLS: readonly DesktopTool[] = [
       y: num('截图中的 Y 像素'),
       button: { type: 'string', enum: ['left', 'right', 'middle'], description: '默认 left' },
       count: { type: 'integer', minimum: 1, maximum: 3, description: '点击次数，默认 1' },
+      from_zoom: {
+        type: 'boolean',
+        description: 'x/y 是否来自最近一次 computer_zoom 放大图；不能同时指定元素编号'
+      },
       delivery_mode: DELIVERY
     }),
-    pass: ['pid', 'window_id', 'element_index', 'x', 'y', 'button', 'count', 'delivery_mode'],
+    pass: ['pid', 'window_id', 'element_index', 'x', 'y', 'button', 'count', 'from_zoom', 'delivery_mode'],
     log: ['element_index', 'x', 'y', 'button', 'count']
   },
   {
@@ -316,7 +340,7 @@ export const DESKTOP_TOOLS: readonly DesktopTool[] = [
     driver: 'launch_app',
     kind: 'launch',
     description:
-      '在后台启动应用（不抢焦点）。优先使用 computer_list_apps 返回的 launch_path，或商店应用的 aumid；也可给出名称或 .exe 完整路径。不能附带命令行参数。',
+      '启动应用，可能切换前台。优先使用 computer_list_apps 返回的 launch_path，或商店应用的 aumid；也可给出名称或 .exe 完整路径。不能附带命令行参数。',
     parameters: {
       type: 'object',
       additionalProperties: false,
@@ -331,10 +355,82 @@ export const DESKTOP_TOOLS: readonly DesktopTool[] = [
     log: ['name', 'aumid', 'launch_path', 'path']
   },
   {
+    name: 'computer_move_pointer',
+    driver: 'move_pointer',
+    kind: 'act',
+    vision: true,
+    description:
+      '移动真实鼠标指针并悬停，不点击。用于查看提示文字。目标窗口须已处于前台；x/y 来自最近一次完整窗口截图，不是放大图或屏幕绝对坐标。移动后重新观察；在锁定鼠标的 3D 视图中应改用相对输入。',
+    parameters: window(
+      {
+        x: num('完整窗口截图中的 X'),
+        y: num('完整窗口截图中的 Y'),
+        delivery_mode: {
+          type: 'string',
+          enum: ['foreground'],
+          description: '显式前台操作，复用本会话的窗口授权'
+        }
+      },
+      ['x', 'y', 'delivery_mode']
+    ),
+    pass: ['pid', 'window_id', 'x', 'y', 'delivery_mode'],
+    log: ['x', 'y']
+  },
+  {
+    name: 'computer_bounded_input',
+    driver: 'bounded_input',
+    kind: 'act',
+    vision: true,
+    description:
+      '在已授权且已处于前台的窗口持续按键、按住鼠标或相对移动，可组合使用。单次最长 10 秒，默认优先短动作；完成、失焦、Esc、取消或控制端失联后释放。适用于游戏、3D 视图等连续操作；不会自动激活窗口。执行后必须重新观察。',
+    parameters: window(
+      {
+        keys: {
+          type: 'array',
+          items: { type: 'string' },
+          maxItems: 6,
+          description: '同时按住的键，例如 ["w", "space"]；支持字母、数字、方向键、修饰键及 F1～F12'
+        },
+        buttons: {
+          type: 'array',
+          items: { type: 'string', enum: ['left', 'right', 'middle'] },
+          maxItems: 2,
+          description: '同时按住的鼠标按钮'
+        },
+        duration_ms: {
+          type: 'integer',
+          minimum: 10,
+          maximum: 10000,
+          description: '持续毫秒数；初次操作建议 100～300'
+        },
+        dx: {
+          type: 'integer',
+          minimum: -2000,
+          maximum: 2000,
+          description: '这段时间内鼠标相对向右位移；负数向左'
+        },
+        dy: {
+          type: 'integer',
+          minimum: -2000,
+          maximum: 2000,
+          description: '这段时间内鼠标相对向下位移；负数向上'
+        },
+        delivery_mode: {
+          type: 'string',
+          enum: ['foreground'],
+          description: '必须显式为 foreground，复用本会话对此窗口的前台授权'
+        }
+      },
+      ['duration_ms', 'delivery_mode']
+    ),
+    pass: ['pid', 'window_id', 'keys', 'buttons', 'duration_ms', 'dx', 'dy', 'delivery_mode'],
+    log: ['keys', 'buttons', 'duration_ms', 'dx', 'dy']
+  },
+  {
     name: 'computer_bring_to_front',
     driver: 'bring_to_front',
     kind: 'act',
-    description: '把窗口切到前台。只在确实需要前台且用户批准本次操作后使用；后台模式会拒绝。',
+    description: '把窗口切到前台。复用本会话对此窗口的前台授权；后台模式会拒绝。',
     parameters: window({}),
     pass: ['pid', 'window_id'],
     log: []
@@ -360,21 +456,32 @@ export const DESKTOP_TOOLS: readonly DesktopTool[] = [
 const ELEMENT_ADDRESSED = new Set(['click', 'type_text', 'press_key', 'set_value'])
 
 export interface DesktopContext {
-  driver: DesktopDriver
+  driver: DesktopCaller
   sessionId: string
   signal: AbortSignal
   seesImages: boolean
   foregroundAllowed?: boolean
-  authorizeForeground?: (label: string) => Promise<void>
+  authorizeForeground?: (
+    label: string,
+    target: { pid: number; windowId: number; identity: WindowIdentity }
+  ) => Promise<void>
   onUnexpectedForeground?: () => void
+  onWindowGone?: (pid: number, windowId: number) => void
   /** Latest snapshot id per `pid:window`, owned by this DSH session. */
   snapshots: Map<string, string>
   /** Resolve and authorize a window before reading or acting on it. */
-  authorize: (window: WindowIdentity, label: string) => Promise<void>
+  authorize: (
+    window: WindowIdentity,
+    label: string,
+    target?: { pid: number; windowId: number }
+  ) => Promise<void>
   /** Authorize starting a program before it exists. */
   authorizeLaunch: (label: string, confirm?: string) => Promise<void>
   /** Called after a launch with the windows it produced. */
-  grantLaunched: (windows: WindowIdentity[]) => void
+  grantLaunched: (
+    windows: Array<WindowIdentity & { pid: number; windowId: number }>,
+    allowForeground: boolean
+  ) => void
   /** Called before the first input action of a driver session (agent cursor). */
   beginSession: () => Promise<void>
   env: NodeJS.ProcessEnv
@@ -404,7 +511,7 @@ function integer(value: unknown, name: string): number {
 
 /** Look up one exact window of a process. */
 export async function identify(
-  driver: DesktopDriver,
+  driver: DesktopCaller,
   pid: number,
   windowId: number,
   signal: AbortSignal
@@ -420,7 +527,11 @@ export async function identify(
 }
 
 function windowsLine(w: any): string {
-  const state = w.minimized ? '最小化' : w.is_on_screen === false ? '不在屏幕上' : '可见'
+  const state = w.minimized
+    ? '最小化'
+    : w.is_on_screen === false
+      ? '不在可见区域'
+      : '已打开（前台与桌面状态需观察）'
   return `- pid=${w.pid} window_id=${w.window_id} | ${w.app_name} | ${JSON.stringify(w.title ?? '')} | ${state}`
 }
 
@@ -432,6 +543,15 @@ export async function runDesktopTool(
 ): Promise<DesktopOutcome> {
   const args = (rawArgs && typeof rawArgs === 'object' ? rawArgs : {}) as Record<string, unknown>
   const driverArgs = argsFor(tool, args)
+  if (tool.driver === 'bounded_input') {
+    try {
+      const plan = boundedInputPlan(args)
+      for (const key of Object.keys(driverArgs)) delete driverArgs[key]
+      Object.assign(driverArgs, plan)
+    } catch (error) {
+      throw new ComputerUseRefusal(error instanceof Error ? error.message : String(error))
+    }
+  }
   if (args.delivery_mode !== undefined && !['background', 'foreground'].includes(String(args.delivery_mode)))
     throw new ComputerUseRefusal('delivery_mode 必须为 background 或 foreground')
   // Menu traversal and launching have no verified no-focus contract in the pinned driver.
@@ -440,9 +560,10 @@ export async function runDesktopTool(
     ['bring_to_front', 'invoke_menu', 'launch_app'].includes(tool.driver)
   if (needsForeground && (!c.foregroundAllowed || !c.authorizeForeground))
     throw new ComputerUseRefusal(
-      '当前仅允许后台操作。此操作可能占用前台；请让用户在电脑操作面板选择「允许询问前台操作」，再逐次确认。不会自动切换。'
+      '当前仅允许后台操作。此操作可能占用前台；请在电脑操作面板启用前台操作，再授权本会话控制指定窗口。不会自动切换。'
     )
-  if (tool.pass.includes('delivery_mode')) driverArgs.delivery_mode = args.delivery_mode ?? 'background'
+  if (tool.pass.includes('delivery_mode') && tool.driver !== 'bounded_input')
+    driverArgs.delivery_mode = args.delivery_mode ?? 'background'
   if (tool.vision && !c.seesImages)
     throw new ComputerUseRefusal(
       '当前模型不支持图片，无法使用这个工具；请改用元素树，或请用户切换到支持图片的模型。'
@@ -500,22 +621,21 @@ export async function runDesktopTool(
     if (decision.kind === 'deny') throw new ComputerUseRefusal(`不能启动该程序：${decision.reason}。`)
     const label = String(request.name ?? request.aumid ?? request.path ?? request.launch_path)
     await c.authorizeLaunch(label, decision.kind === 'confirm' ? decision.reason : undefined)
-    await c.authorizeForeground!(label)
     const result = await c.driver.call('launch_app', driverArgs, c.signal)
     if (result.isError) throw new Error(textOf(result) || '启动失败')
     const pid = result.structuredContent?.pid
     const launched: any[] = result.structuredContent?.windows ?? []
     // Grant only the windows this launch reported: a UWP launch returns the shared frame host's pid,
     // whose other windows (Settings, other store apps) must still ask on first use.
-    const identities: WindowIdentity[] = []
+    const identities: Array<WindowIdentity & { pid: number; windowId: number }> = []
     if (typeof pid === 'number' && launched.length) {
       const listed = await c.driver.call('list_windows', { pid }, c.signal)
       const own = new Set(launched.map((w) => w.window_id))
       for (const w of listed.structuredContent?.windows ?? [])
         if (own.has(w.window_id) && !deniedWindow({ appName: String(w.app_name ?? ''), title: w.title }))
-          identities.push({ appName: String(w.app_name ?? ''), title: w.title })
+          identities.push({ appName: String(w.app_name ?? ''), title: w.title, pid, windowId: w.window_id })
     }
-    c.grantLaunched(identities)
+    c.grantLaunched(identities, decision.kind === 'allow')
     const lines = launched.map((w) => windowsLine({ ...w, pid, app_name: identities[0]?.appName ?? '' }))
     return {
       text: [
@@ -543,14 +663,30 @@ export async function runDesktopTool(
     const reason = deniedKeys(Array.isArray(args.keys) ? args.keys.map(String) : [])
     if (reason) throw new ComputerUseRefusal(reason)
   }
-  const identity = await identify(c.driver, pid, windowId, c.signal)
+  let identity: Awaited<ReturnType<typeof identify>>
+  try {
+    identity = await identify(c.driver, pid, windowId, c.signal)
+  } catch (error) {
+    c.onWindowGone?.(pid, windowId)
+    throw error
+  }
   const denied = deniedWindow(identity)
   if (denied) throw new ComputerUseRefusal(`不能读取或操作该窗口：${denied}。`)
   if (identity.appName.toLowerCase() === FRAME_HOST && !identity.title)
     throw new ComputerUseRefusal('无法识别这个商店应用窗口，请重新列出窗口后再试。')
   const label = appLabel(identity)
-  await c.authorize(identity, label)
-  if (needsForeground) await c.authorizeForeground!(label)
+  if (needsForeground) await c.authorizeForeground!(label, { pid, windowId, identity })
+  else await c.authorize(identity, label, { pid, windowId })
+
+  // A human can leave a confirmation open while its original window closes or changes owner.
+  try {
+    const current = await identify(c.driver, pid, windowId, c.signal)
+    if (appKey(current) !== appKey(identity) || deniedWindow(current))
+      throw new ComputerUseRefusal('目标窗口在授权期间已变化，请重新观察并授权。')
+  } catch (error) {
+    c.onWindowGone?.(pid, windowId)
+    throw error
+  }
 
   const key = `${pid}:${windowId}`
   if (ELEMENT_ADDRESSED.has(tool.driver) && args.element_index !== undefined) {
@@ -564,9 +700,37 @@ export async function runDesktopTool(
 
   if (tool.driver === 'get_window_state') {
     const screenshot = c.seesImages && args.include_screenshot !== false && !identity.minimized
+    const treeRequested = args.include_accessibility_tree !== false
+    if (!treeRequested && !screenshot)
+      throw new ComputerUseRefusal('跳过 UIA 时需要可用截图；请使用支持图片的模型并确认窗口未最小化。')
+    c.snapshots.delete(key)
     driverArgs.include_screenshot = screenshot
+    driverArgs.include_accessibility_tree = treeRequested
     driverArgs.max_elements = args.max_elements ?? 200
-    const result = await c.driver.call('get_window_state', driverArgs, c.signal)
+    let result: DriverResult
+    let pixelFallback = false
+    try {
+      result = await c.driver.call('get_window_state', driverArgs, c.signal)
+      if (result.isError) throw Error(textOf(result) || '无法读取窗口')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      // Only this pinned UIA timeout is eligible. Never retry permission, lifecycle or transport failures.
+      if (
+        !treeRequested ||
+        !screenshot ||
+        !/^(?:\[1\] )?(?:Error: )?get_window_state timed out after 4s \(UIA provider unresponsive on hwnd /.test(
+          message
+        )
+      )
+        throw error
+      c.signal.throwIfAborted()
+      result = await c.driver.call(
+        'get_window_state',
+        { ...driverArgs, include_accessibility_tree: false },
+        c.signal
+      )
+      pixelFallback = true
+    }
     if (result.isError) throw new Error(textOf(result) || '无法读取窗口')
     const s = result.structuredContent ?? {}
     if (typeof s.snapshot_id === 'string') c.snapshots.set(key, s.snapshot_id)
@@ -575,7 +739,40 @@ export async function runDesktopTool(
       `pid=${pid} window_id=${windowId} snapshot=${s.snapshot_id ?? '-'} 应用=${identity.appName} 标题=${JSON.stringify(identity.title ?? '')}`,
       `元素 ${s.returned_element_count ?? s.element_count ?? 0}/${s.total_element_count ?? s.element_count ?? 0}${args.query ? `（query=${JSON.stringify(args.query)}）` : ''}`
     ]
+    if (
+      screenshot &&
+      s.screenshot_frame_valid !== false &&
+      imagesOf(result).length > 0 &&
+      Number.isInteger(s.screenshot_width) &&
+      Number.isInteger(s.screenshot_height) &&
+      s.screenshot_width > 0 &&
+      s.screenshot_height > 0
+    )
+      head.push(
+        `截图 ${s.screenshot_width}×${s.screenshot_height}；点击和放大使用这张图的像素坐标（x: 0～${s.screenshot_width - 1}，y: 0～${s.screenshot_height - 1}），不是屏幕绝对坐标。`
+      )
     const notes: string[] = []
+    if (pixelFallback)
+      notes.push(
+        'UIA 元素树未响应，已通过独立截图路径重新观察。没有新的元素编号时，请按当前截图操作，不复用旧编号。'
+      )
+    else if (!treeRequested) notes.push('本次已跳过 UIA 元素树，使用当前截图观察。')
+    if (s.px_window) {
+      const placement =
+        s.px_window.current_desktop === false
+          ? '另一个虚拟桌面'
+          : s.px_window.current_desktop === true
+            ? '当前虚拟桌面'
+            : '桌面归属未知'
+      notes.push(
+        `窗口状态：${placement}；${s.px_window.foreground ? '前台' : '后台'}${s.px_window.cloaked ? '；系统暂时隐藏窗口' : ''}。截图可用不代表后台键鼠投递可用。`
+      )
+    }
+    const validFrame = s.screenshot_frame_valid !== false
+    if (!validFrame)
+      notes.push(
+        '驱动未能确认截图与目标窗口匹配，本次不提供图片。请使用可访问性元素或重新获取有效窗口画面，不要按旧截图坐标操作。'
+      )
     if (s.degraded && s.degraded_reason) notes.push(`注意：${String(s.degraded_reason).split('.')[0]}`)
     if (identity.minimized)
       notes.push('窗口已最小化，无法截图；可先读取元素树，需要恢复到前台时必须另行确认。')
@@ -583,16 +780,22 @@ export async function runDesktopTool(
     const tree = String(s.tree_markdown ?? '').trim()
     return {
       text: [...head, '', tree || '（没有可识别的元素）', ...(notes.length ? ['', ...notes] : [])].join('\n'),
-      images: screenshot ? imagesOf(result) : [],
+      images: screenshot && validFrame ? imagesOf(result) : [],
       target: label
     }
   }
 
-  const result = await c.driver.call(tool.driver, driverArgs, c.signal)
+  let result: DriverResult
+  try {
+    result = await c.driver.call(tool.driver, driverArgs, c.signal)
+  } catch (error) {
+    if ((error as any)?.code === 'driver_unexpected_foreground') c.onUnexpectedForeground?.()
+    throw error
+  }
   const text = textOf(result)
   if (result.isError && result.structuredContent?.code === 'background_unavailable')
     throw new ComputerUseRefusal(
-      `此窗口不支持 ${tool.name} 的后台投递。操作已停止，不会自动切到前台。可检查元素支持的语义动作；确实需要前台时，由用户在面板开启询问后逐次确认。`
+      `此窗口不支持 ${tool.name} 的后台投递。操作已停止，不会自动切到前台。可检查元素支持的语义动作；需要前台时，在面板开启并授权本会话控制指定窗口。`
     )
   if (result.isError) throw new Error(text || `${tool.name} 失败`)
   if (tool.kind === 'act') c.snapshots.delete(key)
@@ -600,7 +803,7 @@ export async function runDesktopTool(
   const actual = mode === 'background' ? '后台' : mode === 'foreground' ? '前台' : '未知'
   const receipt =
     tool.kind === 'act'
-      ? `请求：${needsForeground ? '前台（本次已确认）' : '后台'} · 驱动回报：${actual} · 效果待重新观察`
+      ? `请求：${needsForeground ? '前台（本会话窗口已授权）' : '后台'} · 驱动回报：${actual} · 效果待重新观察`
       : undefined
   if (!needsForeground && mode === 'foreground') {
     c.onUnexpectedForeground?.()

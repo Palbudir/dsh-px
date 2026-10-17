@@ -33,6 +33,7 @@ export interface CompositionOptions {
   version: string
   install: (args: string[]) => Promise<void>
   log?: (message: string) => void
+  onFailure?: (error: unknown) => void
   knowledgeDirectory?: string
 }
 const TRACKED = ['package.json', 'pnpm-lock.yaml', 'cordis.patch.yml', 'cordis.yml']
@@ -390,10 +391,12 @@ export async function provisionNativeComposition(
     if (migrated !== patch) writeAtomic(patchPath, migrated)
     await options.install(['install'])
     for (const name of Object.keys(specs))
-      if (!identityMatches(name)) throw Error('Feature installation did not produce the expected version')
+      if (!identityMatches(name))
+        throw Error(`Feature installation did not produce the expected version: ${name}`)
     writeAtomic(statePath, JSON.stringify({ ...pending, phase: 'installed' }, null, 2) + '\n')
     return 'installed'
-  } catch {
+  } catch (error) {
+    options.onFailure?.(error)
     try {
       await recover(before)
     } catch {

@@ -203,14 +203,24 @@ export class PackDeployment {
         version: receipt.version,
         foundationDirectory: join(this.directory(receipt), 'foundation')
       })
+      let installationFailure: unknown
       const result = await provisionNativeComposition({
         profile: options.profile,
         directory: this.directory(receipt),
         version: receipt.version,
         knowledgeDirectory: resolve(options.profile, '..', '..', 'storages', 'dsh-px-knowledge'),
-        install: (args) => options.install(runtime, args)
+        install: (args) => options.install(runtime, args),
+        onFailure: (error) => {
+          installationFailure = error
+        }
       })
-      if (result === 'failed') throw Error('Pack 安装失败，原生依赖已恢复')
+      if (result === 'failed')
+        throw Error(
+          'Pack 安装失败，原生依赖已恢复。' +
+            (installationFailure instanceof Error
+              ? installationFailure.message.slice(0, 2000)
+              : '请查看原生插件安装日志。')
+        )
       if (result === 'user-managed') throw new UserManagedPack()
       return runtime
     }

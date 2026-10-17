@@ -10,6 +10,8 @@
 
 Pack 的依赖与 peer 固定在 [native-pack.json](../config/native-pack.json)。Desktop 的上游提交、编译产物与构建工厂摘要固定在 [native-desktop.json](../config/native-desktop.json)。
 
+电脑操作功能包携带 [computer-driver.json](../config/computer-driver.json) 锁定的 Cua Windows 原生可执行文件，构建时核对官方 ZIP 及各 EXE 的 SHA-256；PX 的 Windows 执行器从受审查的 C# 源码编译，并把摘要写入功能包内清单。Windows 用系统 .NET Framework 编译器，Linux 质量任务用 Mono 交叉编译；发布构建和原生运行验收仍由 Windows runner 执行。客户端运行时不下载编译器或临时编译，也不连接用户已有的 Cua 服务。
+
 ## Desktop 构建顺序
 
 可信构建在 `windows-2025` runner 上执行，不读取任何 secret：

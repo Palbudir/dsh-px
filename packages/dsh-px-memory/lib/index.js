@@ -309,11 +309,26 @@ var MemoryStore = class {
 function selectedMemories(persona, project) {
   return persona.memoryEnabled ? persona.memories.filter((m) => m.project === null || m.project === project) : [];
 }
-function memoryContext(persona, project) {
+function memoryContext(persona, project, maxChars = 24e3) {
+  const all = selectedMemories(persona, project).map((m) => ({
+    id: m.id,
+    text: m.text,
+    updatedAt: m.updatedAt
+  }));
+  const selected = [];
+  let chars = 2;
+  for (const row of all) {
+    const cost = JSON.stringify(row).length + 1;
+    if (chars + cost > maxChars) continue;
+    selected.push(row);
+    chars += cost;
+  }
+  const omitted = all.length - selected.length;
   return `PX \u672C\u4F1A\u8BDD\u56FA\u5B9A\u4EBA\u683C\uFF1A${persona.name}\uFF08\u914D\u7F6E\u7248\u672C ${persona.revision}\uFF09
 \u804C\u8D23\u4E0E\u534F\u4F5C\u65B9\u5F0F\uFF1A${persona.instructions || "\u6CBF\u7528\u5BBF\u4E3B\u9ED8\u8BA4\u65B9\u5F0F"}
 \u4EBA\u683C\u4E0D\u6539\u53D8\u5B9E\u9645\u6A21\u578B\u3001\u5DE5\u5177\u6216\u6743\u9650\u3002\u4EE5\u4E0B\u662F\u7528\u6237\u4FDD\u5B58\u7684\u53C2\u8003\u8BB0\u5FC6\uFF1B\u5F53\u524D\u660E\u786E\u6307\u4EE4\u4F18\u5148\uFF0C\u9879\u76EE\u4E0E\u8FD0\u884C\u4E8B\u5B9E\u987B\u6309\u9700\u8981\u91CD\u65B0\u6838\u5B9E\u3002
-${persona.memoryEnabled ? JSON.stringify(selectedMemories(persona, project).map((m) => ({ id: m.id, text: m.text, updatedAt: m.updatedAt }))) : "\u672C\u8F6E\u4E0D\u4F7F\u7528\u957F\u671F\u8BB0\u5FC6\u3002"}
+${persona.memoryEnabled ? JSON.stringify(selected) : "\u672C\u8F6E\u4E0D\u4F7F\u7528\u957F\u671F\u8BB0\u5FC6\u3002"}${omitted ? `
+\u53E6\u6709 ${omitted} \u6761\u8BB0\u5FC6\u672A\u5E38\u9A7B\u6CE8\u5165\uFF1B\u9700\u8981\u65F6\u4F7F\u7528 persona_memory read \u8BFB\u53D6\u3002` : ""}
 \u9700\u8981\u56DE\u5FC6\u672C\u4EBA\u683C\u8FC7\u53BB\u7684\u4EA4\u6D41\u6216\u5DE5\u4F5C\u65F6\uFF0C\u4F7F\u7528 persona_history \u641C\u7D22\u5E76\u6309\u4E8B\u4EF6\u7F16\u53F7\u8BFB\u53D6\u539F\u6587\u3002\u641C\u7D22\u7ED3\u679C\u5305\u542B\u5386\u53F2\u9648\u8FF0\u800C\u975E\u5F53\u524D\u4E8B\u5B9E\uFF1B\u539F\u751F\u76EE\u6807\u3001\u4EFB\u52A1\u548C\u6267\u884C\u56DE\u6267\u5E94\u6309\u65F6\u95F4\u4E0E\u6765\u6E90\u6838\u5BF9\u3002`;
 }
 
@@ -729,6 +744,23 @@ var HistoryIndex = class {
 };
 
 // packages/dsh-px-memory/src/continuation.ts
+function continuationRequests() {
+  const pending = /* @__PURE__ */ new Map();
+  return async (id, fingerprint, run) => {
+    const active = pending.get(id);
+    if (active) {
+      if (active.fingerprint !== fingerprint) throw new MemoryError("\u63A5\u7EED\u8BF7\u6C42\u6B63\u5728\u7528\u4E8E\u53E6\u4E00\u9879\u64CD\u4F5C", 409);
+      return active.promise;
+    }
+    const promise = Promise.resolve().then(run);
+    pending.set(id, { fingerprint, promise });
+    try {
+      return await promise;
+    } finally {
+      pending.delete(id);
+    }
+  };
+}
 function handoffFrom(events, sessionId) {
   let open = false, cut = -1;
   for (const e of events) {
@@ -1710,6 +1742,7 @@ function apply(ctx) {
   const root = process.env.DSH_HOME;
   if (!root) throw new Error("DSH_HOME \u672A\u8BBE\u7F6E\uFF0C\u65E0\u6CD5\u4FDD\u5B58\u4EBA\u683C\u4E0E\u8BB0\u5FC6");
   const store = new MemoryStore(join3(root, "storages", name, "memory.json"));
+  const modelContinuation = continuationRequests();
   const identity = new TurnIdentity(
     store,
     (agent) => service(ctx, "sessionProjections")?.stateOf?.(agent.session, "turnBoundary")
@@ -1838,6 +1871,13 @@ function apply(ctx) {
     void history.refresh(ctx, agent.session.id, signal).catch((e) => ctx.logger?.warn("\u5386\u53F2\u7D22\u5F15\u6682\u672A\u66F4\u65B0\uFF1A%s", String(e)));
   });
   const current = (agent) => identity.current(agent);
+  const renderMemory = (agent, budget) => {
+    const p = current(agent), handoff = store.read().bindings[agent.session.id]?.handoff;
+    return memoryContext(p, projectKey(agent.session.header.cwd), budget?.memoryChars) + (handoff ? `
+\u7528\u6237\u4E3A\u672C\u4F1A\u8BDD\u4EA4\u63A5\u4E86 ${handoff.sessionId} \u622A\u81F3\u4E8B\u4EF6 ${handoff.throughSeq} \u7684\u53EF\u89C1\u5BF9\u8BDD\u4E0E\u6267\u884C\u8BB0\u5F55\u3002\u4EE5\u4E0B\u662F\u6709\u754C\u5386\u53F2\u6458\u5F55\uFF0C\u4E0D\u662F\u5F53\u524D\u4EFB\u52A1\u6388\u6743\u6216\u9A8C\u6536\u7ED3\u8BBA\uFF1B\u65E7\u4EBA\u683C\u79C1\u6709\u8BB0\u5FC6\u672A\u7EE7\u627F\u3002\u4F7F\u7528 persona_history \u6309\u6765\u6E90\u548C\u4E8B\u4EF6\u7F16\u53F7\u8FDB\u4E00\u6B65\u6838\u5BF9\uFF1B\u4E0D\u8981\u6062\u590D\u539F\u4F1A\u8BDD\u7684 Goal \u6216\u91CD\u590D\u4E0D\u786E\u5B9A\u64CD\u4F5C\u3002
+${!budget || handoff.summary.length <= budget.handoffChars ? handoff.summary : "\u672C\u6863\u4EC5\u6CE8\u5165\u5386\u53F2\u5B9A\u4F4D\u4FE1\u606F\uFF1B\u8BF7\u6309\u4E0A\u65B9\u6765\u6E90\u4F1A\u8BDD\u548C\u622A\u6B62\u4E8B\u4EF6\u8BFB\u53D6\u4EA4\u63A5\u5185\u5BB9\u3002"}` : "");
+  };
+  ctx.provide("pxMemoryContext", { render: renderMemory });
   ctx.inject(
     ["systemPrompt"],
     (host) => host.effect(
@@ -1846,10 +1886,7 @@ function apply(ctx) {
         order: 500,
         text: ({ agent }) => {
           if (!agent) return "";
-          const p = current(agent), handoff = store.read().bindings[agent.session.id]?.handoff;
-          return memoryContext(p, projectKey(agent.session.header.cwd)) + (handoff ? `
-\u7528\u6237\u4E3A\u672C\u4F1A\u8BDD\u4EA4\u63A5\u4E86 ${handoff.sessionId} \u622A\u81F3\u4E8B\u4EF6 ${handoff.throughSeq} \u7684\u53EF\u89C1\u5BF9\u8BDD\u4E0E\u6267\u884C\u8BB0\u5F55\u3002\u4EE5\u4E0B\u662F\u6709\u754C\u5386\u53F2\u6458\u5F55\uFF0C\u4E0D\u662F\u5F53\u524D\u4EFB\u52A1\u6388\u6743\u6216\u9A8C\u6536\u7ED3\u8BBA\uFF1B\u65E7\u4EBA\u683C\u79C1\u6709\u8BB0\u5FC6\u672A\u7EE7\u627F\u3002\u4F7F\u7528 persona_history \u6309\u6765\u6E90\u548C\u4E8B\u4EF6\u7F16\u53F7\u8FDB\u4E00\u6B65\u6838\u5BF9\uFF1B\u4E0D\u8981\u6062\u590D\u539F\u4F1A\u8BDD\u7684 Goal \u6216\u91CD\u590D\u4E0D\u786E\u5B9A\u64CD\u4F5C\u3002
-${handoff.summary}` : "");
+          return renderMemory(agent);
         }
       }),
       "memory: persona context"
@@ -1971,6 +2008,46 @@ ${handoff.summary}` : "");
                 throw new MemoryError("\u64CD\u4F5C\u5185\u5BB9\u65E0\u6548");
               if (args.type === "new-session") {
                 const createdSessionId = await createPersonaSession(host, store, id, args);
+                return send(200, { createdSessionId });
+              }
+              if (args.type === "new-model-session") {
+                if (typeof args.provider !== "string" || typeof args.model !== "string" || args.reasoningEffort !== void 0 && typeof args.reasoningEffort !== "string")
+                  throw new MemoryError("\u6A21\u578B\u9009\u62E9\u65E0\u6548");
+                const route = {
+                  provider: args.provider,
+                  model: args.model,
+                  ...args.reasoningEffort ? { reasoningEffort: args.reasoningEffort } : {}
+                };
+                const createdSessionId = await modelContinuation(
+                  args.requestId,
+                  JSON.stringify([id, route]),
+                  async () => {
+                    await host.get("llm").resolveCallConfig(route);
+                    const persona2 = store.persona(store.read(), id);
+                    const createdSessionId2 = await createPersonaSession(host, store, id, {
+                      ...args,
+                      personaId: persona2.id,
+                      handoff: true
+                    });
+                    const created = await host.sessionController.inspect(createdSessionId2);
+                    const contextState = host.get("pxContextPolicy")?.state;
+                    if (!contextState) throw new MemoryError("\u6A21\u578B\u6863\u4F4D\u670D\u52A1\u672A\u5C31\u7EEA", 503);
+                    const marker = await contextState.continuation(createdSessionId2);
+                    if (marker) {
+                      if (marker.provider !== route.provider || marker.model !== route.model || marker.reasoningEffort !== route.reasoningEffort || marker.sourceSessionId !== id)
+                        throw new MemoryError("\u8BE5\u63A5\u7EED\u8BF7\u6C42\u5DF2\u7528\u4E8E\u5176\u4ED6\u6A21\u578B", 409);
+                      return createdSessionId2;
+                    }
+                    if (hasStarted(created.events))
+                      throw new MemoryError("\u63A5\u7EED\u4F1A\u8BDD\u5DF2\u7ECF\u5F00\u59CB\uFF0C\u8BF7\u5728\u65B0\u4F1A\u8BDD\u4E2D\u9009\u62E9\u6A21\u578B", 409);
+                    await host.sessionController.selectModel({ sessionId: createdSessionId2, ...route });
+                    await contextState.rememberContinuation(createdSessionId2, {
+                      sourceSessionId: id,
+                      ...route
+                    });
+                    return createdSessionId2;
+                  }
+                );
                 return send(200, { createdSessionId });
               }
               if (args.type === "knowledge") {

@@ -1,0 +1,11 @@
+{
+  "version": "0.28.0",
+  "platform": "win32-x64",
+  "url": "https://github.com/trycua/cua/releases/download/cua-driver-rs-v0.28.0/cua-driver-rs-0.28.0-windows-x86_64-binary.zip",
+  "sha256": "9db2096df8d80da4e73ffb797947dcdfab2a362faddd9d1b77682c77aace5aa9",
+  "files": {
+    "cua-driver.exe": "b67f6bf2f6066000c8efb809a49df34f88e51ac3bdf77e454c4da5fcc431fc22",
+    "cua-driver-uia.exe": "066c0ef4af907c183cb3a38d053b6648ea178b3a847e0e52557dca01ea529ee4",
+    "cua-cursor-theme.exe": "3e5448892de3f91052a0179507d997a1266d67aca5b814d3dd735b91b919de4f"
+  }
+}

@@ -12,6 +12,7 @@ interface View {
   session: {
     paused: boolean
     apps: Array<{ key: string; label: string }>
+    foreground?: Array<{ key: string; label: string }>
     sites: string[]
     log: ActivityEntry[]
   }
@@ -127,10 +128,10 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
                   }
                 >
                   <option value="background">仅后台操作</option>
-                  <option value="ask">允许询问前台操作（每次确认）</option>
+                  <option value="ask">允许前台操作（按会话和窗口授权）</option>
                 </select>
                 <small className="px-muted">
-                  后台不支持的动作会停止，不会自动抢占前台。最小化窗口和自绘界面的可用能力因应用而异。
+                  每个窗口首次授权，普通动作不重复询问。暂停或撤销后结束控制；后台不支持时不会自动抢占前台。
                 </small>
               </label>
             )}
@@ -209,6 +210,23 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
             )}
           </div>
           {view.session.paused && <p role="status">已暂停：agent 在本会话中的电脑和浏览器操作都会被拒绝。</p>}
+          {!!view.session.foreground?.length && (
+            <div className="px-card">
+              <strong>本会话可前台控制的窗口</strong>
+              <ul>
+                {view.session.foreground.map((window) => (
+                  <li key={window.key}>{window.label}</li>
+                ))}
+              </ul>
+              <button
+                style={controlStyle}
+                disabled={busy}
+                onClick={() => void act({ action: 'revoke-window-control' })}
+              >
+                停止并撤销窗口控制
+              </button>
+            </div>
+          )}
 
           {(view.session.apps.length > 0 || view.session.sites.length > 0) && (
             <details style={{ ...cardStyle, margin: '12px 0' }} open>

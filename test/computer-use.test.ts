@@ -61,6 +61,8 @@ test('hard deny list covers terminals, security, credentials, remote control and
     'ToDesk.exe',
     'DSH-PX Desktop.exe',
     'ChatGPT.exe',
+    'cua-driver.exe',
+    'C:\\PX\\native\\px-windows-input.exe',
     'C:\\Windows\\System32\\consent.exe'
   ])
     assert.ok(deniedWindow({ appName }), appName)
@@ -149,6 +151,8 @@ test('Start, search, the taskbar, the desktop and localized Run dialogs are shel
   for (const window of [
     { appName: 'StartMenuExperienceHost.exe', title: '开始' },
     { appName: 'SearchHost.exe', title: '搜索' },
+    { appName: 'Microsoft.CmdPal.UI.exe', title: '命令面板' },
+    { appName: 'PowerToys.PowerLauncher.exe', title: 'PowerToys Run' },
     { appName: 'explorer.exe', title: '' },
     { appName: 'explorer.exe', title: 'Program Manager' },
     { appName: 'explorer.exe', title: 'Ausführen' },
@@ -180,6 +184,7 @@ test('every curated desktop tool maps onto the pinned Cua Driver contract', () =
   assert.equal(contract.driverVersion, '0.28.0')
   const pxOnly: Record<string, string[]> = { computer_list_apps: ['query'] }
   for (const tool of DESKTOP_TOOLS) {
+    if (['bounded_input', 'move_pointer'].includes(tool.driver)) continue // PX native executors have separate contract and permission tests.
     const driver = contract.tools[tool.driver]
     assert.ok(driver, `${tool.name} → ${tool.driver}`)
     const props = (tool.parameters as any).properties ?? {}
@@ -281,6 +286,123 @@ function context(driver: DesktopDriver, overrides: Partial<DesktopContext> = {})
 }
 const tool = (name: string) => DESKTOP_TOOLS.find((t) => t.name === name)!
 
+test('UIA timeout falls back to an independent image without keeping stale element IDs', async () => {
+  const { driver, calls } = fakeDriver([{ pid: 20, window_id: 2, app_name: 'java.exe', title: '3D view' }], {
+    get_window_state: (args) =>
+      args.include_accessibility_tree === false
+        ? {
+            content: [{ type: 'image', data: 'AA==', mimeType: 'image/png' }],
+            structuredContent: { screenshot_width: 856, screenshot_height: 525 }
+          }
+        : {
+            isError: true,
+            content: [
+              {
+                type: 'text',
+                text: "Error: get_window_state timed out after 4s (UIA provider unresponsive on hwnd 0x2, class 'SDL_app')."
+              }
+            ]
+          }
+  })
+  const { c } = context(driver)
+  c.snapshots.set('20:2', 'old-snapshot')
+  const result = await runDesktopTool(tool('computer_get_window_state'), { pid: 20, window_id: 2 }, c)
+  assert.equal(result.images.length, 1)
+  assert.match(result.text, /UIA 元素树未响应/)
+  assert.match(result.text, /截图 856×525/)
+  assert.equal(c.snapshots.has('20:2'), false)
+  assert.deepEqual(
+    calls
+      .filter((call) => call.name === 'get_window_state')
+      .map((call) => call.args.include_accessibility_tree),
+    [true, false]
+  )
+  await assert.rejects(
+    runDesktopTool(tool('computer_click'), { pid: 20, window_id: 2, element_index: 0 }, c),
+    /先调用/
+  )
+})
+
+test('capture fallback never retries a denial, and capture-only never requests UIA', async () => {
+  const { driver, calls } = fakeDriver([{ pid: 20, window_id: 2, app_name: 'java.exe', title: 'view' }], {
+    get_window_state: () => ({
+      isError: true,
+      content: [
+        {
+          type: 'text',
+          text: 'permission denied: get_window_state timed out after 4s (UIA provider unresponsive on hwnd 0x2'
+        }
+      ]
+    })
+  })
+  const { c } = context(driver)
+  await assert.rejects(
+    runDesktopTool(tool('computer_get_window_state'), { pid: 20, window_id: 2 }, c),
+    /permission denied/
+  )
+  assert.equal(calls.filter((call) => call.name === 'get_window_state').length, 1)
+  calls.length = 0
+  await assert.rejects(
+    runDesktopTool(
+      tool('computer_get_window_state'),
+      { pid: 20, window_id: 2, include_accessibility_tree: false },
+      c
+    ),
+    /permission denied/
+  )
+  assert.deepEqual(
+    calls
+      .filter((call) => call.name === 'get_window_state')
+      .map((call) => call.args.include_accessibility_tree),
+    [false]
+  )
+  calls.length = 0
+  await assert.rejects(
+    runDesktopTool(
+      tool('computer_get_window_state'),
+      { pid: 20, window_id: 2, include_accessibility_tree: false },
+      { ...c, seesImages: false }
+    ),
+    /可用截图/
+  )
+  assert.equal(calls.filter((call) => call.name === 'get_window_state').length, 0)
+})
+
+test('bounded input requires foreground window authorization and sends a finite native plan', async () => {
+  const { driver, calls } = fakeDriver([{ pid: 20, window_id: 2, app_name: 'notepad.exe', title: 'x' }])
+  let grants = 0
+  const { c } = context(driver, {
+    authorizeForeground: async () => {
+      grants++
+    }
+  })
+  const input = {
+    pid: 20,
+    window_id: 2,
+    keys: ['w', 'space'],
+    duration_ms: 250,
+    dx: 50,
+    delivery_mode: 'foreground'
+  }
+  await assert.rejects(
+    runDesktopTool(tool('computer_bounded_input'), input, { ...c, foregroundAllowed: false }),
+    /仅允许后台/
+  )
+  assert.equal(calls.length, 0)
+  await runDesktopTool(tool('computer_bounded_input'), input, c)
+  assert.equal(grants, 1)
+  assert.deepEqual(calls.find((call) => call.name === 'bounded_input')?.args, {
+    pid: 20,
+    window_id: 2,
+    keys: [87, 32],
+    buttons: [],
+    duration_ms: 250,
+    dx: 50,
+    dy: 0
+  })
+  assert.ok(!calls.some((call) => call.name === 'bring_to_front'))
+})
+
 test('background-only forces explicit delivery and never falls back or focuses', async () => {
   const { driver, calls } = fakeDriver([{ pid: 20, window_id: 2, app_name: 'notepad.exe', title: 'x' }], {
     click: () => ({ isError: true, content: [{ type: 'text', text: 'background_unavailable' }] })
@@ -303,7 +425,7 @@ test('background-only forces explicit delivery and never falls back or focuses',
   )
 })
 
-test('foreground always asks separately; denied foreground never reaches driver action', async () => {
+test('foreground requires window control; a declined grant never reaches driver action', async () => {
   const { driver, calls } = fakeDriver([{ pid: 20, window_id: 2, app_name: 'notepad.exe', title: 'x' }])
   let approvals = 0
   const { c } = context(driver, {
@@ -322,6 +444,48 @@ test('foreground always asks separately; denied foreground never reaches driver 
   )
   assert.equal(approvals, 1)
   assert.ok(!calls.some((v) => v.name === 'click'))
+})
+
+test('an explicitly invalid capture is not presented as the target window screenshot', async () => {
+  const { driver } = fakeDriver([{ pid: 20, window_id: 2, app_name: 'java.exe', title: 'Minecraft' }], {
+    get_window_state: () => ({
+      content: [{ type: 'image', data: 'AA==', mimeType: 'image/png' }],
+      structuredContent: {
+        snapshot_id: 's-invalid',
+        screenshot_frame_valid: false,
+        tree_markdown: '- [0] Button'
+      }
+    })
+  })
+  const { c } = context(driver)
+  const result = await runDesktopTool(tool('computer_get_window_state'), { pid: 20, window_id: 2 }, c)
+  assert.deepEqual(result.images, [])
+  assert.match(result.text, /不提供图片/)
+  assert.match(result.text, /Button/)
+})
+
+test('a window replaced while approval is pending cannot receive the approved input', async () => {
+  const windows = [{ pid: 20, window_id: 2, app_name: 'notepad.exe', title: 'draft' }]
+  const { driver, calls } = fakeDriver(windows)
+  let revoked = false
+  const { c } = context(driver, {
+    authorizeForeground: async () => {
+      windows[0].app_name = 'cmd.exe'
+    },
+    onWindowGone: () => {
+      revoked = true
+    }
+  })
+  await assert.rejects(
+    runDesktopTool(
+      tool('computer_click'),
+      { pid: 20, window_id: 2, x: 1, y: 2, delivery_mode: 'foreground' },
+      c
+    ),
+    /窗口.*变化/
+  )
+  assert.equal(revoked, true)
+  assert.ok(!calls.some((call) => call.name === 'click'))
 })
 
 test('desktop actions resolve the exact window, refuse protected apps and never touch them', async () => {
@@ -626,6 +790,39 @@ test('session state pauses and aborts running calls and forgets a finished sessi
   assert.equal(states.granted('s', 'notepad.exe'), false)
 })
 
+test('foreground window grants are reused, isolated per window/session, and ended by pause or revocation', async () => {
+  const states = new SessionStates(),
+    signal = new AbortController().signal
+  let asks = 0
+  const ask = async () => {
+    asks++
+  }
+  const authorize = (session: string, key: string) =>
+    states.authorizeForeground(session, key, 'java.exe', 'Minecraft 26.3', signal, ask)
+  await authorize('a', 'window|10|20|java.exe')
+  await authorize('a', 'window|10|20|java.exe')
+  assert.equal(asks, 1, 'ordinary repeat actions reuse the approved window')
+  await authorize('a', 'window|10|21|java.exe')
+  await authorize('b', 'window|10|20|java.exe')
+  assert.equal(asks, 3)
+  states.pause('a')
+  states.resume('a')
+  assert.equal(states.foregroundWindows('a').length, 0)
+  await authorize('a', 'window|10|20|java.exe')
+  assert.equal(asks, 4)
+  states.revoke('a', 'java.exe')
+  assert.equal(states.foregroundWindows('a').length, 0)
+  assert.equal(states.foregroundWindows('b').length, 1)
+  states.clearForeground()
+  assert.equal(states.foregroundWindows('b').length, 0)
+  const ac = new AbortController()
+  await assert.rejects(
+    states.authorizeForeground('a', 'stale', 'java.exe', 'Minecraft', ac.signal, async () => ac.abort()),
+    /abort/i
+  )
+  assert.equal(states.foregroundGranted('a', 'stale'), false)
+})
+
 test('stopping a capability aborts only its calls, in every session', async () => {
   const states = new SessionStates()
   const hang = (signal: AbortSignal) =>
@@ -824,7 +1021,7 @@ const agentRun = (name: string, callId: string) => ({
 })
 
 test(
-  'delivery-mode changes cancel a pending foreground action but retain already granted app access',
+  'delivery-mode changes cancel a pending launch grant and a late approval cannot restore it',
   { skip: process.platform !== 'win32' },
   async (t) => {
     const approval = fakeApproval(false),
@@ -835,9 +1032,7 @@ test(
     const launch = tools.get('computer_launch_app')
     const first = launch.execute({ name: 'Notepad' }, agentRun('computer_launch_app', 'mode-1'))
     await until(() => approval.pending.length === 1)
-    approval.pending[0].answer('allowed-once')
-    await until(() => approval.pending.length === 2)
-    assert.match(approval.pending[1].req.displayReason.zh, /前台/)
+    assert.match(approval.pending[0].req.displayReason.zh, /前台/)
     view = (
       await request('POST', {
         action: 'settings',
@@ -845,20 +1040,20 @@ test(
         desktopForeground: false
       })
     ).json
-    approval.pending[1].answer('allowed-once') // A late answer cannot revive the cancelled call.
+    approval.pending[0].answer('allowed-once') // A late answer cannot revive the cancelled call.
     await assert.rejects(first, /桌面操作模式已更改/)
     assert.equal((await request('GET')).json.status.driverLoaded, false)
     view = (
       await request('POST', { action: 'settings', revision: view.settings.revision, desktopForeground: true })
     ).json
     const next = launch.execute({ name: 'Notepad' }, agentRun('computer_launch_app', 'mode-2'))
-    await until(() => approval.pending.length === 3)
+    await until(() => approval.pending.length === 2)
     assert.match(
-      approval.pending[2].req.displayReason.zh,
+      approval.pending[1].req.displayReason.zh,
       /前台/,
-      'application access is retained, only the fresh foreground action asks'
+      'a new launch must request a fresh session-window grant'
     )
-    approval.pending[2].answer('rejected')
+    approval.pending[1].answer('rejected')
     await assert.rejects(next, /没有允许/)
     assert.equal((await request('GET')).json.status.driverLoaded, false)
   }
@@ -978,14 +1173,11 @@ test(
       .execute({ name: 'Notepad' }, agentRun('computer_launch_app', 'c1'))
     await until(() => approval.pending.length === 1)
     approval.pending[0].answer('allowed-once')
-    await until(() => approval.pending.length === 2)
-    assert.match(approval.pending[1].req.displayReason.zh, /前台/)
-    approval.pending[1].answer('allowed-once')
     await assert.rejects(granted, /Cua Driver/)
     const waiting = tools
       .get('computer_launch_app')
       .execute({ name: 'Paint' }, agentRun('computer_launch_app', 'c2'))
-    await until(() => approval.pending.length === 3)
+    await until(() => approval.pending.length === 2)
     view = (await request('POST', { action: 'settings', revision: view.settings.revision, desktop: false }))
       .json
     await assert.rejects(waiting, /桌面应用操作已在「电脑操作」面板关闭/)
@@ -995,8 +1187,8 @@ test(
     const again = tools
       .get('computer_launch_app')
       .execute({ name: 'Notepad' }, agentRun('computer_launch_app', 'c3'))
-    await until(() => approval.pending.length === 4)
-    approval.pending[3].answer('rejected')
+    await until(() => approval.pending.length === 3)
+    approval.pending[2].answer('rejected')
     await assert.rejects(again, /没有允许/)
   }
 )

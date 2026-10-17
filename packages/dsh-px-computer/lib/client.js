@@ -308,11 +308,11 @@ function ComputerPanel({ sessionId, visible }) {
                   onChange: (e) => void act({ action: "settings", desktopForeground: e.target.value === "ask" }),
                   children: [
                     /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "background", children: "\u4EC5\u540E\u53F0\u64CD\u4F5C" }),
-                    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "ask", children: "\u5141\u8BB8\u8BE2\u95EE\u524D\u53F0\u64CD\u4F5C\uFF08\u6BCF\u6B21\u786E\u8BA4\uFF09" })
+                    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "ask", children: "\u5141\u8BB8\u524D\u53F0\u64CD\u4F5C\uFF08\u6309\u4F1A\u8BDD\u548C\u7A97\u53E3\u6388\u6743\uFF09" })
                   ]
                 }
               ),
-              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("small", { className: "px-muted", children: "\u540E\u53F0\u4E0D\u652F\u6301\u7684\u52A8\u4F5C\u4F1A\u505C\u6B62\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u62A2\u5360\u524D\u53F0\u3002\u6700\u5C0F\u5316\u7A97\u53E3\u548C\u81EA\u7ED8\u754C\u9762\u7684\u53EF\u7528\u80FD\u529B\u56E0\u5E94\u7528\u800C\u5F02\u3002" })
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("small", { className: "px-muted", children: "\u6BCF\u4E2A\u7A97\u53E3\u9996\u6B21\u6388\u6743\uFF0C\u666E\u901A\u52A8\u4F5C\u4E0D\u91CD\u590D\u8BE2\u95EE\u3002\u6682\u505C\u6216\u64A4\u9500\u540E\u7ED3\u675F\u63A7\u5236\uFF1B\u540E\u53F0\u4E0D\u652F\u6301\u65F6\u4E0D\u4F1A\u81EA\u52A8\u62A2\u5360\u524D\u53F0\u3002" })
             ] }),
             /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { style: { display: "block" }, children: [
               "\u6D4F\u89C8\u5668",
@@ -379,6 +379,19 @@ function ComputerPanel({ sessionId, visible }) {
             )
           ] }),
           view.session.paused && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { role: "status", children: "\u5DF2\u6682\u505C\uFF1Aagent \u5728\u672C\u4F1A\u8BDD\u4E2D\u7684\u7535\u8111\u548C\u6D4F\u89C8\u5668\u64CD\u4F5C\u90FD\u4F1A\u88AB\u62D2\u7EDD\u3002" }),
+          !!view.session.foreground?.length && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-card", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("strong", { children: "\u672C\u4F1A\u8BDD\u53EF\u524D\u53F0\u63A7\u5236\u7684\u7A97\u53E3" }),
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("ul", { children: view.session.foreground.map((window) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("li", { children: window.label }, window.key)) }),
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+              "button",
+              {
+                style: controlStyle,
+                disabled: busy,
+                onClick: () => void act({ action: "revoke-window-control" }),
+                children: "\u505C\u6B62\u5E76\u64A4\u9500\u7A97\u53E3\u63A7\u5236"
+              }
+            )
+          ] }),
           (view.session.apps.length > 0 || view.session.sites.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { style: { ...cardStyle, margin: "12px 0" }, open: true, children: [
             /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("summary", { children: "\u672C\u4F1A\u8BDD\u5DF2\u5141\u8BB8" }),
             view.session.apps.map((app) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-actions", children: [

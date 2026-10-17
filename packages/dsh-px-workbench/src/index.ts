@@ -6,6 +6,8 @@ import { localStatus, type RunningProfile } from './status'
 import { checkWebAccess, type FetchPage, type NetworkCheck } from './network'
 import { readJsonBody } from './http'
 import { registerActivity } from './activity'
+import { installFileEditing } from './file-edit'
+import { installContextPolicy, modelCapacity, ownRequestContext } from './context-policy'
 
 export const name = 'dsh-px-workbench'
 export const inject: string[] = []
@@ -17,6 +19,8 @@ function json(res: HostResponse, status: number, body: unknown): void {
 }
 
 export function apply(ctx: HostPluginContext): void {
+  installFileEditing(ctx)
+  installContextPolicy(ctx)
   const activity = registerActivity(ctx)
   // dsh profile launchers provide `profileContext` (name, dir); it names the profile whose manifest we report.
   let runningProfile: RunningProfile | undefined
@@ -73,6 +77,41 @@ export function apply(ctx: HostPluginContext): void {
   ctx.inject(['connection', 'webServer'], (ctx) => {
     if (!ctx.webServer) return
     const dispose = [
+      ctx.webServer.register({
+        kind: 'exact',
+        path: `${DEFAULTS.routePrefix}/context-policy`,
+        handler: async (req, res) => {
+          if (rejectUntrustedRequest(req, res, ctx.connection)) return
+          if (req.method !== 'GET') return json(res, 405, { error: '请使用 GET' })
+          try {
+            const params = new URL(req.url ?? '/', 'http://127.0.0.1').searchParams
+            const id = params.get('sessionId'),
+              provider = params.get('provider'),
+              model = params.get('model')
+            if (!id || id.length > 160 || !provider || !model || provider.length > 256 || model.length > 512)
+              throw Error('会话或模型参数无效')
+            const host: any = ctx,
+              controller = host.get('sessionController')
+            const snapshot = await controller.inspect(id)
+            let bound = (await host.get('pxContextPolicy').state.get(id))?.tier
+            const prior = ownRequestContext({
+              snapshotEvents: () => snapshot.events,
+              inheritedEventCount: snapshot.inheritedEventCount ?? 0
+            })
+            if (!bound && prior) bound = (await modelCapacity(host, prior)).tier
+            const target = await modelCapacity(host, { provider, model })
+            json(res, 200, {
+              bound,
+              target,
+              requiresContinuation: !!bound && bound !== target.tier,
+              nativeGuard: controller.pxModelSelectionGuardVersion === 1,
+              canContinue: !!host.get('pxMemoryContext')
+            })
+          } catch (e) {
+            json(res, 400, { error: e instanceof Error ? e.message : String(e) })
+          }
+        }
+      }),
       ctx.webServer.register({
         kind: 'exact',
         path: `${DEFAULTS.routePrefix}/status`,

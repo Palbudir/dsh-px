@@ -1,6 +1,25 @@
 import { MemoryError, type MemoryStore, type Handoff } from './store'
 import { historyRecord, service, type HistoryEvent, type HistoryRecord } from './history'
 
+/** Collapse retries while a native creation/selection is in flight; persisted bindings handle later retries. */
+export function continuationRequests() {
+  const pending = new Map<string, { fingerprint: string; promise: Promise<string> }>()
+  return async (id: string, fingerprint: string, run: () => Promise<string>): Promise<string> => {
+    const active = pending.get(id)
+    if (active) {
+      if (active.fingerprint !== fingerprint) throw new MemoryError('接续请求正在用于另一项操作', 409)
+      return active.promise
+    }
+    const promise = Promise.resolve().then(run)
+    pending.set(id, { fingerprint, promise })
+    try {
+      return await promise
+    } finally {
+      pending.delete(id)
+    }
+  }
+}
+
 /** A finite, human-authorized source range. Does not clone runtime context or resume any Goal. */
 export function handoffFrom(events: readonly HistoryEvent[], sessionId: string): Handoff {
   let open = false,
