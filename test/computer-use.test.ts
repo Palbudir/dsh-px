@@ -62,6 +62,7 @@ test('hard deny list covers terminals, security, credentials, remote control and
     'ToDesk.exe',
     'DSH-PX Desktop.exe',
     'ChatGPT.exe',
+    'codex-computer-use.exe',
     'cua-driver.exe',
     'C:\\PX\\native\\px-windows-input.exe',
     'C:\\Windows\\System32\\consent.exe'

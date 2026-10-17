@@ -116,6 +116,7 @@ deny('DSH 与其他 agent 应用', [
   'claude.exe'
 ])
 deny('电脑操作驱动与提示层', [
+  'codex-computer-use.exe',
   'cua-driver.exe',
   'cua-driver-uia.exe',
   'cua-cursor-theme.exe',

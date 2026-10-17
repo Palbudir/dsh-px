@@ -347,6 +347,7 @@ deny("DSH \u4E0E\u5176\u4ED6 agent \u5E94\u7528", [
   "claude.exe"
 ]);
 deny("\u7535\u8111\u64CD\u4F5C\u9A71\u52A8\u4E0E\u63D0\u793A\u5C42", [
+  "codex-computer-use.exe",
   "cua-driver.exe",
   "cua-driver-uia.exe",
   "cua-cursor-theme.exe",
