@@ -9,13 +9,15 @@ import { Readable } from 'node:stream'
 
 function fixture(t: any) {
   const dir = mkdtempSync(join(tmpdir(), 'px-memory-'))
-  t.after(() => {
+  const cleanup: Array<() => unknown> = []
+  t.after(async () => {
+    for (const close of cleanup.reverse()) await close()
     assert.ok(resolve(dir).startsWith(resolve(tmpdir()) + sep))
     rmSync(dir, { recursive: true, force: true })
   })
   const file = join(dir, 'memory.json'),
     store = new MemoryStore(file)
-  return { dir, file, store }
+  return { dir, file, store, cleanup }
 }
 test('personas isolate config and memories across sessions and persist across restart', (t) => {
   const { store, file } = fixture(t)
@@ -55,16 +57,17 @@ test('project filtering, correction, deletion and stale revisions keep the right
   )
   assert.equal(store.read().personas[0].memories.length, 0)
 })
-test('deleting a persona resets its bindings but preserves other personas and stale writers cannot restore it', (t) => {
+test('archiving a persona retains its bound identity and stale writes cannot restore it', (t) => {
   const { store } = fixture(t)
   let s = store.action(0, { type: 'create', name: '临时角色' }, 'a', null)
   const id = store.persona(s, 'a').id
   s = store.action(s.revision, { type: 'select', personaId: id }, 'b', null)
   s = store.action(s.revision, { type: 'save', text: '旧记忆', scope: 'persona' }, 'a', null)
   const old = s.revision
-  s = store.action(s.revision, { type: 'delete-persona' }, 'a', null)
-  assert.equal(store.persona(s, 'b').id, 'default')
-  assert.equal(s.personas.length, 1)
+  s = store.action(s.revision, { type: 'archive-persona' }, 'a', null)
+  assert.equal(store.persona(s, 'b').id, id)
+  assert.equal(store.persona(s, 'b').archived, true)
+  assert.equal(s.personas.length, 2)
   assert.throws(
     () =>
       store.action(
@@ -75,7 +78,7 @@ test('deleting a persona resets its bindings but preserves other personas and st
       ),
     /记录已变化/
   )
-  assert.throws(() => store.action(s.revision, { type: 'delete-persona' }, 'a', null), /不能删除/)
+  assert.throws(() => store.bind('new', { personaId: id }), /归档/)
 })
 test('invalid input, budgets and corrupt storage never overwrite the last valid state', (t) => {
   const { store, file } = fixture(t)
@@ -94,20 +97,23 @@ test('invalid input, budgets and corrupt storage never overwrite the last valid 
   writeFileSync(file, '{invalid')
   assert.throws(() => store.change(0, () => {}))
 })
-test('native hook snapshot changes only on next turn and storage failure does not stop conversation', async (t) => {
-  const { dir } = fixture(t),
+test('native prompt context fixes identity before first request and refreshes private memory on the next turn', async (t) => {
+  const { dir, cleanup } = fixture(t),
     old = process.env.DSH_HOME
   process.env.DSH_HOME = dir
-  t.after(() => {
+  cleanup.push(() => {
     if (old === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = old
   })
-  const hooks = new Map<string, any>(),
-    contexts: any[] = [],
+  const contexts: any[] = [],
     tools: any[] = []
-  const host = {
-    on: (name: string, fn: any) => hooks.set(name, fn),
-    effect: (fn: any) => fn(),
+  const host: any = {
+    on: () => {},
+    effect: (fn: any) => {
+      const d = fn()
+      if (typeof d === 'function') cleanup.push(d)
+      return d
+    },
     systemPrompt: {
       context: (c: any) => {
         contexts.push(c)
@@ -121,40 +127,38 @@ test('native hook snapshot changes only on next turn and storage failure does no
   }
   apply(host)
   const store = new MemoryStore(join(dir, 'storages/dsh-px-memory/memory.json'))
-  const agent = { session: { id: 's', header: { id: 's', cwd: dir } } }
-  const step = hooks.get('agent/pre-step'),
-    render = () => contexts[0].text({ agent })
-  await step({ agent, turn: 1 }, () => 'next')
-  let s = store.action(0, { type: 'create', name: '新角色' }, 's', projectKey(dir))
-  assert.ok(!render().includes('新角色'))
-  await step({ agent, turn: 2 }, () => 'next')
-  assert.ok(render().includes('新角色'))
-  const invoke = (args: any) => tools[0].execute(args, { agent, signal: new AbortController().signal })
+  store.action(0, { type: 'create', name: '研究助手' }, 's', projectKey(dir))
+  const events: any[] = [{ type: 'turn/start', seq: 0, data: { turn: 1 } }]
+  const agent = { session: { id: 's', header: { id: 's', cwd: dir }, snapshotEvents: () => events } }
+  const render = () => contexts[0].text({ agent })
+  assert.match(render(), /研究助手/)
+  assert.equal(store.read().bindings.s.locked, true)
+  const tool = tools.find((t) => t.name === 'persona_memory')
+  const invoke = (args: any) => tool.execute(args, { agent, signal: new AbortController().signal })
   const before = JSON.parse(await invoke({ action: 'read' }))
   await invoke({ action: 'save', revision: before.revision, text: '跨会话约定', scope: 'persona' })
   assert.ok(!render().includes('跨会话约定'))
-  await step({ agent, turn: 3 }, () => 'next')
-  assert.ok(render().includes('跨会话约定'))
-  s = store.read()
+  events.push({ type: 'turn/end', seq: 1, data: {} }, { type: 'turn/start', seq: 2, data: { turn: 2 } })
+  assert.match(render(), /跨会话约定/)
   store.action(
-    s.revision,
-    { type: 'configure', name: '新角色', instructions: '', memoryEnabled: false },
+    store.read().revision,
+    { type: 'configure', name: '研究助手', instructions: '', memoryEnabled: false },
     's',
     projectKey(dir)
   )
-  await step({ agent, turn: 4 }, () => 'next')
+  events.push({ type: 'turn/end', seq: 3, data: {} }, { type: 'turn/start', seq: 4, data: { turn: 3 } })
   assert.ok(!render().includes('跨会话约定'))
   await assert.rejects(
-    invoke({ action: 'save', revision: store.read().revision, text: '不能保存', scope: 'persona' }),
+    () => invoke({ action: 'save', revision: store.read().revision, text: '不能写入', scope: 'persona' }),
     /关闭/
   )
   writeFileSync(join(dir, 'storages/dsh-px-memory/memory.json'), '{broken')
-  assert.equal(await step({ agent, turn: 5 }, () => 'still-running'), 'still-running')
-  assert.match(render(), /暂时无法读取/)
+  events.push({ type: 'turn/end', seq: 5, data: {} }, { type: 'turn/start', seq: 6, data: { turn: 4 } })
+  assert.throws(render, 'identity corruption must not silently run another persona')
 })
 
 test('HTTP memory saves preserve UTF-8 split across network chunks and reject stale edits', async (t) => {
-  const { dir } = fixture(t),
+  const { dir, cleanup } = fixture(t),
     old = process.env.DSH_HOME
   process.env.DSH_HOME = dir
   t.after(() => {
@@ -164,7 +168,11 @@ test('HTTP memory saves preserve UTF-8 split across network chunks and reject st
   let handler: any
   const host = {
     on: () => {},
-    effect: (fn: any) => fn(),
+    effect: (fn: any) => {
+      const d = fn()
+      if (typeof d === 'function') cleanup.push(d)
+      return d
+    },
     connection: { requestRejection: () => undefined },
     webServer: {
       register: (route: any) => {
@@ -193,7 +201,8 @@ test('HTTP memory saves preserve UTF-8 split across network chunks and reject st
     await handler(req, { writeHead: (n: number) => (status = n), end: (v: string) => (body = JSON.parse(v)) })
     return { status, body }
   }
-  const first = await post(0)
+  new MemoryStore(join(dir, 'storages/dsh-px-memory/memory.json')).bind('s')
+  const first = await post(1)
   assert.equal(first.status, 200)
   assert.equal(first.body.persona.memories[0].text, '保留中文和 emoji 🧠')
   assert.equal((await post(0)).status, 409)

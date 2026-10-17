@@ -1,9 +1,9 @@
 {
   "name": "dsh-px-memory",
-  "version": "0.5.1-alpha.1",
+  "version": "0.5.2-alpha.1",
   "private": true,
   "type": "module",
-  "description": "可切换的人格与独立记忆",
+  "description": "固定人格、接续会话与可追溯经历",
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
@@ -30,7 +30,8 @@
         "@deepseek-ai/dsh-client-connection",
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-sidebar-right",
-        "@deepseek-ai/dsh-client-ui-slots"
+        "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-client-ui-workspace"
       ]
     }
   },
