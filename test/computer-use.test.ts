@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { Readable } from 'node:stream'
+import { assertSupportedJsonSchema, jsonSchemaToTs } from '@deepseek-ai/dsh-tools'
 import {
   appKey,
   BLOCKED_ORIGINS,
@@ -946,6 +947,24 @@ test(
       await request('POST', { action: 'settings', revision: view.settings.revision, browser: 'isolated' })
     ).json
     assert.ok(tools.has('browser_snapshot') && !tools.has('browser_evaluate'))
+    for (const definition of tools.values()) {
+      assertSupportedJsonSchema(definition.parameters)
+      assert.notEqual(jsonSchemaToTs(definition.parameters), 'unknown', definition.name)
+    }
+    const run = {
+      agent: { session: { id: 's1', header: { id: 's1' } } },
+      signal: new AbortController().signal
+    }
+    await assert.rejects(
+      tools
+        .get('computer_bounded_input')
+        .execute({ pid: 1, window_id: 2, duration_ms: 10001, delivery_mode: 'foreground' }, run),
+      /maximum=10000/
+    )
+    await assert.rejects(
+      tools.get('computer_confirm').execute({ action: 'x'.repeat(301), category: 'send' }, run),
+      /maxLength=300/
+    )
     await request('POST', {
       action: 'settings',
       revision: view.settings.revision,

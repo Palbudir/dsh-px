@@ -24,6 +24,7 @@ import { DESKTOP_TOOLS, DesktopDriver, driverSession, runDesktopTool, type Deskt
 import { DriverProcess } from './driver-process'
 import computerDriver from '../../../config/computer-driver.json'
 import { guidance } from './guidance'
+import { enforceToolBounds, nativeToolParameters } from './tool-schema'
 import { appKey, appLabel, type WindowIdentity } from './policy'
 import {
   askUser,
@@ -181,6 +182,7 @@ export function apply(ctx: any): void {
     ) => Promise<{ text: string; images: Image[]; target?: string; receipt?: string }>
   ) => ({
     ...definition,
+    parameters: nativeToolParameters(definition.parameters),
     output: {
       schema: TOOL_OUTPUT_SCHEMA,
       render: (_args: unknown, value: ToolValue) => [{ type: 'text', text: value.text }]
@@ -192,6 +194,7 @@ export function apply(ctx: any): void {
       try {
         // A call the host dispatched before the setting changed still finds the capability off.
         if (!available(capability, settings.read())) throw new ComputerUseRefusal(CLOSED[capability])
+        enforceToolBounds(definition.parameters, args)
         const result = await states.track(session.id, capability, run.signal, (signal) =>
           body(args, run, session, signal)
         )

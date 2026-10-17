@@ -2609,6 +2609,7 @@ function guidance(settings) {
 - \u8BFB\u4E0D\u6E05\u7684\u5C0F\u5B57\u6216\u6570\u503C\u5148\u7528 computer_zoom\uFF0C\u4E0D\u8981\u731C\u6570\u30023D \u671D\u5411\u53EF\u80FD\u8DE8\u8D8A 0/360 \u5EA6\uFF0C\u4E0D\u80FD\u628A\u9996\u5C3E\u8BFB\u6570\u7684\u7EDD\u5BF9\u5DEE\u76F4\u63A5\u5F53\u4F5C\u5B9E\u9645\u8F6C\u52A8\u91CF\u3002\u6BCF\u6BB5\u52A8\u4F5C\u540E\u68C0\u67E5\u753B\u9762\u3001\u65B9\u5411\u4E0E\u72B6\u6001\u3002
 - \u56FE\u6807\u6216\u7269\u54C1\u79CD\u7C7B\u4E0D\u660E\u786E\u65F6\uFF0C\u7528 computer_move_pointer \u60AC\u505C\u8BFB\u53D6\u5E94\u7528\u81EA\u5DF1\u7684\u6587\u5B57\u63D0\u793A\uFF0C\u6216\u4F7F\u7528\u5E94\u7528\u63D0\u4F9B\u7684\u540D\u79F0\u663E\u793A\uFF1B\u4E0D\u8981\u51ED\u7EB9\u7406\u731C\u6D4B\u3002\u653E\u5927\u56FE\u70B9\u51FB\u5FC5\u987B\u6807\u660E from_zoom:true\uFF0C\u53EA\u5BF9\u6700\u65B0\u653E\u5927\u56FE\u6709\u6548\uFF1B\u60AC\u505C\u79FB\u52A8\u4F7F\u7528\u5B8C\u6574\u622A\u56FE\u5750\u6807\u3002
 - \u9884\u7559\u6700\u7EC8\u89C2\u5BDF\uFF1A\u6709\u5DE5\u5177\u8C03\u7528\u6570\u91CF\u9650\u5236\u65F6\u63D0\u524D\u505C\u6B62\u65B0\u589E\u52A8\u4F5C\uFF0C\u786E\u8BA4\u6700\u540E\u72B6\u6001\u540E\u518D\u62A5\u544A\u3002\u628A\u5DF2\u6267\u884C\u3001\u5B9E\u9645\u5DF2\u89C2\u5BDF\u751F\u6548\u548C\u672A\u9A8C\u8BC1\u5206\u522B\u8BF4\u660E\u3002
+- \u4F7F\u7528\u539F\u751F PTC \u6A21\u5F0F\u65F6\uFF0C\u53EF\u7528\u751F\u6210 SDK \u987A\u5E8F await \u65E0\u9700\u4E2D\u95F4\u5224\u65AD\u7684\u77ED\u52A8\u4F5C\uFF0C\u518D\u8BFB\u53D6\u622A\u56FE\uFF1B\u6709\u4F9D\u8D56\u7684\u7535\u8111\u8F93\u5165\u4E0D\u8981 Promise.all\u3002\u4EFB\u4E00\u6B65\u5931\u8D25\u5C31\u505C\u6B62\u540E\u7EED\u8F93\u5165\uFF0C\u4E0D\u541E\u6389\u9519\u8BEF\u7EE7\u7EED\u64CD\u4F5C\u3002\u6301\u7EED\u8F93\u5165\u7684\u9F20\u6807\u6309\u4F4F\u5B57\u6BB5\u662F buttons\uFF0C\u76F8\u5BF9\u603B\u4F4D\u79FB\u5B57\u6BB5\u662F dx\u3001dy\uFF1B\u53C2\u6570\u4EE5\u5F53\u524D SDK \u58F0\u660E\u4E3A\u51C6\uFF0C\u4E0D\u731C\u6D4B\u6216\u5047\u8BBE\u4E0D\u5B58\u5728\u3002
 - \u52A8\u4F5C\u8D85\u65F6\u6216\u62A5\u9519\u65F6\u7ED3\u679C\u672A\u77E5\uFF1A\u5148\u91CD\u65B0\u89C2\u5BDF\uFF0C\u4E0D\u8981\u76F4\u63A5\u91CD\u590D\u6709\u526F\u4F5C\u7528\u7684\u52A8\u4F5C\u3002
 - \u684C\u9762\u6295\u9012\u6A21\u5F0F\uFF1A${settings.desktopForeground ? "\u6309\u672C\u4F1A\u8BDD\u4E0E\u5177\u4F53\u7A97\u53E3\u53D6\u5F97\u524D\u53F0\u63A7\u5236\u6388\u6743\u540E\uFF0C\u666E\u901A\u67E5\u770B\u3001\u70B9\u51FB\u3001\u8F93\u5165\u548C\u6309\u952E\u4E0D\u518D\u9010\u6B21\u8BE2\u95EE\uFF1B\u6682\u505C\u6216\u64A4\u9500\u540E\u987B\u91CD\u65B0\u6388\u6743\uFF0C\u5220\u9664\u3001\u53D1\u9001\u3001\u4ED8\u6B3E\u7B49\u654F\u611F\u52A8\u4F5C\u4ECD\u5355\u72EC\u786E\u8BA4" : "\u4EC5\u540E\u53F0\u64CD\u4F5C\uFF1B\u540E\u53F0\u4E0D\u53EF\u7528\u5C31\u505C\u6B62\uFF0C\u4E0D\u5F97\u6539\u7528 foreground \u6216\u5207\u5230\u524D\u53F0"}\u3002\u4E0D\u628A\u5DE5\u5177\u8FD4\u56DE\u6210\u529F\u5F53\u4F5C\u754C\u9762\u5DF2\u6539\u53D8\u3002\u6700\u5C0F\u5316\u3001\u906E\u6321\u548C\u9501\u5C4F\u662F\u4E0D\u540C\u72B6\u6001\u3002
 - \u9996\u6B21\u8BFB\u53D6\u6216\u64CD\u4F5C\u67D0\u4E2A\u5E94\u7528\uFF08\u4EE5\u53CA\u767B\u5F55\u6001\u6D4F\u89C8\u5668\u4E2D\u7684\u65B0\u7F51\u7AD9\uFF09\u4F1A\u8BF7\u7528\u6237\u5141\u8BB8\u3002\u88AB\u62D2\u7EDD\u5C31\u505C\u6B62\uFF0C\u4E0D\u8981\u6362\u5E94\u7528\u3001\u6362\u7A97\u53E3\u6216\u6362\u65B9\u5F0F\u7ED5\u8FC7\u3002
@@ -2625,6 +2626,43 @@ function guidance(settings) {
 
 ## \u505C\u6B62
 \u7528\u6237\u505C\u6B62\u6216\u6682\u505C\u540E\u4E0D\u518D\u64CD\u4F5C\u3002\u684C\u9762\u88AB\u9501\u5B9A\u65F6\u505C\u6B62\u5E76\u8BF7\u7528\u6237\u89E3\u9501\u3002`;
+}
+
+// packages/dsh-px-computer/src/tool-schema.ts
+var BOUNDS = ["minimum", "maximum", "minItems", "maxItems", "minLength", "maxLength"];
+function nativeToolParameters(schema) {
+  const result = { ...schema };
+  delete result.$schema;
+  const limits = [];
+  for (const name2 of BOUNDS) {
+    if (schema[name2] === void 0) continue;
+    limits.push(`${name2}=${schema[name2]}`);
+    delete result[name2];
+  }
+  if (limits.length)
+    result.description = [schema.description, `\u9650\u5236\uFF1A${limits.join(", ")}`].filter(Boolean).join("\uFF1B");
+  if (schema.properties)
+    result.properties = Object.fromEntries(
+      Object.entries(schema.properties).map(([key, value]) => [key, nativeToolParameters(value)])
+    );
+  if (schema.items) result.items = nativeToolParameters(schema.items);
+  return result;
+}
+function enforceToolBounds(schema, value, path = "arguments") {
+  if (value === void 0) return;
+  for (const name2 of BOUNDS) {
+    const bound = schema[name2];
+    if (bound === void 0) continue;
+    const measured = name2 === "minimum" || name2 === "maximum" ? typeof value === "number" && Number.isFinite(value) ? value : void 0 : name2 === "minItems" || name2 === "maxItems" ? Array.isArray(value) ? value.length : void 0 : typeof value === "string" ? Array.from(value).length : void 0;
+    const lower = name2 === "minimum" || name2 === "minItems" || name2 === "minLength";
+    if (measured === void 0 || (lower ? measured < bound : measured > bound))
+      throw Error(`${path} \u4E0D\u6EE1\u8DB3 ${name2}=${bound}`);
+  }
+  if (schema.properties && value && typeof value === "object" && !Array.isArray(value))
+    for (const [key, child] of Object.entries(schema.properties))
+      enforceToolBounds(child, value[key], `${path}.${key}`);
+  if (schema.items && Array.isArray(value))
+    value.forEach((item, index) => enforceToolBounds(schema.items, item, `${path}[${index}]`));
 }
 
 // packages/dsh-px-computer/src/settings.ts
@@ -2795,6 +2833,7 @@ function apply(ctx) {
   };
   const tool = (capability, definition, target, detail, body) => ({
     ...definition,
+    parameters: nativeToolParameters(definition.parameters),
     output: {
       schema: TOOL_OUTPUT_SCHEMA,
       render: (_args, value) => [{ type: "text", text: value.text }]
@@ -2805,6 +2844,7 @@ function apply(ctx) {
       let label = target(args);
       try {
         if (!available(capability, settings.read())) throw new ComputerUseRefusal(CLOSED[capability]);
+        enforceToolBounds(definition.parameters, args);
         const result = await states.track(
           session.id,
           capability,
