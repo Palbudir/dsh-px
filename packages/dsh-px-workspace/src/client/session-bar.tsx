@@ -7,7 +7,7 @@ import { panelAvailability, usePanelCapabilities } from './panel-availability'
 import { selectedSession } from '../../../shared/native-navigation'
 
 const panels = [
-  ['editor', '工作区', 'file'],
+  ['editor', '文件', 'file'],
   ['terminal', '终端', 'terminal'],
   ['git', '文件变动', 'git'],
   ['subagent', '后台任务', 'jobs']
@@ -29,6 +29,8 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
   const [error, setError] = useState('')
   const [more, setMore] = useState(false)
   const bar = useRef<HTMLDivElement | null>(null)
+  const trigger = useRef<HTMLButtonElement | null>(null)
+  const popup = useRef<HTMLDivElement | null>(null)
   const current = selectedSession(sessions, panelInfo.activePanelId),
     row = current ? sessions.byId[current] : undefined
   const shown = !!current && panelInfo.activePanelId === null
@@ -37,6 +39,15 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
     setError('')
     setMore(false)
   }, [current, shown])
+  useEffect(() => {
+    if (!more) return
+    popup.current?.querySelector<HTMLButtonElement>('button:not(:disabled)')?.focus()
+    const dismiss = (event: PointerEvent): void => {
+      if (event.target instanceof Node && !bar.current?.contains(event.target)) setMore(false)
+    }
+    window.addEventListener('pointerdown', dismiss, true)
+    return () => window.removeEventListener('pointerdown', dismiss, true)
+  }, [more])
   const panel = (type: string): void => {
     if (!current) return
     try {
@@ -73,9 +84,19 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
     ...panelAvailability(capabilities, type)
   }))
   const missingPanels = panelStates.filter((panel) => panel.state === 'missing' || panel.state === 'unknown')
-  const primary = ['editor', 'dsh-px-taskflow', 'dsh-px-memory', 'dsh-px-computer']
+  const primary = ['editor', 'dsh-px-taskflow']
   const primaryPanels = primary.flatMap((type) => panelStates.filter((p) => p.type === type))
   const secondaryPanels = panelStates.filter((p) => !primary.includes(p.type))
+  const groups = [
+    { label: '工作区', types: ['terminal', 'git', 'px-artifacts'] },
+    { label: '会话', types: ['subagent', 'px-notes', 'px-schedules'] },
+    { label: '能力', types: ['dsh-px-memory', 'dsh-px-computer'] }
+  ]
+  const known = groups.flatMap((group) => group.types)
+  groups.push({
+    label: '其他',
+    types: secondaryPanels.filter((p) => !known.includes(p.type)).map((p) => p.type)
+  })
   if (!shown) return null
   const action = ({ type, text, icon, enabled, reason }: (typeof panelStates)[number]) => (
     <button
@@ -94,37 +115,53 @@ export function SessionBar({ ctx }: { ctx: Client }): unknown {
       className="px-ui px-bar"
       aria-label="DSH-PX 工作工具"
       onKeyDown={(event: any) => {
-        if (event.key === 'Escape') setMore(false)
+        if (event.key === 'Escape' && more) {
+          event.stopPropagation()
+          setMore(false)
+          trigger.current?.focus()
+        }
+      }}
+      onBlur={(event: any) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setMore(false)
       }}
     >
       <div className="px-tools">
         {primaryPanels.map(action)}
         {secondaryPanels.length > 0 && (
-          <button aria-expanded={more} aria-controls="px-more-tools" onClick={() => setMore(!more)}>
-            更多{more ? ' ▴' : ' ▾'}
+          <button
+            ref={trigger}
+            aria-expanded={more}
+            aria-controls="px-more-tools"
+            onClick={() => setMore(!more)}
+          >
+            工具{more ? ' ▴' : ' ▾'}
           </button>
         )}
-        <span className="px-status">
-          {current
-            ? row?.origin === 'subagent'
-              ? '正在查看子 Agent · 返回上级可继续任务'
-              : row?.running
-                ? 'Agent 执行中'
-                : '会话空闲'
-            : '选择或新建会话开始'}
-        </span>
+        {(row?.running || row?.origin === 'subagent') && (
+          <span className="px-status">{row?.running ? 'Agent 执行中' : '正在查看子 Agent'}</span>
+        )}
       </div>
       {more && (
-        <div id="px-more-tools" className="px-tools px-tools-more" aria-label="更多工作工具">
-          {secondaryPanels.map(action)}
+        <div ref={popup} id="px-more-tools" className="px-tool-popup" aria-label="工作工具">
+          {groups.map(({ label, types }) => {
+            const items = types.flatMap((type) => secondaryPanels.filter((p) => p.type === type))
+            return items.length ? (
+              <div key={label} className="px-tool-group" role="group" aria-label={label}>
+                <div className="px-tool-heading" aria-hidden="true">
+                  {label}
+                </div>
+                {items.map(action)}
+              </div>
+            ) : null
+          })}
+          {missingPanels.length > 0 && (
+            <div role="status" className="px-dependency-warning">
+              暂不可用：{missingPanels.map((panel) => panel.text).join('、')}
+              。请在插件设置或“运行与帮助”中检查。
+            </div>
+          )}
         </div>
       )}
-      {more && missingPanels.length ? (
-        <div role="status" className="px-dependency-warning">
-          暂不可用的面板：{missingPanels.map((panel) => panel.text).join('、')}
-          。可在“插件”设置中检查是否启用，或到“运行与帮助”查看依赖；会话仍可使用。
-        </div>
-      ) : null}
       {error ? (
         <div className="px-bar-error" role="alert">
           {error}
