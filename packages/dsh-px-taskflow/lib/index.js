@@ -562,7 +562,7 @@ var failure = (error) => ({
   status: "error",
   reason: error instanceof Error ? error.message : String(error)
 });
-var service = (host, name2) => host.get?.(name2) ?? host[name2];
+var service = (host, name2) => typeof host.get === "function" ? host.get(name2) : host[name2];
 function checkpointNativeRefs(host, agent, taskIds) {
   const ids = taskIds === void 0 ? [] : taskIds;
   if (!Array.isArray(ids) || ids.length > 10 || !ids.every((id) => typeof id === "string" && id.length > 0 && id.length <= 200))

@@ -18,7 +18,7 @@ IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
 
 // packages/dsh-px-memory/src/index.ts
-import { join } from "node:path";
+import { join as join3 } from "node:path";
 
 // packages/dsh-px-memory/src/store.ts
 import {
@@ -392,7 +392,7 @@ var TurnIdentity = class {
     if (previous && previous.turnSeq === turnSeq) return previous.persona;
     const state = this.store.bind(agent.session.id, {
       parent: agent.session.header.parentSession,
-      locked: turnSeq >= 0
+      locked: !!agent.session.header.parentSession || turnSeq >= 0
     });
     const persona = this.store.persona(state, agent.session.id);
     if (persona.archived) throw new MemoryError("\u672C\u4F1A\u8BDD\u4EBA\u683C\u5DF2\u5F52\u6863\uFF1B\u8BF7\u65B0\u5EFA\u5176\u4ED6\u4EBA\u683C\u7684\u63A5\u7EED\u4F1A\u8BDD", 409);
@@ -448,7 +448,7 @@ ${JSON.stringify(d)}`;
   return text2.trim() ? { seq: event.seq, time: event.time, kind, text: text2, ...toolName ? { tool: toolName } : {} } : void 0;
 }
 function service(host, name2) {
-  return host.get?.(name2) ?? host[name2];
+  return typeof host.get === "function" ? host.get(name2) : host[name2];
 }
 async function nativeReader(host, id, signal) {
   const persistence = service(host, "sessionPersistence");
@@ -808,24 +808,1027 @@ async function createPersonaSession(host, store, sourceId, args, signal) {
   return id;
 }
 
+// packages/dsh-px-memory/src/knowledge.ts
+import { createHash as createHash2 } from "node:crypto";
+import { mkdirSync as mkdirSync3 } from "node:fs";
+import { join } from "node:path";
+var KNOWLEDGE_SCOPES = ["persona", "persona-project", "project", "global"];
+var SCOPE_LABELS = {
+  persona: "\u4EBA\u683C\u79C1\u6709",
+  "persona-project": "\u4EBA\u683C \xD7 \u9879\u76EE",
+  project: "\u9879\u76EE\u5171\u4EAB",
+  global: "\u5168\u5C40\u5171\u4EAB"
+};
+var prefix = "<!-- dsh-px-knowledge:";
+var digest = (value) => createHash2("sha256").update(JSON.stringify(value)).digest("hex");
+var contentRevision = (snapshot) => digest(snapshot.documents.map((d) => [d.id, d.revision, d.contentHash, d.title, d.status, d.healthy]));
+function unwrap(document) {
+  const end = document.content.indexOf(" -->\n");
+  if (!document.content.startsWith(prefix) || end < 0)
+    throw new MemoryError("\u77E5\u8BC6\u6765\u6E90\u4FE1\u606F\u7F3A\u5931\uFF0C\u8BF7\u68C0\u67E5\u6B64\u6761\u76EE\u7684\u539F\u6587", 409);
+  let metadata;
+  try {
+    metadata = JSON.parse(document.content.slice(prefix.length, end));
+  } catch {
+    throw new MemoryError("\u77E5\u8BC6\u6765\u6E90\u4FE1\u606F\u65E0\u6548", 409);
+  }
+  if (metadata.schema !== 1 || !Array.isArray(metadata.sources))
+    throw new MemoryError("\u77E5\u8BC6\u7248\u672C\u683C\u5F0F\u4E0D\u53D7\u652F\u6301", 409);
+  return { metadata, body: document.content.slice(end + 5) };
+}
+function wrap(metadata, body) {
+  return prefix + JSON.stringify(metadata) + " -->\n" + body;
+}
+function bounded(value, label, max) {
+  if (typeof value !== "string" || !value.trim() || value.length > max)
+    throw new MemoryError(`${label}\u4E3A\u7A7A\u6216\u8D85\u8FC7\u9650\u5236`);
+  return value.trim();
+}
+function validateNamespace(ns) {
+  if (!ns || !KNOWLEDGE_SCOPES.includes(ns.scope)) throw new MemoryError("\u77E5\u8BC6\u6765\u6E90\u8303\u56F4\u65E0\u6548", 409);
+  const privateScope = ns.scope === "persona" || ns.scope === "persona-project", projectScope = ns.scope === "project" || ns.scope === "persona-project";
+  if (privateScope !== (typeof ns.personaId === "string" && ns.personaId.length > 0 && ns.personaId.length <= 200) || projectScope !== (typeof ns.project === "string" && ns.project.length > 0))
+    throw new MemoryError("\u77E5\u8BC6\u6765\u6E90\u8EAB\u4EFD\u65E0\u6548", 409);
+}
+var KnowledgeBank = class {
+  constructor(root, identities, observeFile2) {
+    this.root = root;
+    this.identities = identities;
+    this.observeFile = observeFile2;
+    mkdirSync3(root, { recursive: true });
+  }
+  runtimes = /* @__PURE__ */ new Map();
+  factory;
+  namespace(caller, scope) {
+    if (!KNOWLEDGE_SCOPES.includes(scope)) throw new MemoryError("\u77E5\u8BC6\u8303\u56F4\u65E0\u6548");
+    const state = this.identities.read(), binding = state.bindings[caller.sessionId];
+    if ((scope === "persona" || scope === "persona-project") && (!binding || binding.pending))
+      throw new MemoryError("\u8BF7\u5148\u5EFA\u7ACB\u5F53\u524D\u4F1A\u8BDD\u4EBA\u683C", 409);
+    const project = projectKey(caller.project);
+    if ((scope === "project" || scope === "persona-project") && !project)
+      throw new MemoryError("\u6B64\u8303\u56F4\u9700\u8981\u5F53\u524D\u9879\u76EE\u76EE\u5F55");
+    return {
+      scope,
+      ...scope === "persona" || scope === "persona-project" ? { personaId: binding.personaId } : {},
+      ...scope === "project" || scope === "persona-project" ? { project } : {}
+    };
+  }
+  async runtime(ns) {
+    validateNamespace(ns);
+    const key = digest(ns), existing = this.runtimes.get(key);
+    if (existing) return existing;
+    const module = await (this.factory ??= import("dsh-mnemon-source-documents").catch((e) => {
+      this.factory = void 0;
+      throw e;
+    }));
+    const runtime = module.createDocumentsMemorySource({ dataDir: join(this.root, ns.scope, key), limitBytes: 10 * 1024 * 1024 }).create({
+      sourceInstanceKey: "px-knowledge-" + key,
+      provenance: { packageName: "dsh-px-memory", entryId: "px-knowledge" }
+    });
+    if (this.runtimes.size >= 64) {
+      const oldest = this.runtimes.keys().next().value;
+      await this.runtimes.get(oldest)?.dispose?.();
+      this.runtimes.delete(oldest);
+    }
+    this.runtimes.set(key, runtime);
+    return runtime;
+  }
+  async call(ns, operation, input = {}, revision) {
+    const runtime = await this.runtime(ns);
+    const mutate = operation === "mutate" || operation === "archive";
+    if (mutate && (!revision || typeof revision !== "string"))
+      throw new MemoryError("\u8BF7\u5148\u8BFB\u53D6\u5F53\u524D\u77E5\u8BC6\u7248\u672C", 409);
+    return runtime.manage({
+      scope: { storage: "workspace", workspaceId: ns.project ?? this.root },
+      sourceInstanceKey: "px-knowledge-" + digest(ns),
+      mode: mutate ? "mutate" : "read",
+      operation,
+      input,
+      expectedRevision: revision,
+      confirmed: mutate
+    });
+  }
+  async catalog(caller, scope) {
+    const result = await this.call(this.namespace(caller, scope), "snapshot");
+    return {
+      scope,
+      label: SCOPE_LABELS[scope],
+      revision: contentRevision(result.value),
+      documents: result.value.documents.map((d) => ({
+        id: d.id,
+        key: d.title,
+        revision: d.revision,
+        contentHash: d.contentHash,
+        status: d.status,
+        updatedAt: d.updatedAt,
+        healthy: d.healthy
+      }))
+    };
+  }
+  async present(ns, document, caller) {
+    const { metadata, body } = unwrap(document);
+    let stale = false, sourceState = "original";
+    if (metadata.origin) {
+      const { id, revision, contentHash, ...originNs } = metadata.origin;
+      try {
+        const original = (await this.call(originNs, "document", { id })).value;
+        stale = original.status !== "active" || original.revision !== revision || original.contentHash !== contentHash;
+        sourceState = stale ? "shared-source-changed" : "shared-snapshot";
+      } catch {
+        stale = true;
+        sourceState = "shared-source-unavailable";
+      }
+    }
+    const sourceFiles = [];
+    for (const source of metadata.sources) {
+      let state = "unavailable";
+      try {
+        const current = await this.observeFile?.(caller, source.path);
+        state = !current ? "missing" : current.version === source.version ? "current" : "changed";
+      } catch {
+      }
+      sourceFiles.push({ ...source, state });
+      if (state !== "current") {
+        stale = true;
+        sourceState = "file-source-" + state;
+      }
+    }
+    return {
+      id: document.id,
+      key: document.title,
+      scope: ns.scope,
+      revision: document.revision,
+      contentHash: document.contentHash,
+      status: document.status,
+      current: document.status === "active" && !stale,
+      sourceState,
+      body,
+      sources: sourceFiles,
+      author: metadata.author ?? { kind: "unknown" },
+      sourceMeaning: "File versions track freshness; they do not prove the content supports every claim.",
+      previous: metadata.previous,
+      sharedFrom: metadata.origin ? { scope: metadata.origin.scope, revision: metadata.origin.revision } : void 0
+    };
+  }
+  async read(caller, scope, id, includeHistorical = false) {
+    const ns = this.namespace(caller, scope);
+    bounded(id, "\u6761\u76EE\u7F16\u53F7", 300);
+    let result;
+    try {
+      result = await this.call(ns, "document", { id });
+    } catch (error) {
+      if (error instanceof Error && error.message === `document not found: ${id}`)
+        throw new MemoryError("\u6B64\u77E5\u8BC6\u6761\u76EE\u4E0D\u5728\u5F53\u524D\u53EF\u89C1\u8303\u56F4\u5185\uFF0C\u6216\u5DF2\u4E0D\u5B58\u5728", 404);
+      throw error;
+    }
+    const document = await this.present(ns, result.value, caller);
+    if (!document.current && !includeHistorical) {
+      delete document.body;
+      document.requiresHistoricalRead = true;
+    }
+    const snapshot = (await this.call(ns, "snapshot")).value, now = snapshot.documents.find((d) => d.id === document.id);
+    if (!now || now.revision !== document.revision || now.contentHash !== document.contentHash || now.status !== document.status)
+      throw new MemoryError("\u77E5\u8BC6\u8BFB\u53D6\u671F\u95F4\u53D1\u751F\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6", 409);
+    return { revision: contentRevision(snapshot), document };
+  }
+  async search(caller, scope, query, includeHistorical = false) {
+    const ns = this.namespace(caller, scope), result = await this.call(ns, "search", {
+      query: bounded(query, "\u5173\u952E\u8BCD", 256),
+      limit: 20,
+      includeArchived: includeHistorical
+    });
+    const matches = await Promise.all(
+      result.value.results.map((d) => this.present(ns, d, caller))
+    );
+    const snapshot = (await this.call(ns, "snapshot")).value;
+    if (matches.some(
+      (d) => !snapshot.documents.some(
+        (now) => now.id === d.id && now.revision === d.revision && now.contentHash === d.contentHash && now.status === d.status
+      )
+    ))
+      throw new MemoryError("\u77E5\u8BC6\u67E5\u8BE2\u671F\u95F4\u53D1\u751F\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u67E5\u8BE2", 409);
+    return {
+      scope,
+      revision: contentRevision(snapshot),
+      results: matches.filter((d) => includeHistorical || d.current),
+      excludedHistorical: includeHistorical ? 0 : matches.filter((d) => !d.current).length
+    };
+  }
+  async write(caller, scope, args, origin, sourceAuthor) {
+    const ns = this.namespace(caller, scope), key = bounded(args.key, "\u77E5\u8BC6\u4E3B\u9898", 160), body = bounded(args.body, "\u77E5\u8BC6\u6B63\u6587", 64e3);
+    const snapshot = await this.call(ns, "snapshot");
+    if (contentRevision(snapshot.value) !== args.revision)
+      throw new MemoryError("\u77E5\u8BC6\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u5148 catalog \u8BFB\u53D6 CONTROL.revision \u540E\u518D\u4FEE\u6539", 409);
+    const matches = snapshot.value.documents.filter((d) => d.status === "active" && d.title === key);
+    if (matches.length > 1) throw new MemoryError("\u4E3B\u9898\u5B58\u5728\u91CD\u590D\u8BB0\u5F55\uFF0C\u8BF7\u5148\u6574\u7406\u4E3A\u5355\u4E00\u73B0\u884C\u6761\u76EE", 409);
+    const old = matches[0];
+    let sources = args.sources ?? (old ? unwrap((await this.call(ns, "document", { id: old.id })).value).metadata.sources : []);
+    if (args.sourcePaths !== void 0) {
+      if (!Array.isArray(args.sourcePaths) || args.sourcePaths.length > 12 || !this.observeFile)
+        throw new MemoryError("\u6587\u4EF6\u6765\u6E90\u6216\u539F\u751F\u8BFB\u53D6\u670D\u52A1\u4E0D\u53EF\u7528");
+      sources = await Promise.all(
+        args.sourcePaths.map(async (path) => {
+          const ref = await this.observeFile(caller, path);
+          if (!ref) throw new MemoryError("\u6765\u6E90\u6587\u4EF6\u4E0D\u5B58\u5728");
+          return ref;
+        })
+      );
+    }
+    if (!Array.isArray(sources) || sources.length > 12 || sources.some(
+      (s) => typeof s.path !== "string" || typeof s.version !== "string" || !Number.isFinite(Date.parse(s.observedAt))
+    ))
+      throw new MemoryError("\u6587\u4EF6\u7248\u672C\u5F15\u7528\u65E0\u6548");
+    const metadata = {
+      schema: 1,
+      sources,
+      author: origin ? sourceAuthor ?? { kind: "unknown", at: (/* @__PURE__ */ new Date()).toISOString() } : { kind: caller.actor ?? "model", at: (/* @__PURE__ */ new Date()).toISOString() },
+      ...origin ? { sharedBy: { kind: caller.actor ?? "model", at: (/* @__PURE__ */ new Date()).toISOString() } } : {},
+      ...origin ? { origin } : {},
+      ...old ? { previous: { revision: old.revision, contentHash: old.contentHash } } : {}
+    };
+    const mutation = {
+      action: old ? "update" : "create",
+      ...old ? { id: old.id } : {},
+      title: key,
+      description: "\u7531 PX \u7BA1\u7406\u7684\u73B0\u884C\u77E5\u8BC6\uFF1B\u5386\u53F2\u4FEE\u8BA2\u4E0D\u4F5C\u4E3A\u5F53\u524D\u7ED3\u8BBA\u3002",
+      content: wrap(metadata, body),
+      sourcePaths: sources.map((s) => s.path),
+      sessionIds: caller.sessionId ? [caller.sessionId] : []
+    };
+    let result;
+    try {
+      result = await this.call(ns, "mutate", mutation, snapshot.revision);
+    } catch (error) {
+      if (error?.name !== "DocumentConflictError") throw error;
+      const latest = await this.call(ns, "snapshot");
+      if (contentRevision(latest.value) !== args.revision)
+        throw new MemoryError("\u77E5\u8BC6\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u5148 catalog \u8BFB\u53D6 CONTROL.revision \u540E\u518D\u4FEE\u6539", 409);
+      result = await this.call(ns, "mutate", mutation, latest.revision);
+    }
+    return {
+      revision: contentRevision(result.value.snapshot),
+      document: await this.present(ns, result.value.document, caller)
+    };
+  }
+  async share(caller, from, id, to, revision, expectedSourceRevision) {
+    if (from === to) throw new MemoryError("\u6765\u6E90\u4E0E\u76EE\u6807\u8303\u56F4\u76F8\u540C");
+    const ns = this.namespace(caller, from), document = (await this.call(ns, "document", { id })).value;
+    if (document.revision !== expectedSourceRevision || document.status !== "active")
+      throw new MemoryError("\u6765\u6E90\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u9884\u89C8\u540E\u5206\u4EAB", 409);
+    const { metadata, body } = unwrap(document);
+    if (!(await this.present(ns, document, caller)).current)
+      throw new MemoryError("\u6765\u6E90\u4E0D\u662F\u73B0\u884C\u77E5\u8BC6\uFF0C\u4E0D\u80FD\u7EE7\u7EED\u5206\u4EAB\u65E7\u526F\u672C", 409);
+    return this.write(
+      caller,
+      to,
+      { key: document.title, body, revision, sources: metadata.sources },
+      metadata.origin ?? { ...ns, id, revision: document.revision, contentHash: document.contentHash },
+      metadata.author
+    );
+  }
+  async archive(caller, scope, id, revision, documentRevision) {
+    const ns = this.namespace(caller, scope), current = await this.call(ns, "snapshot");
+    if (contentRevision(current.value) !== revision)
+      throw new MemoryError("\u77E5\u8BC6\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u518D\u5F52\u6863", 409);
+    const result = await this.call(
+      ns,
+      "archive",
+      { id, documentRevision, summary: "\u7531\u7528\u6237\u5F52\u6863\uFF0C\u4E0D\u518D\u7528\u4E8E\u5F53\u524D\u7ED3\u8BBA\u3002" },
+      current.revision
+    );
+    return {
+      revision: contentRevision(result.value.snapshot),
+      document: await this.present(ns, result.value.document, caller)
+    };
+  }
+  async dispose() {
+    for (const runtime of this.runtimes.values()) await runtime.dispose?.();
+    this.runtimes.clear();
+  }
+};
+
+// packages/dsh-px-memory/src/knowledge-source.ts
+import { createHash as createHash3, randomUUID as randomUUID2 } from "node:crypto";
+var properties = {
+  action: { type: "string", enum: ["catalog", "search", "read", "write", "share", "archive"] },
+  scope: { type: "string", enum: ["visible", ...KNOWLEDGE_SCOPES] },
+  query: { type: "string", maxLength: 256 },
+  id: { type: "string" },
+  key: { type: "string", maxLength: 160 },
+  body: { type: "string", maxLength: 64e3 },
+  revision: { type: "string" },
+  documentRevision: { type: "integer", minimum: 1 },
+  targetScope: { type: "string", enum: [...KNOWLEDGE_SCOPES] },
+  historical: { type: "boolean" },
+  offset: { type: "integer", minimum: 0 },
+  sourcePaths: { type: "array", maxItems: 12, items: { type: "string", maxLength: 4096 } }
+};
+function knowledgeCaller(scope) {
+  return { sessionId: scope.sessionId ?? scope.agentId ?? "", project: scope.workspaceId };
+}
+async function knowledgeAction(bank, caller, input) {
+  if (!input || typeof input !== "object" || input.scope !== "visible" && !KNOWLEDGE_SCOPES.includes(input.scope))
+    throw new MemoryError("\u8BF7\u9009\u62E9\u6709\u6548\u77E5\u8BC6\u8303\u56F4");
+  if (input.historical !== void 0 && typeof input.historical !== "boolean")
+    throw new MemoryError("\u5386\u53F2\u8BFB\u53D6\u9009\u9879\u65E0\u6548");
+  if (input.scope === "visible") {
+    if (!["catalog", "search"].includes(input.action))
+      throw new MemoryError("\u8054\u5408\u8303\u56F4\u53EA\u7528\u4E8E\u76EE\u5F55\u548C\u641C\u7D22\uFF1B\u8BFB\u53D6\u6216\u4FEE\u6539\u65F6\u6307\u5B9A\u7ED3\u679C\u7684\u5B9E\u9645\u8303\u56F4");
+    const revisions = {}, rows = [];
+    let excludedHistorical = 0;
+    for (const scope of KNOWLEDGE_SCOPES) {
+      try {
+        bank.namespace(caller, scope);
+      } catch {
+        continue;
+      }
+      const value = await knowledgeAction(bank, caller, { ...input, scope });
+      revisions[scope] = value.revision;
+      excludedHistorical += value.excludedHistorical ?? 0;
+      rows.push(...(value.results ?? value.documents ?? []).map((row) => ({ ...row, scope })));
+    }
+    return {
+      scope: "visible",
+      revisions,
+      ...input.action === "search" ? { results: rows, excludedHistorical } : { documents: rows }
+    };
+  }
+  switch (input.action) {
+    case "catalog":
+      return bank.catalog(caller, input.scope);
+    case "search":
+      return bank.search(caller, input.scope, input.query ?? "", input.historical === true);
+    case "read":
+      return bank.read(caller, input.scope, input.id, input.historical === true);
+    case "write":
+      return bank.write(caller, input.scope, {
+        key: input.key,
+        body: input.body,
+        revision: input.revision,
+        sourcePaths: input.sourcePaths
+      });
+    case "share":
+      return bank.share(
+        caller,
+        input.scope,
+        input.id,
+        input.targetScope,
+        input.revision,
+        input.documentRevision
+      );
+    case "archive":
+      return bank.archive(caller, input.scope, input.id, input.revision, input.documentRevision);
+    default:
+      throw new MemoryError("\u77E5\u8BC6\u64CD\u4F5C\u65E0\u6548");
+  }
+}
+var hash2 = (v) => createHash3("sha256").update(JSON.stringify(v)).digest("hex");
+var schema = (keys, required) => ({
+  type: "object",
+  additionalProperties: false,
+  properties: Object.fromEntries(keys.map((k) => [k, properties[k]])),
+  required
+});
+function knowledgeContractText(instance) {
+  return `PX knowledge operations available in the current native Mnemon View (keep these exact IDs after compaction):
+Read tool mnemon_view_route: routeId="${instance}/catalog", input={scope:"project"} returns a CONTROL item containing the current string revision, even when empty. Search: routeId="${instance}/search", input={scope:"visible",query:"1-3 key words"}. visible already combines all accessible scopes; use CONTROL.revisions[targetScope] directly and do not recheck every scope. Read: routeId="${instance}/read", input={scope:"project",id:"copy a returned document id",offset:0}.
+Write tool mnemon_view_action: offerId="${instance}/write", input={scope:"project",key:"one stable topic",body:"the corrected CURRENT statement",revision:"copy CONTROL.revision exactly"}. For an explicit save to a named scope/key: catalog that scope ONCE, write, then read the returned id if verification was requested. Do not repeatedly search other scopes or old archives before this write; uniqueness is per scope and write updates the existing exact key. Never put a version number in a new topic key. The string store revision is NOT the numeric document revision. Do not guess IDs or revisions; after a real conflict call catalog again. Other native offers are ${instance}/share and ${instance}/archive. Private scopes are persona/persona-project; shared scopes project/global. Historical or stale records are not current facts. Task progress stays in the work ledger, not knowledge. Read-only permissions remain enforced by native Mnemon.`;
+}
+function pxKnowledgeSource(bank, canParticipate, authorize, onContract, resolveCaller = (caller) => caller) {
+  return {
+    manifest: {
+      apiVersion: "dsh-mnemon/v1",
+      kind: "source",
+      typeId: "px-knowledge",
+      packageName: "dsh-px-memory",
+      role: "narrative",
+      capabilities: ["status", "project", "search", "read", "write", "archive"],
+      consistency: "namespace-pinned-live-read",
+      routes: [
+        {
+          id: "catalog",
+          description: "\u5217\u51FA\u77E5\u8BC6\u4E3B\u9898\u5E76\u8FD4\u56DE\u5199\u5165\u7528\u7684\u5B57\u7B26\u4E32 revision\uFF1B\u7A7A\u5E93\u4E5F\u8FD4\u56DE CONTROL \u7248\u672C\u3002scope \u53EF\u7528 visible \u8054\u5408\u67E5\u8BE2\u3002",
+          capability: "read",
+          inputSchema: schema(["scope"], []),
+          maxCalls: 4,
+          maxResults: 20,
+          maxCharacters: 16e3
+        },
+        {
+          id: "search",
+          description: "\u75281-3\u4E2A\u5173\u952E\u8BCD\u641C\u7D22\u73B0\u884C\u77E5\u8BC6\uFF0C\u9ED8\u8BA4 visible \u4E00\u6B21\u641C\u7D22\u53EF\u89C1\u8303\u56F4\uFF1B\u4E0D\u8981\u62FC\u5F88\u591A\u4E2D\u82F1\u8FD1\u4E49\u8BCD\u3002",
+          capability: "search",
+          inputSchema: schema(["scope", "query", "historical"], ["query"]),
+          maxCalls: 4,
+          maxResults: 20,
+          maxCharacters: 16e3
+        },
+        {
+          id: "read",
+          description: "\u8BFB\u53D6\u7ED3\u679C\u4E2D\u7684\u786E\u5207 scope\u3001id\uFF1B\u957F\u6B63\u6587\u6309 nextOffset \u7EE7\u7EED\u3002\u8FC7\u65F6\u6B63\u6587\u4EC5\u5728 historical=true \u65F6\u63D0\u4F9B\u3002",
+          capability: "read",
+          inputSchema: schema(["scope", "id", "offset", "historical"], ["scope", "id"]),
+          maxCalls: 8,
+          maxResults: 20,
+          maxCharacters: 16e3
+        }
+      ],
+      actions: [
+        {
+          id: "write",
+          description: "\u521B\u5EFA\u6216\u7EA0\u6B63\u4E00\u4E2A\u7A33\u5B9A\u4E3B\u9898\uFF1B\u5148 catalog \u53D6\u5F97 CONTROL.revision \u5B57\u7B26\u4E32\uFF0C\u4E0D\u7528\u6570\u5B57\u6587\u6863\u7248\u672C\uFF0C\u4E0D\u731C\u7248\u672C\u3002",
+          capability: "write",
+          inputSchema: schema(
+            ["scope", "key", "body", "revision", "sourcePaths"],
+            ["scope", "key", "body", "revision"]
+          )
+        },
+        {
+          id: "share",
+          description: "\u7ECF\u660E\u786E\u786E\u8BA4\u5206\u4EAB\u77E5\u8BC6\u5FEB\u7167\uFF1Brevision \u4F7F\u7528\u76EE\u6807\u8303\u56F4\u7684 CONTROL.revision\uFF0CdocumentRevision \u4F7F\u7528\u6765\u6E90\u6761\u76EE\u7684\u6570\u5B57\u7248\u672C\u3002",
+          capability: "write",
+          inputSchema: schema(
+            ["scope", "id", "targetScope", "revision", "documentRevision"],
+            ["scope", "id", "targetScope", "revision", "documentRevision"]
+          )
+        },
+        {
+          id: "archive",
+          description: "\u5F52\u6863\u5DF2\u64A4\u56DE\u7684\u77E5\u8BC6\uFF0C\u4F7F\u5176\u4E0D\u518D\u4F5C\u4E3A\u5F53\u524D\u7ED3\u8BBA\uFF1B\u9700\u8981 CONTROL.revision \u548C\u6587\u6863\u7684\u6570\u5B57\u7248\u672C\u3002",
+          capability: "write",
+          inputSchema: schema(
+            ["scope", "id", "revision", "documentRevision"],
+            ["scope", "id", "revision", "documentRevision"]
+          )
+        }
+      ],
+      management: {
+        label: "PX \u77E5\u8BC6",
+        description: "\u4EBA\u683C\u79C1\u6709\u3001\u4EBA\u683C \xD7 \u9879\u76EE\u3001\u9879\u76EE\u5171\u4EAB\u3001\u5168\u5C40\u5171\u4EAB\uFF1B\u590D\u7528 Mnemon \u6587\u6863\u4FEE\u8BA2\u4E0E\u641C\u7D22\u3002"
+      }
+    },
+    create(context) {
+      const catalogs = async (scope) => {
+        const caller = knowledgeCaller(scope), rows = [];
+        for (const kind of KNOWLEDGE_SCOPES) {
+          try {
+            bank.namespace(caller, kind);
+          } catch {
+            continue;
+          }
+          rows.push(await bank.catalog(caller, kind));
+        }
+        return rows;
+      };
+      const revision = (rows) => hash2(
+        rows.map((r) => [
+          r.scope,
+          r.documents.map((d) => [d.id, d.revision, d.contentHash, d.status, d.healthy])
+        ])
+      );
+      return {
+        async facts(request, signal) {
+          signal?.throwIfAborted();
+          const enabled = request.scenario.startsWith("management.") || canParticipate(knowledgeCaller(request.scope));
+          const rows = enabled ? await catalogs(request.scope) : [];
+          return {
+            sourceInstanceKey: context.sourceInstanceKey,
+            sourceTypeId: "px-knowledge",
+            role: "narrative",
+            availability: enabled ? "ready" : "unavailable",
+            revision: revision(rows),
+            capabilities: enabled ? ["status", "project", "search", "read", "write", "archive"] : ["status"],
+            routeIds: enabled ? ["catalog", "search", "read"] : [],
+            actionIds: enabled ? ["write", "share", "archive"] : [],
+            hints: {
+              scopes: rows.map((r) => r.scope),
+              activeCount: rows.reduce(
+                (n, r) => n + r.documents.filter((d) => d.status === "active").length,
+                0
+              )
+            }
+          };
+        },
+        async project(request, signal) {
+          signal?.throwIfAborted();
+          const rows = await catalogs(request.scope), current = revision(rows);
+          if (current !== request.expectedRevision)
+            throw new MemoryError("\u77E5\u8BC6\u5728\u4E0A\u4E0B\u6587\u7EC4\u88C5\u65F6\u53D1\u751F\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6", 409);
+          onContract?.(knowledgeCaller(request.scope), context.sourceInstanceKey);
+          return {
+            fragments: request.includeProjection ? [
+              {
+                id: context.sourceInstanceKey + "/routing",
+                sourceInstanceKey: context.sourceInstanceKey,
+                mode: "routed",
+                text: "PX \u77E5\u8BC6\u6309\u4EBA\u683C\u4E0E\u9879\u76EE\u9694\u79BB\u3002\u5148\u641C\u7D22\u73B0\u884C\u77E5\u8BC6\uFF0C\u9700\u8981\u65F6\u8BFB\u53D6\u539F\u6587\uFF1B\u539F\u59CB\u4F1A\u8BDD\u8BB0\u5F55\u548C\u5DE5\u4F5C\u8D26\u672C\u662F\u5386\u53F2\u8BC1\u636E\u3002\u5171\u4EAB\u6216\u6587\u4EF6\u6765\u6E90\u5931\u6548\u65F6\u91CD\u65B0\u6838\u5BF9\uFF0C\u4E0D\u91C7\u7528\u8FC7\u65F6\u5185\u5BB9\u3002",
+                revision: current
+              }
+            ] : [],
+            readGrant: {
+              id: context.sourceInstanceKey + "/grant/" + current,
+              sourceInstanceKey: context.sourceInstanceKey,
+              schema: "dsh-px.knowledge/v1",
+              value: { caller: knowledgeCaller(request.scope) },
+              revision: current,
+              consistency: "namespace-pinned-live-read"
+            },
+            presentation: {
+              visibleItems: rows.reduce(
+                (n, r) => n + r.documents.filter((d) => d.status === "active").length,
+                0
+              )
+            }
+          };
+        },
+        async query(request) {
+          request.signal?.throwIfAborted();
+          const input = { scope: "visible", ...request.input, action: request.route.sourceRouteId }, viewCaller = knowledgeCaller(request.view.scope), caller = resolveCaller(viewCaller);
+          if (!canParticipate(caller)) throw new MemoryError("\u5F53\u524D\u4EBA\u683C\u7684\u8BB0\u5FC6\u5DF2\u5173\u95ED");
+          if (!["catalog", "search", "read"].includes(input?.action))
+            throw new MemoryError("\u53EA\u8BFB\u67E5\u8BE2\u4E0D\u80FD\u4FEE\u6539\u77E5\u8BC6");
+          if (JSON.stringify(request.grant.value?.caller) !== JSON.stringify(viewCaller))
+            throw new MemoryError("\u77E5\u8BC6\u8BFB\u53D6\u8EAB\u4EFD\u5DF2\u7ECF\u53D8\u5316", 409);
+          const value = await knowledgeAction(bank, caller, input), limit = request.route.maxCharacters ?? 16e3;
+          if (input.offset !== void 0 && (!Number.isSafeInteger(input.offset) || input.offset < 0))
+            throw new MemoryError("\u77E5\u8BC6\u8BFB\u53D6\u4F4D\u7F6E\u65E0\u6548");
+          const rows = value.document ? [value.document] : value.results ?? value.documents ?? [];
+          const control = JSON.stringify({
+            kind: "CONTROL",
+            scope: input.scope,
+            ...value.revision ? { revision: value.revision } : { revisions: value.revisions },
+            matches: rows.length,
+            excludedHistorical: value.excludedHistorical ?? 0,
+            instruction: value.revision ? "Use this exact string revision for writes; document revision is a different numeric value." : "Use revisions[targetScope] for a write; visible already searched all accessible scopes, so do not repeat four scope queries."
+          });
+          if (control.length > limit) throw new MemoryError("\u77E5\u8BC6\u7ED3\u679C\u9884\u7B97\u592A\u5C0F\uFF0C\u65E0\u6CD5\u8FD4\u56DE\u5B8C\u6574\u7248\u672C\u4FE1\u606F");
+          let remaining = limit - control.length, truncated = rows.length > (request.route.maxResults ?? 20) - 1;
+          const items = [
+            { id: "@px-control", text: control, provenance: { kind: "control", scope: input.scope } }
+          ];
+          for (const row of rows.slice(0, (request.route.maxResults ?? 20) - 1)) {
+            if (remaining <= 0) {
+              truncated = true;
+              break;
+            }
+            const body = typeof row.body === "string" ? row.body : JSON.stringify({
+              id: row.id,
+              key: row.key,
+              status: row.status,
+              current: row.current,
+              sourceState: row.sourceState,
+              requiresHistoricalRead: row.requiresHistoricalRead
+            });
+            const offset = input.action === "read" ? input.offset ?? 0 : 0, max = Math.min(remaining, input.action === "read" ? 12e3 : 2e3), text2 = body.slice(offset, offset + max), nextOffset = offset + text2.length < body.length ? offset + text2.length : null;
+            remaining -= text2.length;
+            truncated ||= nextOffset !== null;
+            items.push({
+              id: row.id,
+              text: text2,
+              revision: String(row.revision),
+              provenance: {
+                scope: row.scope ?? input.scope,
+                key: row.key,
+                historical: input.historical === true,
+                current: row.current ?? null,
+                sourceState: row.sourceState ?? "catalog",
+                author: row.author ?? { kind: "unknown" },
+                sourceMeaning: row.sourceMeaning ?? null,
+                nextOffset,
+                totalCharacters: body.length,
+                sources: row.sources ?? []
+              }
+            });
+          }
+          return {
+            id: randomUUID2(),
+            viewId: request.view.id,
+            routeId: request.route.id,
+            sourceInstanceKey: context.sourceInstanceKey,
+            observedAt: (/* @__PURE__ */ new Date()).toISOString(),
+            truncated,
+            items,
+            metadata: {
+              scope: input.scope,
+              revision: value.revision ?? null,
+              revisions: value.revisions ?? null,
+              excludedHistorical: value.excludedHistorical ?? 0
+            }
+          };
+        },
+        async mutate(request) {
+          const input = { ...request.input, action: request.offer.sourceActionId }, caller = resolveCaller(knowledgeCaller(request.view.scope));
+          if (!canParticipate(caller)) throw new MemoryError("\u5F53\u524D\u4EBA\u683C\u7684\u8BB0\u5FC6\u5DF2\u5173\u95ED");
+          if (!["write", "share", "archive"].includes(input?.action))
+            throw new MemoryError("\u77E5\u8BC6\u4FEE\u6539\u64CD\u4F5C\u65E0\u6548");
+          await authorize(caller, input, request.signal);
+          request.signal?.throwIfAborted();
+          const result = await knowledgeAction(bank, caller, input);
+          return {
+            id: randomUUID2(),
+            viewId: request.view.id,
+            offerId: request.offer.id,
+            sourceInstanceKey: context.sourceInstanceKey,
+            status: "succeeded",
+            completion: "committed",
+            committedAt: (/* @__PURE__ */ new Date()).toISOString(),
+            revision: result.revision,
+            details: {
+              scope: input.scope,
+              document: result.document ? {
+                id: result.document.id,
+                key: result.document.key,
+                revision: result.document.revision,
+                current: result.document.current
+              } : null
+            }
+          };
+        },
+        async manage(request) {
+          const input = request.input, caller = { ...knowledgeCaller(request.scope), actor: "human" };
+          if (request.operation === "snapshot") {
+            const rows = await catalogs(request.scope);
+            return { revision: revision(rows), value: { scopes: rows } };
+          }
+          const mutate = ["write", "share", "archive"].includes(input?.action);
+          if (mutate && (request.mode !== "mutate" || !request.confirmed))
+            throw new MemoryError("\u4FEE\u6539\u77E5\u8BC6\u9700\u8981\u660E\u786E\u786E\u8BA4");
+          if (!mutate && request.mode !== "read") throw new MemoryError("\u77E5\u8BC6\u8BFB\u53D6\u6A21\u5F0F\u65E0\u6548");
+          const result = await knowledgeAction(bank, caller, input);
+          return { revision: revision(await catalogs(request.scope)), value: result };
+        }
+      };
+    }
+  };
+}
+
+// packages/dsh-px-memory/src/native-resources.ts
+import { join as join2, dirname as dirname3, resolve as resolve2 } from "node:path";
+function scopedService(host, caller, name2) {
+  const agent = service(host, "agents")?.get(caller.sessionId);
+  return (agent?.ctx ? service(host, "agentPresets")?.serviceFor?.(agent, name2) ?? agent.ctx.get?.(name2) : void 0) ?? service(host, name2);
+}
+async function observeFile(host, caller, path) {
+  if (typeof path !== "string" || !path.trim() || path.length > 4096) throw new MemoryError("\u6587\u4EF6\u8DEF\u5F84\u65E0\u6548");
+  const fs = scopedService(host, caller, "fs");
+  if (!fs?.resolve || !fs?.stat) throw new MemoryError("\u5F53\u524D\u4F1A\u8BDD\u7684\u539F\u751F\u6587\u4EF6\u670D\u52A1\u4E0D\u53EF\u7528", 503);
+  const target = await fs.resolve(path, { cwd: caller.project }), info = await fs.stat(target);
+  if (!info) return void 0;
+  if (info.type !== "file") throw new MemoryError("\u6765\u6E90\u5FC5\u987B\u662F\u6587\u4EF6");
+  return { path: fs.processPath(target), version: String(info.version), observedAt: (/* @__PURE__ */ new Date()).toISOString() };
+}
+function skillName(value) {
+  if (typeof value !== "string" || value.length > 80 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value))
+    throw new MemoryError("\u6280\u80FD\u540D\u9700\u4F7F\u7528\u5C0F\u5199\u82F1\u6587\u3001\u6570\u5B57\u548C\u8FDE\u5B57\u7B26");
+  return value;
+}
+async function nativeSkillProjectRoot(fs, cwd) {
+  let current = resolve2(cwd);
+  for (; ; ) {
+    try {
+      if (await fs.stat(await fs.resolve(join2(current, ".git")))) return current;
+    } catch {
+    }
+    const parent = dirname3(current);
+    if (parent === current) return resolve2(cwd);
+    current = parent;
+  }
+}
+async function frontmatter(raw) {
+  const { parse: parseYaml } = await import("yaml");
+  const match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(raw);
+  if (!match) throw new MemoryError("\u6280\u80FD\u6CA1\u6709\u6807\u51C6 frontmatter");
+  const metadata = parseYaml(match[1]);
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata))
+    throw new MemoryError("\u6280\u80FD\u5143\u6570\u636E\u65E0\u6548");
+  return { metadata, body: raw.slice(match[0].length) };
+}
+async function skillAction(host, caller, home, args) {
+  const skills = scopedService(host, caller, "skills"), fs = scopedService(host, caller, "fs"), agent = service(host, "agents")?.get(caller.sessionId);
+  if (!skills?.list || !skills?.get) throw new MemoryError("\u539F\u751F Skills \u670D\u52A1\u4E0D\u53EF\u7528", 503);
+  const options = { cwd: caller.project, ...agent ? { scope: agent } : {} };
+  const projectRoot = caller.project && fs ? await nativeSkillProjectRoot(fs, caller.project) : void 0;
+  const directories = {
+    project: projectRoot ? join2(projectRoot, ".dsh", "skills") : null,
+    global: join2(home, "skills")
+  };
+  if (args.action === "list") return { skills: await skills.list(options), directories };
+  const name2 = skillName(args.name);
+  if (args.action === "read") {
+    const item = await skills.get(name2, options);
+    if (!item) throw new MemoryError("\u539F\u751F\u6280\u80FD\u4E0D\u5B58\u5728", 404);
+    let version, managed = false;
+    if (item.path && fs) {
+      const target2 = await fs.resolve(item.path, { cwd: caller.project });
+      version = (await fs.stat(target2))?.version;
+      try {
+        managed = (await frontmatter(await fs.readText(target2))).metadata["dsh-px-managed"] === true;
+      } catch {
+      }
+    }
+    return {
+      skill: item,
+      version,
+      managed: managed && ["project-dsh", "user-dsh"].includes(item.source),
+      directories
+    };
+  }
+  if (args.action !== "save" || !["project", "global"].includes(args.scope))
+    throw new MemoryError("\u6280\u80FD\u64CD\u4F5C\u6216\u8303\u56F4\u65E0\u6548");
+  if (!fs?.writeText) throw new MemoryError("\u539F\u751F\u6587\u4EF6\u5199\u5165\u670D\u52A1\u4E0D\u53EF\u7528", 503);
+  const sandbox = scopedService(host, caller, "sandboxPolicy");
+  if (!agent || !sandbox?.resolve)
+    throw new MemoryError("\u5F53\u524D\u4F1A\u8BDD\u7684\u539F\u751F\u6587\u4EF6\u6743\u9650\u6682\u4E0D\u53EF\u7528\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u4F1A\u8BDD", 503);
+  const policy = sandbox.resolve({ session: agent.session });
+  if (args.scope === "project" && !caller.project) throw new MemoryError("\u9879\u76EE\u6280\u80FD\u9700\u8981\u5F53\u524D\u9879\u76EE");
+  if (typeof args.description !== "string" || !args.description.trim() || args.description.length > 1e3 || typeof args.body !== "string" || !args.body.trim() || args.body.length > 64e3 || typeof args.enabled !== "boolean")
+    throw new MemoryError("\u8BF7\u586B\u5199\u6709\u6548\u7684\u6280\u80FD\u8BF4\u660E\u3001\u6B63\u6587\u548C\u542F\u7528\u72B6\u6001");
+  const base = args.scope === "project" ? directories.project : directories.global, path = join2(base, name2, "SKILL.md");
+  if (args.expectedRoot !== base) throw new MemoryError("\u6280\u80FD\u76EE\u5F55\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u5217\u8868\u5E76\u786E\u8BA4\u4FDD\u5B58\u4F4D\u7F6E", 409);
+  const parent = await fs.resolve(base, { cwd: caller.project }), target = await fs.resolve(path, { cwd: caller.project });
+  if (!fs.contains(parent, target)) throw new MemoryError("\u6280\u80FD\u8DEF\u5F84\u8D85\u51FA\u53D7\u7BA1\u76EE\u5F55");
+  if (args.scope === "project" && !fs.contains(await fs.resolve(projectRoot), target))
+    throw new MemoryError("\u6280\u80FD\u8DEF\u5F84\u4E0D\u5728\u9879\u76EE\u5185");
+  const info = await fs.stat(target);
+  if (info) {
+    if (info.type !== "file" || !args.version || info.version !== args.version)
+      throw new MemoryError("\u6280\u80FD\u6587\u4EF6\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6", 409);
+    if ((await frontmatter(await fs.readText(target))).metadata["dsh-px-managed"] !== true)
+      throw new MemoryError("\u6B64\u6280\u80FD\u7531\u5176\u4ED6\u6765\u6E90\u7BA1\u7406\uFF0C\u8BF7\u4F7F\u7528\u539F\u6587\u4EF6\u7F16\u8F91\u5165\u53E3", 409);
+  } else if (args.version) throw new MemoryError("\u539F\u6280\u80FD\u6587\u4EF6\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u5237\u65B0", 409);
+  const metadata = {
+    name: name2,
+    description: args.description.trim(),
+    "disable-model-invocation": !args.enabled,
+    "user-invocable": args.enabled,
+    "dsh-px-managed": true,
+    ...args.knowledge ? { "dsh-px-knowledge": args.knowledge } : {}
+  };
+  const { stringify: stringifyYaml } = await import("yaml");
+  let result;
+  try {
+    result = await fs.writeText(
+      target,
+      "---\n" + stringifyYaml(metadata) + "---\n\n" + args.body.trim() + "\n",
+      info ? { kind: "replaceIfVersion", version: info.version } : { kind: "createIfAbsent" },
+      void 0,
+      policy
+    );
+  } catch (error) {
+    if (error instanceof Error && error.code === "FS_SANDBOX_DENIED")
+      throw new MemoryError(
+        "\u5F53\u524D\u4F1A\u8BDD\u7684\u539F\u751F\u6587\u4EF6\u6743\u9650\u4E0D\u5141\u8BB8\u5199\u5165\u6B64\u6280\u80FD\u76EE\u5F55\u3002\u8BF7\u6539\u7528\u5141\u8BB8\u7684\u9879\u76EE\u76EE\u5F55\uFF0C\u6216\u5728\u4F1A\u8BDD\u8BBF\u95EE\u6A21\u5F0F\u4E2D\u660E\u786E\u6388\u6743\u540E\u91CD\u8BD5\uFF1B\u8349\u7A3F\u4ECD\u4FDD\u7559\u3002",
+        403
+      );
+    throw error;
+  }
+  let discovery = "pending";
+  for (let attempt = 0; attempt < 12; attempt++) {
+    try {
+      const listed = (await skills.list(options)).find(
+        (s) => s.name === name2 && s.path === fs.processPath(target)
+      );
+      if (listed && listed.invocation.modelInvocable === args.enabled && listed.invocation.userInvocable === args.enabled) {
+        discovery = "ready";
+        break;
+      }
+    } catch {
+      break;
+    }
+    await new Promise((resolve3) => setTimeout(resolve3, 80));
+  }
+  return {
+    saved: true,
+    name: name2,
+    path: fs.processPath(target),
+    version: result.version,
+    enabled: args.enabled,
+    discovery
+  };
+}
+
+// packages/dsh-px-memory/src/knowledge-tools.ts
+function installKnowledgeToolRouting(host) {
+  const masks = /* @__PURE__ */ new Map();
+  let changing = false, closed = false, queued = false;
+  const refresh = () => {
+    if (changing || closed) return;
+    changing = true;
+    try {
+      const agents = service(host, "agents")?.list?.() ?? [];
+      for (const [agent, mask] of masks)
+        if (!agents.includes(agent)) {
+          masks.delete(agent);
+          mask.dispose();
+        }
+      const names = (service(host, "tools")?.schemas?.() ?? []).map((t) => t.name).filter(
+        (n) => n.startsWith("mnemon_") && !["mnemon_view_route", "mnemon_view_action"].includes(n)
+      ).sort();
+      const key = names.join(",");
+      for (const agent of agents) {
+        const tools = agent.ctx?.get?.("tools") ?? agent.ctx?.tools;
+        if (!tools?.restrict) continue;
+        const old = masks.get(agent);
+        if (old?.key === key) continue;
+        if (old) {
+          masks.delete(agent);
+          old.dispose();
+        }
+        if (names.length) {
+          const dispose = tools.restrict({ deny: names });
+          masks.set(agent, { key, dispose });
+        }
+      }
+    } finally {
+      changing = false;
+    }
+  };
+  const schedule = () => {
+    if (queued || changing || closed) return;
+    queued = true;
+    queueMicrotask(() => {
+      queued = false;
+      try {
+        refresh();
+      } catch (e) {
+        host.logger?.warn("PX \u77E5\u8BC6\u5DE5\u5177\u8DEF\u7531\u672A\u66F4\u65B0\uFF1A%s", String(e));
+      }
+    });
+  };
+  const offCreated = host.on("agent/created", schedule), offTools = host.on("tools/change", schedule);
+  refresh();
+  return () => {
+    closed = true;
+    offCreated?.();
+    offTools?.();
+    for (const mask of masks.values()) mask.dispose();
+    masks.clear();
+  };
+}
+
+// packages/dsh-px-memory/src/knowledge-delegation.ts
+function delegatedKnowledgeCaller(caller, actor, get, store) {
+  if (!actor || actor.session.id === caller.sessionId) return caller;
+  const state = store.read(), owner = state.bindings[caller.sessionId], child = state.bindings[actor.session.id];
+  if (!owner || !child || owner.personaId !== child.personaId || owner.personaRevision !== child.personaRevision || projectKey(caller.project) !== projectKey(actor.session.header.cwd))
+    throw new MemoryError("\u59D4\u6D3E\u77E5\u8BC6\u89C6\u56FE\u4E0E\u5F53\u524D\u4EBA\u683C\u6216\u9879\u76EE\u4E0D\u4E00\u81F4\uFF0C\u8BF7\u65B0\u5EFA\u72EC\u7ACB\u4F1A\u8BDD", 409);
+  const seen = /* @__PURE__ */ new Set();
+  let cursor = actor;
+  while (cursor && !seen.has(cursor.session.id)) {
+    seen.add(cursor.session.id);
+    if (cursor.session.id === caller.sessionId) return { ...caller, sessionId: actor.session.id };
+    if (cursor.session.header.origin !== "subagent" || !cursor.session.header.parentSession) break;
+    cursor = get(cursor.session.header.parentSession);
+  }
+  throw new MemoryError("\u5F53\u524D\u8C03\u7528\u4E0D\u5C5E\u4E8E\u6B64\u59D4\u6D3E\u77E5\u8BC6\u89C6\u56FE", 409);
+}
+function delegatedContract(agent, get, lookup, store) {
+  const seen = /* @__PURE__ */ new Set();
+  let cursor = agent;
+  while (cursor && !seen.has(cursor.session.id)) {
+    seen.add(cursor.session.id);
+    const instance = lookup(cursor.session.id);
+    if (instance) {
+      delegatedKnowledgeCaller(
+        { sessionId: cursor.session.id, project: cursor.session.header.cwd },
+        agent,
+        get,
+        store
+      );
+      return instance;
+    }
+    if (cursor.session.header.origin !== "subagent" || !cursor.session.header.parentSession) break;
+    cursor = get(cursor.session.header.parentSession);
+  }
+  return void 0;
+}
+
 // packages/dsh-px-memory/src/index.ts
 var name = "dsh-px-memory";
 var inject = [];
 function apply(ctx) {
   const root = process.env.DSH_HOME;
   if (!root) throw new Error("DSH_HOME \u672A\u8BBE\u7F6E\uFF0C\u65E0\u6CD5\u4FDD\u5B58\u4EBA\u683C\u4E0E\u8BB0\u5FC6");
-  const store = new MemoryStore(join(root, "storages", name, "memory.json"));
+  const store = new MemoryStore(join3(root, "storages", name, "memory.json"));
   const identity = new TurnIdentity(
     store,
     (agent) => service(ctx, "sessionProjections")?.stateOf?.(agent.session, "turnBoundary")
   );
-  const history = new HistoryIndex(join(root, "storages", name, "history.sqlite"), store);
+  const contracts = /* @__PURE__ */ new Map();
+  const currentTurn = (agent) => service(ctx, "sessionProjections")?.stateOf?.(agent.session, "turnBoundary")?.lastTurn ?? agent.session.snapshotEvents?.().findLast((e) => e.type === "turn/start")?.data?.turn ?? 0;
+  ctx.effect(() => () => contracts.clear(), "memory: current knowledge contracts");
+  const knowledge = new KnowledgeBank(
+    join3(root, "storages", "dsh-px-knowledge-scopes"),
+    store,
+    (caller, path) => observeFile(ctx, caller, path)
+  );
+  ctx.effect(() => () => knowledge.dispose(), "memory: knowledge sources");
+  ctx.inject(
+    ["mnemonMemory", "tools", "agents"],
+    (host) => host.effect(() => installKnowledgeToolRouting(host), "memory: native knowledge tool routing")
+  );
+  const knowledgeEnabled = (caller) => {
+    const agent = service(ctx, "agents")?.get(caller.sessionId);
+    if (agent) {
+      try {
+        const persona2 = identity.current(agent);
+        return persona2.memoryEnabled && !persona2.archived;
+      } catch {
+        return false;
+      }
+    }
+    const s = store.read(), binding = s.bindings[caller.sessionId], persona = s.personas.find((p) => p.id === binding?.personaId);
+    return !!persona && persona.memoryEnabled && !persona.archived && !binding?.pending;
+  };
+  ctx.inject(
+    ["mnemonMemory"],
+    (host) => host.effect(
+      () => host.mnemonMemory.installContributions(
+        {
+          plugin: {
+            apiVersion: "dsh-mnemon/plugin/v1",
+            packageName: "dsh-px-memory",
+            label: { en: "PX Knowledge", "zh-CN": "PX \u77E5\u8BC6" },
+            description: {
+              en: "Persona and shared knowledge with versioned sources.",
+              "zh-CN": "\u4EBA\u683C\u79C1\u6709\u4E0E\u516C\u5171\u77E5\u8BC6\uFF0C\u4FDD\u7559\u4FEE\u8BA2\u4E0E\u6765\u6E90\u3002"
+            },
+            roles: ["source"],
+            provides: [{ id: "px-scoped-knowledge" }]
+          },
+          sources: [
+            pxKnowledgeSource(
+              knowledge,
+              knowledgeEnabled,
+              async (caller, input, signal) => {
+                if (input.action !== "share" && input.scope !== "global") return;
+                const approval = service(host, "approval"), agent = service(host, "agents")?.get(caller.sessionId);
+                if (!approval?.request || !agent) throw new MemoryError("\u5171\u4EAB\u77E5\u8BC6\u9700\u8981\u5F53\u524D\u4F1A\u8BDD\u4E2D\u7684\u539F\u751F\u786E\u8BA4");
+                const decision = await approval.request({
+                  agent,
+                  toolName: "mnemon_view_action",
+                  reason: "Share or change globally reusable PX knowledge",
+                  displayReason: {
+                    zh: `\u5141\u8BB8${input.action === "share" ? "\u5206\u4EAB\u8FD9\u6761\u77E5\u8BC6\u5230 " + input.targetScope : "\u4FEE\u6539\u5168\u5C40\u5171\u4EAB\u77E5\u8BC6"}\uFF1F`,
+                    en: "Allow sharing or modifying globally shared knowledge?"
+                  },
+                  signal
+                });
+                if (decision !== "allowed-once") throw new MemoryError("\u77E5\u8BC6\u5171\u4EAB\u672A\u83B7\u786E\u8BA4\uFF0C\u672A\u4FEE\u6539\u5185\u5BB9", 409);
+              },
+              (caller, instance) => {
+                const agent = service(ctx, "agents")?.get(caller.sessionId);
+                if (agent) contracts.set(caller.sessionId, { turn: currentTurn(agent), instance });
+              },
+              (caller) => {
+                const agents = service(ctx, "agents");
+                return delegatedKnowledgeCaller(
+                  caller,
+                  agents?.currentInitiator?.(),
+                  (id) => agents?.get(id),
+                  store
+                );
+              }
+            )
+          ]
+        },
+        { instanceId: "dsh-px-knowledge" }
+      ),
+      "memory: Mnemon source"
+    )
+  );
+  ctx.inject(
+    ["systemPrompt"],
+    (host) => host.effect(
+      () => host.systemPrompt.section({
+        name: "dsh-px-current-knowledge-contract",
+        order: 501,
+        text: ({ agent }) => {
+          if (!agent) return "";
+          if (!knowledgeEnabled({ sessionId: agent.session.id })) return "";
+          const agents = service(ctx, "agents");
+          const instance = delegatedContract(
+            agent,
+            (id) => agents?.get(id),
+            (id) => {
+              const binding = contracts.get(id);
+              return binding && (id !== agent.session.id || binding.turn === currentTurn(agent)) ? binding.instance : void 0;
+            },
+            store
+          );
+          return instance ? knowledgeContractText(instance) : "";
+        }
+      }),
+      "memory: compression-stable native operation contract"
+    )
+  );
+  const history = new HistoryIndex(join3(root, "storages", name, "history.sqlite"), store);
   ctx.effect(() => () => history.close(), "memory: history index");
   ctx.on("agent/created", ({ agent }) => {
     try {
       store.bind(agent.session.id, {
         parent: agent.session.header.parentSession,
-        locked: hasStarted(agent.session.snapshotEvents?.() ?? [])
+        locked: !!agent.session.header.parentSession || hasStarted(agent.session.snapshotEvents?.() ?? [])
       });
     } catch (error) {
       ctx.logger?.warn("\u4EBA\u683C\u7ED1\u5B9A\u6682\u4E0D\u53EF\u7528\uFF1B\u8BF7\u6C42\u7EC4\u88C5\u524D\u4ECD\u4F1A\u62D2\u7EDD\u672A\u77E5\u8EAB\u4EFD\uFF1A%s", String(error));
@@ -944,7 +1947,10 @@ ${handoff.summary}` : "");
             const id = validId(new URL(req.url, "http://127.0.0.1").searchParams.get("sessionId"));
             const { meta, events = [] } = await host.sessionController.inspect(id);
             const project = projectKey(meta.cwd);
-            store.bind(id, { parent: meta.parentSession, locked: hasStarted(events) });
+            store.bind(id, {
+              parent: meta.parentSession,
+              locked: !!meta.parentSession || hasStarted(events)
+            });
             if (req.method === "POST") {
               if (!String(req.headers["content-type"]).startsWith("application/json"))
                 throw new MemoryError("\u8BF7\u4F7F\u7528 JSON", 415);
@@ -967,6 +1973,19 @@ ${handoff.summary}` : "");
                 const createdSessionId = await createPersonaSession(host, store, id, args);
                 return send(200, { createdSessionId });
               }
+              if (args.type === "knowledge") {
+                const result = await knowledgeAction(
+                  knowledge,
+                  { sessionId: id, project: meta.cwd, actor: "human" },
+                  args.input
+                );
+                return send(200, result);
+              }
+              if (args.type === "skills")
+                return send(
+                  200,
+                  await skillAction(host, { sessionId: id, project: meta.cwd }, root, args.input)
+                );
               if (args.type === "search-history" || args.type === "read-history") {
                 if (args.projectOnly !== void 0 && typeof args.projectOnly !== "boolean")
                   throw new MemoryError("\u9879\u76EE\u8303\u56F4\u65E0\u6548");

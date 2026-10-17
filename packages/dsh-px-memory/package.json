@@ -1,6 +1,6 @@
 {
   "name": "dsh-px-memory",
-  "version": "0.5.2-alpha.1",
+  "version": "0.6.0-alpha.1",
   "private": true,
   "type": "module",
   "description": "固定人格、接续会话与可追溯经历",
@@ -19,6 +19,11 @@
     "icon.svg"
   ],
   "license": "MIT",
+  "dependencies": {
+    "dsh-mnemon": "0.5.29",
+    "dsh-mnemon-source-documents": "0.5.10",
+    "yaml": "2.9.1"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"

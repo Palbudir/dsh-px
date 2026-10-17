@@ -29,6 +29,20 @@ const team = {
   ],
   tasks: [task]
 }
+test('optional native services use Cordis get without falling through to a throwing property proxy', async () => {
+  const host = new Proxy(
+    { get: (name: string) => (name === 'goals' ? { get: () => goal } : undefined) },
+    {
+      get(target, key) {
+        if (key === 'get') return target.get
+        throw Error('undeclared service property accessed')
+      }
+    }
+  )
+  const result = await readNativeWork(host, 'root', { id: 'root' })
+  assert.equal(result.goal.status, 'available')
+  assert.equal(result.team.status, 'unavailable')
+})
 
 test('ledger references are stamped from native owners; invented tasks and malformed saved refs are rejected', () => {
   const agent = { id: 'root' }

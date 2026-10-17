@@ -16,7 +16,7 @@
       "integrity": "sha512-NDVMDataHJnUzCbIkSvjsqfUU9/wyoy6LWf/2Kw7Hjy1O1W8NQNANvavCsqAQffMJ2j5MLkogG24rgkfF0YRag==",
       "license": "MIT",
       "source": "https://github.com/omdsh-dev/dsh-mnemon",
-      "defaults": "project-documents-v1"
+      "defaults": "px-knowledge-v2"
     }
   ]
 }

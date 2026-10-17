@@ -2,6 +2,8 @@
 
 可下载的安装包、完整 tag 和发布时间见 [GitHub Releases](https://github.com/Palbudir/dsh-px/releases)。这些说明描述对应历史版本的用户可见变化；当前行为和后续工作以 [状态](../STATUS.md) 与 [路线图](../ROADMAP.md) 为准。
 
+- [0.6.0-alpha.1 · 四范围知识、原生 Skills、长任务接续与更新诊断](0.6.0-alpha.1.md)（下载安装状态以 Releases 为准）
+
 - 0.5.0-alpha.1 · 原生 Goal/Team 任务连续性、独立社区知识与上下文插件、后台电脑操作驱动及工具栏整理；从旧版升级时先更新 Desktop：[Desktop](https://github.com/Palbudir/dsh-px/releases/tag/desktop-v0.5.0-alpha.1) · [Pack](https://github.com/Palbudir/dsh-px/releases/tag/pack-v0.5.0-alpha.1)
 - 0.4.2-alpha.1 · 可选的电脑操作功能包（Windows 应用与浏览器，默认关闭）：[Desktop](https://github.com/Palbudir/dsh-px/releases/tag/desktop-v0.4.2-alpha.1) · [Pack](https://github.com/Palbudir/dsh-px/releases/tag/pack-v0.4.2-alpha.1)
 - 0.4.1-alpha.1 · 客户端更新前检查安装登记，记录安装失败原因：[Desktop](https://github.com/Palbudir/dsh-px/releases/tag/desktop-v0.4.1-alpha.1) · [Pack](https://github.com/Palbudir/dsh-px/releases/tag/pack-v0.4.1-alpha.1)

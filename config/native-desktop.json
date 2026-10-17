@@ -4,6 +4,7 @@
   "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
   "version": "0.2.0-rc.2",
   "compiledMainSha256": "10325004a1ddbd8118ed0607ea28d50a7b0d692dcaeb25a67a7d8aea9165019d",
+  "compiledHostSha256": "6c6182cbd9ff7df144145065885fbc5873e9a9db9651c5152e785c84a55689d6",
   "builderFactorySha256": "1402156a2760de1ae1b79727344807ae7be002c62be6dd49ac202efb3c03fd8d",
   "preloadSha256": {
     "preload-app.cjs": "f323eb67f7ace407d3b1d858f264f7846e436d9ba3e80c02b0454a6da0aed968",

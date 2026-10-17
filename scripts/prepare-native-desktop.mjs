@@ -119,6 +119,48 @@ if (!existsSync(runtimeReady)) {
     })
   writeFileSync(runtimeReady, packSha256)
 }
+// Preserve native admission, lock and shutdown; classify non-waking notifications and carry reasons over IPC.
+const hostRelative = 'node_modules/@deepseek-ai/dsh-desktop-host/lib/index.js'
+const nativeHost = readFileSync(join(nativeRuntime, hostRelative), 'utf8')
+assertDigest(nativeHost, pin.compiledHostSha256, 'Desktop Host')
+let patchedHost = replaceOnce(
+  nativeHost,
+  'return liveAgents.some((agent) => agent.status === "running" || agent.inbox.nextTurn.length > 0 || agent.inbox.nextStep.length > 0) || [void 0, ...liveAgents].some((agent) => jobs.list(agent?.id).some((job) => job.status === "running" || job.status === "stopping"));',
+  'pxTaskInspection = inspectNativeTasks(liveAgents, jobs); return pxTaskInspection.active;'
+)
+patchedHost = replaceOnce(
+  patchedHost,
+  'requestId: message.requestId,\n\t\t\t\t\tactive\n',
+  'requestId: message.requestId,\n\t\t\t\t\tactive, inspection: pxTaskInspection\n'
+)
+patchedHost =
+  'import {inspectNativeTasks} from "./px-task-inspection.mjs";\nlet pxTaskInspection;\n' + patchedHost
+writeFileSync(join(pxRuntime, hostRelative), patchedHost)
+const helperRelative = 'node_modules/@deepseek-ai/dsh-desktop-host/lib/px-task-inspection.mjs'
+await build({
+  entryPoints: [join(root, 'src/main/native-task-inspection.ts')],
+  outfile: join(pxRuntime, helperRelative),
+  bundle: true,
+  format: 'esm',
+  platform: 'node',
+  target: 'node24',
+  legalComments: 'none'
+})
+const runtimeInventory = JSON.parse(readFileSync(join(nativeRuntime, 'desktop-runtime.json'), 'utf8'))
+for (const path of [hostRelative, helperRelative]) {
+  const bytes = readFileSync(join(pxRuntime, path)),
+    record = {
+      path,
+      bytes: bytes.length,
+      sha256: createHash('sha256').update(bytes).digest('hex'),
+      executable: false
+    }
+  const at = runtimeInventory.files.findIndex((f) => f.path === path)
+  if (at < 0) runtimeInventory.files.push(record)
+  else runtimeInventory.files[at] = record
+}
+runtimeInventory.files.sort((a, b) => a.path.localeCompare(b.path))
+writeFileSync(join(pxRuntime, 'desktop-runtime.json'), JSON.stringify(runtimeInventory, null, 2) + '\n')
 if (
   packManifest.name !== 'dsh-px-pack' ||
   packManifest.version !== products.pack.version ||
@@ -194,6 +236,16 @@ let main = replaceOnce(
   original,
   'this.updater.allowDowngrade = false;',
   'this.updater.allowDowngrade = false;\n\t\tconfigurePxUpdates(this.updater);'
+)
+main = replaceOnce(
+  main,
+  'return response.active;',
+  'this.pxTaskInspection = response.inspection; return response.active;'
+)
+main = replaceOnce(
+  main,
+  'detail: active ? locale.messages.updateActiveTasksDetail : ready.detail,',
+  'detail: active ? locale.messages.updateActiveTasksDetail + "\\n\\n" + describeNativeTasks(host.pxTaskInspection, locale.id.startsWith("zh")) : ready.detail,'
 )
 main = replaceOnce(
   main,
@@ -316,7 +368,7 @@ if (
   throw Error('Upstream withLock no longer holds the profile lock across an awaited operation')
 writeFileSync(
   join(lib, 'px-main.mjs'),
-  'import { configurePxUpdates, preparePxDefaults, preparePxPack, openDesktopInBrowser, createUpdateJournal, createPackUpdateWindow, currentPackDeployment, confirmPackStartup, checkPxInstall, pxInstallFailure } from "./px-updates.mjs";\n' +
+  'import { configurePxUpdates, preparePxDefaults, preparePxPack, openDesktopInBrowser, createUpdateJournal, createPackUpdateWindow, currentPackDeployment, confirmPackStartup, checkPxInstall, pxInstallFailure, describeNativeTasks } from "./px-updates.mjs";\n' +
     main
 )
 // The patched entry is text surgery on the pinned bundle; parse it now (including every injected
@@ -330,6 +382,7 @@ await build({
   stdin: {
     contents: `import {configureSignedUpdates} from ${JSON.stringify(join(root, 'src/main/signed-update-provider.ts'))};
 export {openDesktopInBrowser} from ${JSON.stringify(join(root, 'src/main/open-browser.ts'))};
+export {describeNativeTasks} from ${JSON.stringify(join(root, 'src/main/native-task-inspection.ts'))};
 export {createUpdateJournal} from ${JSON.stringify(join(root, 'src/main/update-history.ts'))};
 export {createPackUpdateWindow} from ${JSON.stringify(join(root, 'src/main/pack-update-window.ts'))};
 import {assertInstallRegistration} from ${JSON.stringify(join(root, 'src/main/install-registration.ts'))};
@@ -486,6 +539,8 @@ writeFileSync(
       sourceCommit: ownHead,
       sourceDirty: ownDirty,
       originalMainSha256: createHash('sha256').update(original).digest('hex'),
+      originalHostSha256: createHash('sha256').update(nativeHost).digest('hex'),
+      hostSha256: createHash('sha256').update(patchedHost).digest('hex'),
       mainSha256: createHash('sha256').update(main).digest('hex'),
       packSha256,
       version: products.desktop.version,
