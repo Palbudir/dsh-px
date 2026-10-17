@@ -45,3 +45,40 @@ export function projectKnowledgeDefaults(text: string, directory: string): strin
     doc.add(row)
   return String(doc)
 }
+
+/** One-time 0.6 managed-composition transition; later user edits remain authoritative. */
+export function scopedKnowledgeDefaults(text: string, directory: string): string {
+  const initialized = projectKnowledgeDefaults(text, directory)
+  const doc = parseDocument(initialized, {
+    customTags: [{ tag: 'tag:yaml.org,2002:js', resolve: (value: string) => value }]
+  })
+  if (doc.errors.length || !isSeq(doc.contents))
+    throw Error('Invalid profile patch for PX knowledge defaults')
+  let index = doc.contents.items.findIndex((_row, i) => doc.getIn([i, 'id']) === 'mnemon')
+  if (index < 0) {
+    doc.add({ id: 'mnemon', config: { storageScope: 'workspaces', dataDir: directory } })
+    index = doc.contents.items.length - 1
+  }
+  const set = (path: string[], value: unknown) => doc.setIn([index, 'config', ...path], value)
+  set(['lifecycleEnabled'], true)
+  set(['idleReview', 'enabled'], false)
+  set(['routingGuidance'], true)
+  set(['memoryView', 'strategyTypeId'], 'general')
+  set(['memoryTopology', 'strategyId'], 'general')
+  set(['memoryTopology', 'layers', 'documents', 'enabled'], true)
+  for (const channel of ['recall', 'write', 'projection', 'maintenance'])
+    set(['memoryTopology', 'layers', 'documents', 'participation', channel], 'manual')
+  set(['memoryTopology', 'layers', 'px-knowledge', 'enabled'], true)
+  for (const channel of ['recall', 'write', 'projection'])
+    set(['memoryTopology', 'layers', 'px-knowledge', 'participation', channel], 'automatic')
+  set(['memoryTopology', 'layers', 'px-knowledge', 'participation', 'maintenance'], 'manual')
+  for (const [id, disabled] of [
+    ['mnemon-strategy-default-three-tier', true],
+    ['mnemon-strategy-general', false]
+  ] as const) {
+    const at = doc.contents.items.findIndex((_row, i) => doc.getIn([i, 'id']) === id)
+    if (at < 0) doc.add({ id, disabled })
+    else doc.setIn([at, 'disabled'], disabled)
+  }
+  return String(doc)
+}

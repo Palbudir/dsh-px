@@ -16,7 +16,7 @@ import {
   type PackDistribution
 } from '../shared/distribution'
 import { assertRegularOrAbsent, renameWithRetry, writeAtomic } from './native-atomic'
-import { projectKnowledgeDefaults } from './community-defaults'
+import { projectKnowledgeDefaults, scopedKnowledgeDefaults } from './community-defaults'
 
 type Files = Record<string, string | null>
 interface State {
@@ -25,6 +25,7 @@ interface State {
   version: string
   specs: Record<string, string>
   seenFeatures?: string[]
+  communityDefaults?: Record<string, string>
 }
 export interface CompositionOptions {
   profile: string
@@ -78,6 +79,14 @@ function validState(value: any): value is State {
     Object.entries(value.specs).every(
       ([name, spec]) => isCompositionName(name) && typeof spec === 'string'
     ) &&
+    (value.communityDefaults === undefined ||
+      (value.communityDefaults &&
+        typeof value.communityDefaults === 'object' &&
+        !Array.isArray(value.communityDefaults) &&
+        Object.entries(value.communityDefaults).every(
+          ([name, kind]) =>
+            name === 'dsh-mnemon' && ['project-documents-v1', 'px-knowledge-v2'].includes(String(kind))
+        ))) &&
     (value.seenFeatures === undefined ||
       (Array.isArray(value.seenFeatures) && value.seenFeatures.every(isCompositionName)))
   )
@@ -333,6 +342,20 @@ export async function provisionNativeComposition(
     if (!options.knowledgeDirectory) throw Error('Project knowledge storage must be explicitly scoped')
     migrated = projectKnowledgeDefaults(migrated, options.knowledgeDirectory)
   }
+  const communityDefaults = { ...state?.communityDefaults }
+  for (const entry of distribution.community ?? []) {
+    if (
+      entry.defaults === 'px-knowledge-v2' &&
+      specs[entry.name] &&
+      bundles.includes(entry.name) &&
+      bundles.includes('dsh-px-memory') &&
+      communityDefaults[entry.name] !== entry.defaults
+    ) {
+      if (!options.knowledgeDirectory) throw Error('Knowledge directory must be explicitly scoped')
+      migrated = scopedKnowledgeDefaults(migrated, options.knowledgeDirectory)
+      communityDefaults[entry.name] = entry.defaults
+    }
+  }
   const identityMatches = (name: string): boolean => {
     try {
       const pkg = readJson(join(options.profile, 'node_modules', name, 'package.json'))
@@ -347,6 +370,7 @@ export async function provisionNativeComposition(
     state.version === options.version &&
     JSON.stringify(next) === JSON.stringify(manifest) &&
     migrated === patch &&
+    JSON.stringify(state.communityDefaults ?? {}) === JSON.stringify(communityDefaults) &&
     identities
   )
     return 'unchanged'
@@ -357,7 +381,8 @@ export async function provisionNativeComposition(
     phase: 'pending',
     version: options.version,
     specs,
-    seenFeatures: [...new Set([...seen, ...members.map((f) => f.name)])]
+    seenFeatures: [...new Set([...seen, ...members.map((f) => f.name)])],
+    communityDefaults
   }
   writeAtomic(statePath, JSON.stringify(pending))
   try {

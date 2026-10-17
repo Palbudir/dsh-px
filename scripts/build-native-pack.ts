@@ -6,7 +6,11 @@ import { join, resolve } from 'node:path'
 import { repoRoot } from './paths'
 import { copyBundlePayload } from '../src/shared/bundle-payload'
 import { MANAGED_PLUGIN_NAMES, PACK_VERSION, PRODUCT_CATALOG } from '../src/shared/plugin-catalog'
-import { patchSidebarAuthentication, SIDEBAR_AUTH_SOURCE } from '../src/shared/sidebar-auth-compatibility'
+import {
+  patchSidebarAuthentication,
+  patchSidebarClientTransport,
+  SIDEBAR_AUTH_SOURCE
+} from '../src/shared/sidebar-auth-compatibility'
 import { buildDistribution } from './pack-distribution'
 import { validCommunityList, type CommunityBundle } from '../src/shared/distribution'
 
@@ -91,6 +95,10 @@ if (sidebarManifest.name !== sidebar.name || sidebarManifest.version !== sidebar
   throw new Error('Sidebar identity mismatch')
 const patched = patchSidebarAuthentication(readFileSync(join(sidebarDirectory, 'lib/index.js'), 'utf8'))
 writeFileSync(join(sidebarDirectory, 'lib/index.js'), patched.code)
+writeFileSync(
+  join(sidebarDirectory, 'lib/client.js'),
+  patchSidebarClientTransport(readFileSync(join(sidebarDirectory, 'lib/client.js'), 'utf8')).code
+)
 const members = [...MANAGED_PLUGIN_NAMES, sidebar.name]
 // Native module discovery requires exact package names for client halves.
 const exports: Record<string, string> = {

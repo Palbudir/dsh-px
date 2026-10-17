@@ -28,7 +28,7 @@ export class TurnIdentity {
     if (previous && previous.turnSeq === turnSeq) return previous.persona
     const state = this.store.bind(agent.session.id, {
       parent: agent.session.header.parentSession,
-      locked: turnSeq >= 0
+      locked: !!agent.session.header.parentSession || turnSeq >= 0
     })
     const persona = this.store.persona(state, agent.session.id)
     if (persona.archived) throw new MemoryError('本会话人格已归档；请新建其他人格的接续会话', 409)

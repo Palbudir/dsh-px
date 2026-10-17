@@ -50,7 +50,8 @@ const failure = (error: unknown): NativeValue<never> => ({
   status: 'error',
   reason: error instanceof Error ? error.message : String(error)
 })
-const service = (host: any, name: string): any => host.get?.(name) ?? host[name]
+const service = (host: any, name: string): any =>
+  typeof host.get === 'function' ? host.get(name) : host[name]
 
 /** Bind a saved ledger to exact native owners; no invented ids, status mutations or second tasks. */
 export function checkpointNativeRefs(

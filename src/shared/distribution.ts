@@ -50,7 +50,7 @@ export interface PackDistribution {
 
 export interface CommunityBundle extends DistributionFile {
   integrity: string
-  defaults?: 'project-documents-v1'
+  defaults?: 'project-documents-v1' | 'px-knowledge-v2'
 }
 export const bundleFileStem = (name: string): string => encodeURIComponent(name)
 export function isCommunityName(value: unknown): value is string {
@@ -73,7 +73,7 @@ export function validCommunityList(value: unknown): value is CommunityBundle[] {
         /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(item.version) &&
         /^sha512-[A-Za-z0-9+/]{86}==$/.test(item.integrity) &&
         (item.defaults === undefined ||
-          (item.name === 'dsh-mnemon' && item.defaults === 'project-documents-v1'))
+          (item.name === 'dsh-mnemon' && ['project-documents-v1', 'px-knowledge-v2'].includes(item.defaults)))
     ) &&
     new Set(value.map((item) => item.name)).size === value.length
   )

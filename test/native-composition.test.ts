@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { createHash } from 'node:crypto'
 import { provisionNativeComposition } from '../src/main/native-composition'
 import { FEATURE_BUNDLES } from '../src/shared/distribution'
-import { projectKnowledgeDefaults } from '../src/main/community-defaults'
+import { projectKnowledgeDefaults, scopedKnowledgeDefaults } from '../src/main/community-defaults'
 
 function fixture(t: any) {
   const root = mkdtempSync(join(tmpdir(), 'px-composition-'))
@@ -145,6 +145,31 @@ test('community defaults reject malformed patches and respect any existing Mnemo
   assert.equal(projectKnowledgeDefaults(disabled, directory), disabled)
   assert.throws(() => projectKnowledgeDefaults('not: a sequence', directory), /Invalid profile/)
   assert.throws(() => projectKnowledgeDefaults('', 'relative'), /absolute/)
+})
+test('0.6 switches managed knowledge participation once without overwriting later operator choices', async (t) => {
+  const f = fixture(t),
+    old = withCommunity(f)
+  await provisionNativeComposition(old)
+  const distributionPath = join(f.directory, 'distribution.json'),
+    distribution = JSON.parse(readFileSync(distributionPath, 'utf8'))
+  distribution.community[0].defaults = 'px-knowledge-v2'
+  writeFileSync(distributionPath, JSON.stringify(distribution))
+  assert.equal(await provisionNativeComposition(old), 'installed')
+  const patch = join(f.profile, 'cordis.patch.yml'),
+    text = readFileSync(patch, 'utf8')
+  assert.match(text, /px-knowledge:/)
+  assert.match(text, /recall: manual/)
+  assert.match(text, /lifecycleEnabled: true/)
+  const user = text.replace('lifecycleEnabled: true', 'lifecycleEnabled: false')
+  writeFileSync(patch, user)
+  assert.equal(await provisionNativeComposition(old), 'unchanged')
+  assert.equal(readFileSync(patch, 'utf8'), user)
+  const parsed = scopedKnowledgeDefaults(
+    '- id: mnemon\n  config:\n    timeoutMs: 1234\n',
+    join(tmpdir(), 'px-knowledge')
+  )
+  assert.match(parsed, /timeoutMs: 1234/)
+  assert.match(parsed, /strategyId: general/)
 })
 test('composition installs once, preserves disabled features and never restores user removals', async (t) => {
   const f = fixture(t)

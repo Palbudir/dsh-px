@@ -44,7 +44,7 @@ DSH-PX Pack 随附 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-
 
 “接管我的 Edge”模式使用微软发布的 Playwright Extension，由用户自行从扩展商店安装，PX 不分发该扩展。
 
-Pack 以独立社区成员声明 [dsh-context](https://github.com/bowenliang123/dsh-context) 0.72.0（Apache-2.0）与 [dsh-mnemon](https://github.com/omdsh-dev/dsh-mnemon) 0.5.29（MIT）。归档核对固定 SRI 后保持原样，依赖由 DSH 原生插件管理器安装，保留上游名称、许可、版本、配置页与组件信息，PX 不把它们标为自制插件。Desktop 首次受管安装默认采用项目档案 Source 与 General 策略，不启用 Mnemon 的运行时记忆、外部记忆 Provider 或自动历史提炼，不分发 Mnemon CLI；用户已有配置保持不变。
+Pack 以独立社区成员声明 [dsh-context](https://github.com/bowenliang123/dsh-context) 0.72.0（Apache-2.0）与 [dsh-mnemon](https://github.com/omdsh-dev/dsh-mnemon) 0.5.29（MIT）。社区原包核对固定 SRI 后保持原样，依赖由 DSH 原生插件管理器安装，保留上游名称、许可、版本、配置页与组件信息。PX 知识通过公开 Source 合约复用 `dsh-mnemon-source-documents` 0.5.10（同项目，MIT）；该包、Mnemon 合约及 YAML 2.9.1（ISC）作为人格功能包的固定运行依赖安装。0.6 受管组合一次性采用 PX 四范围知识与 General 策略，原项目档案改为手动来源；保留用户自行安装的 Mnemon 配置及后续设置。不默认启用外部 Provider、自动历史提炼或闲时复盘，不分发 Mnemon CLI。
 
 分发二进制前请逐一核对各上游许可要求。
 

@@ -28,3 +28,26 @@ export function patchSidebarAuthentication(source: string): { code: string; sha2
   if (sha256 !== SIDEBAR_AUTH_SOURCE.patchedSha256) throw new Error('侧栏认证补丁产物与已核验摘要不一致')
   return { code, sha256 }
 }
+
+export const SIDEBAR_CLIENT_SOURCE = {
+  sourceSha256: '657812e84edd91684b8e85b728f119ce0b0e0f5318ad96714f9c528d1b75b41e',
+  patchedSha256: '1c11c08ed4fcfef66e42ccbc54bc523f848b88509c9d810dbb83cb56bf388519',
+  patchId: 'px-sidebar-native-stream-v1'
+} as const
+/** Native shell owns transport origin and cookie injection; ordinary Web keeps its own origin. */
+export function patchSidebarClientTransport(source: string): { code: string; sha256: string } {
+  if (createHash('sha256').update(source).digest('hex') !== SIDEBAR_CLIENT_SOURCE.sourceSha256)
+    throw Error('侧栏客户端来源与固定版本不一致')
+  let code = source
+  for (const name of ['fs-watch', 'agent-opens']) {
+    const before = `new URL("/sidebar/ws/${name}", location.origin)`
+    if (code.split(before).length !== 2) throw Error('侧栏连接合约已变化')
+    code = code.replace(
+      before,
+      `new URL("/sidebar/ws/${name}", globalThis.__DSH_TRANSPORT__?.streamBaseUrl ?? location.origin)`
+    )
+  }
+  const sha256 = createHash('sha256').update(code).digest('hex')
+  if (sha256 !== SIDEBAR_CLIENT_SOURCE.patchedSha256) throw Error('侧栏客户端补丁摘要不一致')
+  return { code, sha256 }
+}

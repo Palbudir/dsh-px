@@ -12,13 +12,18 @@ import { rejectUnauthenticatedRequest } from '../../shared/request-trust'
 import { TurnIdentity, hasStarted } from './identity'
 import { HistoryIndex, service } from './history'
 import { createPersonaSession } from './continuation'
+import { KnowledgeBank, type KnowledgeCaller } from './knowledge'
+import { knowledgeAction, pxKnowledgeSource, knowledgeContractText } from './knowledge-source'
+import { observeFile, skillAction } from './native-resources'
+import { installKnowledgeToolRouting } from './knowledge-tools'
+import { delegatedContract, delegatedKnowledgeCaller } from './knowledge-delegation'
 
 export const name = 'dsh-px-memory'
 export const inject: string[] = []
 interface Agent {
   session: {
     id: string
-    header: { id: string; cwd?: string; parentSession?: string }
+    header: { id: string; cwd?: string; parentSession?: string; origin?: string }
     snapshotEvents?: () => readonly any[]
   }
 }
@@ -29,13 +34,128 @@ export function apply(ctx: any): void {
   const identity = new TurnIdentity(store, (agent) =>
     service(ctx, 'sessionProjections')?.stateOf?.(agent.session, 'turnBoundary')
   )
+  const contracts = new Map<string, { turn: number; instance: string }>()
+  const currentTurn = (agent: Agent): number =>
+    service(ctx, 'sessionProjections')?.stateOf?.(agent.session, 'turnBoundary')?.lastTurn ??
+    agent.session.snapshotEvents?.().findLast((e) => e.type === 'turn/start')?.data?.turn ??
+    0
+  ctx.effect(() => () => contracts.clear(), 'memory: current knowledge contracts')
+  const knowledge = new KnowledgeBank(
+    join(root, 'storages', 'dsh-px-knowledge-scopes'),
+    store,
+    (caller, path) => observeFile(ctx, caller, path)
+  )
+  ctx.effect(() => () => knowledge.dispose(), 'memory: knowledge sources')
+  ctx.inject(['mnemonMemory', 'tools', 'agents'], (host: any) =>
+    host.effect(() => installKnowledgeToolRouting(host), 'memory: native knowledge tool routing')
+  )
+  const knowledgeEnabled = (caller: KnowledgeCaller): boolean => {
+    const agent = service(ctx, 'agents')?.get(caller.sessionId)
+    if (agent) {
+      try {
+        const persona = identity.current(agent)
+        return persona.memoryEnabled && !persona.archived
+      } catch {
+        return false
+      }
+    }
+    const s = store.read(),
+      binding = s.bindings[caller.sessionId],
+      persona = s.personas.find((p) => p.id === binding?.personaId)
+    return !!persona && persona.memoryEnabled && !persona.archived && !binding?.pending
+  }
+  ctx.inject(['mnemonMemory'], (host: any) =>
+    host.effect(
+      () =>
+        host.mnemonMemory.installContributions(
+          {
+            plugin: {
+              apiVersion: 'dsh-mnemon/plugin/v1',
+              packageName: 'dsh-px-memory',
+              label: { en: 'PX Knowledge', 'zh-CN': 'PX 知识' },
+              description: {
+                en: 'Persona and shared knowledge with versioned sources.',
+                'zh-CN': '人格私有与公共知识，保留修订与来源。'
+              },
+              roles: ['source'],
+              provides: [{ id: 'px-scoped-knowledge' }]
+            },
+            sources: [
+              pxKnowledgeSource(
+                knowledge,
+                knowledgeEnabled,
+                async (caller, input, signal) => {
+                  if (input.action !== 'share' && input.scope !== 'global') return
+                  const approval = service(host, 'approval'),
+                    agent = service(host, 'agents')?.get(caller.sessionId)
+                  if (!approval?.request || !agent) throw new MemoryError('共享知识需要当前会话中的原生确认')
+                  const decision = await approval.request({
+                    agent,
+                    toolName: 'mnemon_view_action',
+                    reason: 'Share or change globally reusable PX knowledge',
+                    displayReason: {
+                      zh: `允许${input.action === 'share' ? '分享这条知识到 ' + input.targetScope : '修改全局共享知识'}？`,
+                      en: 'Allow sharing or modifying globally shared knowledge?'
+                    },
+                    signal
+                  })
+                  if (decision !== 'allowed-once') throw new MemoryError('知识共享未获确认，未修改内容', 409)
+                },
+                (caller, instance) => {
+                  const agent = service(ctx, 'agents')?.get(caller.sessionId)
+                  if (agent) contracts.set(caller.sessionId, { turn: currentTurn(agent), instance })
+                },
+                (caller) => {
+                  const agents = service(ctx, 'agents')
+                  return delegatedKnowledgeCaller(
+                    caller,
+                    agents?.currentInitiator?.(),
+                    (id) => agents?.get(id),
+                    store
+                  )
+                }
+              )
+            ]
+          },
+          { instanceId: 'dsh-px-knowledge' }
+        ),
+      'memory: Mnemon source'
+    )
+  )
+  ctx.inject(['systemPrompt'], (host: any) =>
+    host.effect(
+      () =>
+        host.systemPrompt.section({
+          name: 'dsh-px-current-knowledge-contract',
+          order: 501,
+          text: ({ agent }: { agent?: Agent }) => {
+            if (!agent) return ''
+            if (!knowledgeEnabled({ sessionId: agent.session.id })) return ''
+            const agents = service(ctx, 'agents')
+            const instance = delegatedContract(
+              agent,
+              (id) => agents?.get(id),
+              (id) => {
+                const binding = contracts.get(id)
+                return binding && (id !== agent.session.id || binding.turn === currentTurn(agent))
+                  ? binding.instance
+                  : undefined
+              },
+              store
+            )
+            return instance ? knowledgeContractText(instance) : ''
+          }
+        }),
+      'memory: compression-stable native operation contract'
+    )
+  )
   const history = new HistoryIndex(join(root, 'storages', name, 'history.sqlite'), store)
   ctx.effect(() => () => history.close(), 'memory: history index')
   ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
     try {
       store.bind(agent.session.id, {
         parent: agent.session.header.parentSession,
-        locked: hasStarted(agent.session.snapshotEvents?.() ?? [])
+        locked: !!agent.session.header.parentSession || hasStarted(agent.session.snapshotEvents?.() ?? [])
       })
     } catch (error) {
       ctx.logger?.warn('人格绑定暂不可用；请求组装前仍会拒绝未知身份：%s', String(error))
@@ -174,7 +294,10 @@ export function apply(ctx: any): void {
               const id = validId(new URL(req.url, 'http://127.0.0.1').searchParams.get('sessionId'))
               const { meta, events = [] } = await host.sessionController.inspect(id)
               const project = projectKey(meta.cwd)
-              store.bind(id, { parent: meta.parentSession, locked: hasStarted(events) })
+              store.bind(id, {
+                parent: meta.parentSession,
+                locked: !!meta.parentSession || hasStarted(events)
+              })
               if (req.method === 'POST') {
                 if (!String(req.headers['content-type']).startsWith('application/json'))
                   throw new MemoryError('请使用 JSON', 415)
@@ -197,6 +320,19 @@ export function apply(ctx: any): void {
                   const createdSessionId = await createPersonaSession(host, store, id, args)
                   return send(200, { createdSessionId })
                 }
+                if (args.type === 'knowledge') {
+                  const result = await knowledgeAction(
+                    knowledge,
+                    { sessionId: id, project: meta.cwd, actor: 'human' },
+                    args.input
+                  )
+                  return send(200, result)
+                }
+                if (args.type === 'skills')
+                  return send(
+                    200,
+                    await skillAction(host, { sessionId: id, project: meta.cwd }, root, args.input)
+                  )
                 if (args.type === 'search-history' || args.type === 'read-history') {
                   if (args.projectOnly !== undefined && typeof args.projectOnly !== 'boolean')
                     throw new MemoryError('项目范围无效')

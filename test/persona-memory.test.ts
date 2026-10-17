@@ -115,6 +115,7 @@ test('native prompt context fixes identity before first request and refreshes pr
       return d
     },
     systemPrompt: {
+      section: () => () => {},
       context: (c: any) => {
         contexts.push(c)
         return () => {}
@@ -122,7 +123,7 @@ test('native prompt context fixes identity before first request and refreshes pr
     },
     tools: { register: (t: any) => tools.push(t) },
     inject: (names: string[], cb: any) => {
-      if (!names.includes('webServer')) cb(host)
+      if (names.every((name) => host[name] !== undefined)) cb(host)
     }
   }
   apply(host)

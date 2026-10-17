@@ -4,6 +4,8 @@ import { installUiStyles, controlStyle, cardStyle } from '../../shared/ui'
 import { requestJson } from '../../shared/client-http'
 import type { Persona, MemoryEntry, SessionBinding } from './store'
 import { HistoryPanel } from './history-panel'
+import { KnowledgePanel } from './knowledge-panel'
+import { registerMnemonKnowledgePage } from './mnemon-page'
 
 export const inject: string[] = []
 interface View {
@@ -36,6 +38,7 @@ function MemoryPanel({
     [editing, setEditing] = useState<string | undefined>(undefined)
   const [scope, setScope] = useState('project')
   const [targetPersona, setTargetPersona] = useState('')
+  const [knowledgePage, setKnowledgePage] = useState(false)
   const newRequest = useRef<{ key: string; id: string } | null>(null)
   const alive = useRef(true),
     isVisible = useRef(visible)
@@ -140,6 +143,26 @@ function MemoryPanel({
       setBusy(false)
     }
   }
+  if (knowledgePage && view)
+    return (
+      <div
+        className="px-ui"
+        style={{ padding: 16, height: '100%', overflow: 'auto', overflowWrap: 'anywhere', fontSize: 13 }}
+      >
+        <button style={controlStyle} onClick={() => setKnowledgePage(false)}>
+          返回人格与经历
+        </button>
+        <h3>知识与 Skills</h3>
+        <p className="px-muted">当前人格：{view.persona.name}</p>
+        <KnowledgePanel
+          key={sessionId + view.persona.id}
+          sessionId={sessionId}
+          personaId={view.persona.id}
+          project={view.project}
+          openLegacy={openKnowledge}
+        />
+      </div>
+    )
   return (
     <div
       className="px-ui"
@@ -147,6 +170,9 @@ function MemoryPanel({
     >
       <h3>人格与经历</h3>
       <div className="px-actions">
+        <button style={controlStyle} disabled={busy || dirty || !view} onClick={() => setKnowledgePage(true)}>
+          知识与 Skills
+        </button>
         <button
           style={controlStyle}
           disabled={busy || dirty}
@@ -453,6 +479,9 @@ function MemoryPanel({
 }
 export function apply(ctx: any): void {
   installUiStyles(ctx)
+  ctx.inject(['slots', 'uiWorkspace', 'sidebarRight'], (host: any) =>
+    host.effect(() => registerMnemonKnowledgePage(host), 'memory: native Mnemon knowledge page')
+  )
   ctx.inject(['sidebarRight', 'sidebarRightTabs', 'slots', 'uiWorkspace'], (host: any) =>
     host.effect(
       () =>

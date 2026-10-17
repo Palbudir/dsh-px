@@ -78,7 +78,7 @@ export function historyRecord(
     : undefined
 }
 export function service(host: any, name: string): any {
-  return host.get?.(name) ?? host[name]
+  return typeof host.get === 'function' ? host.get(name) : host[name]
 }
 export async function nativeReader(host: any, id: string, signal?: AbortSignal): Promise<any> {
   const persistence = service(host, 'sessionPersistence')
