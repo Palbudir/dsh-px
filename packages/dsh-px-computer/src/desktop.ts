@@ -254,7 +254,7 @@ export const DESKTOP_TOOLS: readonly DesktopTool[] = [
     kind: 'act',
     session: true,
     description:
-      '按一个键，可带修饰键。键名：return、tab、escape、up、down、left、right、space、delete、home、end、pageup、pagedown、f1–f12、字母或数字。不允许 Windows 键。',
+      '按一个键，可带修饰键。修饰键与组合键只支持已授权的 foreground 投递。键名：return、tab、escape、up、down、left、right、space、delete、home、end、pageup、pagedown、f1–f12、字母或数字。不允许 Windows 键。',
     parameters: window(
       {
         key: { type: 'string', description: '键名' },
@@ -272,7 +272,8 @@ export const DESKTOP_TOOLS: readonly DesktopTool[] = [
     driver: 'hotkey',
     kind: 'act',
     session: true,
-    description: '按组合键，例如 ["ctrl","s"]。不允许 Windows 键。',
+    description:
+      '按组合键，例如 ["ctrl","s"]。只支持已授权的 foreground 投递；后台组合键不会发送。不允许 Windows 键。',
     parameters: window(
       {
         keys: { type: 'array', items: { type: 'string' }, minItems: 2, description: '修饰键加一个普通键' },
@@ -663,6 +664,17 @@ export async function runDesktopTool(
     const reason = deniedKeys(Array.isArray(args.keys) ? args.keys.map(String) : [])
     if (reason) throw new ComputerUseRefusal(reason)
   }
+  // Pinned Windows PostMessage delivery does not establish keyboard modifier state:
+  // Ctrl+A on a background Edit can insert a literal "a" instead of selecting text.
+  const modifiedKey =
+    tool.driver === 'press_key' &&
+    ((Array.isArray(args.modifiers) && args.modifiers.length > 0) ||
+      String(args.key ?? '').includes('+') ||
+      /^(ctrl|control|shift|alt|menu)([_ -]?(left|right|l|r))?$/i.test(String(args.key ?? '').trim()))
+  if (!needsForeground && (tool.driver === 'hotkey' || modifiedKey))
+    throw new ComputerUseRefusal(
+      '后台组合键和修饰键无法可靠投递，操作未发送。可用 computer_set_value 替换支持的文本控件；需要快捷键时，明确使用 foreground 并取得本会话窗口授权。'
+    )
   let identity: Awaited<ReturnType<typeof identify>>
   try {
     identity = await identify(c.driver, pid, windowId, c.signal)

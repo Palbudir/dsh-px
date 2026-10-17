@@ -405,6 +405,39 @@ test('bounded input requires foreground window authorization and sends a finite 
   assert.ok(!calls.some((call) => call.name === 'bring_to_front'))
 })
 
+test('background chords are rejected before any driver call; foreground chords remain available', async () => {
+  const { driver, calls } = fakeDriver([{ pid: 20, window_id: 2, app_name: 'notepad.exe', title: 'x' }])
+  let grants = 0
+  const { c } = context(driver, {
+    authorizeForeground: async () => {
+      grants++
+    }
+  })
+  for (const delivery_mode of [undefined, 'background']) {
+    for (const [name, input] of [
+      ['computer_hotkey', { keys: ['ctrl', 'a'] }],
+      ['computer_press_key', { key: 'a', modifiers: ['ctrl'] }],
+      ['computer_press_key', { key: 'Ctrl+A' }],
+      ['computer_press_key', { key: 'Shift_L' }]
+    ] as const)
+      await assert.rejects(
+        runDesktopTool(tool(name), { pid: 20, window_id: 2, ...input, delivery_mode }, c),
+        /后台组合键和修饰键.*操作未发送/
+      )
+  }
+  assert.equal(calls.length, 0)
+  assert.equal(grants, 0)
+  await runDesktopTool(
+    tool('computer_hotkey'),
+    { pid: 20, window_id: 2, keys: ['ctrl', 'a'], delivery_mode: 'foreground' },
+    c
+  )
+  assert.equal(grants, 1)
+  assert.equal(calls.find((call) => call.name === 'hotkey')?.args.delivery_mode, 'foreground')
+  await runDesktopTool(tool('computer_press_key'), { pid: 20, window_id: 2, key: 'tab' }, c)
+  assert.equal(calls.find((call) => call.name === 'press_key')?.args.delivery_mode, 'background')
+})
+
 test('background-only forces explicit delivery and never falls back or focuses', async () => {
   const { driver, calls } = fakeDriver([{ pid: 20, window_id: 2, app_name: 'notepad.exe', title: 'x' }], {
     click: () => ({ isError: true, content: [{ type: 'text', text: 'background_unavailable' }] })
