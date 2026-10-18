@@ -16,6 +16,11 @@ public sealed class PointerRequest {
 internal static class WindowsView {
     [StructLayout(LayoutKind.Sequential)] internal struct Rect { public int left, top, right, bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct Point { public int x, y; }
+    [StructLayout(LayoutKind.Sequential)] private struct CursorInfo { public int size; public int flags; public IntPtr cursor; public Point position; }
+    [DllImport("user32.dll")] private static extern bool GetCursorInfo(ref CursorInfo info);
+    [DllImport("user32.dll")] private static extern bool GetClipCursor(out Rect rectangle);
+    [DllImport("user32.dll")] private static extern bool GetClientRect(IntPtr window, out Rect rectangle);
+    [DllImport("user32.dll")] private static extern bool ClientToScreen(IntPtr window, ref Point point);
     [DllImport("dwmapi.dll")] private static extern int DwmGetWindowAttribute(IntPtr window, int attribute, out Rect value, int size);
     [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr window, out uint pid);
     [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
@@ -56,6 +61,28 @@ internal static class WindowsView {
         return "point=("+x+","+y+") hit_window="+hit.ToInt64()+" hit_pid="+owner+
             " hit_cloaked="+(result == 0 ? cloaked.ToString() : "unknown")+" foreground="+GetForegroundWindow().ToInt64()+
             ". A window-only capture may omit input-method or other overlay windows; inspect input mode/overlays before retrying. Do not bypass this target check.";
+    }
+
+    // OS cursor observations do not establish SDL/raw-input capture or prove camera movement.
+    internal static object PointerState(IntPtr window) {
+        Point point;
+        if (!GetCursorPos(out point)) return null;
+        var cursor = new CursorInfo { size = Marshal.SizeOf(typeof(CursorInfo)) };
+        bool knownCursor = GetCursorInfo(ref cursor);
+        Rect clip, client;
+        bool knownClip = GetClipCursor(out clip), knownClient = GetClientRect(window, out client);
+        var origin = new Point();
+        knownClient = knownClient && ClientToScreen(window, ref origin);
+        int left = origin.x, top = origin.y, right = origin.x + client.right, bottom = origin.y + client.bottom;
+        return new {
+            source = "win32_cursor_observation", screen_x = point.x, screen_y = point.y,
+            visible = knownCursor ? (bool?)((cursor.flags & 1) != 0) : null,
+            hit_target = GetAncestor(WindowFromPoint(point), 2) == window,
+            inside_client = knownClient ? (bool?)(point.x >= left && point.x < right && point.y >= top && point.y < bottom) : null,
+            near_client_edge = knownClient ? (bool?)(point.x <= left + 2 || point.x >= right - 3 || point.y <= top + 2 || point.y >= bottom - 3) : null,
+            confined_to_client = knownClient && knownClip ? (bool?)(clip.left >= left && clip.top >= top && clip.right <= right && clip.bottom <= bottom) : null,
+            relative_capture = "unknown"
+        };
     }
 
     internal static Rect Bounds(IntPtr window) {

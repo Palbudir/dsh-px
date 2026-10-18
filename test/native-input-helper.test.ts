@@ -88,7 +88,7 @@ test(
       clickLog = join(dir, 'click.log')
     writeFileSync(
       helperSource,
-      `using System;using System.Web.Script.Serialization;class ViewContractHelper{static void Main(string[] a){var j=new JavaScriptSerializer();if(a[0]=="--inspect")Console.WriteLine(j.Serialize(new{foreground=true,current_desktop=true,cloaked=0,bounds=new{left=0,top=0,right=4,bottom=3}}));else if(a[0]=="--magnify")Console.WriteLine(j.Serialize(WindowsView.Magnify(a[1],a[2])));else if(a[0]=="--point"){System.IO.File.WriteAllText(${JSON.stringify(pointLog)},System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(a[1])));if(System.IO.File.Exists(${JSON.stringify(blockPoint)})){Console.WriteLine(j.Serialize(new{error="synthetic overlay: point=(1,1) hit_window=9"}));Environment.Exit(1);}Console.WriteLine("{}");}else throw new Exception("Unexpected operation");}}`
+      `using System;using System.Web.Script.Serialization;class ViewContractHelper{static void Main(string[] a){var j=new JavaScriptSerializer();if(a[0]=="--guard"){if(Console.ReadLine()!="start")Environment.Exit(2);var plan=j.Deserialize<System.Collections.Generic.Dictionary<string,object>>(System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(a[2])));bool failed=Convert.ToInt32(plan["dx"])<0;Console.WriteLine(j.Serialize(new{finished=true,ok=!failed,error=failed?"synthetic target lost":null,elapsed_ms=42,release_attempted=true,pointer_before=new{screen_x=10},pointer_after=new{near_client_edge=true,inside_client=true,relative_capture="unknown"}}));Environment.Exit(failed?1:0);}else if(a[0]=="--inspect")Console.WriteLine(j.Serialize(new{foreground=true,current_desktop=true,cloaked=0,bounds=new{left=0,top=0,right=4,bottom=3}}));else if(a[0]=="--magnify")Console.WriteLine(j.Serialize(WindowsView.Magnify(a[1],a[2])));else if(a[0]=="--point"){System.IO.File.WriteAllText(${JSON.stringify(pointLog)},System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(a[1])));if(System.IO.File.Exists(${JSON.stringify(blockPoint)})){Console.WriteLine(j.Serialize(new{error="synthetic overlay: point=(1,1) hit_window=9"}));Environment.Exit(1);}Console.WriteLine("{}");}else throw new Exception("Unexpected operation");}}`
     )
     execFileSync(
       compiler,
@@ -125,6 +125,23 @@ test(
     const call = async (name: string, args: any, scope = 'a') =>
       JSON.parse((await worker.callTool(name, JSON.stringify(args), { scope })).rawJson)
     const target = { pid: 1, window_id: 2 }
+    // Exercise the real worker/guardian handshake and failure transport, but never inject OS input.
+    for (const dx of [1, -1]) {
+      const receipt = await call('bounded_input', {
+        ...target,
+        dx,
+        duration_ms: 100,
+        delivery_mode: 'foreground'
+      })
+      assert.equal(receipt.isError, dx < 0)
+      assert.equal(receipt.structuredContent.effect, 'unverifiable')
+      assert.equal(receipt.structuredContent.release_attempted, true)
+      assert.equal(receipt.structuredContent.elapsed_ms, 42)
+      assert.equal(receipt.structuredContent.pointer_before.screen_x, 10)
+      assert.equal(receipt.structuredContent.pointer_after.relative_capture, 'unknown')
+      assert.match(receipt.content[0].text, /不要重复长动作或盲目居中/)
+      if (dx < 0) assert.match(receipt.content[0].text, /synthetic target lost.*动作可能部分执行/)
+    }
     await call('get_window_state', target)
     const zoom = await call('zoom', { ...target, x1: 0, y1: 0, x2: 2, y2: 1 })
     assert.equal(zoom.structuredContent.width, 8)

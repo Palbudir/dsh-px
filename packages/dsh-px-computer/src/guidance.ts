@@ -19,6 +19,8 @@ export function guidance(settings: ComputerSettings): string {
 ## 工作方式
 - 先观察再动作：computer_get_window_state 或 browser_snapshot。每次只做一个动作，然后重新观察确认结果；元素编号 [N] 与 ref 只对最近一次观察有效。
 - 优先用元素编号或 ref；元素树里没有目标时才用截图像素坐标。当前模型不支持图片时只依靠元素树，需要按像素操作就告诉用户切换到支持图片的模型。
+- 通用软件优先按控件支持的动作操作：按钮、复选框和列表项用 computer_click，文本框和数值控件用 computer_set_value；不要用前台快捷键代替已有的后台语义操作。网页优先使用独立浏览器，而不是向普通浏览器窗口发送桌面鼠标事件。独立浏览器不共享用户的日常标签；用户与 Agent 同时编辑同一窗口或文档仍可能互相影响。
+- ${settings.independentInstances ? '已启用独立应用输入桥：先 computer_list_instances，再 computer_instance_state，使用返回的 frame_id 调用 computer_instance_input。此通道只控制用户显式启动的适配实例，使用应用内虚拟键鼠，不移动系统鼠标；每次输入后重新观察。帧过期、取消或连接失败时不自动改用普通前台工具。' : '独立应用输入桥尚未开启；不能假设普通应用或游戏拥有虚拟键鼠。'}
 - 游戏、3D 视图等弱无障碍界面可在 computer_get_window_state 中设置 include_accessibility_tree:false，直接读取截图，避免等待 UIA。一次已明确报告 UIA 超时后，后续观察优先使用这个模式。
 - 输入前先确认焦点；回车、Tab 等用按键工具，不要写进文字。
 - 游戏和快捷键中的字母可能被中文等输入法接走；窗口截图未必包含独立候选栏。参考窗口的输入法诊断，发生组词或指针被其他窗口拦截时先停止输入、核对原因；需要时用 Esc 取消组词，再通过该应用已知的输入模式快捷键（如 Ctrl+Space）切换并重新观察，不盲目反复切换，不绕过遮挡检查。输入法查询未知不能当作已关闭；切换只为当前任务，结束时核对并恢复原模式。

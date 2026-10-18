@@ -6,6 +6,9 @@
 /dist/
 /out/
 /output/
+/integrations/minecraft-input/.gradle/
+/integrations/minecraft-input/build/
+/integrations/minecraft-input/run-isolated/
 
 # Local configuration and credentials
 .env

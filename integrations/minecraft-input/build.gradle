@@ -1,0 +1,16 @@
+plugins { id 'net.fabricmc.fabric-loom' version '1.17.21' }
+version = '0.1.0'
+group = 'com.palbudir.dshpx'
+base { archivesName = 'px-input-bridge' }
+dependencies {
+    minecraft 'com.mojang:minecraft:26.3'
+    implementation 'net.fabricmc:fabric-loader:0.19.5'
+}
+loom { runs { client { runDir 'run-isolated'; vmArg '-Ddsh.px.game.isolated=true'; vmArg '-Xmx3G' } } }
+java { sourceCompatibility = JavaVersion.VERSION_25; targetCompatibility = JavaVersion.VERSION_25 }
+tasks.withType(JavaCompile).configureEach { options.release = 25 }
+tasks.withType(Jar).configureEach {
+    preserveFileTimestamps = false
+    reproducibleFileOrder = true
+    from('../../LICENSE') { rename { 'LICENSE' } }
+}

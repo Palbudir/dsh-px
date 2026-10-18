@@ -141,6 +141,23 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
                 </small>
               </label>
             )}
+            {s.desktop && (
+              <label style={{ display: 'block', marginTop: 8 }}>
+                <input
+                  type="checkbox"
+                  disabled={busy}
+                  checked={s.independentInstances === true}
+                  onChange={(e: any) =>
+                    void act({ action: 'settings', independentInstances: e.target.checked })
+                  }
+                />{' '}
+                允许独立应用输入桥（需应用另行支持）
+                <span className="px-muted" style={{ display: 'block', marginTop: 4 }}>
+                  使用应用内虚拟输入，不移动你的鼠标。普通窗口不会因此获得后台输入能力；当前适配 Minecraft
+                  26.3 的独立 Fabric 实例。
+                </span>
+              </label>
+            )}
             <label style={{ display: 'block' }}>
               浏览器
               <select
@@ -167,6 +184,11 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
                 />{' '}
                 后台运行浏览器（不显示窗口）
               </label>
+            )}
+            {s.browser === 'isolated' && (
+              <p className="px-muted">
+                每个会话使用自己的临时浏览器实例，与日常浏览器的标签和登录分开。后台运行时不显示窗口，也不占用系统鼠标。
+              </p>
             )}
             {s.browser === 'extension' && (
               <p className="px-muted">

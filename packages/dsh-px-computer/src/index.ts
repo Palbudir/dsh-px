@@ -20,13 +20,21 @@ import {
   uploadSummary,
   type BrowserLaunchOptions
 } from './browser'
-import { DESKTOP_TOOLS, DesktopDriver, driverSession, runDesktopTool, type DesktopTool } from './desktop'
+import {
+  DESKTOP_TOOLS,
+  DesktopDriver,
+  driverSession,
+  identify,
+  runDesktopTool,
+  type DesktopTool
+} from './desktop'
+import { InputInstances, INSTANCE_TOOLS } from './instances'
 import { DriverProcess } from './driver-process'
 import computerDriver from '../../../config/computer-driver.json'
 import { guidance } from './guidance'
 import { accessPolicy } from './authorization'
 import { enforceToolBounds, nativeToolParameters } from './tool-schema'
-import { appKey, appLabel, type WindowIdentity } from './policy'
+import { appKey, appLabel, deniedWindow, type WindowIdentity } from './policy'
 import {
   askUser,
   ComputerUseRefusal,
@@ -82,6 +90,9 @@ export function apply(ctx: any): void {
   const snapshots = new Map<string, Map<string, string>>()
   const cursors = new Set<string>()
   const projections = new WeakMap<object, ContentBlock[]>()
+  const instances = new InputInstances(
+    join(process.env.LOCALAPPDATA ?? join(home, 'local'), 'DSH-PX', 'input-bridges')
+  )
   const driver = new DesktopDriver(async () => {
     // Resolve in the profile, load only in the disposable child process. No native code in DSH.
     const nativeDirectory = fileURLToPath(new URL('../native/win32-x64/', import.meta.url))
@@ -93,6 +104,7 @@ export function apply(ctx: any): void {
       () => {
         for (const observed of snapshots.values()) observed.clear()
         snapshots.clear()
+        instances.forget()
         cursors.clear()
         states.clearForeground()
         states.stop(
@@ -431,6 +443,63 @@ export function apply(ctx: any): void {
       }
     )
 
+  const instanceTool = (spec: (typeof INSTANCE_TOOLS)[number]) =>
+    tool(
+      'desktop',
+      spec,
+      (args) => String(args.instance ?? '独立实例'),
+      ['instance', 'duration_ms', 'keys', 'buttons'],
+      async (args, run, s, signal) => {
+        if (!settings.read().independentInstances) throw new ComputerUseRefusal('独立应用输入桥未开启')
+        const listed = await instances.list(signal)
+        const windows = await driver.forSession(s.id).call('list_windows', { on_screen_only: false }, signal)
+        const available = []
+        for (const entry of listed) {
+          const rows = (windows.structuredContent?.windows ?? []).filter((w: any) => w.pid === entry.pid)
+          if (rows.length !== 1) continue
+          const identity = await identify(driver.forSession(s.id), entry.pid, rows[0].window_id, signal)
+          if (!deniedWindow(identity)) available.push({ ...entry, identity })
+        }
+        if (spec.name === 'computer_list_instances')
+          return {
+            text: available.length
+              ? available
+                  .map((e) => `${e.instance} · ${appLabel(e.identity)} · pid=${e.pid} · 独立虚拟输入`)
+                  .join('\n')
+              : '没有已启动的可操作独立实例。此入口需要应用安装可选输入桥并显式启用隔离模式；不会把普通窗口自动转换为独立实例。',
+            images: []
+          }
+        const entry = available.find((e) => e.instance === args.instance)
+        if (!entry) throw new ComputerUseRefusal('独立实例已关闭、窗口不唯一或不可操作，请重新列出')
+        const key = appKey(entry.identity),
+          label = appLabel(entry.identity)
+        states.observe(s.id, key, label)
+        if (
+          !states.granted(s.id, key) &&
+          !settings.alwaysAllowsApp(key) &&
+          accessPolicy(ctx, s.agent) !== 'full'
+        ) {
+          await askOrRefuse(
+            run,
+            signal,
+            `操作独立实例「${label}」`,
+            `允许本会话查看和操作独立实例「${label}」吗？此通道使用应用内虚拟输入，不占用系统鼠标。`,
+            `Allow this session to control the isolated instance "${label}" using application-local input?`,
+            'computer use: isolated instance',
+            true
+          )
+          states.grant(s.id, key, label)
+        }
+        signal.throwIfAborted()
+        if (spec.name === 'computer_instance_state') {
+          if (!(await modelSeesImages(ctx, s.agent, signal)))
+            throw new ComputerUseRefusal('独立实例画面需要支持图片的模型')
+          return { ...(await instances.observe(s.id, entry.instance, signal)), target: label }
+        }
+        return { ...(await instances.input(s.id, args, signal)), target: label }
+      }
+    )
+
   const confirmTool = tool(
     'confirm',
     {
@@ -480,13 +549,15 @@ export function apply(ctx: any): void {
     let registered: Array<() => void> = []
     let shape = ''
     const sync = (current: ComputerSettings): void => {
-      const next = `${windows && current.desktop}|${windows && current.browser !== 'off'}`
+      const next = `${windows && current.desktop}|${windows && current.browser !== 'off'}|${current.independentInstances === true}`
       if (next === shape) return
       for (const dispose of registered) dispose()
       registered = []
       shape = next
       if (windows && current.desktop)
         for (const spec of DESKTOP_TOOLS) registered.push(host.tools.register(desktopTool(spec)))
+      if (windows && current.desktop && current.independentInstances)
+        for (const spec of INSTANCE_TOOLS) registered.push(host.tools.register(instanceTool(spec)))
       if (windows && current.browser !== 'off')
         for (const spec of BROWSER_TOOLS) registered.push(host.tools.register(browserTool(spec)))
       if (enabled(current)) registered.push(host.tools.register(confirmTool))
@@ -538,8 +609,13 @@ export function apply(ctx: any): void {
       void browsers.closeAll().catch(() => undefined)
     }
     if (current.browser !== before.browser) states.revokeAll((key) => key.startsWith('site|'))
-    if ((before.desktop && !current.desktop) || before.desktopForeground !== current.desktopForeground) {
+    if (
+      (before.desktop && !current.desktop) ||
+      before.desktopForeground !== current.desktopForeground ||
+      before.independentInstances !== current.independentInstances
+    ) {
       states.clearForeground()
+      instances.forget()
       states.stop(
         'desktop',
         new ComputerUseRefusal(current.desktop ? '桌面操作模式已更改，本次调用已停止。' : CLOSED.desktop)
@@ -563,6 +639,7 @@ export function apply(ctx: any): void {
             .catch(() => undefined)
         await driver.releaseSession(id).catch(() => undefined)
         snapshots.delete(id)
+        instances.forget(id)
         states.forget(id)
         observedAgents.delete(id)
       },
@@ -627,6 +704,8 @@ export function apply(ctx: any): void {
         settings.change(body.revision, (next) => {
           if (typeof body.desktop === 'boolean') next.desktop = body.desktop
           if (typeof body.desktopForeground === 'boolean') next.desktopForeground = body.desktopForeground
+          if (typeof body.independentInstances === 'boolean')
+            next.independentInstances = body.independentInstances
           if (typeof body.browser === 'string') next.browser = body.browser
           if (typeof body.headless === 'boolean') next.headless = body.headless
         })
@@ -682,11 +761,13 @@ export function apply(ctx: any): void {
         states.revoke(sessionId, `site|${String(body.site ?? '')}`)
         return
       case 'pause':
+        instances.forget(sessionId)
         states.pause(sessionId)
         void browsers.close(sessionId).catch(() => undefined)
         await driver.releaseSession(sessionId)
         return
       case 'resume':
+        instances.forget(sessionId)
         await driver.releaseSession(sessionId)
         snapshots.delete(sessionId)
         cursors.delete(driverSession(sessionId))

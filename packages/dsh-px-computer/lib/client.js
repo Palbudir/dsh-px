@@ -316,6 +316,20 @@ function ComputerPanel({ sessionId, visible }) {
               ),
               /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("small", { className: "px-muted", children: "\u5B8C\u5168\u6743\u9650\u4F1A\u8BDD\u76F4\u63A5\u63A7\u5236\u7A97\u53E3\uFF0C\u5176\u4F59\u6A21\u5F0F\u6BCF\u4E2A\u7A97\u53E3\u9996\u6B21\u786E\u8BA4\u3002\u6682\u505C\u4F1A\u4E2D\u6B62\u63A7\u5236\uFF1B\u540E\u53F0\u6A21\u5F0F\u4E0D\u4F1A\u81EA\u52A8\u62A2\u5360\u524D\u53F0\u3002" })
             ] }),
+            s.desktop && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { style: { display: "block", marginTop: 8 }, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+                "input",
+                {
+                  type: "checkbox",
+                  disabled: busy,
+                  checked: s.independentInstances === true,
+                  onChange: (e) => void act({ action: "settings", independentInstances: e.target.checked })
+                }
+              ),
+              " ",
+              "\u5141\u8BB8\u72EC\u7ACB\u5E94\u7528\u8F93\u5165\u6865\uFF08\u9700\u5E94\u7528\u53E6\u884C\u652F\u6301\uFF09",
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", style: { display: "block", marginTop: 4 }, children: "\u4F7F\u7528\u5E94\u7528\u5185\u865A\u62DF\u8F93\u5165\uFF0C\u4E0D\u79FB\u52A8\u4F60\u7684\u9F20\u6807\u3002\u666E\u901A\u7A97\u53E3\u4E0D\u4F1A\u56E0\u6B64\u83B7\u5F97\u540E\u53F0\u8F93\u5165\u80FD\u529B\uFF1B\u5F53\u524D\u9002\u914D Minecraft 26.3 \u7684\u72EC\u7ACB Fabric \u5B9E\u4F8B\u3002" })
+            ] }),
             /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { style: { display: "block" }, children: [
               "\u6D4F\u89C8\u5668",
               /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
@@ -343,6 +357,7 @@ function ComputerPanel({ sessionId, visible }) {
               " ",
               "\u540E\u53F0\u8FD0\u884C\u6D4F\u89C8\u5668\uFF08\u4E0D\u663E\u793A\u7A97\u53E3\uFF09"
             ] }),
+            s.browser === "isolated" && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-muted", children: "\u6BCF\u4E2A\u4F1A\u8BDD\u4F7F\u7528\u81EA\u5DF1\u7684\u4E34\u65F6\u6D4F\u89C8\u5668\u5B9E\u4F8B\uFF0C\u4E0E\u65E5\u5E38\u6D4F\u89C8\u5668\u7684\u6807\u7B7E\u548C\u767B\u5F55\u5206\u5F00\u3002\u540E\u53F0\u8FD0\u884C\u65F6\u4E0D\u663E\u793A\u7A97\u53E3\uFF0C\u4E5F\u4E0D\u5360\u7528\u7CFB\u7EDF\u9F20\u6807\u3002" }),
             s.browser === "extension" && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { className: "px-muted", children: [
               view.status.edgeExtension ? "\u5DF2\u68C0\u6D4B\u5230 Playwright \u6269\u5C55\u3002\u6BCF\u6B21\u8FDE\u63A5\u65F6 Edge \u4F1A\u6253\u5F00\u786E\u8BA4\u9875\uFF0C\u7531\u4F60\u9009\u62E9\u5171\u4EAB\u54EA\u4E2A\u6807\u7B7E\u9875\u3002" : "\u5C1A\u672A\u5728 Edge \u4E2D\u68C0\u6D4B\u5230 Playwright \u6269\u5C55\u3002\u8BF7\u5148\u4ECE Edge \u6269\u5C55\u5546\u5E97\u5B89\u88C5 \u201CPlaywright Extension\u201D\uFF0C\u5B89\u88C5\u7531\u4F60\u81EA\u5DF1\u5B8C\u6210\u3002",
               " ",

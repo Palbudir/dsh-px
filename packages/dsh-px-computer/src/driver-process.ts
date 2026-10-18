@@ -151,7 +151,14 @@ async function dispatch(name, args, json, id, client) {
   const result = await client.callTool(name, json);
   if (beforeForeground !== undefined) {
     const after = await helperCall(['--foreground'], true);
-    if (after.window_id !== beforeForeground) throw Object.assign(Error('Foreground changed during background delivery; inspect before continuing'),{code:'unexpected_foreground'});
+    if (after.window_id !== beforeForeground && after.pid === args.pid) throw Object.assign(Error('Target application became foreground during background delivery; inspect before continuing'),{code:'unexpected_foreground'});
+    const raw=JSON.parse(result.rawJson);
+    raw.structuredContent={...raw.structuredContent,px_background_observation:{foreground_unchanged:after.window_id===beforeForeground,target_became_foreground:after.window_id!==beforeForeground&&after.pid===args.pid}};
+    // Pinned 0.28 SetValueTool only calls UIA ValuePattern/RangeValuePattern and returns no delivery record.
+    // Do not infer delivery from arbitrary text or apply this to other SDK methods/versions.
+    if(native.version==='0.28.0' && name==='set_value' && !raw.isError)
+      raw.structuredContent={...raw.structuredContent,delivery:{mode:'background'},route:'uia_value_pattern',effect:'unverifiable'};
+    result.rawJson=JSON.stringify(raw);
   }
   return result;
 }
@@ -173,8 +180,14 @@ async function boundedInput(id, args) {
       if (child.pid) process.send?.({ inputGuard: id, pid: child.pid });
     });
     const final = output.trim().split(/\r?\n/).map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(item => item?.finished).at(-1);
-    if (code !== 0 || !final?.ok) throw Error(final?.error || errors || '有时长输入中断；请重新观察目标');
-    return { rawJson: JSON.stringify({ content: [{type:'text',text:'已执行有时长输入并释放按键；请重新观察目标确认实际效果。'}], structuredContent:{delivery:{mode:'foreground'},effect:'unverifiable',elapsed_ms:final.elapsed_ms,release_attempted:final.release_attempted} }) };
+    if (!final) throw Error(errors || '有时长输入中断，未收到最终释放报告；效果未知，请重新观察目标');
+    const pointer = final.pointer_after;
+    const warning = pointer && (pointer.near_client_edge === true || pointer.inside_client === false)
+      ? ' 系统指针已接近或越过客户区边缘；这不证明游戏转向成功。请检查当前是菜单还是捕获鼠标的3D场景，再做小幅校准；不要重复长动作或盲目居中。' : '';
+    const failed = code !== 0 || !final.ok;
+    const details = {elapsed_ms:final.elapsed_ms,release_attempted:final.release_attempted,pointer_before:final.pointer_before,pointer_after:final.pointer_after};
+    const message = failed ? (final.error || errors || '有时长输入中断') + '；动作可能部分执行，请重新观察。' : '已执行有时长输入并尝试释放按键；请重新观察目标确认实际效果。';
+    return { rawJson: JSON.stringify({ isError:failed,content: [{type:'text',text:message+warning+' 输入诊断：'+JSON.stringify(details)}], structuredContent:{delivery:{mode:'foreground'},effect:'unverifiable',...details} }) };
   } finally {
     guards.delete(id);
     process.send?.({ inputGuardEnded: id, pid: child.pid });
@@ -195,7 +208,7 @@ if (native) {
     approveCapabilityManifest: false, approveSessionPolicy: false,
     dangerouslyBypassApprovals: false, permissionMode: sdk.EmbeddedPermissionMode.Standard,
     environment: [{ name: 'CUA_DRIVER_RS_TELEMETRY_ENABLED', value: 'false' }],
-    inheritStderr: true, noOverlay: false
+    inheritStderr: true, noOverlay: true
   }));
   const connection = await host.start();
   socketPath = connection.socketPath;

@@ -1,0 +1,7 @@
+{
+  "required": true,
+  "package": "com.palbudir.dshpx.bridge.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": ["InputMixin", "MouseMixin", "KeyboardMixin", "WindowMixin", "MinecraftMixin"],
+  "injectors": { "defaultRequire": 1 }
+}

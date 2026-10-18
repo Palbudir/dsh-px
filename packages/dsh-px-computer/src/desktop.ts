@@ -794,6 +794,17 @@ export async function runDesktopTool(
         `窗口状态：${placement}；${s.px_window.foreground ? '前台' : '后台'}${s.px_window.cloaked ? '；系统暂时隐藏窗口' : ''}。截图可用不代表后台键鼠投递可用。`
       )
       const input = s.px_window.input_state
+      const pointer = s.px_window.pointer_state
+      if (pointer?.source === 'win32_cursor_observation') {
+        const reported = (value: unknown) => (value === true ? '是' : value === false ? '否' : '未知')
+        notes.push(
+          `系统指针：可见=${reported(pointer.visible)}；命中目标=${reported(pointer.hit_target)}；位于客户区=${reported(pointer.inside_client)}；接近边缘=${reported(pointer.near_client_edge)}；限制在客户区=${reported(pointer.confined_to_client)}。这是系统光标状态，不能证明游戏已捕获相对鼠标，也不能证明转向成功。`
+        )
+        if (pointer.near_client_edge === true || pointer.inside_client === false)
+          notes.push(
+            '相对转向停滞时先检查游戏是否处于菜单、失去鼠标捕获或有覆盖窗口；用短动作和新画面校准。不要把绝对指针居中当作无副作用的转向修复。'
+          )
+      }
       if (input?.source === 'window_thread_imm_compatibility') {
         const native = input.ime_native_reported
         notes.push(

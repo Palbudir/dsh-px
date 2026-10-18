@@ -80,6 +80,32 @@ test('ordinary full access requires the effective native full-access bundle and 
 
 const contract = JSON.parse(readFileSync('test/fixtures/cua-driver-0.28.0-tools.json', 'utf8'))
 
+test('pointer observations expose edge trouble without claiming game capture or applying recovery input', async () => {
+  const { driver, calls } = fakeDriver([{ pid: 20, window_id: 2, app_name: 'java.exe', title: 'Game' }], {
+    get_window_state: () => ({
+      structuredContent: {
+        px_window: {
+          foreground: true,
+          pointer_state: {
+            source: 'win32_cursor_observation',
+            visible: false,
+            hit_target: true,
+            inside_client: true,
+            near_client_edge: true,
+            confined_to_client: null
+          }
+        }
+      }
+    })
+  })
+  const { c } = context(driver)
+  const result = await runDesktopTool(tool('computer_get_window_state'), { pid: 20, window_id: 2 }, c)
+  assert.match(result.text, /可见=否.*接近边缘=是.*限制在客户区=未知/)
+  assert.match(result.text, /不能证明游戏已捕获相对鼠标/)
+  assert.match(result.text, /不要把绝对指针居中当作无副作用/)
+  assert.ok(calls.every((call) => ['list_windows', 'get_window_state'].includes(call.name)))
+})
+
 function temp(t: any, prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), prefix))
   t.after(() => {
