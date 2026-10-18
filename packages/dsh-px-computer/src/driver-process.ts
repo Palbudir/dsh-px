@@ -173,8 +173,14 @@ async function boundedInput(id, args) {
       if (child.pid) process.send?.({ inputGuard: id, pid: child.pid });
     });
     const final = output.trim().split(/\r?\n/).map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(item => item?.finished).at(-1);
-    if (code !== 0 || !final?.ok) throw Error(final?.error || errors || '有时长输入中断；请重新观察目标');
-    return { rawJson: JSON.stringify({ content: [{type:'text',text:'已执行有时长输入并释放按键；请重新观察目标确认实际效果。'}], structuredContent:{delivery:{mode:'foreground'},effect:'unverifiable',elapsed_ms:final.elapsed_ms,release_attempted:final.release_attempted} }) };
+    if (!final) throw Error(errors || '有时长输入中断，未收到最终释放报告；效果未知，请重新观察目标');
+    const pointer = final.pointer_after;
+    const warning = pointer && (pointer.near_client_edge === true || pointer.inside_client === false)
+      ? ' 系统指针已接近或越过客户区边缘；这不证明游戏转向成功。请检查当前是菜单还是捕获鼠标的3D场景，再做小幅校准；不要重复长动作或盲目居中。' : '';
+    const failed = code !== 0 || !final.ok;
+    const details = {elapsed_ms:final.elapsed_ms,release_attempted:final.release_attempted,pointer_before:final.pointer_before,pointer_after:final.pointer_after};
+    const message = failed ? (final.error || errors || '有时长输入中断') + '；动作可能部分执行，请重新观察。' : '已执行有时长输入并尝试释放按键；请重新观察目标确认实际效果。';
+    return { rawJson: JSON.stringify({ isError:failed,content: [{type:'text',text:message+warning+' 输入诊断：'+JSON.stringify(details)}], structuredContent:{delivery:{mode:'foreground'},effect:'unverifiable',...details} }) };
   } finally {
     guards.delete(id);
     process.send?.({ inputGuardEnded: id, pid: child.pid });

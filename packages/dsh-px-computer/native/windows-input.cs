@@ -70,7 +70,7 @@ internal static class WindowsInput {
         } catch { } finally { if (manager != null) Marshal.ReleaseComObject(manager); }
         var foreground = GetForegroundWindow();
         Emit(new { pid = expectedPid, window_id = windowId, foreground = foreground == window, foreground_window_id = foreground.ToInt64(),
-            current_desktop = current, cloaked = result == 0 ? (int?)cloaked : null, bounds = WindowsView.Bounds(window), input_state = WindowsView.InputState(window) });
+            current_desktop = current, cloaked = result == 0 ? (int?)cloaked : null, bounds = WindowsView.Bounds(window), input_state = WindowsView.InputState(window), pointer_state = WindowsView.PointerState(window) });
         return 0;
     }
 
@@ -140,10 +140,12 @@ internal static class WindowsInput {
         var held = new List<string>();
         string failure = null;
         var clock = Stopwatch.StartNew();
+        object pointerBefore = null;
         using (var guardian = Process.GetProcessById(guardianPid))
         using (var host = Process.GetProcessById(hostPid)) {
             try {
                 Target(plan);
+                pointerBefore = WindowsView.PointerState(new IntPtr(plan.window_id));
                 foreach (int modifier in new int[] { 16, 17, 18, 91, 92 })
                     if ((GetAsyncKeyState(modifier) & 0x8000) != 0) throw new InvalidOperationException("A user modifier is held; input did not start");
                 if (plan.buttons.Length > 0 || plan.dx != 0 || plan.dy != 0) {
@@ -188,7 +190,8 @@ internal static class WindowsInput {
                 }
             }
         }
-        Emit(new { finished = true, ok = failure == null, error = failure, elapsed_ms = clock.ElapsedMilliseconds });
+        Emit(new { finished = true, ok = failure == null, error = failure, elapsed_ms = clock.ElapsedMilliseconds,
+            pointer_before = pointerBefore, pointer_after = WindowsView.PointerState(new IntPtr(plan.window_id)) });
         return failure == null ? 0 : 1;
     }
 
@@ -204,6 +207,7 @@ internal static class WindowsInput {
             UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardError = true
         };
         string error = null; bool completed = false; long elapsed = 0;
+        object pointerBefore = null, pointerAfter = null;
         using (var host = Process.GetProcessById(hostPid))
         using (var child = Process.Start(start)) {
             Emit(new { worker_pid = child.Id });
@@ -230,6 +234,8 @@ internal static class WindowsInput {
                         completed = (bool)item["ok"];
                         error = item["error"] as string;
                         elapsed = Convert.ToInt64(item["elapsed_ms"]);
+                        item.TryGetValue("pointer_before", out pointerBefore);
+                        item.TryGetValue("pointer_after", out pointerAfter);
                     }
                 }
                 child.WaitForExit();
@@ -241,7 +247,8 @@ internal static class WindowsInput {
                 }
             }
         }
-        Emit(new { finished = true, ok = completed && error == null, error = error, elapsed_ms = elapsed, release_attempted = true });
+        Emit(new { finished = true, ok = completed && error == null, error = error, elapsed_ms = elapsed, release_attempted = true,
+            pointer_before = pointerBefore, pointer_after = pointerAfter });
         return completed && error == null ? 0 : 1;
     }
 

@@ -2151,6 +2151,17 @@ async function runDesktopTool(tool, rawArgs, c) {
         `\u7A97\u53E3\u72B6\u6001\uFF1A${placement}\uFF1B${s.px_window.foreground ? "\u524D\u53F0" : "\u540E\u53F0"}${s.px_window.cloaked ? "\uFF1B\u7CFB\u7EDF\u6682\u65F6\u9690\u85CF\u7A97\u53E3" : ""}\u3002\u622A\u56FE\u53EF\u7528\u4E0D\u4EE3\u8868\u540E\u53F0\u952E\u9F20\u6295\u9012\u53EF\u7528\u3002`
       );
       const input = s.px_window.input_state;
+      const pointer = s.px_window.pointer_state;
+      if (pointer?.source === "win32_cursor_observation") {
+        const reported = (value) => value === true ? "\u662F" : value === false ? "\u5426" : "\u672A\u77E5";
+        notes.push(
+          `\u7CFB\u7EDF\u6307\u9488\uFF1A\u53EF\u89C1=${reported(pointer.visible)}\uFF1B\u547D\u4E2D\u76EE\u6807=${reported(pointer.hit_target)}\uFF1B\u4F4D\u4E8E\u5BA2\u6237\u533A=${reported(pointer.inside_client)}\uFF1B\u63A5\u8FD1\u8FB9\u7F18=${reported(pointer.near_client_edge)}\uFF1B\u9650\u5236\u5728\u5BA2\u6237\u533A=${reported(pointer.confined_to_client)}\u3002\u8FD9\u662F\u7CFB\u7EDF\u5149\u6807\u72B6\u6001\uFF0C\u4E0D\u80FD\u8BC1\u660E\u6E38\u620F\u5DF2\u6355\u83B7\u76F8\u5BF9\u9F20\u6807\uFF0C\u4E5F\u4E0D\u80FD\u8BC1\u660E\u8F6C\u5411\u6210\u529F\u3002`
+        );
+        if (pointer.near_client_edge === true || pointer.inside_client === false)
+          notes.push(
+            "\u76F8\u5BF9\u8F6C\u5411\u505C\u6EDE\u65F6\u5148\u68C0\u67E5\u6E38\u620F\u662F\u5426\u5904\u4E8E\u83DC\u5355\u3001\u5931\u53BB\u9F20\u6807\u6355\u83B7\u6216\u6709\u8986\u76D6\u7A97\u53E3\uFF1B\u7528\u77ED\u52A8\u4F5C\u548C\u65B0\u753B\u9762\u6821\u51C6\u3002\u4E0D\u8981\u628A\u7EDD\u5BF9\u6307\u9488\u5C45\u4E2D\u5F53\u4F5C\u65E0\u526F\u4F5C\u7528\u7684\u8F6C\u5411\u4FEE\u590D\u3002"
+          );
+      }
       if (input?.source === "window_thread_imm_compatibility") {
         const native = input.ime_native_reported;
         notes.push(
@@ -2369,8 +2380,14 @@ async function boundedInput(id, args) {
       if (child.pid) process.send?.({ inputGuard: id, pid: child.pid });
     });
     const final = output.trim().split(/\r?\n/).map(line => { try { return JSON.parse(line); } catch { return null; } }).filter(item => item?.finished).at(-1);
-    if (code !== 0 || !final?.ok) throw Error(final?.error || errors || '有时长输入中断；请重新观察目标');
-    return { rawJson: JSON.stringify({ content: [{type:'text',text:'已执行有时长输入并释放按键；请重新观察目标确认实际效果。'}], structuredContent:{delivery:{mode:'foreground'},effect:'unverifiable',elapsed_ms:final.elapsed_ms,release_attempted:final.release_attempted} }) };
+    if (!final) throw Error(errors || '有时长输入中断，未收到最终释放报告；效果未知，请重新观察目标');
+    const pointer = final.pointer_after;
+    const warning = pointer && (pointer.near_client_edge === true || pointer.inside_client === false)
+      ? ' 系统指针已接近或越过客户区边缘；这不证明游戏转向成功。请检查当前是菜单还是捕获鼠标的3D场景，再做小幅校准；不要重复长动作或盲目居中。' : '';
+    const failed = code !== 0 || !final.ok;
+    const details = {elapsed_ms:final.elapsed_ms,release_attempted:final.release_attempted,pointer_before:final.pointer_before,pointer_after:final.pointer_after};
+    const message = failed ? (final.error || errors || '有时长输入中断') + '；动作可能部分执行，请重新观察。' : '已执行有时长输入并尝试释放按键；请重新观察目标确认实际效果。';
+    return { rawJson: JSON.stringify({ isError:failed,content: [{type:'text',text:message+warning+' 输入诊断：'+JSON.stringify(details)}], structuredContent:{delivery:{mode:'foreground'},effect:'unverifiable',...details} }) };
   } finally {
     guards.delete(id);
     process.send?.({ inputGuardEnded: id, pid: child.pid });
