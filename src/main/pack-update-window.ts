@@ -3,6 +3,10 @@ import { pathToFileURL } from 'node:url'
 import { gt } from 'semver'
 import type { PackDeployment, PackReceipt } from './pack-deployment'
 
+// Native drivers make current Packs larger than the former 32 MiB download cap.
+// Keep an independent allocation limit, then enforce the exact signed size while streaming.
+export const MAX_PACK_DOWNLOAD_BYTES = 512 * 1024 * 1024
+
 // Electron is supplied by the pinned native entry, keeping this overlay on the same module instance.
 export function createPackUpdateWindow(
   electron: any,
@@ -64,26 +68,28 @@ export function createPackUpdateWindow(
   }
   const fetchBytes = async (url: string, limit: number, progress?: (n: number) => void): Promise<Buffer> => {
     const controller = new AbortController(),
-      timeout = setTimeout(() => controller.abort(), progress ? 180000 : 10000)
+      timeout = setTimeout(() => controller.abort(), progress ? 900000 : 10000)
     try {
       const response = await net.fetch(url, { signal: controller.signal, cache: 'no-store' })
       if (!response.ok || !response.body) throw Error(`下载失败（HTTP ${response.status}）`)
       const reader = response.body.getReader(),
-        chunks: Buffer[] = []
+        // Allocate once instead of retaining every chunk and concatenating another full copy.
+        bytes = Buffer.allocUnsafe(limit)
       let count = 0
       try {
         for (;;) {
           const { done, value } = await reader.read()
           if (done) break
           count += value.byteLength
-          if (count > limit) throw Error('下载内容超出签名清单大小')
-          chunks.push(Buffer.from(value))
+          if (count > limit) throw Error(progress ? '下载内容超出签名清单大小' : '更新清单超过 64 KiB 限制')
+          bytes.set(value, count - value.byteLength)
           progress?.(count)
         }
       } finally {
         await reader.cancel().catch(() => {})
       }
-      return Buffer.concat(chunks)
+      // Never expose the unwritten tail when a response ends early; staging checks exact size.
+      return bytes.subarray(0, count)
     } finally {
       clearTimeout(timeout)
     }
@@ -99,6 +105,8 @@ export function createPackUpdateWindow(
       ).toString('utf8')
       const manifest = deployment().manifest(signed)
       const current = deployment().read().active?.version ?? deployment().options.bundled.version
+      if (gt(manifest.version, current) && manifest.files[0].size > MAX_PACK_DOWNLOAD_BYTES)
+        throw Error('插件包超过本版客户端支持的 512 MiB 上限，请先升级桌面客户端。')
       pack = {
         phase: gt(manifest.version, current) ? 'available' : 'current',
         version: manifest.version,
@@ -110,7 +118,7 @@ export function createPackUpdateWindow(
         file = manifest.files[0]
       const began = Date.now()
       pack = { phase: 'downloading', version: manifest.version, total: file.size, transferred: 0, percent: 0 }
-      const bytes = await fetchBytes(file.url, Math.min(file.size, 32 * 1024 * 1024), (n) => {
+      const bytes = await fetchBytes(file.url, file.size, (n) => {
         pack = {
           ...pack,
           transferred: n,

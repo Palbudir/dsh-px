@@ -11,9 +11,19 @@ import {
 
 export const sha256 = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex')
 
+// Bound each tar layer, including foundation and community archives, independently of gzip size.
+export const MAX_PACK_UNPACKED_BYTES = 1024 * 1024 * 1024
+
 /** Read the regular-file subset produced by our Pack builder, before writing any paths. */
 export function unpackFiles(archive: Buffer): Map<string, Buffer> {
-  const data = gunzipSync(archive, { maxOutputLength: 128 * 1024 * 1024 })
+  let data: Buffer
+  try {
+    data = gunzipSync(archive, { maxOutputLength: MAX_PACK_UNPACKED_BYTES })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ERR_BUFFER_TOO_LARGE')
+      throw Error('插件包单层解压内容超过 1 GiB 上限，请升级客户端或联系发布者。')
+    throw error
+  }
   const files = new Map<string, Buffer>(),
     names = new Set<string>()
   const field = (header: Buffer, start: number, length: number) =>

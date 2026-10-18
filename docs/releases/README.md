@@ -2,6 +2,7 @@
 
 可下载的安装包、完整 tag 和发布时间见 [GitHub Releases](https://github.com/Palbudir/dsh-px/releases)。这些说明描述对应历史版本的用户可见变化；当前行为和后续工作以 [状态](../STATUS.md) 与 [路线图](../ROADMAP.md) 为准。
 
+- [Desktop 0.7.1 / Pack 0.7.3 · 修复大体积 Pack 更新](0.7.3-alpha.1.md)
 - [Pack 0.7.2-alpha.1 · 后台操作与可选独立应用输入桥](0.7.2-alpha.1.md)
 - [Pack 0.7.1-alpha.1 · 电脑操作遵循原生权限与直接授权入口](0.7.1-alpha.1.md)
 
