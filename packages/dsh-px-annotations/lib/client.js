@@ -250,7 +250,9 @@ var css = hostLayoutCss + `
 .px-panel label.px-check{display:flex;gap:7px;align-items:center}.px-panel input[type=checkbox]{display:inline;width:16px;height:16px;margin:0}
 .px-panel pre,.px-panel blockquote{white-space:pre-wrap;margin:9px 0;max-height:220px;overflow:auto;font:inherit}.px-panel blockquote{border-left:3px solid var(--px-accent);padding-left:11px;color:var(--px-muted)}
 .px-load-status{font-size:12px;min-height:20px;color:var(--px-muted);display:block}
-.px-quote-action{font-size:12px!important;min-height:28px!important;padding:3px 8px!important}
+.px-quote-wrap{display:inline-flex;flex:none}
+.px-ui .px-quote-action{width:28px;height:28px;min-height:28px!important;padding:5px!important;box-sizing:border-box;white-space:nowrap;flex:none;border-color:transparent;background:transparent}
+.px-quote-action-label{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
 @keyframes px-panel-in{from{opacity:.6}to{opacity:1}}
 @media(max-width:1000px){.px-status{display:none}.px-bar{padding-left:6px;padding-right:6px}.px-tools>button{padding-inline:6px}}
 @media(max-width:560px){.px-tools{min-height:34px}}
@@ -1187,10 +1189,11 @@ function QuoteAction({
   messageId
 }) {
   const availability = panelAvailability(usePanelCapabilities(ctx), "px-notes");
-  return /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("span", { className: "px-ui", children: /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)(
+  return /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("span", { className: "px-ui px-quote-wrap", children: /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)(
     "button",
     {
       className: "px-quote-action",
+      "aria-label": "\u5F15\u7528 / \u6279\u6CE8",
       disabled: !availability.enabled,
       title: availability.enabled ? "\u5F15\u7528\u6216\u6279\u6CE8\u8FD9\u6761\u6D88\u606F" : `\u5F15\u7528\u4E0E\u6279\u6CE8\u4E0D\u53EF\u7528\uFF1A${availability.reason}`,
       onClick: () => {
@@ -1211,7 +1214,7 @@ function QuoteAction({
       },
       children: [
         /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(Icon, { name: "note" }),
-        "\u5F15\u7528 / \u6279\u6CE8"
+        /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("span", { className: "px-quote-action-label", children: "\u5F15\u7528 / \u6279\u6CE8" })
       ]
     }
   ) });

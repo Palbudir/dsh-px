@@ -14,9 +14,10 @@ export function QuoteAction({
 }): unknown {
   const availability = panelAvailability(usePanelCapabilities(ctx), 'px-notes')
   return (
-    <span className="px-ui">
+    <span className="px-ui px-quote-wrap">
       <button
         className="px-quote-action"
+        aria-label="引用 / 批注"
         disabled={!availability.enabled}
         title={availability.enabled ? '引用或批注这条消息' : `引用与批注不可用：${availability.reason}`}
         onClick={() => {
@@ -39,7 +40,7 @@ export function QuoteAction({
         }}
       >
         <Icon name="note" />
-        引用 / 批注
+        <span className="px-quote-action-label">引用 / 批注</span>
       </button>
     </span>
   )

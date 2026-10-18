@@ -184,7 +184,9 @@ var css = hostLayoutCss + `
 .px-panel label.px-check{display:flex;gap:7px;align-items:center}.px-panel input[type=checkbox]{display:inline;width:16px;height:16px;margin:0}
 .px-panel pre,.px-panel blockquote{white-space:pre-wrap;margin:9px 0;max-height:220px;overflow:auto;font:inherit}.px-panel blockquote{border-left:3px solid var(--px-accent);padding-left:11px;color:var(--px-muted)}
 .px-load-status{font-size:12px;min-height:20px;color:var(--px-muted);display:block}
-.px-quote-action{font-size:12px!important;min-height:28px!important;padding:3px 8px!important}
+.px-quote-wrap{display:inline-flex;flex:none}
+.px-ui .px-quote-action{width:28px;height:28px;min-height:28px!important;padding:5px!important;box-sizing:border-box;white-space:nowrap;flex:none;border-color:transparent;background:transparent}
+.px-quote-action-label{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}
 @keyframes px-panel-in{from{opacity:.6}to{opacity:1}}
 @media(max-width:1000px){.px-status{display:none}.px-bar{padding-left:6px;padding-right:6px}.px-tools>button{padding-inline:6px}}
 @media(max-width:560px){.px-tools{min-height:34px}}
