@@ -288,6 +288,43 @@ function context(driver: DesktopDriver, overrides: Partial<DesktopContext> = {})
 }
 const tool = (name: string) => DESKTOP_TOOLS.find((t) => t.name === name)!
 
+test('window observations distinguish reported IME modes from unknown and warn about omitted overlays', async () => {
+  for (const [open, native, expected] of [
+    [null, true, '本地文字转换位为开（字母键可能进入组词）'],
+    [true, false, '本地文字转换位为关'],
+    [null, null, '模式未知'],
+    [false, true, '开关位为关闭']
+  ] as const) {
+    const { driver, calls } = fakeDriver(
+      [{ pid: 20, window_id: 2, app_name: 'java.exe', title: '3D view' }],
+      {
+        get_window_state: () => ({
+          content: [{ type: 'text', text: 'current window' }],
+          structuredContent: {
+            px_window: {
+              foreground: true,
+              current_desktop: true,
+              input_state: {
+                source: 'window_thread_imm_compatibility',
+                ime_open_reported: open,
+                ime_native_reported: native
+              }
+            }
+          }
+        })
+      }
+    )
+    const { c } = context(driver)
+    const result = await runDesktopTool(tool('computer_get_window_state'), { pid: 20, window_id: 2 }, c)
+    assert.ok(result.text.includes(expected))
+    assert.match(result.text, /不是按键已到达应用的证明/)
+    assert.match(result.text, /可能不包含输入法候选栏等独立浮层/)
+    assert.match(result.text, /不保证当前实际效果/)
+    if (open !== false) assert.doesNotMatch(result.text, /开关位为关闭/)
+    assert.ok(calls.every((call) => ['list_windows', 'get_window_state'].includes(call.name)))
+  }
+})
+
 test('UIA timeout falls back to an independent image without keeping stale element IDs', async () => {
   const { driver, calls } = fakeDriver([{ pid: 20, window_id: 2, app_name: 'java.exe', title: '3D view' }], {
     get_window_state: (args) =>

@@ -2137,6 +2137,14 @@ async function runDesktopTool(tool, rawArgs, c) {
       notes.push(
         `\u7A97\u53E3\u72B6\u6001\uFF1A${placement}\uFF1B${s.px_window.foreground ? "\u524D\u53F0" : "\u540E\u53F0"}${s.px_window.cloaked ? "\uFF1B\u7CFB\u7EDF\u6682\u65F6\u9690\u85CF\u7A97\u53E3" : ""}\u3002\u622A\u56FE\u53EF\u7528\u4E0D\u4EE3\u8868\u540E\u53F0\u952E\u9F20\u6295\u9012\u53EF\u7528\u3002`
       );
+      const input = s.px_window.input_state;
+      if (input?.source === "window_thread_imm_compatibility") {
+        const native = input.ime_native_reported;
+        notes.push(
+          `\u8F93\u5165\u6CD5\u517C\u5BB9\u63A5\u53E3\u62A5\u544A\uFF1A${input.ime_open_reported === false ? "\u5F00\u5173\u4F4D\u4E3A\u5173\u95ED" : native === true ? "\u672C\u5730\u6587\u5B57\u8F6C\u6362\u4F4D\u4E3A\u5F00\uFF08\u5B57\u6BCD\u952E\u53EF\u80FD\u8FDB\u5165\u7EC4\u8BCD\uFF09" : native === false ? "\u672C\u5730\u6587\u5B57\u8F6C\u6362\u4F4D\u4E3A\u5173" : "\u6A21\u5F0F\u672A\u77E5"}\u3002\u8FD9\u53EA\u662F\u8F93\u5165\u6CD5\u62A5\u544A\u7684\u72B6\u6001\uFF0C\u4E0D\u4FDD\u8BC1\u5F53\u524D\u5B9E\u9645\u6548\u679C\uFF0C\u4E5F\u4E0D\u662F\u6309\u952E\u5DF2\u5230\u8FBE\u5E94\u7528\u7684\u8BC1\u660E\uFF1B\u4E0D\u540C\u8F93\u5165\u6CD5\u53EF\u80FD\u4E0D\u652F\u6301\u6B64\u67E5\u8BE2\u3002`
+        );
+      }
+      notes.push("\u8FD9\u662F\u76EE\u6807\u7A97\u53E3\u622A\u56FE\uFF0C\u53EF\u80FD\u4E0D\u5305\u542B\u8F93\u5165\u6CD5\u5019\u9009\u680F\u7B49\u72EC\u7ACB\u6D6E\u5C42\uFF1B\u524D\u53F0\u7A97\u53E3\u4E0D\u7B49\u4E8E\u6BCF\u4E2A\u5750\u6807\u90FD\u53EF\u70B9\u51FB\u3002");
     }
     const validFrame = s.screenshot_frame_valid !== false;
     if (!validFrame)
@@ -2243,7 +2251,17 @@ async function magnifyZoom(raw, args) {
     await writeFile(input,Buffer.from(image.data,'base64'),{flag:'wx'});
     const size = await helperCall(['--magnify',input,output],true);
     image.data = (await readFile(output)).toString('base64'); image.mimeType = 'image/png';
-    zooms.set(args.pid,{scope:args.__px_scope,windowId:args.window_id,width:size.width,height:size.height,scaleX:size.width/size.source_width,scaleY:size.height/size.source_height});
+    // Pinned Cua 0.28 crop_png_to_jpeg: native-pixel region, 20% padding, integer
+    // clipping, then width <= 500. Validate the actual crop size before using this
+    // mapping for a read-only foreground hit test; native Cua still sends the click.
+    const frame=observedFrame(args), nativeWidth=frame.bounds.width-2, nativeHeight=frame.bounds.height-2;
+    const ratio=nativeWidth/frame.width, x1=args.x1*ratio, y1=args.y1*ratio, x2=args.x2*ratio, y2=args.y2*ratio;
+    const padX=Math.max(1,x2-x1)*0.2,padY=Math.max(1,y2-y1)*0.2;
+    const originX=Math.min(nativeWidth,Math.floor(Math.max(0,x1-padX))),originY=Math.min(nativeHeight,Math.floor(Math.max(0,y1-padY)));
+    const cropWidth=Math.max(1,Math.min(nativeWidth,Math.floor(x2+padX))-originX),cropHeight=Math.max(1,Math.min(nativeHeight,Math.floor(y2+padY))-originY);
+    const expectedWidth=Math.min(500,cropWidth),expectedHeight=cropWidth>500?Math.max(1,Math.round(cropHeight*500/cropWidth)):cropHeight;
+    if(size.source_width!==expectedWidth || size.source_height!==expectedHeight)throw Error('原生放大图尺寸与固定版本坐标契约不符，请重新观察并使用完整截图');
+    zooms.set(args.pid,{scope:args.__px_scope,windowId:args.window_id,width:size.width,height:size.height,scaleX:size.width/size.source_width,scaleY:size.height/size.source_height,originX,originY,scaleInv:cropWidth/size.source_width});
     raw.content = raw.content.filter(item=>item.type !== 'text');
     raw.content.push({type:'text',text:'已放大到 '+size.width+'×'+size.height+'。需要点击此图时使用 computer_click(from_zoom:true)，坐标按本张放大图；仅最近一次放大有效。原生截图范围含边缘留白，勿自行猜偏移。'});
     raw.structuredContent = {...raw.structuredContent,width:size.width,height:size.height,mime_type:'image/png',format:'png'};
@@ -2251,6 +2269,7 @@ async function magnifyZoom(raw, args) {
   } finally {if(!directory.startsWith(temporaryRoot+sep))throw Error('Invalid zoom cleanup path');await rm(directory,{recursive:true,force:true});}
 }
 async function dispatch(name, args, json, id, client) {
+  let clickPoint;
   if (native?.input && name === 'move_pointer') {
     if(args.delivery_mode !== 'foreground')throw Error('真实指针移动必须显式使用 foreground');
     const frame=observedFrame(args);
@@ -2272,7 +2291,20 @@ async function dispatch(name, args, json, id, client) {
     if(args.element_index !== undefined || !Number.isFinite(args.x) || !Number.isFinite(args.y) || args.x<0 || args.y<0 || args.x>=zoom.width || args.y>=zoom.height)
       throw Error('放大图点击必须使用图内的 x/y，不能同时指定元素编号');
     const input=JSON.parse(json);input.x=args.x/zoom.scaleX;input.y=args.y/zoom.scaleY;json=JSON.stringify(input);
+    clickPoint={x:zoom.originX+input.x*zoom.scaleInv,y:zoom.originY+input.y*zoom.scaleInv};
   } else if (native?.input && ['click','scroll','drag'].includes(name) && (args.x !== undefined || args.from_x !== undefined) && args.element_index === undefined) observedFrame(args);
+  if(native?.input && name==='click' && args.delivery_mode==='foreground' && args.element_index===undefined) {
+    const frame=observedFrame(args),ratio=(frame.bounds.width-2)/frame.width;
+    const point=clickPoint??{x:args.x*ratio,y:args.y*ratio};
+    zooms.delete(args.pid);
+    const state=await inspectWindow(args);
+    if(!state?.foreground) {
+      const activated=JSON.parse((await client.callTool('bring_to_front',JSON.stringify({pid:args.pid,window_id:args.window_id,session:args.session}))).rawJson);
+      if(activated.isError)throw Error('无法激活已授权目标窗口；点击未投递，请重新观察');
+    }
+    // Never treat an IME/overlay hit (even cloaked) as permission to click through.
+    await helperCall(['--point',Buffer.from(JSON.stringify({pid:args.pid,window_id:args.window_id,...point,image_width:frame.bounds.width-2,image_height:frame.bounds.height-2,window_width:frame.bounds.width,window_height:frame.bounds.height})).toString('base64')],true);
+  }
   if (['click','type_text','set_value','press_key','hotkey','scroll','drag','bring_to_front','invoke_menu','bounded_input'].includes(name)) {
     zooms.delete(args.pid);
     const previous=frames.get(args.pid);if(previous && (previous.scope !== args.__px_scope || previous.windowId !== args.window_id))frames.delete(args.pid);
@@ -2621,6 +2653,7 @@ function guidance(settings) {
 - \u4F18\u5148\u7528\u5143\u7D20\u7F16\u53F7\u6216 ref\uFF1B\u5143\u7D20\u6811\u91CC\u6CA1\u6709\u76EE\u6807\u65F6\u624D\u7528\u622A\u56FE\u50CF\u7D20\u5750\u6807\u3002\u5F53\u524D\u6A21\u578B\u4E0D\u652F\u6301\u56FE\u7247\u65F6\u53EA\u4F9D\u9760\u5143\u7D20\u6811\uFF0C\u9700\u8981\u6309\u50CF\u7D20\u64CD\u4F5C\u5C31\u544A\u8BC9\u7528\u6237\u5207\u6362\u5230\u652F\u6301\u56FE\u7247\u7684\u6A21\u578B\u3002
 - \u6E38\u620F\u30013D \u89C6\u56FE\u7B49\u5F31\u65E0\u969C\u788D\u754C\u9762\u53EF\u5728 computer_get_window_state \u4E2D\u8BBE\u7F6E include_accessibility_tree:false\uFF0C\u76F4\u63A5\u8BFB\u53D6\u622A\u56FE\uFF0C\u907F\u514D\u7B49\u5F85 UIA\u3002\u4E00\u6B21\u5DF2\u660E\u786E\u62A5\u544A UIA \u8D85\u65F6\u540E\uFF0C\u540E\u7EED\u89C2\u5BDF\u4F18\u5148\u4F7F\u7528\u8FD9\u4E2A\u6A21\u5F0F\u3002
 - \u8F93\u5165\u524D\u5148\u786E\u8BA4\u7126\u70B9\uFF1B\u56DE\u8F66\u3001Tab \u7B49\u7528\u6309\u952E\u5DE5\u5177\uFF0C\u4E0D\u8981\u5199\u8FDB\u6587\u5B57\u3002
+- \u6E38\u620F\u548C\u5FEB\u6377\u952E\u4E2D\u7684\u5B57\u6BCD\u53EF\u80FD\u88AB\u4E2D\u6587\u7B49\u8F93\u5165\u6CD5\u63A5\u8D70\uFF1B\u7A97\u53E3\u622A\u56FE\u672A\u5FC5\u5305\u542B\u72EC\u7ACB\u5019\u9009\u680F\u3002\u53C2\u8003\u7A97\u53E3\u7684\u8F93\u5165\u6CD5\u8BCA\u65AD\uFF0C\u53D1\u751F\u7EC4\u8BCD\u6216\u6307\u9488\u88AB\u5176\u4ED6\u7A97\u53E3\u62E6\u622A\u65F6\u5148\u505C\u6B62\u8F93\u5165\u3001\u6838\u5BF9\u539F\u56E0\uFF1B\u9700\u8981\u65F6\u7528 Esc \u53D6\u6D88\u7EC4\u8BCD\uFF0C\u518D\u901A\u8FC7\u8BE5\u5E94\u7528\u5DF2\u77E5\u7684\u8F93\u5165\u6A21\u5F0F\u5FEB\u6377\u952E\uFF08\u5982 Ctrl+Space\uFF09\u5207\u6362\u5E76\u91CD\u65B0\u89C2\u5BDF\uFF0C\u4E0D\u76F2\u76EE\u53CD\u590D\u5207\u6362\uFF0C\u4E0D\u7ED5\u8FC7\u906E\u6321\u68C0\u67E5\u3002\u8F93\u5165\u6CD5\u67E5\u8BE2\u672A\u77E5\u4E0D\u80FD\u5F53\u4F5C\u5DF2\u5173\u95ED\uFF1B\u5207\u6362\u53EA\u4E3A\u5F53\u524D\u4EFB\u52A1\uFF0C\u7ED3\u675F\u65F6\u6838\u5BF9\u5E76\u6062\u590D\u539F\u6A21\u5F0F\u3002
 - \u540E\u53F0\u7EC4\u5408\u952E\u4E0D\u80FD\u53EF\u9760\u5F62\u6210\u4FEE\u9970\u952E\u72B6\u6001\uFF0C\u7CFB\u7EDF\u4F1A\u5728\u6295\u9012\u524D\u62D2\u7EDD\u3002\u66FF\u6362\u6587\u672C\u4F18\u5148\u7528\u652F\u6301\u7684 computer_set_value\uFF1B\u786E\u5B9E\u9700\u8981 Ctrl+A \u7B49\u5FEB\u6377\u952E\u65F6\uFF0C\u4F7F\u7528\u5DF2\u6388\u6743\u7684 foreground\uFF0C\u4E0D\u628A\u62D2\u7EDD\u6539\u5199\u6210\u5355\u4E2A\u5B57\u6BCD\u8F93\u5165\u3002
 - \u6301\u7EED\u6309\u952E\u3001\u9F20\u6807\u6309\u4F4F\u548C\u76F8\u5BF9\u79FB\u52A8\u7528 computer_bounded_input\u3002\u5148\u786E\u8BA4\u76EE\u6807\u5728\u524D\u53F0\uFF1B\u9F20\u6807\u52A8\u4F5C\u8FD8\u8981\u6C42\u6307\u9488\u4F4D\u4E8E\u76EE\u6807\u7A97\u53E3\u3002\u9ED8\u8BA4\u5148\u505A 100\uFF5E500 ms \u77ED\u52A8\u4F5C\uFF0C\u6301\u7EED\u6316\u6398\u7B49\u786E\u5B9E\u9700\u8981\u65F6\u518D\u5EF6\u957F\uFF0C\u6700\u957F 10 \u79D2\u3002\u76F8\u5BF9\u4F4D\u79FB\u4E0D\u662F\u4FDD\u8BC1\u7684\u5C4F\u5E55\u50CF\u7D20\u6216\u8F6C\u89D2\uFF0C\u6309\u5B9E\u9645\u7ED3\u679C\u6821\u51C6\uFF0C\u4E0D\u8981\u76F4\u63A5\u628A\u5355\u6B21\u91CF\u63A8\u5230\u4E0A\u9650\u3002
 - \u8BFB\u4E0D\u6E05\u7684\u5C0F\u5B57\u6216\u6570\u503C\u5148\u7528 computer_zoom\uFF0C\u4E0D\u8981\u731C\u6570\u30023D \u671D\u5411\u53EF\u80FD\u8DE8\u8D8A 0/360 \u5EA6\uFF0C\u4E0D\u80FD\u628A\u9996\u5C3E\u8BFB\u6570\u7684\u7EDD\u5BF9\u5DEE\u76F4\u63A5\u5F53\u4F5C\u5B9E\u9645\u8F6C\u52A8\u91CF\u3002\u6BCF\u6BB5\u52A8\u4F5C\u540E\u68C0\u67E5\u753B\u9762\u3001\u65B9\u5411\u4E0E\u72B6\u6001\u3002

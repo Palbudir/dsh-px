@@ -24,6 +24,39 @@ internal static class WindowsView {
     [DllImport("user32.dll")] private static extern IntPtr GetAncestor(IntPtr window, uint flags);
     [DllImport("user32.dll", SetLastError=true)] private static extern bool SetCursorPos(int x, int y);
     [DllImport("user32.dll")] private static extern bool GetCursorPos(out Point point);
+    [DllImport("user32.dll")] private static extern IntPtr GetKeyboardLayout(uint thread);
+    [DllImport("imm32.dll")] private static extern IntPtr ImmGetDefaultIMEWnd(IntPtr window);
+    [DllImport("user32.dll")] private static extern IntPtr SendMessageTimeout(IntPtr window, uint message, IntPtr command, IntPtr value, uint flags, uint timeout, out UIntPtr result);
+    [DllImport("dwmapi.dll", EntryPoint="DwmGetWindowAttribute")] private static extern int ReadCloaked(IntPtr window, int attribute, out int value, int size);
+
+    // Read-only compatibility diagnostics, not an input authorization or a guarantee that TSF/IME
+    // will deliver a key to the application. Failed or timed-out queries stay unknown; even a
+    // successful reply may be incomplete with a TSF-only input method.
+    internal static object InputState(IntPtr window) {
+        uint owner; uint thread = GetWindowThreadProcessId(window, out owner);
+        if (thread == 0) return null;
+        IntPtr layout = GetKeyboardLayout(thread), ime = ImmGetDefaultIMEWnd(window);
+        int? conversion = null; bool? open = null;
+        if (ime != IntPtr.Zero) {
+            UIntPtr result;
+            if (SendMessageTimeout(ime, 0x0283, new IntPtr(1), IntPtr.Zero, 2, 150, out result) != IntPtr.Zero)
+                conversion = unchecked((int)result.ToUInt64());
+            if (SendMessageTimeout(ime, 0x0283, new IntPtr(5), IntPtr.Zero, 2, 150, out result) != IntPtr.Zero)
+                open = result != UIntPtr.Zero;
+        }
+        return new { keyboard_layout = layout.ToInt64().ToString("X"), ime_open_reported = open,
+            ime_native_reported = conversion.HasValue ? (bool?)((conversion.Value & 1) != 0) : null,
+            source = "window_thread_imm_compatibility" };
+    }
+
+    internal static string PointDiagnostic(int x, int y) {
+        IntPtr hit = GetAncestor(WindowFromPoint(new Point { x=x, y=y }), 2); uint owner; int cloaked;
+        GetWindowThreadProcessId(hit, out owner);
+        int result = ReadCloaked(hit, 14, out cloaked, 4);
+        return "point=("+x+","+y+") hit_window="+hit.ToInt64()+" hit_pid="+owner+
+            " hit_cloaked="+(result == 0 ? cloaked.ToString() : "unknown")+" foreground="+GetForegroundWindow().ToInt64()+
+            ". A window-only capture may omit input-method or other overlay windows; inspect input mode/overlays before retrying. Do not bypass this target check.";
+    }
 
     internal static Rect Bounds(IntPtr window) {
         Rect result;
@@ -50,7 +83,7 @@ internal static class WindowsView {
             return new { width = width, height = height, source_width = image.Width, source_height = image.Height };
         }
     }
-    internal static object MovePointer(PointerRequest request) {
+    private static Point CheckedPoint(PointerRequest request) {
         if (request == null || request.pid <= 0 || request.window_id <= 0 || request.image_width <= 0 || request.image_height <= 0 ||
             double.IsNaN(request.x) || double.IsNaN(request.y) || double.IsInfinity(request.x) || double.IsInfinity(request.y) ||
             request.x < 0 || request.y < 0 || request.x >= request.image_width || request.y >= request.image_height)
@@ -67,7 +100,15 @@ internal static class WindowsView {
         double ratio = (request.window_width - 2) / request.image_width;
         var point = new Point { x = bounds.left + 1 + (int)(request.x * ratio), y = bounds.top + 1 + (int)(request.y * ratio) };
         if (GetAncestor(WindowFromPoint(point), 2) != window || GetForegroundWindow() != window)
-            throw new InvalidOperationException("The pointer target is covered or no longer belongs to the foreground window");
+            throw new InvalidOperationException("The pointer target is covered or no longer belongs to the foreground window. " + PointDiagnostic(point.x, point.y));
+        return point;
+    }
+    internal static object CheckPoint(PointerRequest request) {
+        Point point = CheckedPoint(request);
+        return new { checked_x = point.x, checked_y = point.y };
+    }
+    internal static object MovePointer(PointerRequest request) {
+        Point point = CheckedPoint(request);
         if (!SetCursorPos(point.x, point.y)) throw new InvalidOperationException("Pointer movement failed: " + Marshal.GetLastWin32Error());
         Point actual; GetCursorPos(out actual);
         return new { requested_x = point.x, requested_y = point.y, actual_x = actual.x, actual_y = actual.y };
