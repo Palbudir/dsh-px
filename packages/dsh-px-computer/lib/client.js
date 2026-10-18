@@ -270,6 +270,8 @@ function ComputerPanel({ sessionId, visible }) {
   };
   const s = view?.settings;
   const supported = view?.status.platform === "win32";
+  const apps = view?.session.observedApps ?? view?.session.apps ?? [];
+  const sites = view?.session.observedSites ?? view?.session.sites ?? [];
   return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
     "div",
     {
@@ -277,7 +279,7 @@ function ComputerPanel({ sessionId, visible }) {
       style: { padding: 16, height: "100%", overflow: "auto", overflowWrap: "anywhere", fontSize: 13 },
       children: [
         /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("h3", { children: "\u7535\u8111\u64CD\u4F5C" }),
-        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-muted", children: "\u5F00\u542F\u540E\uFF0Cagent \u53EF\u4EE5\u5728\u4F60\u6388\u6743\u7684\u8303\u56F4\u5185\u67E5\u770B\u5E76\u64CD\u4F5C\u672C\u673A\u5E94\u7528\u548C\u7F51\u9875\u3002\u7B2C\u4E00\u6B21\u64CD\u4F5C\u67D0\u4E2A\u5E94\u7528\u90FD\u4F1A\u5148\u8BE2\u95EE\uFF1B\u5220\u9664\u3001\u53D1\u9001\u3001\u4ED8\u6B3E\u7B49\u52A8\u4F5C\u4F1A\u518D\u6B21\u786E\u8BA4\u3002\u7EC8\u7AEF\u3001\u5BC6\u7801\u7BA1\u7406\u5668\u3001\u5B89\u5168\u8F6F\u4EF6\u3001\u8FDC\u7A0B\u63A7\u5236\u8F6F\u4EF6\u548C DSH \u672C\u8EAB\u59CB\u7EC8\u4E0D\u80FD\u64CD\u4F5C\u3002" }),
+        /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-muted", children: "\u5F00\u542F\u540E\uFF0Cagent \u53EF\u4EE5\u5728\u4F60\u6388\u6743\u7684\u8303\u56F4\u5185\u67E5\u770B\u5E76\u64CD\u4F5C\u672C\u673A\u5E94\u7528\u548C\u7F51\u9875\u3002\u666E\u901A\u8BBF\u95EE\u9075\u5FAA\u4F1A\u8BDD\u6743\u9650\uFF1A\u5B8C\u5168\u6743\u9650\u76F4\u63A5\u6267\u884C\uFF0C\u5176\u4F59\u6A21\u5F0F\u9996\u6B21\u786E\u8BA4\uFF1B\u5220\u9664\u3001\u53D1\u9001\u3001\u4ED8\u6B3E\u7B49\u52A8\u4F5C\u4ECD\u9700\u5355\u72EC\u786E\u8BA4\u3002\u7EC8\u7AEF\u3001\u5BC6\u7801\u7BA1\u7406\u5668\u3001\u5B89\u5168\u8F6F\u4EF6\u3001\u8FDC\u7A0B\u63A7\u5236\u8F6F\u4EF6\u548C DSH \u672C\u8EAB\u59CB\u7EC8\u4E0D\u80FD\u64CD\u4F5C\u3002" }),
         error && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { role: "alert", children: error }),
         !view && !error && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u2026" }),
         view && !supported && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-empty", children: "\u7535\u8111\u64CD\u4F5C\u76EE\u524D\u53EA\u652F\u6301 Windows\u3002" }),
@@ -308,11 +310,11 @@ function ComputerPanel({ sessionId, visible }) {
                   onChange: (e) => void act({ action: "settings", desktopForeground: e.target.value === "ask" }),
                   children: [
                     /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "background", children: "\u4EC5\u540E\u53F0\u64CD\u4F5C" }),
-                    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "ask", children: "\u5141\u8BB8\u524D\u53F0\u64CD\u4F5C\uFF08\u6309\u4F1A\u8BDD\u548C\u7A97\u53E3\u6388\u6743\uFF09" })
+                    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("option", { value: "ask", children: "\u5141\u8BB8\u524D\u53F0\u64CD\u4F5C\uFF08\u9075\u5FAA\u4F1A\u8BDD\u6743\u9650\uFF09" })
                   ]
                 }
               ),
-              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("small", { className: "px-muted", children: "\u6BCF\u4E2A\u7A97\u53E3\u9996\u6B21\u6388\u6743\uFF0C\u666E\u901A\u52A8\u4F5C\u4E0D\u91CD\u590D\u8BE2\u95EE\u3002\u6682\u505C\u6216\u64A4\u9500\u540E\u7ED3\u675F\u63A7\u5236\uFF1B\u540E\u53F0\u4E0D\u652F\u6301\u65F6\u4E0D\u4F1A\u81EA\u52A8\u62A2\u5360\u524D\u53F0\u3002" })
+              /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("small", { className: "px-muted", children: "\u5B8C\u5168\u6743\u9650\u4F1A\u8BDD\u76F4\u63A5\u63A7\u5236\u7A97\u53E3\uFF0C\u5176\u4F59\u6A21\u5F0F\u6BCF\u4E2A\u7A97\u53E3\u9996\u6B21\u786E\u8BA4\u3002\u6682\u505C\u4F1A\u4E2D\u6B62\u63A7\u5236\uFF1B\u540E\u53F0\u6A21\u5F0F\u4E0D\u4F1A\u81EA\u52A8\u62A2\u5360\u524D\u53F0\u3002" })
             ] }),
             /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("label", { style: { display: "block" }, children: [
               "\u6D4F\u89C8\u5668",
@@ -346,7 +348,7 @@ function ComputerPanel({ sessionId, visible }) {
               " ",
               !view.status.edgeExtension && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("a", { href: EXTENSION_URL, target: "_blank", rel: "noreferrer", children: "\u6253\u5F00\u6269\u5C55\u5546\u5E97" })
             ] }),
-            s.browser !== "off" && s.browser !== "isolated" && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-muted", children: "\u8FD9\u4E2A\u6A21\u5F0F\u5305\u542B\u767B\u5F55\u72B6\u6001\uFF1A\u6BCF\u4E2A\u4F1A\u8BDD\u7B2C\u4E00\u6B21\u8BBF\u95EE\u67D0\u4E2A\u7F51\u7AD9\u524D\u4F1A\u5148\u8BE2\u95EE\u3002" })
+            s.browser !== "off" && s.browser !== "isolated" && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-muted", children: "\u8FD9\u4E2A\u6A21\u5F0F\u5305\u542B\u767B\u5F55\u72B6\u6001\uFF1A\u5B8C\u5168\u6743\u9650\u4F1A\u8BDD\u76F4\u63A5\u8BBF\u95EE\uFF0C\u5176\u4F59\u6A21\u5F0F\u9996\u6B21\u8BBF\u95EE\u7F51\u7AD9\u524D\u8BE2\u95EE\u3002" })
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-actions", children: [
             view.session.paused ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
@@ -392,31 +394,54 @@ function ComputerPanel({ sessionId, visible }) {
               }
             )
           ] }),
-          (view.session.apps.length > 0 || view.session.sites.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { style: { ...cardStyle, margin: "12px 0" }, open: true, children: [
-            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("summary", { children: "\u672C\u4F1A\u8BDD\u5DF2\u5141\u8BB8" }),
-            view.session.apps.map((app) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-actions", children: [
+          view.session.policy === "full" && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { role: "status", children: "\u672C\u4F1A\u8BDD\u4E3A\u5B8C\u5168\u6743\u9650\uFF1A\u5DF2\u5F00\u542F\u80FD\u529B\u5185\u7684\u666E\u901A\u64CD\u4F5C\u76F4\u63A5\u6267\u884C\uFF0C\u65E0\u9700\u8BBE\u7F6E\u59CB\u7EC8\u5141\u8BB8\u3002\u654F\u611F\u52A8\u4F5C\u4ECD\u5355\u72EC\u786E\u8BA4\u3002" }),
+          view.session.policy === "never" && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { role: "status", children: "\u672C\u4F1A\u8BDD\u5173\u95ED\u4E86\u786E\u8BA4\u63D0\u793A\uFF0C\u4F46\u4E0D\u662F\u5B8C\u5168\u6743\u9650\u3002\u8BF7\u5728\u4E0B\u65B9\u6388\u6743\u5E94\u7528\u6216\u7F51\u7AD9\uFF1B\u9700\u8981\u7A97\u53E3\u63A7\u5236\u6216\u654F\u611F\u52A8\u4F5C\u786E\u8BA4\u65F6\uFF0C\u5148\u5207\u6362\u5230\u201C\u5DE5\u4F5C\u533A\u5185\u4FEE\u6539\u201D\u7B49\u53EF\u8BE2\u95EE\u6A21\u5F0F\u3002" }),
+          (apps.length > 0 || sites.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { style: { ...cardStyle, margin: "12px 0" }, open: true, children: [
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("summary", { children: "\u5E94\u7528\u4E0E\u7F51\u7AD9\u6388\u6743" }),
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-muted", children: "\u8FD9\u91CC\u5217\u51FA\u672C\u4F1A\u8BDD\u5DF2\u8BC6\u522B\u7684\u76EE\u6807\uFF1B\u672A\u83B7\u5141\u8BB8\u7684\u76EE\u6807\u4E5F\u53EF\u76F4\u63A5\u6388\u6743\u3002\u8BBE\u7F6E\u540E\u8BA9 Agent \u91CD\u8BD5\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u91CD\u653E\u4E4B\u524D\u7684\u52A8\u4F5C\u3002" }),
+            apps.map((app) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-actions", children: [
               /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { style: { flex: 1 }, children: app.label }),
-              s.alwaysAllowApps.some((a) => a.key === app.key) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u59CB\u7EC8\u5141\u8BB8" }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+              view.session.policy === "full" && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u968F\u5B8C\u5168\u6743\u9650\u5141\u8BB8" }),
+              view.session.policy !== "full" && !s.alwaysAllowApps.some((a) => a.key === app.key) && (view.session.apps.some((a) => a.key === app.key) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u672C\u4F1A\u8BDD\u5DF2\u5141\u8BB8" }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
                 "button",
                 {
                   style: controlStyle,
-                  disabled: busy,
+                  disabled: busy || view.session.paused || !s.desktop,
+                  onClick: () => void act({ action: "allow-app", key: app.key }),
+                  children: "\u672C\u4F1A\u8BDD\u5141\u8BB8"
+                }
+              )),
+              s.alwaysAllowApps.some((a) => a.key === app.key) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u59CB\u7EC8\u5141\u8BB8" }) : view.session.policy !== "full" ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+                "button",
+                {
+                  style: controlStyle,
+                  disabled: busy || view.session.paused || !s.desktop,
                   onClick: () => void act({ action: "always-allow-app", key: app.key, label: app.label }),
                   children: "\u8BBE\u4E3A\u59CB\u7EC8\u5141\u8BB8"
                 }
-              )
+              ) : null
             ] }, app.key)),
-            view.session.sites.map((site) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-actions", children: [
+            sites.map((site) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-actions", children: [
               /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { style: { flex: 1 }, children: site }),
-              s.alwaysAllowSites.includes(site) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u59CB\u7EC8\u5141\u8BB8" }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+              view.session.policy === "full" && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u968F\u5B8C\u5168\u6743\u9650\u5141\u8BB8" }),
+              view.session.policy !== "full" && !s.alwaysAllowSites.includes(site) && (view.session.sites.includes(site) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u672C\u4F1A\u8BDD\u5DF2\u5141\u8BB8" }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
                 "button",
                 {
                   style: controlStyle,
-                  disabled: busy,
+                  disabled: busy || view.session.paused || s.browser === "off",
+                  onClick: () => void act({ action: "allow-site", site }),
+                  children: "\u672C\u4F1A\u8BDD\u5141\u8BB8"
+                }
+              )),
+              s.alwaysAllowSites.includes(site) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u59CB\u7EC8\u5141\u8BB8" }) : view.session.policy !== "full" ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+                "button",
+                {
+                  style: controlStyle,
+                  disabled: busy || view.session.paused || s.browser === "off",
                   onClick: () => void act({ action: "always-allow-site", site }),
                   children: "\u8BBE\u4E3A\u59CB\u7EC8\u5141\u8BB8"
                 }
-              )
+              ) : null
             ] }, site))
           ] }),
           (s.alwaysAllowApps.length > 0 || s.alwaysAllowSites.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { style: { ...cardStyle, margin: "12px 0" }, children: [

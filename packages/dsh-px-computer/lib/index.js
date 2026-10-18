@@ -555,12 +555,24 @@ var LOG_LIMIT = 200;
 var MEDIA = /* @__PURE__ */ new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 var SessionStates = class {
   grants = /* @__PURE__ */ new Map();
+  observed = /* @__PURE__ */ new Map();
   foreground = /* @__PURE__ */ new Map();
   logs = /* @__PURE__ */ new Map();
   paused = /* @__PURE__ */ new Set();
   running = /* @__PURE__ */ new Map();
   granted(sessionId, key) {
     return this.grants.get(sessionId)?.has(key) ?? false;
+  }
+  /** Only identities validated by the desktop/site policy may be offered for manual consent. */
+  observe(sessionId, key, label) {
+    const map = this.observed.get(sessionId) ?? /* @__PURE__ */ new Map();
+    map.delete(key);
+    if (map.size >= 200) map.delete(map.keys().next().value);
+    map.set(key, label);
+    this.observed.set(sessionId, map);
+  }
+  observedApps(sessionId) {
+    return [...this.observed.get(sessionId) ?? []].map(([key, label]) => ({ key, label }));
   }
   grant(sessionId, key, label = key) {
     const map = this.grants.get(sessionId) ?? /* @__PURE__ */ new Map();
@@ -670,6 +682,7 @@ var SessionStates = class {
   /** Drop everything a finished session owned. */
   forget(sessionId) {
     this.grants.delete(sessionId);
+    this.observed.delete(sessionId);
     this.revokeForeground(sessionId);
     this.logs.delete(sessionId);
     this.paused.delete(sessionId);
@@ -696,7 +709,7 @@ function refusalText(outcome, subject) {
   if (outcome === "cancelled") return `${subject}\u7684\u786E\u8BA4\u5DF2\u53D6\u6D88\uFF0C\u672A\u6267\u884C\u3002`;
   if (outcome === "unavailable")
     return `${subject}\u9700\u8981\u7528\u6237\u786E\u8BA4\uFF0C\u4F46\u5F53\u524D\u65E0\u6CD5\u663E\u793A\u786E\u8BA4\uFF08\u4F1A\u8BDD\u53EF\u80FD\u5904\u4E8E\u65E0\u4EBA\u503C\u5B88\u6A21\u5F0F\uFF09\u3002\u672A\u6267\u884C\uFF1B\u8BF7\u5728\u56DE\u590D\u4E2D\u8BF4\u660E\u5E76\u7B49\u5F85\u7528\u6237\u3002`;
-  return `\u7528\u6237\u6CA1\u6709\u5141\u8BB8${subject}\uFF08\u82E5\u4F1A\u8BDD\u5173\u95ED\u4E86\u786E\u8BA4\u63D0\u793A\uFF0C\u786E\u8BA4\u4F1A\u88AB\u81EA\u52A8\u62D2\u7EDD\uFF1B\u7528\u6237\u53EF\u5728\u300C\u7535\u8111\u64CD\u4F5C\u300D\u9762\u677F\u4E2D\u628A\u5E94\u7528\u6216\u7F51\u7AD9\u8BBE\u4E3A\u59CB\u7EC8\u5141\u8BB8\uFF09\u3002\u672A\u6267\u884C\uFF1B\u4E0D\u8981\u6362\u4E00\u79CD\u65B9\u5F0F\u7ED5\u8FC7\uFF0C\u8BF7\u5728\u56DE\u590D\u4E2D\u8BF4\u660E\u3002`;
+  return `\u7528\u6237\u6CA1\u6709\u5141\u8BB8${subject}\uFF0C\u672A\u6267\u884C\u3002\u5E94\u7528\u6216\u7F51\u7AD9\u7684\u666E\u901A\u8BBF\u95EE\u53EF\u7531\u7528\u6237\u5728\u300C\u7535\u8111\u64CD\u4F5C \u2192 \u5E94\u7528\u4E0E\u7F51\u7AD9\u6388\u6743\u300D\u4E2D\u5141\u8BB8\uFF1B\u5177\u4F53\u52A8\u4F5C\u88AB\u62D2\u7EDD\u65F6\u987B\u505C\u6B62\u3002\u4E0D\u8981\u628A\u53E3\u5934\u56DE\u590D\u5F53\u4F5C\u5DE5\u5177\u6388\u6743\uFF0C\u4E5F\u4E0D\u8981\u6362\u4E00\u79CD\u65B9\u5F0F\u7ED5\u8FC7\u3002`;
 }
 async function modelSeesImages(ctx, agent, signal) {
   if (!agent) return false;
@@ -2661,8 +2674,8 @@ function guidance(settings) {
 - \u9884\u7559\u6700\u7EC8\u89C2\u5BDF\uFF1A\u6709\u5DE5\u5177\u8C03\u7528\u6570\u91CF\u9650\u5236\u65F6\u63D0\u524D\u505C\u6B62\u65B0\u589E\u52A8\u4F5C\uFF0C\u786E\u8BA4\u6700\u540E\u72B6\u6001\u540E\u518D\u62A5\u544A\u3002\u628A\u5DF2\u6267\u884C\u3001\u5B9E\u9645\u5DF2\u89C2\u5BDF\u751F\u6548\u548C\u672A\u9A8C\u8BC1\u5206\u522B\u8BF4\u660E\u3002
 - \u4F7F\u7528\u539F\u751F PTC \u6A21\u5F0F\u65F6\uFF0C\u53EF\u7528\u751F\u6210 SDK \u987A\u5E8F await \u65E0\u9700\u4E2D\u95F4\u5224\u65AD\u7684\u77ED\u52A8\u4F5C\uFF0C\u518D\u8BFB\u53D6\u622A\u56FE\uFF1B\u6709\u4F9D\u8D56\u7684\u7535\u8111\u8F93\u5165\u4E0D\u8981 Promise.all\u3002\u4EFB\u4E00\u6B65\u5931\u8D25\u5C31\u505C\u6B62\u540E\u7EED\u8F93\u5165\uFF0C\u4E0D\u541E\u6389\u9519\u8BEF\u7EE7\u7EED\u64CD\u4F5C\u3002\u6301\u7EED\u8F93\u5165\u7684\u9F20\u6807\u6309\u4F4F\u5B57\u6BB5\u662F buttons\uFF0C\u76F8\u5BF9\u603B\u4F4D\u79FB\u5B57\u6BB5\u662F dx\u3001dy\uFF1B\u53C2\u6570\u4EE5\u5F53\u524D SDK \u58F0\u660E\u4E3A\u51C6\uFF0C\u4E0D\u731C\u6D4B\u6216\u5047\u8BBE\u4E0D\u5B58\u5728\u3002
 - \u52A8\u4F5C\u8D85\u65F6\u6216\u62A5\u9519\u65F6\u7ED3\u679C\u672A\u77E5\uFF1A\u5148\u91CD\u65B0\u89C2\u5BDF\uFF0C\u4E0D\u8981\u76F4\u63A5\u91CD\u590D\u6709\u526F\u4F5C\u7528\u7684\u52A8\u4F5C\u3002
-- \u684C\u9762\u6295\u9012\u6A21\u5F0F\uFF1A${settings.desktopForeground ? "\u6309\u672C\u4F1A\u8BDD\u4E0E\u5177\u4F53\u7A97\u53E3\u53D6\u5F97\u524D\u53F0\u63A7\u5236\u6388\u6743\u540E\uFF0C\u666E\u901A\u67E5\u770B\u3001\u70B9\u51FB\u3001\u8F93\u5165\u548C\u6309\u952E\u4E0D\u518D\u9010\u6B21\u8BE2\u95EE\uFF1B\u6682\u505C\u6216\u64A4\u9500\u540E\u987B\u91CD\u65B0\u6388\u6743\uFF0C\u5220\u9664\u3001\u53D1\u9001\u3001\u4ED8\u6B3E\u7B49\u654F\u611F\u52A8\u4F5C\u4ECD\u5355\u72EC\u786E\u8BA4" : "\u4EC5\u540E\u53F0\u64CD\u4F5C\uFF1B\u540E\u53F0\u4E0D\u53EF\u7528\u5C31\u505C\u6B62\uFF0C\u4E0D\u5F97\u6539\u7528 foreground \u6216\u5207\u5230\u524D\u53F0"}\u3002\u4E0D\u628A\u5DE5\u5177\u8FD4\u56DE\u6210\u529F\u5F53\u4F5C\u754C\u9762\u5DF2\u6539\u53D8\u3002\u6700\u5C0F\u5316\u3001\u906E\u6321\u548C\u9501\u5C4F\u662F\u4E0D\u540C\u72B6\u6001\u3002
-- \u9996\u6B21\u8BFB\u53D6\u6216\u64CD\u4F5C\u67D0\u4E2A\u5E94\u7528\uFF08\u4EE5\u53CA\u767B\u5F55\u6001\u6D4F\u89C8\u5668\u4E2D\u7684\u65B0\u7F51\u7AD9\uFF09\u4F1A\u8BF7\u7528\u6237\u5141\u8BB8\u3002\u88AB\u62D2\u7EDD\u5C31\u505C\u6B62\uFF0C\u4E0D\u8981\u6362\u5E94\u7528\u3001\u6362\u7A97\u53E3\u6216\u6362\u65B9\u5F0F\u7ED5\u8FC7\u3002
+- \u684C\u9762\u6295\u9012\u6A21\u5F0F\uFF1A${settings.desktopForeground ? "\u5141\u8BB8\u524D\u53F0\u64CD\u4F5C\uFF1B\u539F\u751F\u5B8C\u5168\u6743\u9650\u4F1A\u8BDD\u53EF\u76F4\u63A5\u63A7\u5236\u76EE\u6807\u7A97\u53E3\uFF0C\u5176\u4F59\u6A21\u5F0F\u6309\u4F1A\u8BDD\u548C\u5177\u4F53\u7A97\u53E3\u9996\u6B21\u786E\u8BA4\uFF1B\u666E\u901A\u67E5\u770B\u3001\u70B9\u51FB\u3001\u8F93\u5165\u548C\u6309\u952E\u4E0D\u9010\u6B21\u8BE2\u95EE\uFF0C\u5220\u9664\u3001\u53D1\u9001\u3001\u4ED8\u6B3E\u7B49\u654F\u611F\u52A8\u4F5C\u4ECD\u5355\u72EC\u786E\u8BA4" : "\u4EC5\u540E\u53F0\u64CD\u4F5C\uFF1B\u540E\u53F0\u4E0D\u53EF\u7528\u5C31\u505C\u6B62\uFF0C\u4E0D\u5F97\u6539\u7528 foreground \u6216\u5207\u5230\u524D\u53F0"}\u3002\u4E0D\u628A\u5DE5\u5177\u8FD4\u56DE\u6210\u529F\u5F53\u4F5C\u754C\u9762\u5DF2\u6539\u53D8\u3002\u6700\u5C0F\u5316\u3001\u906E\u6321\u548C\u9501\u5C4F\u662F\u4E0D\u540C\u72B6\u6001\u3002
+- \u666E\u901A\u5E94\u7528\u3001\u7F51\u7AD9\u4E0E\u7A97\u53E3\u8BBF\u95EE\u9075\u5FAA\u539F\u751F\u4F1A\u8BDD\u6743\u9650\u3002\u5B8C\u5168\u6743\u9650\u4E14\u80FD\u529B\u5DF2\u5F00\u542F\u65F6\u76F4\u63A5\u6267\u884C\uFF0C\u4E0D\u8981\u81EA\u884C\u518D\u95EE\u201C\u662F\u5426\u6388\u6743\u201D\uFF1B\u5176\u4ED6\u6A21\u5F0F\u9996\u6B21\u8BF7\u6C42\u539F\u751F\u786E\u8BA4\u3002\u672A\u83B7\u5141\u8BB8\u7684\u5E94\u7528\u6216\u7F51\u7AD9\u4F1A\u51FA\u73B0\u5728\u300C\u7535\u8111\u64CD\u4F5C \u2192 \u5E94\u7528\u4E0E\u7F51\u7AD9\u6388\u6743\u300D\uFF0C\u7528\u6237\u53EF\u9009\u62E9\u672C\u4F1A\u8BDD\u5141\u8BB8\u6216\u59CB\u7EC8\u5141\u8BB8\u3002\u4E0D\u8981\u8C0E\u79F0\u6309\u94AE\u5DF2\u70B9\u51FB\uFF0C\u4E5F\u4E0D\u8981\u628A\u7528\u6237\u53E3\u5934\u56DE\u590D\u5F53\u4F5C\u5DE5\u5177\u6388\u6743\u3002\u660E\u786E\u88AB\u62D2\u7EDD\u65F6\u505C\u6B62\uFF0C\u4E0D\u8981\u6362\u65B9\u5F0F\u7ED5\u8FC7\uFF1B\u654F\u611F\u52A8\u4F5C\u7684\u786E\u8BA4\u4E0D\u80FD\u7531\u666E\u901A\u8BBF\u95EE\u6388\u6743\u4EE3\u66FF\u3002
 
 ## \u5148\u786E\u8BA4\u518D\u6267\u884C
 \u4EE5\u4E0B\u52A8\u4F5C\u5728\u6267\u884C\u524D\u8C03\u7528 computer_confirm\uFF0C\u7528\u6237\u6279\u51C6\u540E\u624D\u505A\uFF0C\u6279\u51C6\u53EA\u5BF9\u63CF\u8FF0\u7684\u90A3\u4E00\u6B65\u6709\u6548\uFF1A\u5220\u9664\u6570\u636E\uFF08\u672C\u5730\u6216\u4E91\u7AEF\uFF09\uFF1B\u4EE3\u8868\u7528\u6237\u5BF9\u5916\u53D1\u9001\u3001\u53D1\u5E03\u3001\u8BC4\u8BBA\u3001\u70B9\u8D5E\u3001\u63D0\u4EA4\u8868\u5355\u6216\u9884\u7EA6\uFF1B\u4ED8\u6B3E\u3001\u4E0B\u5355\u3001\u8F6C\u8D26\u3001\u8BA2\u9605\u6216\u9000\u8BA2\uFF1B\u521B\u5EFA\u8D26\u53F7\u3001\u4FEE\u6539\u6743\u9650\u6216\u5171\u4EAB\u3001\u751F\u6210 API \u5BC6\u94A5\u3001\u5728\u6D4F\u89C8\u5668\u4FDD\u5B58\u5BC6\u7801\u6216\u94F6\u884C\u5361\uFF1B\u5B89\u88C5\u8F6F\u4EF6\u3001\u8FD0\u884C\u65B0\u4E0B\u8F7D\u7684\u7A0B\u5E8F\u3001\u5B89\u88C5\u6D4F\u89C8\u5668\u6269\u5C55\uFF1B\u4FEE\u6539 VPN\u3001\u7CFB\u7EDF\u5B89\u5168\u8BBE\u7F6E\u6216\u8D26\u6237\u5BC6\u7801\uFF1B\u5904\u7406\u9A8C\u8BC1\u7801\uFF1B\u533B\u7597\u76F8\u5173\u64CD\u4F5C\u3002
@@ -2676,6 +2689,26 @@ function guidance(settings) {
 
 ## \u505C\u6B62
 \u7528\u6237\u505C\u6B62\u6216\u6682\u505C\u540E\u4E0D\u518D\u64CD\u4F5C\u3002\u684C\u9762\u88AB\u9501\u5B9A\u65F6\u505C\u6B62\u5E76\u8BF7\u7528\u6237\u89E3\u9501\u3002`;
+}
+
+// packages/dsh-px-computer/src/authorization.ts
+function accessPolicy(ctx, agent) {
+  if (!agent) return "unknown";
+  const get = (name2) => ctx.get?.(name2) ?? ctx[name2];
+  try {
+    const approval = get("approval")?.effectivePolicy?.(agent.session);
+    if (approval === "ask") return "ask";
+    if (approval !== "never") return "unknown";
+    const presets = get("permissionPresets");
+    const selected = presets?.current?.(agent.session);
+    if (selected && selected !== "auto" && selected !== "custom") {
+      const spec = presets.resolve(selected);
+      if (spec.sandbox === "danger-full-access" && spec.approval === "never") return "full";
+    }
+    return "never";
+  } catch {
+    return "unknown";
+  }
 }
 
 // packages/dsh-px-computer/src/tool-schema.ts
@@ -2809,6 +2842,7 @@ function apply(ctx) {
   const storage = join2(home, "storages", name);
   const settings = new SettingsStore(join2(storage, "settings.json"));
   const states = new SessionStates();
+  const observedAgents = /* @__PURE__ */ new Map();
   const snapshots = /* @__PURE__ */ new Map();
   const cursors = /* @__PURE__ */ new Set();
   const projections = /* @__PURE__ */ new WeakMap();
@@ -2866,9 +2900,17 @@ function apply(ctx) {
   const approval = () => ctx.get?.("approval") ?? ctx.approval;
   const sessionOf = (run) => {
     if (!run.agent) throw new ComputerUseRefusal("\u7535\u8111\u64CD\u4F5C\u53EA\u80FD\u5728\u4F1A\u8BDD\u4E2D\u4F7F\u7528");
+    observedAgents.set(run.agent.session.id, run.agent);
     return { agent: run.agent, id: run.agent.session.id };
   };
-  const askOrRefuse = async (run, signal, subject, zh, en, reason) => {
+  const askOrRefuse = async (run, signal, subject, zh, en, reason, ordinary = false) => {
+    signal.throwIfAborted();
+    const policy = accessPolicy(ctx, run.agent);
+    if (ordinary && policy === "full") return;
+    if (policy === "never" || policy === "full")
+      throw new AnswerRefusal(
+        ordinary ? `${subject}\u5C1A\u672A\u6388\u6743\uFF0C\u4E14\u672C\u4F1A\u8BDD\u5173\u95ED\u4E86\u786E\u8BA4\u63D0\u793A\u3002\u8BF7\u7528\u6237\u5728\u300C\u7535\u8111\u64CD\u4F5C \u2192 \u5E94\u7528\u4E0E\u7F51\u7AD9\u6388\u6743\u300D\u4E2D\u5141\u8BB8\u8BE5\u5E94\u7528\u6216\u7F51\u7AD9\uFF1B\u524D\u53F0\u7A97\u53E3\u9700\u5207\u6362\u5230\u53EF\u8BE2\u95EE\u7684\u4F1A\u8BDD\u6743\u9650\u540E\u91CD\u8BD5\u3002\u672A\u6267\u884C\uFF0C\u4E0D\u8981\u53CD\u590D\u7533\u8BF7\u3002` : `${subject}\u9700\u8981\u5355\u72EC\u786E\u8BA4\uFF0C\u4F46\u672C\u4F1A\u8BDD\u5173\u95ED\u4E86\u786E\u8BA4\u63D0\u793A\u3002\u8BF7\u7528\u6237\u5207\u6362\u5230\u53EF\u8BE2\u95EE\u7684\u4F1A\u8BDD\u6743\u9650\u540E\u91CD\u65B0\u7533\u8BF7\uFF0C\u6216\u4EB2\u81EA\u5B8C\u6210\u8FD9\u4E00\u6B65\u3002\u672A\u6267\u884C\uFF0C\u4E0D\u8981\u53CD\u590D\u7533\u8BF7\u3002`
+      );
     const outcome = await askUser(approval(), run, signal, { toolName: run.name ?? name, reason, zh, en });
     signal.throwIfAborted();
     if (outcome !== "allowed-once") throw new AnswerRefusal(refusalText(outcome, subject));
@@ -2958,6 +3000,7 @@ function apply(ctx) {
         onUnexpectedForeground: () => states.pause(s.id),
         onWindowGone: (pid, windowId) => states.forgetForegroundWindow(s.id, pid, windowId),
         authorizeForeground: async (display, target) => {
+          if (accessPolicy(ctx, s.agent) === "full") return;
           const app = appKey(target.identity);
           const key = `window|${target.pid}|${target.windowId}|${app}`;
           await states.authorizeForeground(
@@ -2972,7 +3015,8 @@ function apply(ctx) {
               `\u5728\u672C\u4F1A\u8BDD\u4E2D\u63A7\u5236\u300C${display}\u300D`,
               `\u5141\u8BB8\u672C\u4F1A\u8BDD\u8FDE\u7EED\u8BFB\u53D6\u548C\u64CD\u4F5C\u300C${display}\u300D\u8FD9\u4E2A\u7A97\u53E3\uFF0C\u5E76\u6309\u4EFB\u52A1\u9700\u8981\u5360\u7528\u524D\u53F0\u9F20\u6807\u548C\u952E\u76D8\u5417\uFF1F\u666E\u901A\u52A8\u4F5C\u4E0D\u518D\u9010\u6B21\u8BE2\u95EE\uFF1B\u6682\u505C\u3001\u64A4\u9500\u6216\u5173\u95ED\u684C\u9762\u80FD\u529B\u540E\u7ED3\u675F\u6388\u6743\u3002\u5220\u9664\u3001\u53D1\u9001\u3001\u4ED8\u6B3E\u7B49\u654F\u611F\u52A8\u4F5C\u4ECD\u5355\u72EC\u786E\u8BA4\u3002`,
               `Allow this session to read, operate and focus this exact "${display}" window? Ordinary actions will not ask again. Pause, revoke or disable desktop control to end the grant. Sensitive actions still need confirmation.`,
-              "computer use: session window control"
+              "computer use: session window control",
+              true
             )
           );
         },
@@ -2980,14 +3024,17 @@ function apply(ctx) {
         env: process.env,
         authorize: async (window2, display, target) => {
           const key = appKey(window2);
+          states.observe(s.id, key, display);
           if (states.granted(s.id, key) || settings.alwaysAllowsApp(key)) return;
+          if (accessPolicy(ctx, s.agent) === "full") return;
           await askOrRefuse(
             run,
             signal,
             `\u64CD\u4F5C\u300C${display}\u300D`,
             `\u5141\u8BB8 DSH \u5728\u672C\u4F1A\u8BDD\u4E2D\u8BFB\u53D6\u548C\u64CD\u4F5C\u300C${display}\u300D\u5417\uFF1F${settings.read().desktopForeground ? "\u5305\u62EC\u6309\u4EFB\u52A1\u9700\u8981\u5360\u7528\u8FD9\u4E2A\u7A97\u53E3\u7684\u524D\u53F0\u9F20\u6807\u548C\u952E\u76D8\u3002" : ""}\u4E4B\u540E\u666E\u901A\u64CD\u4F5C\u4E0D\u518D\u9010\u6B21\u8BE2\u95EE\uFF1B\u5220\u9664\u3001\u53D1\u9001\u3001\u4ED8\u6B3E\u7B49\u654F\u611F\u52A8\u4F5C\u4ECD\u4F1A\u5355\u72EC\u786E\u8BA4\u3002`,
             `Allow DSH to read and operate "${display}" in this session? ${settings.read().desktopForeground ? "This includes focusing this window for mouse and keyboard actions. " : ""}Ordinary operations will not ask again; sensitive actions still ask separately.`,
-            `computer use: app access ${window2.appName}`
+            `computer use: app access ${window2.appName}`,
+            true
           );
           states.grant(s.id, key, display);
           if (settings.read().desktopForeground && target)
@@ -3001,13 +3048,16 @@ function apply(ctx) {
             `\u542F\u52A8\u300C${display}\u300D`,
             confirm ? `\u5373\u5C06${confirm}\uFF1A${display}\u3002\u5141\u8BB8\u5417\uFF1F` : `\u5141\u8BB8 DSH \u542F\u52A8\u300C${display}\u300D\u5E76\u5728\u672C\u4F1A\u8BDD\u4E2D\u8FDE\u7EED\u64CD\u4F5C\u5B83\u521B\u5EFA\u7684\u7A97\u53E3\u5417\uFF1F\u8FD9\u53EF\u80FD\u5360\u7528\u524D\u53F0\u9F20\u6807\u548C\u952E\u76D8\uFF0C\u666E\u901A\u64CD\u4F5C\u4E0D\u518D\u9010\u6B21\u8BE2\u95EE\u3002`,
             confirm ? `About to ${LAUNCH_REASON_EN[confirm] ?? "run a program"}: ${display}. Allow?` : `Allow DSH to launch "${display}" and control its new windows in this session, including foreground mouse and keyboard actions?`,
-            `computer use: launch ${display}`
+            `computer use: launch ${display}`,
+            !confirm
           );
           states.grant(s.id, key);
         },
         grantLaunched: (windows2, allowForeground) => {
           for (const window2 of windows2) {
             const key = appKey(window2), label2 = appLabel(window2);
+            states.observe(s.id, key, label2);
+            if (accessPolicy(ctx, s.agent) === "full") continue;
             states.grant(s.id, key, label2);
             if (allowForeground)
               states.grantForeground(s.id, `window|${window2.pid}|${window2.windowId}|${key}`, key, label2);
@@ -3046,14 +3096,17 @@ function apply(ctx) {
       const where = current.browser === "extension" ? ["\u4F60\u7684 Edge", "your Edge"] : ["PX \u4E13\u7528\u6D4F\u89C8\u5668", "the PX browser profile"];
       const siteGranted = (target) => states.granted(s.id, `site|${target}`) || settings.alwaysAllowsSite(target);
       const grantSite = async (target, landed2) => {
+        states.observe(s.id, `site|${target}`, target);
         if (siteGranted(target)) return;
+        if (accessPolicy(ctx, s.agent) === "full") return;
         await askOrRefuse(
           run,
           signal,
           `\u8BBF\u95EE ${target}`,
           landed2 ? `\u9875\u9762\u5DF2\u8DF3\u8F6C\u5230 ${target}\u3002\u5141\u8BB8 DSH \u5728\u672C\u4F1A\u8BDD\u4E2D\u4F7F\u7528${where[0]}\u8BFB\u53D6\u5E76\u64CD\u4F5C\u8FD9\u4E2A\u7F51\u7AD9\u5417\uFF1F\u8BE5\u6D4F\u89C8\u5668\u53EF\u80FD\u4FDD\u7559\u4F60\u7684\u767B\u5F55\u72B6\u6001\u3002` : `\u5141\u8BB8 DSH \u5728\u672C\u4F1A\u8BDD\u4E2D\u4F7F\u7528${where[0]}\u8BBF\u95EE\u5E76\u64CD\u4F5C ${target} \u5417\uFF1F\u8BE5\u6D4F\u89C8\u5668\u53EF\u80FD\u4FDD\u7559\u4F60\u7684\u767B\u5F55\u72B6\u6001\u3002`,
           `${landed2 ? `The page moved to ${target}. ` : ""}Allow DSH to open and operate ${target} in ${where[1]} for this session? It may hold your signed-in state.`,
-          `browser use: site access ${target}`
+          `browser use: site access ${target}`,
+          true
         );
         states.grant(s.id, `site|${target}`, target);
       };
@@ -3075,7 +3128,8 @@ function apply(ctx) {
       if (result.isError) throw new Error(text2 || `${spec.name} \u5931\u8D25`);
       const landed = siteOf(pageUrlOf(text2) ?? "");
       if (signedIn && landed && landed !== site) await grantSite(landed, true);
-      if (signedIn && spec.name === "browser_tabs") text2 = redactTabTitles(text2, siteGranted);
+      if (signedIn && spec.name === "browser_tabs" && accessPolicy(ctx, s.agent) !== "full")
+        text2 = redactTabTitles(text2, siteGranted);
       const sees = browserImages(result).length > 0 && await modelSeesImages(ctx, s.agent, signal);
       return {
         text: text2 || "\u5B8C\u6210\u3002",
@@ -3203,6 +3257,7 @@ function apply(ctx) {
         await driver.releaseSession(id).catch(() => void 0);
         snapshots.delete(id);
         states.forget(id);
+        observedAgents.delete(id);
       },
       "computer: session"
     );
@@ -3266,13 +3321,21 @@ function apply(ctx) {
           if (typeof body.headless === "boolean") next.headless = body.headless;
         });
         return;
+      case "allow-app":
       case "always-allow-app": {
+        if (states.isPaused(sessionId) || !available("desktop", settings.read()))
+          throw new SettingsError("\u8BF7\u5148\u5F00\u542F\u684C\u9762\u80FD\u529B\u5E76\u6062\u590D\u672C\u4F1A\u8BDD\uFF0C\u518D\u6388\u4E88\u5E94\u7528\u6743\u9650");
         const key = String(body.key ?? "");
-        if (!states.grantedApps(sessionId).some((app) => app.key === key) || key.startsWith("launch|") || key.startsWith("site|"))
-          throw new SettingsError("\u53EA\u80FD\u628A\u672C\u4F1A\u8BDD\u5DF2\u5141\u8BB8\u7684\u5E94\u7528\u8BBE\u4E3A\u59CB\u7EC8\u5141\u8BB8");
+        const observed = states.observedApps(sessionId).find((app) => app.key === key);
+        if (!observed || key.startsWith("launch|") || key.startsWith("site|"))
+          throw new SettingsError("\u53EA\u80FD\u5141\u8BB8\u672C\u4F1A\u8BDD\u5DF2\u8BC6\u522B\u4E14\u53EF\u64CD\u4F5C\u7684\u5E94\u7528");
+        if (body.action === "allow-app") {
+          states.grant(sessionId, key, observed.label);
+          return;
+        }
         settings.change(body.revision, (next) => {
           if (!next.alwaysAllowApps.some((app) => app.key === key))
-            next.alwaysAllowApps.push({ key, label: String(body.label ?? key).slice(0, 300) });
+            next.alwaysAllowApps.push({ key, label: observed.label.slice(0, 300) });
         });
         return;
       }
@@ -3286,10 +3349,17 @@ function apply(ctx) {
         states.pause(sessionId);
         await driver.releaseSession(sessionId);
         return;
+      case "allow-site":
       case "always-allow-site": {
+        if (states.isPaused(sessionId) || !available("browser", settings.read()))
+          throw new SettingsError("\u8BF7\u5148\u5F00\u542F\u6D4F\u89C8\u5668\u80FD\u529B\u5E76\u6062\u590D\u672C\u4F1A\u8BDD\uFF0C\u518D\u6388\u4E88\u7F51\u7AD9\u6743\u9650");
         const site = String(body.site ?? "");
-        if (!states.grantedApps(sessionId).some((app) => app.key === `site|${site}`))
-          throw new SettingsError("\u53EA\u80FD\u628A\u672C\u4F1A\u8BDD\u5DF2\u5141\u8BB8\u7684\u7F51\u7AD9\u8BBE\u4E3A\u59CB\u7EC8\u5141\u8BB8");
+        if (!states.observedApps(sessionId).some((app) => app.key === `site|${site}`))
+          throw new SettingsError("\u53EA\u80FD\u5141\u8BB8\u672C\u4F1A\u8BDD\u5DF2\u8BC6\u522B\u7684\u7F51\u7AD9");
+        if (body.action === "allow-site") {
+          states.grant(sessionId, `site|${site}`, site);
+          return;
+        }
         settings.change(body.revision, (next) => {
           if (!next.alwaysAllowSites.includes(site)) next.alwaysAllowSites.push(site);
         });
@@ -3328,6 +3398,9 @@ function apply(ctx) {
     return {
       settings: current,
       session: {
+        policy: accessPolicy(ctx, observedAgents.get(sessionId)),
+        observedApps: states.observedApps(sessionId).filter((app) => !app.key.startsWith("site|")),
+        observedSites: states.observedApps(sessionId).filter((app) => app.key.startsWith("site|")).map((app) => app.label),
         paused: states.isPaused(sessionId),
         apps: granted.filter((app) => !app.key.startsWith("launch|") && !app.key.startsWith("site|")),
         foreground: states.foregroundWindows(sessionId),

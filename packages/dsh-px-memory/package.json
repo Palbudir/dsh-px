@@ -1,6 +1,6 @@
 {
   "name": "dsh-px-memory",
-  "version": "0.7.0-alpha.1",
+  "version": "0.7.1-alpha.1",
   "private": true,
   "type": "module",
   "description": "固定人格、接续会话与可追溯经历",

@@ -24,6 +24,7 @@ import { DESKTOP_TOOLS, DesktopDriver, driverSession, runDesktopTool, type Deskt
 import { DriverProcess } from './driver-process'
 import computerDriver from '../../../config/computer-driver.json'
 import { guidance } from './guidance'
+import { accessPolicy } from './authorization'
 import { enforceToolBounds, nativeToolParameters } from './tool-schema'
 import { appKey, appLabel, type WindowIdentity } from './policy'
 import {
@@ -77,6 +78,7 @@ export function apply(ctx: any): void {
   const storage = join(home, 'storages', name)
   const settings = new SettingsStore(join(storage, 'settings.json'))
   const states = new SessionStates()
+  const observedAgents = new Map<string, Agent>()
   const snapshots = new Map<string, Map<string, string>>()
   const cursors = new Set<string>()
   const projections = new WeakMap<object, ContentBlock[]>()
@@ -136,6 +138,7 @@ export function apply(ctx: any): void {
 
   const sessionOf = (run: ToolRun): { agent: Agent; id: string } => {
     if (!run.agent) throw new ComputerUseRefusal('电脑操作只能在会话中使用')
+    observedAgents.set(run.agent.session.id, run.agent)
     return { agent: run.agent, id: run.agent.session.id }
   }
 
@@ -146,8 +149,20 @@ export function apply(ctx: any): void {
     subject: string,
     zh: string,
     en: string,
-    reason: string
+    reason: string,
+    ordinary = false
   ) => {
+    signal.throwIfAborted()
+    const policy = accessPolicy(ctx, run.agent)
+    // Full access is the user's native session choice. It grants ordinary use only while the
+    // corresponding capability/delivery mode is enabled; never persist it across preset changes.
+    if (ordinary && policy === 'full') return
+    if (policy === 'never' || policy === 'full')
+      throw new AnswerRefusal(
+        ordinary
+          ? `${subject}尚未授权，且本会话关闭了确认提示。请用户在「电脑操作 → 应用与网站授权」中允许该应用或网站；前台窗口需切换到可询问的会话权限后重试。未执行，不要反复申请。`
+          : `${subject}需要单独确认，但本会话关闭了确认提示。请用户切换到可询问的会话权限后重新申请，或亲自完成这一步。未执行，不要反复申请。`
+      )
     const outcome = await askUser(approval(), run, signal, { toolName: run.name ?? name, reason, zh, en })
     signal.throwIfAborted()
     if (outcome !== 'allowed-once') throw new AnswerRefusal(refusalText(outcome, subject))
@@ -265,6 +280,7 @@ export function apply(ctx: any): void {
           onUnexpectedForeground: () => states.pause(s.id),
           onWindowGone: (pid, windowId) => states.forgetForegroundWindow(s.id, pid, windowId),
           authorizeForeground: async (display, target) => {
+            if (accessPolicy(ctx, s.agent) === 'full') return
             const app = appKey(target.identity)
             const key = `window|${target.pid}|${target.windowId}|${app}`
             await states.authorizeForeground(s.id, key, app, display, signal, () =>
@@ -274,7 +290,8 @@ export function apply(ctx: any): void {
                 `在本会话中控制「${display}」`,
                 `允许本会话连续读取和操作「${display}」这个窗口，并按任务需要占用前台鼠标和键盘吗？普通动作不再逐次询问；暂停、撤销或关闭桌面能力后结束授权。删除、发送、付款等敏感动作仍单独确认。`,
                 `Allow this session to read, operate and focus this exact "${display}" window? Ordinary actions will not ask again. Pause, revoke or disable desktop control to end the grant. Sensitive actions still need confirmation.`,
-                'computer use: session window control'
+                'computer use: session window control',
+                true
               )
             )
           },
@@ -282,14 +299,17 @@ export function apply(ctx: any): void {
           env: process.env,
           authorize: async (window: WindowIdentity, display: string, target) => {
             const key = appKey(window)
+            states.observe(s.id, key, display)
             if (states.granted(s.id, key) || settings.alwaysAllowsApp(key)) return
+            if (accessPolicy(ctx, s.agent) === 'full') return
             await askOrRefuse(
               run,
               signal,
               `操作「${display}」`,
               `允许 DSH 在本会话中读取和操作「${display}」吗？${settings.read().desktopForeground ? '包括按任务需要占用这个窗口的前台鼠标和键盘。' : ''}之后普通操作不再逐次询问；删除、发送、付款等敏感动作仍会单独确认。`,
               `Allow DSH to read and operate "${display}" in this session? ${settings.read().desktopForeground ? 'This includes focusing this window for mouse and keyboard actions. ' : ''}Ordinary operations will not ask again; sensitive actions still ask separately.`,
-              `computer use: app access ${window.appName}`
+              `computer use: app access ${window.appName}`,
+              true
             )
             states.grant(s.id, key, display)
             if (settings.read().desktopForeground && target)
@@ -307,7 +327,8 @@ export function apply(ctx: any): void {
               confirm
                 ? `About to ${LAUNCH_REASON_EN[confirm] ?? 'run a program'}: ${display}. Allow?`
                 : `Allow DSH to launch "${display}" and control its new windows in this session, including foreground mouse and keyboard actions?`,
-              `computer use: launch ${display}`
+              `computer use: launch ${display}`,
+              !confirm
             )
             states.grant(s.id, key)
           },
@@ -315,6 +336,8 @@ export function apply(ctx: any): void {
             for (const window of windows) {
               const key = appKey(window),
                 label = appLabel(window)
+              states.observe(s.id, key, label)
+              if (accessPolicy(ctx, s.agent) === 'full') continue
               states.grant(s.id, key, label)
               if (allowForeground)
                 states.grantForeground(s.id, `window|${window.pid}|${window.windowId}|${key}`, key, label)
@@ -362,7 +385,9 @@ export function apply(ctx: any): void {
         const siteGranted = (target: string): boolean =>
           states.granted(s.id, `site|${target}`) || settings.alwaysAllowsSite(target)
         const grantSite = async (target: string, landed: boolean): Promise<void> => {
+          states.observe(s.id, `site|${target}`, target)
           if (siteGranted(target)) return
+          if (accessPolicy(ctx, s.agent) === 'full') return
           await askOrRefuse(
             run,
             signal,
@@ -371,7 +396,8 @@ export function apply(ctx: any): void {
               ? `页面已跳转到 ${target}。允许 DSH 在本会话中使用${where[0]}读取并操作这个网站吗？该浏览器可能保留你的登录状态。`
               : `允许 DSH 在本会话中使用${where[0]}访问并操作 ${target} 吗？该浏览器可能保留你的登录状态。`,
             `${landed ? `The page moved to ${target}. ` : ''}Allow DSH to open and operate ${target} in ${where[1]} for this session? It may hold your signed-in state.`,
-            `browser use: site access ${target}`
+            `browser use: site access ${target}`,
+            true
           )
           states.grant(s.id, `site|${target}`, target)
         }
@@ -394,7 +420,8 @@ export function apply(ctx: any): void {
         // A click or redirect can land on another site; its content is withheld until that site is granted.
         const landed = siteOf(pageUrlOf(text) ?? '')
         if (signedIn && landed && landed !== site) await grantSite(landed, true)
-        if (signedIn && spec.name === 'browser_tabs') text = redactTabTitles(text, siteGranted)
+        if (signedIn && spec.name === 'browser_tabs' && accessPolicy(ctx, s.agent) !== 'full')
+          text = redactTabTitles(text, siteGranted)
         const sees = browserImages(result).length > 0 && (await modelSeesImages(ctx, s.agent, signal))
         return {
           text: text || '完成。',
@@ -537,6 +564,7 @@ export function apply(ctx: any): void {
         await driver.releaseSession(id).catch(() => undefined)
         snapshots.delete(id)
         states.forget(id)
+        observedAgents.delete(id)
       },
       'computer: session'
     )
@@ -603,17 +631,21 @@ export function apply(ctx: any): void {
           if (typeof body.headless === 'boolean') next.headless = body.headless
         })
         return
+      case 'allow-app':
       case 'always-allow-app': {
+        if (states.isPaused(sessionId) || !available('desktop', settings.read()))
+          throw new SettingsError('请先开启桌面能力并恢复本会话，再授予应用权限')
         const key = String(body.key ?? '')
-        if (
-          !states.grantedApps(sessionId).some((app) => app.key === key) ||
-          key.startsWith('launch|') ||
-          key.startsWith('site|')
-        )
-          throw new SettingsError('只能把本会话已允许的应用设为始终允许')
+        const observed = states.observedApps(sessionId).find((app) => app.key === key)
+        if (!observed || key.startsWith('launch|') || key.startsWith('site|'))
+          throw new SettingsError('只能允许本会话已识别且可操作的应用')
+        if (body.action === 'allow-app') {
+          states.grant(sessionId, key, observed.label)
+          return
+        }
         settings.change(body.revision, (next) => {
           if (!next.alwaysAllowApps.some((app) => app.key === key))
-            next.alwaysAllowApps.push({ key, label: String(body.label ?? key).slice(0, 300) })
+            next.alwaysAllowApps.push({ key, label: observed.label.slice(0, 300) })
         })
         return
       }
@@ -627,10 +659,17 @@ export function apply(ctx: any): void {
         states.pause(sessionId)
         await driver.releaseSession(sessionId)
         return
+      case 'allow-site':
       case 'always-allow-site': {
+        if (states.isPaused(sessionId) || !available('browser', settings.read()))
+          throw new SettingsError('请先开启浏览器能力并恢复本会话，再授予网站权限')
         const site = String(body.site ?? '')
-        if (!states.grantedApps(sessionId).some((app) => app.key === `site|${site}`))
-          throw new SettingsError('只能把本会话已允许的网站设为始终允许')
+        if (!states.observedApps(sessionId).some((app) => app.key === `site|${site}`))
+          throw new SettingsError('只能允许本会话已识别的网站')
+        if (body.action === 'allow-site') {
+          states.grant(sessionId, `site|${site}`, site)
+          return
+        }
         settings.change(body.revision, (next) => {
           if (!next.alwaysAllowSites.includes(site)) next.alwaysAllowSites.push(site)
         })
@@ -670,6 +709,12 @@ export function apply(ctx: any): void {
     return {
       settings: current,
       session: {
+        policy: accessPolicy(ctx, observedAgents.get(sessionId)),
+        observedApps: states.observedApps(sessionId).filter((app) => !app.key.startsWith('site|')),
+        observedSites: states
+          .observedApps(sessionId)
+          .filter((app) => app.key.startsWith('site|'))
+          .map((app) => app.label),
         paused: states.isPaused(sessionId),
         apps: granted.filter((app) => !app.key.startsWith('launch|') && !app.key.startsWith('site|')),
         foreground: states.foregroundWindows(sessionId),

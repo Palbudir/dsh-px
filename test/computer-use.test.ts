@@ -40,6 +40,43 @@ import { McpStdioClient } from '../packages/dsh-px-computer/src/mcp-stdio'
 import { SettingsStore } from '../packages/dsh-px-computer/src/settings'
 import { ComputerUseRefusal, SessionStates } from '../packages/dsh-px-computer/src/runtime'
 import { apply } from '../packages/dsh-px-computer/src/index'
+import { accessPolicy } from '../packages/dsh-px-computer/src/authorization'
+
+test('recently re-observed refused targets remain available when the bounded consent list fills', () => {
+  const states = new SessionStates()
+  for (let i = 0; i < 200; i++) states.observe('s', `site|target-${i}`, `target-${i}`)
+  states.observe('s', 'site|target-0', 'target-0 refreshed')
+  states.observe('s', 'new-app', 'New app')
+  assert.equal(states.observedApps('s').length, 200)
+  assert.ok(states.observedApps('s').some((target) => target.label === 'target-0 refreshed'))
+  assert.ok(!states.observedApps('s').some((target) => target.key === 'site|target-1'))
+  states.forget('s')
+  assert.deepEqual(states.observedApps('s'), [])
+})
+
+test('ordinary full access requires the effective native full-access bundle and never trusts Auto or missing metadata', () => {
+  const agent = { session: { id: 's', header: { id: 's' } } }
+  let approval = 'never',
+    sandbox = 'danger-full-access',
+    selected = 'danger-full-access'
+  const ctx = {
+    approval: { effectivePolicy: () => approval },
+    permissionPresets: { current: () => selected, resolve: () => ({ sandbox, approval }) }
+  }
+  assert.equal(accessPolicy(ctx, agent), 'full')
+  sandbox = 'workspace-write'
+  assert.equal(accessPolicy(ctx, agent), 'never')
+  approval = 'ask'
+  assert.equal(accessPolicy(ctx, agent), 'ask')
+  approval = 'never'
+  sandbox = 'danger-full-access'
+  selected = 'auto'
+  assert.equal(accessPolicy(ctx, agent), 'never')
+  selected = 'custom'
+  assert.equal(accessPolicy(ctx, agent), 'never')
+  assert.equal(accessPolicy({}, agent), 'unknown')
+  assert.equal(accessPolicy(ctx), 'unknown')
+})
 
 const contract = JSON.parse(readFileSync('test/fixtures/cua-driver-0.28.0-tools.json', 'utf8'))
 
@@ -1048,7 +1085,7 @@ test(
 )
 
 test(
-  'panel actions cannot pre-authorize apps the session never granted, and pause blocks tools',
+  'panel actions cannot authorize identities the session never observed, and pause blocks tools',
   { skip: process.platform !== 'win32' },
   async (t) => {
     const { tools, request } = hostFixture(t)
@@ -1109,6 +1146,121 @@ const agentRun = (name: string, callId: string) => ({
   name,
   callId
 })
+
+test(
+  'full-access ordinary browsing skips approval without leaving grants after downgrade',
+  { skip: process.platform !== 'win32' || !noRealDrivers },
+  async (t) => {
+    let policy = 'never',
+      sandbox = 'danger-full-access'
+    const approval = Object.assign(fakeApproval(), { effectivePolicy: () => policy })
+    const permissionPresets = { current: () => sandbox, resolve: () => ({ sandbox, approval: policy }) }
+    const { tools, request } = hostFixture(t, { approval, permissionPresets })
+    await request('POST', { action: 'settings', revision: 0, browser: 'profile' })
+    const navigate = tools.get('browser_navigate')
+    await assert.rejects(
+      navigate.execute({ url: 'http://localhost:8123/' }, agentRun('browser_navigate', 'full')),
+      /@playwright\/mcp/
+    )
+    assert.equal(approval.pending.length, 0)
+    let view = (await request('GET')).json
+    assert.equal(view.session.policy, 'full')
+    assert.deepEqual(view.session.sites, [])
+    assert.deepEqual(view.session.observedSites, ['localhost'])
+    policy = 'ask'
+    sandbox = 'workspace-write'
+    const waiting = navigate.execute(
+      { url: 'http://localhost:8123/' },
+      agentRun('browser_navigate', 'downgraded')
+    )
+    await until(() => approval.pending.length === 1)
+    approval.pending[0].answer('rejected')
+    await assert.rejects(waiting, /用户没有允许/)
+    assert.deepEqual((await request('GET')).json.session.sites, [])
+    policy = 'never'
+    sandbox = 'danger-full-access'
+    await assert.rejects(
+      tools
+        .get('computer_confirm')
+        .execute({ action: '发送消息', category: 'send' }, agentRun('computer_confirm', 'sensitive')),
+      /单独确认/
+    )
+    assert.equal(approval.pending.length, 1)
+    await request('POST', { action: 'pause' })
+    await assert.rejects(
+      navigate.execute({ url: 'http://localhost:8123/' }, agentRun('browser_navigate', 'paused')),
+      /暂停/
+    )
+    view = (await request('GET')).json
+    await request('POST', { action: 'settings', revision: view.settings.revision, browser: 'off' })
+    await request('POST', { action: 'resume' })
+    await assert.rejects(
+      navigate.execute({ url: 'http://localhost:8123/' }, agentRun('browser_navigate', 'disabled')),
+      /关闭/
+    )
+  }
+)
+
+test(
+  'a first refused site can be allowed in the panel without a prior successful grant',
+  { skip: process.platform !== 'win32' || !noRealDrivers },
+  async (t) => {
+    const approval = Object.assign(fakeApproval(), { effectivePolicy: () => 'never' })
+    const permissionPresets = { current: () => 'custom' }
+    const { tools, request } = hostFixture(t, { approval, permissionPresets })
+    let view = (await request('POST', { action: 'settings', revision: 0, browser: 'profile' })).json
+    const navigate = tools.get('browser_navigate')
+    await assert.rejects(
+      navigate.execute({ url: 'http://localhost:8123/' }, agentRun('browser_navigate', 'first')),
+      /应用与网站授权/
+    )
+    assert.equal(approval.pending.length, 0)
+    view = (await request('GET')).json
+    assert.deepEqual(view.session.observedSites, ['localhost'])
+    assert.deepEqual(view.session.sites, [])
+    await request('POST', { action: 'pause' })
+    for (const action of ['allow-site', 'always-allow-site'])
+      assert.equal(
+        (await request('POST', { action, site: 'localhost', revision: view.settings.revision })).status,
+        400
+      )
+    view = (await request('POST', { action: 'settings', revision: view.settings.revision, browser: 'off' }))
+      .json
+    await request('POST', { action: 'resume' })
+    assert.equal((await request('POST', { action: 'allow-site', site: 'localhost' })).status, 400)
+    view = (
+      await request('POST', { action: 'settings', revision: view.settings.revision, browser: 'profile' })
+    ).json
+    assert.equal(
+      (
+        await request('POST', {
+          action: 'always-allow-site',
+          site: 'not-observed.example',
+          revision: view.settings.revision
+        })
+      ).status,
+      400
+    )
+    assert.equal((await request('POST', { action: 'allow-site', site: 'localhost' })).status, 200)
+    await assert.rejects(
+      navigate.execute({ url: 'http://localhost:8123/' }, agentRun('browser_navigate', 'allowed')),
+      /@playwright\/mcp/
+    )
+    view = (
+      await request('POST', {
+        action: 'always-allow-site',
+        site: 'localhost',
+        revision: view.settings.revision
+      })
+    ).json
+    assert.deepEqual(view.settings.alwaysAllowSites, ['localhost'])
+    await request('POST', { action: 'forget-site', site: 'localhost', revision: view.settings.revision })
+    await assert.rejects(
+      navigate.execute({ url: 'http://localhost:8123/' }, agentRun('browser_navigate', 'revoked')),
+      /尚未授权/
+    )
+  }
+)
 
 test(
   'delivery-mode changes cancel a pending launch grant and a late approval cannot restore it',
