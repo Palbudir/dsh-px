@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import { syncBuiltinESMExports } from 'node:module'
 import { createHash } from 'node:crypto'
 import {
   existsSync,
@@ -24,6 +26,20 @@ const hash = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
 const bytes = Buffer.from('complete release archive fixture\x00\xff')
 
 test('binary downloads preserve bytes and reject failed, timed out or oversized child output', async (t) => {
+  const original = fs.createWriteStream
+  const streams: Array<ReturnType<typeof fs.createWriteStream>> = []
+  fs.createWriteStream = (...args) => {
+    const stream = original(...args)
+    streams.push(stream)
+    return stream
+  }
+  syncBuiltinESMExports()
+  t.after(() => {
+    fs.createWriteStream = original
+    syncBuiltinESMExports()
+  })
+  const closed = () =>
+    assert.equal(streams.at(-1)?.closed, true, 'Settlement must release the output file handle')
   const f = fixture(t)
   assert.equal(
     await downloadCommand(
@@ -33,18 +49,22 @@ test('binary downloads preserve bytes and reject failed, timed out or oversized 
     ),
     3
   )
+  closed()
   assert.deepEqual(readFileSync(f.archive), Buffer.from([0, 255, 1]))
   await assert.rejects(downloadCommand(process.execPath, ['-e', 'process.exit(7)'], f.archive), /failed/)
+  closed()
   await assert.rejects(
     downloadCommand(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], f.archive, { timeout: 20 }),
     /timed out/
   )
+  closed()
   await assert.rejects(
     downloadCommand(process.execPath, ['-e', 'process.stdout.write(Buffer.alloc(100))'], f.archive, {
       maxBytes: 10
     }),
     /limit/
   )
+  closed()
 })
 
 function fixture(t: TestContext) {

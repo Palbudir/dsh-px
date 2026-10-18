@@ -31,14 +31,18 @@ export function downloadCommand(exe, args, file, options = {}) {
     const fail = (error) => {
       if (!failed) {
         failed = true
+        child.stdout.unpipe(stream)
         child.kill()
-        stream.destroy()
         clearTimeout(timer)
-        reject(error)
+        // destroy() is asynchronous, including when open() has not finished yet.
+        // Settle only after close so an immediate retry or cleanup cannot race the old file handle.
+        if (stream.closed) reject(error)
+        else stream.once('close', () => reject(error))
+        stream.destroy()
       }
     }
     const finish = () => {
-      if (ended && code === 0 && !failed) {
+      if (ended && stream.closed && code === 0 && !failed) {
         clearTimeout(timer)
         resolve(bytes)
       }
@@ -56,6 +60,7 @@ export function downloadCommand(exe, args, file, options = {}) {
       ended = true
       finish()
     })
+    stream.once('close', finish)
     child.once('close', (status) => {
       code = status
       if (status !== 0) fail(new Error(`Artifact download command failed (${status})`))
