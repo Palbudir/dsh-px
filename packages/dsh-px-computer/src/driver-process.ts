@@ -241,7 +241,10 @@ process.on('message', async message => {
   } catch (error) {
     const detail = error?.inner?.message ?? error?.inner?.reason ?? error?.message ?? error;
     const code = typeof error?.inner?.errorCode === 'string' ? error.inner.errorCode : typeof error?.code === 'string' ? error.code : undefined;
-    const sessionEnded = /^session 'sdk-[0-9a-f-]+' has ended; tool call '[a-z_]+' was rejected\./.test(String(detail));
+    const ended = /^session '([^']+)' has ended; tool call '([a-z_]+)' was rejected\./.exec(String(detail));
+    let requestedSession;try{requestedSession=JSON.parse(message.args).session;}catch{}
+    const sessionEnded = !!ended && ended[2] === message.name &&
+      (/^sdk-[0-9a-f-]+$/.test(ended[1]) || typeof requestedSession === 'string' && ended[1] === requestedSession);
     process.send?.({ id: message.id, error: (code ? '[' + code + '] ' : '') + String(detail).slice(0,2000), driverErrorCode: code, sessionEnded });
   }
 });

@@ -44,6 +44,7 @@ export class DesktopDriver {
   private driver: Promise<DriverLike> | undefined
   private tail: Promise<unknown> = Promise.resolve()
   private epoch = 0
+  private scopeEpochs = new Map<string, number>()
   constructor(private readonly load: LoadDriver) {}
 
   call(
@@ -53,15 +54,24 @@ export class DesktopDriver {
     scope?: string
   ): Promise<DriverResult> {
     const epoch = this.epoch
+    const scopeEpoch = scope ? (this.scopeEpochs.get(scope) ?? 0) : 0
     const run = this.tail.then(async () => {
       signal.throwIfAborted()
       if (epoch !== this.epoch) throw new Error('驱动已关闭，已排队的动作未执行；请重新观察后发起')
+      if (scope && name !== '__px_close_scope' && scopeEpoch !== (this.scopeEpochs.get(scope) ?? 0))
+        throw new Error('本会话的控制已结束或恢复，原排队动作未执行；请重新观察后发起')
       this.driver ??= this.load().catch((error) => {
         this.driver = undefined
         throw new Error(`无法加载 Cua Driver：${error instanceof Error ? error.message : String(error)}`)
       })
       const driver = await this.driver
-      const raw = await driver.callTool(name, JSON.stringify(args), { signal, scope })
+      // Cua keeps explicit input-session tombstones across SDK connections. Reconnecting alone
+      // cannot reuse the ended px-* label, including for the first read after a panel resume.
+      const currentArgs =
+        scopeEpoch > 0 && typeof args.session === 'string'
+          ? { ...args, session: `${args.session}-r${scopeEpoch}` }
+          : args
+      const raw = await driver.callTool(name, JSON.stringify(currentArgs), { signal, scope })
       return JSON.parse(raw.rawJson) as DriverResult
     })
     this.tail = run.catch(() => undefined)
@@ -75,6 +85,9 @@ export class DesktopDriver {
     return { call: (name, args, signal) => this.call(name, args, signal, scope) }
   }
   async releaseSession(scope: string): Promise<void> {
+    // Invalidate queued work before closing the old connection. Only an explicit release/resume
+    // advances this identity; an expired call is never automatically retried or revived.
+    this.scopeEpochs.set(scope, (this.scopeEpochs.get(scope) ?? 0) + 1)
     if (this.driver) await this.call('__px_close_scope', {}, AbortSignal.timeout(3000), scope)
   }
 
@@ -82,6 +95,7 @@ export class DesktopDriver {
     const pending = this.driver
     const calls = this.tail
     this.epoch++
+    this.scopeEpochs.clear()
     this.driver = undefined
     if (pending) await (await pending.catch(() => undefined))?.shutdown().catch(() => undefined)
     await calls.catch(() => undefined)

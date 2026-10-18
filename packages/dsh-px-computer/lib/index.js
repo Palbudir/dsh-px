@@ -1554,17 +1554,22 @@ var DesktopDriver = class {
   driver;
   tail = Promise.resolve();
   epoch = 0;
+  scopeEpochs = /* @__PURE__ */ new Map();
   call(name2, args, signal, scope) {
     const epoch = this.epoch;
+    const scopeEpoch = scope ? this.scopeEpochs.get(scope) ?? 0 : 0;
     const run = this.tail.then(async () => {
       signal.throwIfAborted();
       if (epoch !== this.epoch) throw new Error("\u9A71\u52A8\u5DF2\u5173\u95ED\uFF0C\u5DF2\u6392\u961F\u7684\u52A8\u4F5C\u672A\u6267\u884C\uFF1B\u8BF7\u91CD\u65B0\u89C2\u5BDF\u540E\u53D1\u8D77");
+      if (scope && name2 !== "__px_close_scope" && scopeEpoch !== (this.scopeEpochs.get(scope) ?? 0))
+        throw new Error("\u672C\u4F1A\u8BDD\u7684\u63A7\u5236\u5DF2\u7ED3\u675F\u6216\u6062\u590D\uFF0C\u539F\u6392\u961F\u52A8\u4F5C\u672A\u6267\u884C\uFF1B\u8BF7\u91CD\u65B0\u89C2\u5BDF\u540E\u53D1\u8D77");
       this.driver ??= this.load().catch((error) => {
         this.driver = void 0;
         throw new Error(`\u65E0\u6CD5\u52A0\u8F7D Cua Driver\uFF1A${error instanceof Error ? error.message : String(error)}`);
       });
       const driver = await this.driver;
-      const raw = await driver.callTool(name2, JSON.stringify(args), { signal, scope });
+      const currentArgs = scopeEpoch > 0 && typeof args.session === "string" ? { ...args, session: `${args.session}-r${scopeEpoch}` } : args;
+      const raw = await driver.callTool(name2, JSON.stringify(currentArgs), { signal, scope });
       return JSON.parse(raw.rawJson);
     });
     this.tail = run.catch(() => void 0);
@@ -1577,12 +1582,14 @@ var DesktopDriver = class {
     return { call: (name2, args, signal) => this.call(name2, args, signal, scope) };
   }
   async releaseSession(scope) {
+    this.scopeEpochs.set(scope, (this.scopeEpochs.get(scope) ?? 0) + 1);
     if (this.driver) await this.call("__px_close_scope", {}, AbortSignal.timeout(3e3), scope);
   }
   async close() {
     const pending = this.driver;
     const calls = this.tail;
     this.epoch++;
+    this.scopeEpochs.clear();
     this.driver = void 0;
     if (pending) await (await pending.catch(() => void 0))?.shutdown().catch(() => void 0);
     await calls.catch(() => void 0);
@@ -2409,7 +2416,10 @@ process.on('message', async message => {
   } catch (error) {
     const detail = error?.inner?.message ?? error?.inner?.reason ?? error?.message ?? error;
     const code = typeof error?.inner?.errorCode === 'string' ? error.inner.errorCode : typeof error?.code === 'string' ? error.code : undefined;
-    const sessionEnded = /^session 'sdk-[0-9a-f-]+' has ended; tool call '[a-z_]+' was rejected\./.test(String(detail));
+    const ended = /^session '([^']+)' has ended; tool call '([a-z_]+)' was rejected\./.exec(String(detail));
+    let requestedSession;try{requestedSession=JSON.parse(message.args).session;}catch{}
+    const sessionEnded = !!ended && ended[2] === message.name &&
+      (/^sdk-[0-9a-f-]+$/.test(ended[1]) || typeof requestedSession === 'string' && ended[1] === requestedSession);
     process.send?.({ id: message.id, error: (code ? '[' + code + '] ' : '') + String(detail).slice(0,2000), driverErrorCode: code, sessionEnded });
   }
 });
