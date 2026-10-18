@@ -3,6 +3,10 @@ import { pathToFileURL } from 'node:url'
 import { gt } from 'semver'
 import type { PackDeployment, PackReceipt } from './pack-deployment'
 
+// Native drivers make current Packs larger than the former 32 MiB download cap.
+// Keep an independent allocation limit, then enforce the exact signed size while streaming.
+export const MAX_PACK_DOWNLOAD_BYTES = 128 * 1024 * 1024
+
 // Electron is supplied by the pinned native entry, keeping this overlay on the same module instance.
 export function createPackUpdateWindow(
   electron: any,
@@ -76,7 +80,7 @@ export function createPackUpdateWindow(
           const { done, value } = await reader.read()
           if (done) break
           count += value.byteLength
-          if (count > limit) throw Error('下载内容超出签名清单大小')
+          if (count > limit) throw Error(progress ? '下载内容超出签名清单大小' : '更新清单超过 64 KiB 限制')
           chunks.push(Buffer.from(value))
           progress?.(count)
         }
@@ -98,6 +102,8 @@ export function createPackUpdateWindow(
         await fetchBytes('https://raw.githubusercontent.com/Palbudir/dsh-px/updates/pack-preview.json', 65536)
       ).toString('utf8')
       const manifest = deployment().manifest(signed)
+      if (manifest.files[0].size > MAX_PACK_DOWNLOAD_BYTES)
+        throw Error('插件包超过本版客户端支持的 128 MiB 上限，请先升级桌面客户端。')
       const current = deployment().read().active?.version ?? deployment().options.bundled.version
       pack = {
         phase: gt(manifest.version, current) ? 'available' : 'current',
@@ -110,7 +116,7 @@ export function createPackUpdateWindow(
         file = manifest.files[0]
       const began = Date.now()
       pack = { phase: 'downloading', version: manifest.version, total: file.size, transferred: 0, percent: 0 }
-      const bytes = await fetchBytes(file.url, Math.min(file.size, 32 * 1024 * 1024), (n) => {
+      const bytes = await fetchBytes(file.url, file.size, (n) => {
         pack = {
           ...pack,
           transferred: n,
