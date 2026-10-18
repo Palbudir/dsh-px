@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { promises as fs } from 'node:fs'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { FOUNDATION_PLUGINS } from '../shared/distribution'
+import { renameWithRetry } from './native-atomic'
 
 const hash = (bytes: string | Buffer): string => createHash('sha256').update(bytes).digest('hex')
 const foundation = new Set<string>(['dsh-px-core', ...FOUNDATION_PLUGINS])
@@ -99,17 +100,17 @@ export async function materializePackRuntime(options: {
   const base = join(cache, 'host-' + hostKey.slice(0, 20))
   const baseIdentity = { schemaVersion: 1, hostKey }
   if (!(await ready(base, baseIdentity))) {
-    if (await present(base)) await fs.rename(base, base + '.incomplete-' + randomUUID())
+    if (await present(base)) renameWithRetry(base, base + '.incomplete-' + randomUUID())
     const staging = join(cache, '.host-' + randomUUID())
     await fs.mkdir(staging)
     await copyFiles(options.bundledRuntime, staging, await entries(options.bundledRuntime, true), false)
     await fs.writeFile(join(staging, marker), JSON.stringify(baseIdentity))
-    await fs.rename(staging, base)
+    renameWithRetry(staging, base)
   }
   const view = join(cache, 'pack-' + hostKey.slice(0, 12) + '-' + options.packSha256.slice(0, 20))
   const identity = { ...baseIdentity, packSha256: options.packSha256, version: options.version }
   if (await ready(view, identity)) return view
-  if (await present(view)) await fs.rename(view, view + '.incomplete-' + randomUUID())
+  if (await present(view)) renameWithRetry(view, view + '.incomplete-' + randomUUID())
   const staging = join(cache, '.pack-' + randomUUID())
   await fs.mkdir(staging)
   await copyFiles(base, staging, await entries(base), true)
@@ -136,7 +137,7 @@ export async function materializePackRuntime(options: {
   native.dependencies = { ...native.dependencies, 'dsh-px-core': options.version, ...core.dependencies }
   await fs.writeFile(anchor, JSON.stringify(native, null, 2) + '\n')
   await fs.writeFile(join(staging, marker), JSON.stringify(identity))
-  await fs.rename(staging, view)
+  renameWithRetry(staging, view)
   return view
 }
 
