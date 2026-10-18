@@ -249,9 +249,10 @@ internal static class WindowsInput {
         try {
             SetProcessDpiAwarenessContext(new IntPtr(-4));
             if (args.Length == 3 && args[0] == "--magnify") { Emit(WindowsView.Magnify(args[1], args[2])); return 0; }
-            if (args.Length == 2 && args[0] == "--pointer") {
+            if (args.Length == 2 && (args[0] == "--pointer" || args[0] == "--point")) {
                 if (args[1].Length > 8192) throw new ArgumentException("Pointer request too large");
-                Emit(WindowsView.MovePointer(Json.Deserialize<PointerRequest>(Encoding.UTF8.GetString(Convert.FromBase64String(args[1])))));
+                var request = Json.Deserialize<PointerRequest>(Encoding.UTF8.GetString(Convert.FromBase64String(args[1])));
+                Emit(args[0] == "--point" ? WindowsView.CheckPoint(request) : WindowsView.MovePointer(request));
                 return 0;
             }
             if (args.Length == 1 && args[0] == "--foreground") { Emit(new { window_id = GetForegroundWindow().ToInt64() }); return 0; }

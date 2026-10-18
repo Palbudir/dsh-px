@@ -83,7 +83,7 @@ internal static class WindowsView {
             return new { width = width, height = height, source_width = image.Width, source_height = image.Height };
         }
     }
-    internal static object MovePointer(PointerRequest request) {
+    private static Point CheckedPoint(PointerRequest request) {
         if (request == null || request.pid <= 0 || request.window_id <= 0 || request.image_width <= 0 || request.image_height <= 0 ||
             double.IsNaN(request.x) || double.IsNaN(request.y) || double.IsInfinity(request.x) || double.IsInfinity(request.y) ||
             request.x < 0 || request.y < 0 || request.x >= request.image_width || request.y >= request.image_height)
@@ -101,6 +101,14 @@ internal static class WindowsView {
         var point = new Point { x = bounds.left + 1 + (int)(request.x * ratio), y = bounds.top + 1 + (int)(request.y * ratio) };
         if (GetAncestor(WindowFromPoint(point), 2) != window || GetForegroundWindow() != window)
             throw new InvalidOperationException("The pointer target is covered or no longer belongs to the foreground window. " + PointDiagnostic(point.x, point.y));
+        return point;
+    }
+    internal static object CheckPoint(PointerRequest request) {
+        Point point = CheckedPoint(request);
+        return new { checked_x = point.x, checked_y = point.y };
+    }
+    internal static object MovePointer(PointerRequest request) {
+        Point point = CheckedPoint(request);
         if (!SetCursorPos(point.x, point.y)) throw new InvalidOperationException("Pointer movement failed: " + Marshal.GetLastWin32Error());
         Point actual; GetCursorPos(out actual);
         return new { requested_x = point.x, requested_y = point.y, actual_x = actual.x, actual_y = actual.y };

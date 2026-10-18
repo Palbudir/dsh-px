@@ -797,7 +797,7 @@ export async function runDesktopTool(
       if (input?.source === 'window_thread_imm_compatibility') {
         const native = input.ime_native_reported
         notes.push(
-          `输入法兼容接口报告：${input.ime_open_reported === false ? '关闭' : native === true ? '本地文字转换模式（字母键可能进入组词）' : native === false ? '非本地文字转换模式' : '模式未知'}。这不是按键已到达应用的证明；不同输入法可能不支持此查询。`
+          `输入法兼容接口报告：${input.ime_open_reported === false ? '开关位为关闭' : native === true ? '本地文字转换位为开（字母键可能进入组词）' : native === false ? '本地文字转换位为关' : '模式未知'}。这只是输入法报告的状态，不保证当前实际效果，也不是按键已到达应用的证明；不同输入法可能不支持此查询。`
         )
       }
       notes.push('这是目标窗口截图，可能不包含输入法候选栏等独立浮层；前台窗口不等于每个坐标都可点击。')

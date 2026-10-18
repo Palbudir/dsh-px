@@ -289,10 +289,11 @@ function context(driver: DesktopDriver, overrides: Partial<DesktopContext> = {})
 const tool = (name: string) => DESKTOP_TOOLS.find((t) => t.name === name)!
 
 test('window observations distinguish reported IME modes from unknown and warn about omitted overlays', async () => {
-  for (const [native, expected] of [
-    [true, '本地文字转换模式（字母键可能进入组词）'],
-    [false, '非本地文字转换模式'],
-    [null, '模式未知']
+  for (const [open, native, expected] of [
+    [null, true, '本地文字转换位为开（字母键可能进入组词）'],
+    [true, false, '本地文字转换位为关'],
+    [null, null, '模式未知'],
+    [false, true, '开关位为关闭']
   ] as const) {
     const { driver, calls } = fakeDriver(
       [{ pid: 20, window_id: 2, app_name: 'java.exe', title: '3D view' }],
@@ -305,7 +306,7 @@ test('window observations distinguish reported IME modes from unknown and warn a
               current_desktop: true,
               input_state: {
                 source: 'window_thread_imm_compatibility',
-                ime_open_reported: null,
+                ime_open_reported: open,
                 ime_native_reported: native
               }
             }
@@ -318,7 +319,8 @@ test('window observations distinguish reported IME modes from unknown and warn a
     assert.ok(result.text.includes(expected))
     assert.match(result.text, /不是按键已到达应用的证明/)
     assert.match(result.text, /可能不包含输入法候选栏等独立浮层/)
-    assert.doesNotMatch(result.text, /报告：关闭/)
+    assert.match(result.text, /不保证当前实际效果/)
+    if (open !== false) assert.doesNotMatch(result.text, /开关位为关闭/)
     assert.ok(calls.every((call) => ['list_windows', 'get_window_state'].includes(call.name)))
   }
 })

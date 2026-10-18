@@ -2141,7 +2141,7 @@ async function runDesktopTool(tool, rawArgs, c) {
       if (input?.source === "window_thread_imm_compatibility") {
         const native = input.ime_native_reported;
         notes.push(
-          `\u8F93\u5165\u6CD5\u517C\u5BB9\u63A5\u53E3\u62A5\u544A\uFF1A${input.ime_open_reported === false ? "\u5173\u95ED" : native === true ? "\u672C\u5730\u6587\u5B57\u8F6C\u6362\u6A21\u5F0F\uFF08\u5B57\u6BCD\u952E\u53EF\u80FD\u8FDB\u5165\u7EC4\u8BCD\uFF09" : native === false ? "\u975E\u672C\u5730\u6587\u5B57\u8F6C\u6362\u6A21\u5F0F" : "\u6A21\u5F0F\u672A\u77E5"}\u3002\u8FD9\u4E0D\u662F\u6309\u952E\u5DF2\u5230\u8FBE\u5E94\u7528\u7684\u8BC1\u660E\uFF1B\u4E0D\u540C\u8F93\u5165\u6CD5\u53EF\u80FD\u4E0D\u652F\u6301\u6B64\u67E5\u8BE2\u3002`
+          `\u8F93\u5165\u6CD5\u517C\u5BB9\u63A5\u53E3\u62A5\u544A\uFF1A${input.ime_open_reported === false ? "\u5F00\u5173\u4F4D\u4E3A\u5173\u95ED" : native === true ? "\u672C\u5730\u6587\u5B57\u8F6C\u6362\u4F4D\u4E3A\u5F00\uFF08\u5B57\u6BCD\u952E\u53EF\u80FD\u8FDB\u5165\u7EC4\u8BCD\uFF09" : native === false ? "\u672C\u5730\u6587\u5B57\u8F6C\u6362\u4F4D\u4E3A\u5173" : "\u6A21\u5F0F\u672A\u77E5"}\u3002\u8FD9\u53EA\u662F\u8F93\u5165\u6CD5\u62A5\u544A\u7684\u72B6\u6001\uFF0C\u4E0D\u4FDD\u8BC1\u5F53\u524D\u5B9E\u9645\u6548\u679C\uFF0C\u4E5F\u4E0D\u662F\u6309\u952E\u5DF2\u5230\u8FBE\u5E94\u7528\u7684\u8BC1\u660E\uFF1B\u4E0D\u540C\u8F93\u5165\u6CD5\u53EF\u80FD\u4E0D\u652F\u6301\u6B64\u67E5\u8BE2\u3002`
         );
       }
       notes.push("\u8FD9\u662F\u76EE\u6807\u7A97\u53E3\u622A\u56FE\uFF0C\u53EF\u80FD\u4E0D\u5305\u542B\u8F93\u5165\u6CD5\u5019\u9009\u680F\u7B49\u72EC\u7ACB\u6D6E\u5C42\uFF1B\u524D\u53F0\u7A97\u53E3\u4E0D\u7B49\u4E8E\u6BCF\u4E2A\u5750\u6807\u90FD\u53EF\u70B9\u51FB\u3002");
@@ -2251,7 +2251,17 @@ async function magnifyZoom(raw, args) {
     await writeFile(input,Buffer.from(image.data,'base64'),{flag:'wx'});
     const size = await helperCall(['--magnify',input,output],true);
     image.data = (await readFile(output)).toString('base64'); image.mimeType = 'image/png';
-    zooms.set(args.pid,{scope:args.__px_scope,windowId:args.window_id,width:size.width,height:size.height,scaleX:size.width/size.source_width,scaleY:size.height/size.source_height});
+    // Pinned Cua 0.28 crop_png_to_jpeg: native-pixel region, 20% padding, integer
+    // clipping, then width <= 500. Validate the actual crop size before using this
+    // mapping for a read-only foreground hit test; native Cua still sends the click.
+    const frame=observedFrame(args), nativeWidth=frame.bounds.width-2, nativeHeight=frame.bounds.height-2;
+    const ratio=nativeWidth/frame.width, x1=args.x1*ratio, y1=args.y1*ratio, x2=args.x2*ratio, y2=args.y2*ratio;
+    const padX=Math.max(1,x2-x1)*0.2,padY=Math.max(1,y2-y1)*0.2;
+    const originX=Math.min(nativeWidth,Math.floor(Math.max(0,x1-padX))),originY=Math.min(nativeHeight,Math.floor(Math.max(0,y1-padY)));
+    const cropWidth=Math.max(1,Math.min(nativeWidth,Math.floor(x2+padX))-originX),cropHeight=Math.max(1,Math.min(nativeHeight,Math.floor(y2+padY))-originY);
+    const expectedWidth=Math.min(500,cropWidth),expectedHeight=cropWidth>500?Math.max(1,Math.round(cropHeight*500/cropWidth)):cropHeight;
+    if(size.source_width!==expectedWidth || size.source_height!==expectedHeight)throw Error('原生放大图尺寸与固定版本坐标契约不符，请重新观察并使用完整截图');
+    zooms.set(args.pid,{scope:args.__px_scope,windowId:args.window_id,width:size.width,height:size.height,scaleX:size.width/size.source_width,scaleY:size.height/size.source_height,originX,originY,scaleInv:cropWidth/size.source_width});
     raw.content = raw.content.filter(item=>item.type !== 'text');
     raw.content.push({type:'text',text:'已放大到 '+size.width+'×'+size.height+'。需要点击此图时使用 computer_click(from_zoom:true)，坐标按本张放大图；仅最近一次放大有效。原生截图范围含边缘留白，勿自行猜偏移。'});
     raw.structuredContent = {...raw.structuredContent,width:size.width,height:size.height,mime_type:'image/png',format:'png'};
@@ -2259,6 +2269,7 @@ async function magnifyZoom(raw, args) {
   } finally {if(!directory.startsWith(temporaryRoot+sep))throw Error('Invalid zoom cleanup path');await rm(directory,{recursive:true,force:true});}
 }
 async function dispatch(name, args, json, id, client) {
+  let clickPoint;
   if (native?.input && name === 'move_pointer') {
     if(args.delivery_mode !== 'foreground')throw Error('真实指针移动必须显式使用 foreground');
     const frame=observedFrame(args);
@@ -2280,7 +2291,20 @@ async function dispatch(name, args, json, id, client) {
     if(args.element_index !== undefined || !Number.isFinite(args.x) || !Number.isFinite(args.y) || args.x<0 || args.y<0 || args.x>=zoom.width || args.y>=zoom.height)
       throw Error('放大图点击必须使用图内的 x/y，不能同时指定元素编号');
     const input=JSON.parse(json);input.x=args.x/zoom.scaleX;input.y=args.y/zoom.scaleY;json=JSON.stringify(input);
+    clickPoint={x:zoom.originX+input.x*zoom.scaleInv,y:zoom.originY+input.y*zoom.scaleInv};
   } else if (native?.input && ['click','scroll','drag'].includes(name) && (args.x !== undefined || args.from_x !== undefined) && args.element_index === undefined) observedFrame(args);
+  if(native?.input && name==='click' && args.delivery_mode==='foreground' && args.element_index===undefined) {
+    const frame=observedFrame(args),ratio=(frame.bounds.width-2)/frame.width;
+    const point=clickPoint??{x:args.x*ratio,y:args.y*ratio};
+    zooms.delete(args.pid);
+    const state=await inspectWindow(args);
+    if(!state?.foreground) {
+      const activated=JSON.parse((await client.callTool('bring_to_front',JSON.stringify({pid:args.pid,window_id:args.window_id,session:args.session}))).rawJson);
+      if(activated.isError)throw Error('无法激活已授权目标窗口；点击未投递，请重新观察');
+    }
+    // Never treat an IME/overlay hit (even cloaked) as permission to click through.
+    await helperCall(['--point',Buffer.from(JSON.stringify({pid:args.pid,window_id:args.window_id,...point,image_width:frame.bounds.width-2,image_height:frame.bounds.height-2,window_width:frame.bounds.width,window_height:frame.bounds.height})).toString('base64')],true);
+  }
   if (['click','type_text','set_value','press_key','hotkey','scroll','drag','bring_to_front','invoke_menu','bounded_input'].includes(name)) {
     zooms.delete(args.pid);
     const previous=frames.get(args.pid);if(previous && (previous.scope !== args.__px_scope || previous.windowId !== args.window_id))frames.delete(args.pid);

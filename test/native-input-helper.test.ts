@@ -83,9 +83,12 @@ test(
     // Reuse the real image implementation; fake only window inspection, never inject OS input in unit tests.
     const helperSource = join(dir, 'view-helper.cs'),
       helper = join(dir, 'view-helper.exe')
+    const pointLog = join(dir, 'point.json'),
+      blockPoint = join(dir, 'point-block'),
+      clickLog = join(dir, 'click.log')
     writeFileSync(
       helperSource,
-      `using System;using System.Web.Script.Serialization;class ViewContractHelper{static void Main(string[] a){var j=new JavaScriptSerializer();if(a[0]=="--inspect")Console.WriteLine(j.Serialize(new{foreground=true,current_desktop=true,cloaked=0,bounds=new{left=0,top=0,right=4,bottom=3}}));else if(a[0]=="--magnify")Console.WriteLine(j.Serialize(WindowsView.Magnify(a[1],a[2])));else throw new Exception("Unexpected operation");}}`
+      `using System;using System.Web.Script.Serialization;class ViewContractHelper{static void Main(string[] a){var j=new JavaScriptSerializer();if(a[0]=="--inspect")Console.WriteLine(j.Serialize(new{foreground=true,current_desktop=true,cloaked=0,bounds=new{left=0,top=0,right=4,bottom=3}}));else if(a[0]=="--magnify")Console.WriteLine(j.Serialize(WindowsView.Magnify(a[1],a[2])));else if(a[0]=="--point"){System.IO.File.WriteAllText(${JSON.stringify(pointLog)},System.Text.Encoding.UTF8.GetString(Convert.FromBase64String(a[1])));if(System.IO.File.Exists(${JSON.stringify(blockPoint)})){Console.WriteLine(j.Serialize(new{error="synthetic overlay: point=(1,1) hit_window=9"}));Environment.Exit(1);}Console.WriteLine("{}");}else throw new Exception("Unexpected operation");}}`
     )
     execFileSync(
       compiler,
@@ -106,10 +109,10 @@ test(
     writeFileSync(dummy, 'verified fixture')
     writeFileSync(
       sdk,
-      `const image={type:'image',mimeType:'image/bmp',data:'${bitmap.toString('base64')}'};
+      `import{appendFileSync}from'node:fs';const image={type:'image',mimeType:'image/bmp',data:'${bitmap.toString('base64')}'};
       export const EmbeddedPermissionMode={Standard:0},EmbeddedDriverHostOptions={create:o=>o};
       export const EmbeddedCuaDriverHost={withOptions:()=>({async start(){return{socketPath:'private-test',driverVersion:'0.28.0',generation:'1'}},waitForExit:()=>new Promise(()=>{}),async stop(){}})};
-      export const CuaDriver={connect:()=>({async callTool(name,json){const args=JSON.parse(json);return{rawJson:JSON.stringify(name==='get_window_state'?{content:[image],structuredContent:{screenshot_width:2,screenshot_height:1,window_bounds:{x:0,y:0,width:4,height:3}}}:name==='zoom'?{content:[image],structuredContent:{width:2,height:1}}:{content:[],structuredContent:{args}})};},uniffiDestroy(){}})};`
+      export const CuaDriver={connect:()=>({async callTool(name,json){const args=JSON.parse(json);if(name==='click')appendFileSync(${JSON.stringify(clickLog)},'click;');return{rawJson:JSON.stringify(name==='get_window_state'?{content:[image],structuredContent:{screenshot_width:2,screenshot_height:1,window_bounds:{x:0,y:0,width:4,height:3}}}:name==='zoom'?{content:[image],structuredContent:{width:2,height:1}}:{content:[],structuredContent:{args}})};},uniffiDestroy(){}})};`
     )
     const sha = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex')
     const worker = new DriverProcess(pathToFileURL(sdk).href, () => {}, 5000, {
@@ -135,6 +138,22 @@ test(
     })
     assert.equal(clicked.structuredContent.args.x, 1)
     assert.equal(clicked.structuredContent.args.y, 0.5)
+    const checkedPoint = JSON.parse(readFileSync(pointLog, 'utf8'))
+    assert.equal(checkedPoint.x, 1)
+    assert.equal(checkedPoint.y, 0.5)
+    assert.equal(checkedPoint.image_width, 2)
+    const beforeBlockedClick = readFileSync(clickLog, 'utf8')
+    writeFileSync(blockPoint, 'blocked')
+    await assert.rejects(
+      call('click', { ...target, x: 1, y: 0, delivery_mode: 'foreground' }),
+      /synthetic overlay: point=.*hit_window=/
+    )
+    assert.equal(
+      readFileSync(clickLog, 'utf8'),
+      beforeBlockedClick,
+      'A refused point must never reach native click'
+    )
+    rmSync(blockPoint)
     await assert.rejects(
       call('click', { ...target, x: 4, y: 2, from_zoom: true, delivery_mode: 'foreground' }),
       /放大视图已失效/
