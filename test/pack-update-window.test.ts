@@ -37,6 +37,11 @@ function harness(size: number, actualSize = size, current = '0.7.0-alpha.1') {
       stageCalls++
       received = bytes.length
       if (received !== size) throw Error('Signed archive size mismatch')
+      assert.equal(
+        bytes.every((byte) => byte === 0x5a),
+        true,
+        'stream chunks are copied intact'
+      )
       return { version: '0.7.2-alpha.1' }
     }
   }
@@ -63,7 +68,7 @@ function harness(size: number, actualSize = size, current = '0.7.0-alpha.1') {
                 }
                 const chunk = Math.min(remaining, 1024 * 1024)
                 remaining -= chunk
-                controller.enqueue(new Uint8Array(chunk))
+                controller.enqueue(new Uint8Array(chunk).fill(0x5a))
               },
               cancel() {
                 cancelled = true
@@ -104,11 +109,18 @@ test('oversized supported download is cancelled at signed size and never staged'
   assert.equal(h.counts().stageCalls, 0)
   assert.equal(h.counts().cancelled, true)
 })
+test('expanded allocation cap accepts a Pack above 128 MiB and offers the 512 MiB boundary', async () => {
+  const h = harness(129 * 1024 * 1024)
+  await h.call('check-pack')
+  assert.equal((await h.call('download-pack')).pack.phase, 'ready')
+  assert.equal(h.counts().received, 129 * 1024 * 1024)
+  assert.equal((await harness(MAX_PACK_DOWNLOAD_BYTES).call('check-pack')).pack.phase, 'available')
+})
 test('unsupported Pack size is reported before downloading, rather than as a signature mismatch', async () => {
   const h = harness(MAX_PACK_DOWNLOAD_BYTES + 1)
   const result = await h.call('check-pack')
   assert.equal(result.pack.phase, 'error')
-  assert.match(result.pack.message, /128 MiB/)
+  assert.match(result.pack.message, /512 MiB/)
   assert.equal(h.counts().downloadCalls, 0)
 })
 

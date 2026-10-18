@@ -36,6 +36,15 @@ function tar(files: Record<string, Buffer | string>): Buffer {
   }
   return gzipSync(Buffer.concat([...chunks, Buffer.alloc(1024)]))
 }
+test('Pack extraction accepts a valid tar above the former 128 MiB ceiling', () => {
+  const size = 129 * 1024 * 1024
+  const files = unpackFiles(tar({ 'large.bin': Buffer.alloc(size, 0x5a) }))
+  assert.equal(files.get('large.bin')?.length, size)
+  assert.equal(
+    files.get('large.bin')?.every((byte) => byte === 0x5a),
+    true
+  )
+})
 function fixture(t: any, initialFeatures: readonly string[] = FEATURE_BUNDLES) {
   const root = mkdtempSync(join(tmpdir(), 'px-deployment-'))
   t.after(() => rmSync(root, { recursive: true, force: true }))
