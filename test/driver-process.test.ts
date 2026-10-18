@@ -123,6 +123,98 @@ test('close stops a blocked driver rather than waiting for the call to finish', 
   assert.equal(driver.loaded, false)
 })
 
+test('explicit resume replaces ended named sessions before the first read, without replay or cross-session changes', async (t) => {
+  const { worker } = fixture(
+    t,
+    3000,
+    `
+    let next=0;const ended=new Set();const started=[];
+    export const CuaDriver={async create(){const id=++next;return {
+      uniffiDestroy(){},
+      async callTool(name,json){
+        const args=JSON.parse(json);
+        if(name==='start_session'){ended.delete(args.session);started.push(args.session);}
+        else if(name==='end_session')ended.add(args.session);
+        else if(ended.has(args.session)){
+          const error=Error('DriverError.Tool');
+          error.inner={errorCode:'1',message:"session '"+args.session+"' has ended; tool call '"+name+"' was rejected. Call start_session to revive it."};throw error;
+        }
+        return {rawJson:JSON.stringify({content:[],structuredContent:{id,args,started:[...started]}})};
+      }
+    }}};
+  `
+  )
+  const driver = new DesktopDriver(async () => worker)
+  const a = driver.forSession('session-a'),
+    b = driver.forSession('session-b')
+  await a.call('start_session', { session: 'px-aaaa' }, signal())
+  const initial = await a.call('get_window_state', { session: 'px-aaaa' }, signal())
+  const other = await b.call('get_window_state', { session: 'px-bbbb' }, signal())
+  await a.call('end_session', { session: 'px-aaaa' }, signal())
+  await assert.rejects(
+    a.call('get_window_state', { session: 'px-aaaa' }, signal()),
+    (e: any) => e.code === 'driver_session_ended'
+  )
+  // A fresh SDK connection alone does not remove the service's named-session tombstone.
+  await driver.releaseSession('session-a')
+  const resumed = await a.call('get_window_state', { session: 'px-aaaa' }, signal())
+  assert.notEqual(resumed.structuredContent.id, initial.structuredContent.id)
+  assert.notEqual(resumed.structuredContent.args.session, initial.structuredContent.args.session)
+  assert.deepEqual(resumed.structuredContent.started, ['px-aaaa'])
+  const later = await a.call('start_session', { session: 'px-aaaa' }, signal())
+  assert.equal(later.structuredContent.args.session, resumed.structuredContent.args.session)
+  const unchanged = await b.call('get_window_state', { session: 'px-bbbb' }, signal())
+  assert.equal(unchanged.structuredContent.id, other.structuredContent.id)
+  assert.equal(unchanged.structuredContent.args.session, other.structuredContent.args.session)
+  await driver.close()
+})
+
+test('release rejects previously queued work only for its scope', async () => {
+  let unblock!: () => void, entered!: () => void
+  const gate = new Promise<void>((resolve) => {
+    unblock = resolve
+  })
+  const started = new Promise<void>((resolve) => {
+    entered = resolve
+  })
+  const calls: string[] = []
+  const driver = new DesktopDriver(async () => ({
+    async callTool(name, json) {
+      if (name === 'hold-other') {
+        entered()
+        await gate
+      }
+      calls.push(name)
+      return { rawJson: JSON.stringify({ structuredContent: JSON.parse(json) }) }
+    },
+    async shutdown() {}
+  }))
+  const active = driver.call('hold-other', {}, signal(), 'other')
+  await started
+  const stale = assert.rejects(driver.call('click', { session: 'px-a' }, signal(), 'a'), /原排队动作未执行/)
+  const released = driver.releaseSession('a')
+  unblock()
+  await active
+  await stale
+  await released
+  assert.ok(!calls.includes('click'))
+  const fresh = await driver.call('get_window_state', { session: 'px-a' }, signal(), 'a')
+  assert.notEqual(fresh.structuredContent.session, 'px-a')
+  await driver.close()
+})
+
+test('an unrelated named-session error is not mistaken for the caller session ending', async (t) => {
+  const { worker } = fixture(
+    t,
+    3000,
+    `export const CuaDriver={async create(){return {async callTool(){const error=Error('DriverError.Tool');error.inner={errorCode:'1',message:"session 'px-unrelated' has ended; tool call 'get_window_state' was rejected."};throw error;}}}}`
+  )
+  await assert.rejects(
+    worker.callTool('get_window_state', '{"session":"px-owned"}', { scope: 'owned' }),
+    (e: any) => e.code !== 'driver_session_ended' && /px-unrelated/.test(e.message)
+  )
+})
+
 test('abort during native initialization also settles promptly', async (t) => {
   const f = fixture(t, 3000, 'await new Promise(() => {});')
   const ac = new AbortController()
