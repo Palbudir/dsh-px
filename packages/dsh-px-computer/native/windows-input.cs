@@ -70,7 +70,7 @@ internal static class WindowsInput {
         } catch { } finally { if (manager != null) Marshal.ReleaseComObject(manager); }
         var foreground = GetForegroundWindow();
         Emit(new { pid = expectedPid, window_id = windowId, foreground = foreground == window, foreground_window_id = foreground.ToInt64(),
-            current_desktop = current, cloaked = result == 0 ? (int?)cloaked : null, bounds = WindowsView.Bounds(window) });
+            current_desktop = current, cloaked = result == 0 ? (int?)cloaked : null, bounds = WindowsView.Bounds(window), input_state = WindowsView.InputState(window) });
         return 0;
     }
 
@@ -148,8 +148,9 @@ internal static class WindowsInput {
                     if ((GetAsyncKeyState(modifier) & 0x8000) != 0) throw new InvalidOperationException("A user modifier is held; input did not start");
                 if (plan.buttons.Length > 0 || plan.dx != 0 || plan.dy != 0) {
                     Point pointer;
-                    if (!GetCursorPos(out pointer) || GetAncestor(WindowFromPoint(pointer), 2) != new IntPtr(plan.window_id))
-                        throw new InvalidOperationException("Pointer is outside the target window; observe and position it before pointer input");
+                    if (!GetCursorPos(out pointer)) throw new InvalidOperationException("Pointer position unavailable; input did not start");
+                    if (GetAncestor(WindowFromPoint(pointer), 2) != new IntPtr(plan.window_id))
+                        throw new InvalidOperationException("Pointer is outside the target window; observe and position it before pointer input. " + WindowsView.PointDiagnostic(pointer.x, pointer.y));
                     foreach (int button in new int[] { 1, 2, 4 })
                         if ((GetAsyncKeyState(button) & 0x8000) != 0) throw new InvalidOperationException("A user mouse button is held; pointer input did not start");
                 }

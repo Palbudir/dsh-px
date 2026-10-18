@@ -793,6 +793,14 @@ export async function runDesktopTool(
       notes.push(
         `窗口状态：${placement}；${s.px_window.foreground ? '前台' : '后台'}${s.px_window.cloaked ? '；系统暂时隐藏窗口' : ''}。截图可用不代表后台键鼠投递可用。`
       )
+      const input = s.px_window.input_state
+      if (input?.source === 'window_thread_imm_compatibility') {
+        const native = input.ime_native_reported
+        notes.push(
+          `输入法兼容接口报告：${input.ime_open_reported === false ? '关闭' : native === true ? '本地文字转换模式（字母键可能进入组词）' : native === false ? '非本地文字转换模式' : '模式未知'}。这不是按键已到达应用的证明；不同输入法可能不支持此查询。`
+        )
+      }
+      notes.push('这是目标窗口截图，可能不包含输入法候选栏等独立浮层；前台窗口不等于每个坐标都可点击。')
     }
     const validFrame = s.screenshot_frame_valid !== false
     if (!validFrame)
