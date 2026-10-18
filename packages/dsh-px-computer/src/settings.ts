@@ -13,6 +13,8 @@ export interface ComputerSettings {
   desktop: boolean
   /** Missing in older settings means background only; foreground requires session/window control permission. */
   desktopForeground?: boolean
+  /** Opt in to application-local input bridges; ordinary windows are never converted. */
+  independentInstances?: boolean
   browser: 'off' | BrowserMode
   headless: boolean
   alwaysAllowApps: AllowedApp[]
@@ -24,7 +26,7 @@ export const DEFAULT_SETTINGS: ComputerSettings = {
   revision: 0,
   desktop: false,
   browser: 'off',
-  headless: false,
+  headless: true,
   alwaysAllowApps: [],
   alwaysAllowSites: []
 }
@@ -48,6 +50,7 @@ function valid(value: any): value is ComputerSettings {
     value.revision >= 0 &&
     typeof value.desktop === 'boolean' &&
     (value.desktopForeground === undefined || typeof value.desktopForeground === 'boolean') &&
+    (value.independentInstances === undefined || typeof value.independentInstances === 'boolean') &&
     (value.browser === 'off' || BROWSER_MODES.includes(value.browser)) &&
     typeof value.headless === 'boolean' &&
     Array.isArray(value.alwaysAllowApps) &&

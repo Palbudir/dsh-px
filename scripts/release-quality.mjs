@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSyn
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { compareVersions } from './release-version.mjs'
 import {
   FEATURE_BUNDLES,
   validDistribution,
@@ -71,6 +72,26 @@ export function verifyPackOutput(directory, { products, nativePack, communityPin
   )
     throw new Error('Pack manifest inside the archive does not match the product contract')
   const present = new Set(entries.map((name) => name.replace(/\/$/, '')))
+  if (compareVersions(version, '0.7.2-alpha.1') >= 0) {
+    const bridgeRoot = 'package/node_modules/dsh-px-computer/native/minecraft-input/'
+    const bridge = JSON.parse(tar('-xOzf', tgz, bridgeRoot + 'manifest.json'))
+    if (
+      bridge.schemaVersion !== 1 ||
+      bridge.protocol !== 'dsh-px-input-1' ||
+      bridge.minecraft !== '26.3' ||
+      bridge.fabricLoader !== '0.19.5' ||
+      bridge.java !== 25 ||
+      bridge.file !== 'px-input-bridge-mc26.3.jar'
+    )
+      throw Error('Pack input bridge contract mismatch')
+    const bytes = execFileSync('tar', ['-xOzf', tgz, bridgeRoot + bridge.file], {
+      cwd: directory,
+      windowsHide: true,
+      maxBuffer: 16 * 1024 * 1024
+    })
+    if (createHash('sha256').update(bytes).digest('hex') !== bridge.sha256)
+      throw Error('Pack input bridge digest mismatch')
+  }
   for (const file of ['package/package.json', 'package/cordis.patch.yml', 'package/index.js'])
     if (!present.has(file)) throw new Error(`Pack archive is missing ${file}`)
   if (!Array.isArray(manifest.bundledDependencies) || !manifest.bundledDependencies.length)

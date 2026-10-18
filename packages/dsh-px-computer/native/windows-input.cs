@@ -262,7 +262,7 @@ internal static class WindowsInput {
                 Emit(args[0] == "--point" ? WindowsView.CheckPoint(request) : WindowsView.MovePointer(request));
                 return 0;
             }
-            if (args.Length == 1 && args[0] == "--foreground") { Emit(new { window_id = GetForegroundWindow().ToInt64() }); return 0; }
+            if (args.Length == 1 && args[0] == "--foreground") { var foreground = GetForegroundWindow(); uint owner; GetWindowThreadProcessId(foreground, out owner); Emit(new { window_id = foreground.ToInt64(), pid = owner }); return 0; }
             if (args.Length == 3 && args[0] == "--controls") {
                 using (var deadline = new Timer(_ => Environment.Exit(3), null, 6000, Timeout.Infinite))
                     Emit(WindowsControls.Observe(int.Parse(args[1]), long.Parse(args[2])));

@@ -129,6 +129,22 @@ function packFixture(t: any, mutate: (manifest: any, artifact: any, distribution
   writeFileSync(join(pkg, 'node_modules', 'member', 'package.json'), '{"name":"member"}')
   writeFileSync(join(pkg, 'cordis.patch.yml'), '- insert: []\n')
   writeFileSync(join(pkg, 'index.js'), 'export function apply() {}\n')
+  const bridgeRoot = join(pkg, 'node_modules/dsh-px-computer/native/minecraft-input')
+  mkdirSync(bridgeRoot, { recursive: true })
+  const bridgeBytes = Buffer.from('synthetic input bridge fixture; not executable')
+  writeFileSync(join(bridgeRoot, 'px-input-bridge-mc26.3.jar'), bridgeBytes)
+  writeFileSync(
+    join(bridgeRoot, 'manifest.json'),
+    JSON.stringify({
+      schemaVersion: 1,
+      protocol: 'dsh-px-input-1',
+      minecraft: '26.3',
+      fabricLoader: '0.19.5',
+      java: 25,
+      file: 'px-input-bridge-mc26.3.jar',
+      sha256: hash(bridgeBytes)
+    })
+  )
   const components = [
     'dsh-px-core',
     'dsh-px-files',

@@ -151,7 +151,14 @@ async function dispatch(name, args, json, id, client) {
   const result = await client.callTool(name, json);
   if (beforeForeground !== undefined) {
     const after = await helperCall(['--foreground'], true);
-    if (after.window_id !== beforeForeground) throw Object.assign(Error('Foreground changed during background delivery; inspect before continuing'),{code:'unexpected_foreground'});
+    if (after.window_id !== beforeForeground && after.pid === args.pid) throw Object.assign(Error('Target application became foreground during background delivery; inspect before continuing'),{code:'unexpected_foreground'});
+    const raw=JSON.parse(result.rawJson);
+    raw.structuredContent={...raw.structuredContent,px_background_observation:{foreground_unchanged:after.window_id===beforeForeground,target_became_foreground:after.window_id!==beforeForeground&&after.pid===args.pid}};
+    // Pinned 0.28 SetValueTool only calls UIA ValuePattern/RangeValuePattern and returns no delivery record.
+    // Do not infer delivery from arbitrary text or apply this to other SDK methods/versions.
+    if(native.version==='0.28.0' && name==='set_value' && !raw.isError)
+      raw.structuredContent={...raw.structuredContent,delivery:{mode:'background'},route:'uia_value_pattern',effect:'unverifiable'};
+    result.rawJson=JSON.stringify(raw);
   }
   return result;
 }
@@ -201,7 +208,7 @@ if (native) {
     approveCapabilityManifest: false, approveSessionPolicy: false,
     dangerouslyBypassApprovals: false, permissionMode: sdk.EmbeddedPermissionMode.Standard,
     environment: [{ name: 'CUA_DRIVER_RS_TELEMETRY_ENABLED', value: 'false' }],
-    inheritStderr: true, noOverlay: false
+    inheritStderr: true, noOverlay: true
   }));
   const connection = await host.start();
   socketPath = connection.socketPath;

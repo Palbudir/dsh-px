@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "id": "dshpx_input_bridge",
+  "version": "0.1.0",
+  "name": "DSH-PX Optional Input Bridge",
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": { "client": ["com.palbudir.dshpx.bridge.BridgeMod"] },
+  "mixins": ["dshpx-input.mixins.json"],
+  "depends": { "fabricloader": ">=0.19.5", "minecraft": "26.3", "java": ">=25" }
+}

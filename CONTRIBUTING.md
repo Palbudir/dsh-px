@@ -17,6 +17,8 @@ npm run build
 
 隔离实例显式设置独立数据目录，不共享同一个 DSH_HOME。评测使用专用目录与会话，常规测试不写入日常数据。
 
+完整 Pack 构建还需要 Java 25（设置 `JAVA_HOME`）。可选 Minecraft 输入桥由 `integrations/minecraft-input` 源码构建；构建器校验 Gradle 9.6.0 分发摘要，并将输入桥 JAR 与摘要清单装入电脑操作功能包。JAR 不自动安装到用户游戏中；使用方法见 [后台操作与独立实例](docs/INDEPENDENT-INPUT.md)。
+
 ## 实现约定
 
 - 从独立分支开始，先定义具体行为与回归风险，再修改代码。保留不相关的用户改动。

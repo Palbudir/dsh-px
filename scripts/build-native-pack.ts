@@ -97,6 +97,14 @@ await stageComputerDriver(
     .find((arg) => arg.startsWith('--computer-driver-archive='))
     ?.slice('--computer-driver-archive='.length)
 )
+execFileSync(
+  process.execPath,
+  [
+    join(root, 'scripts/build-input-bridge.mjs'),
+    join(modules, 'dsh-px-computer', 'native', 'minecraft-input')
+  ],
+  { windowsHide: true, stdio: 'inherit' }
+)
 const sidebarDirectory = join(modules, sidebar.name)
 renameSync(join(source, 'package'), sidebarDirectory)
 const sidebarManifest = JSON.parse(readFileSync(join(sidebarDirectory, 'package.json'), 'utf8'))

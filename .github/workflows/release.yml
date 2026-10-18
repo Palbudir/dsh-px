@@ -59,6 +59,10 @@ jobs:
       - name: Secret scan of the candidate
         working-directory: candidate
         run: node scripts/check-secrets.mjs
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '25'
       - name: Install locked candidate dependencies
         working-directory: candidate
         run: npm ci
@@ -156,6 +160,10 @@ jobs:
           version: 11.7.0
 
       # ---- DSH-PX: quality gates and the exact release Pack embedded in Desktop ----
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '25'
       - name: Secret scan of the candidate
         working-directory: candidate
         run: node scripts/check-secrets.mjs

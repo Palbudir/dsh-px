@@ -102,7 +102,11 @@ internal static class WindowsControls {
                     throw new InvalidOperationException("Text message failed; inspect before retrying");
             } finally { Marshal.FreeHGlobal(value); }
         } else throw new InvalidOperationException("This control does not support that background action");
-        if (GetForegroundWindow() != before) throw new NativeControlForegroundChanged();
+        var after = GetForegroundWindow(); uint foregroundOwner;
+        GetWindowThreadProcessId(after, out foregroundOwner);
+        // The human may switch between unrelated apps while this background write runs.
+        // Stop if the controlled application became foreground, including one of its dialogs.
+        if (after != before && foregroundOwner == request.pid) throw new NativeControlForegroundChanged();
         return new { ok = true, effect = request.action == "set_value" && Text(child) == request.value ? "confirmed" : "unverifiable" };
     }
 }
