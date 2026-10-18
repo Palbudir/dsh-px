@@ -453,23 +453,39 @@ public final class BridgeMod implements ClientModInitializer {
             if (mc.gui.screen() == null && !mc.mouseHandler.isMouseGrabbed())
               mc.mouseHandler.grabMouse();
             mc.mouseHandler.onMove(handle, pointerX, pointerY, 0, 0);
+            if (interfaceChanged(a)) return;
             VirtualInput.KEYS.addAll(a.keys);
-            for (int key : a.keys)
+            for (int key : a.keys) {
+              a.dispatchedKeys.add(key);
               mc.keyboardHandler.keyPress(handle, InputConstants.PRESS, keyEvent(key));
+              if (interfaceChanged(a)) return;
+            }
             for (int button : a.buttons) {
               VirtualInput.BUTTONS.add(button);
+              a.dispatchedButtons.add(button);
               mc.mouseHandler.onButton(
                   handle, new MouseButtonInfo(button, modifiers()), InputConstants.PRESS);
+              if (interfaceChanged(a)) return;
             }
-            if (!text.isEmpty()) mc.keyboardHandler.textInput(handle, text);
+            if (!text.isEmpty()) {
+              a.textSent = true;
+              mc.keyboardHandler.textInput(handle, text);
+            }
           });
-      if (mc.gui.screen() != a.screen) {
+      if (interfaceChanged(a)) {
         a.early = true;
         finish(null);
       }
     } catch (Throwable e) {
       finish(e.toString());
     }
+  }
+
+  private static boolean interfaceChanged(Action a) {
+    Minecraft mc = Minecraft.getInstance();
+    return mc.gui.screen() != a.screen
+        || mc.getWindow().getScreenWidth() != a.width
+        || mc.getWindow().getScreenHeight() != a.height;
   }
 
   public static void frame() {
@@ -485,10 +501,7 @@ public final class BridgeMod implements ClientModInitializer {
     Action a = active;
     if (a == null) return;
     try {
-      Minecraft current = Minecraft.getInstance();
-      if (current.gui.screen() != a.screen
-          || current.getWindow().getScreenWidth() != a.width
-          || current.getWindow().getScreenHeight() != a.height) {
+      if (interfaceChanged(a)) {
         a.early = true;
         finish(null);
         return;
@@ -504,7 +517,10 @@ public final class BridgeMod implements ClientModInitializer {
       }
       VirtualInput.dispatch(
           () -> mc.mouseHandler.onMove(mc.getWindow().handle(), pointerX, pointerY, dx, dy));
-      if (a.result.isCancelled()) finish("Input connection ended");
+      if (interfaceChanged(a)) {
+        a.early = true;
+        finish(null);
+      } else if (a.result.isCancelled()) finish("Input connection ended");
       else if (fraction >= 1) finish(null);
     } catch (Throwable e) {
       finish(e.toString());
@@ -516,6 +532,12 @@ public final class BridgeMod implements ClientModInitializer {
     active = null;
     Minecraft mc = Minecraft.getInstance();
     List<Throwable> failures = new ArrayList<>();
+    if (a != null) {
+      // Modifier polling may need the whole requested chord. Undispatched keys must
+      // be cleared without sending release events into a newly opened interface.
+      VirtualInput.KEYS.retainAll(a.dispatchedKeys);
+      VirtualInput.BUTTONS.retainAll(a.dispatchedButtons);
+    }
     VirtualInput.dispatch(
         () -> {
           for (int key : Set.copyOf(VirtualInput.KEYS)) {
@@ -556,6 +578,9 @@ public final class BridgeMod implements ClientModInitializer {
       JsonObject s = status();
       s.addProperty("ok", error == null && released);
       s.addProperty("stopped_early", a.early);
+      s.add("dispatched_keys", JSON.toJsonTree(a.dispatchedKeys));
+      s.add("dispatched_buttons", JSON.toJsonTree(a.dispatchedButtons));
+      s.addProperty("dispatched_text", a.textSent);
       if (error != null) s.addProperty("error", error);
       else if (!released) s.addProperty("error", "Virtual input release failed");
       s.addProperty("elapsed_ms", (System.nanoTime() - a.start) / 1_000_000);
@@ -657,8 +682,10 @@ public final class BridgeMod implements ClientModInitializer {
     long start;
     double sentX, sentY;
     Object screen;
-    boolean early;
+    boolean early, textSent;
     final Set<Integer> keys = new LinkedHashSet<>(), buttons = new LinkedHashSet<>();
+    final Set<Integer> dispatchedKeys = new LinkedHashSet<>(),
+        dispatchedButtons = new LinkedHashSet<>();
     CompletableFuture<JsonObject> result;
   }
 }
