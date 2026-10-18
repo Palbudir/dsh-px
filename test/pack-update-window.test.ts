@@ -4,7 +4,7 @@ import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createPackUpdateWindow, MAX_PACK_DOWNLOAD_BYTES } from '../src/main/pack-update-window'
 
-function harness(size: number, actualSize = size) {
+function harness(size: number, actualSize = size, current = '0.7.0-alpha.1') {
   let handler: any,
     window: any,
     stageCalls = 0,
@@ -27,8 +27,8 @@ function harness(size: number, actualSize = size) {
     }
   }
   const deployment: any = {
-    options: { bundled: { version: '0.7.0-alpha.1' } },
-    read: () => ({ active: { version: '0.7.0-alpha.1' } }),
+    options: { bundled: { version: current } },
+    read: () => ({ active: { version: current } }),
     manifest: () => ({
       version: '0.7.2-alpha.1',
       files: [{ url: 'https://example.invalid/pack.tgz', size }]
@@ -110,6 +110,14 @@ test('unsupported Pack size is reported before downloading, rather than as a sig
   assert.equal(result.pack.phase, 'error')
   assert.match(result.pack.message, /128 MiB/)
   assert.equal(h.counts().downloadCalls, 0)
+})
+
+test('an equal or newer installed Pack stays current without applying a download-only limit', async () => {
+  for (const version of ['0.7.2-alpha.1', '0.7.3-alpha.1']) {
+    const h = harness(MAX_PACK_DOWNLOAD_BYTES + 1, MAX_PACK_DOWNLOAD_BYTES + 1, version)
+    assert.equal((await h.call('check-pack')).pack.phase, 'current')
+    assert.equal(h.counts().downloadCalls, 0)
+  }
 })
 test('truncated Pack still fails staging and foreign updater callers are rejected', async () => {
   const h = harness(33 * 1024 * 1024, 1024)

@@ -102,9 +102,9 @@ export function createPackUpdateWindow(
         await fetchBytes('https://raw.githubusercontent.com/Palbudir/dsh-px/updates/pack-preview.json', 65536)
       ).toString('utf8')
       const manifest = deployment().manifest(signed)
-      if (manifest.files[0].size > MAX_PACK_DOWNLOAD_BYTES)
-        throw Error('插件包超过本版客户端支持的 128 MiB 上限，请先升级桌面客户端。')
       const current = deployment().read().active?.version ?? deployment().options.bundled.version
+      if (gt(manifest.version, current) && manifest.files[0].size > MAX_PACK_DOWNLOAD_BYTES)
+        throw Error('插件包超过本版客户端支持的 128 MiB 上限，请先升级桌面客户端。')
       pack = {
         phase: gt(manifest.version, current) ? 'available' : 'current',
         version: manifest.version,
