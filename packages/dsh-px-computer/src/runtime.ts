@@ -55,6 +55,7 @@ export type Capability = 'desktop' | 'browser' | 'confirm'
 
 export class SessionStates {
   private readonly grants = new Map<string, Map<string, string>>()
+  private readonly observed = new Map<string, Map<string, string>>()
   private readonly foreground = new Map<string, Map<string, { key: string; appKey: string; label: string }>>()
   private readonly logs = new Map<string, ActivityEntry[]>()
   private readonly paused = new Set<string>()
@@ -62,6 +63,16 @@ export class SessionStates {
 
   granted(sessionId: string, key: string): boolean {
     return this.grants.get(sessionId)?.has(key) ?? false
+  }
+  /** Only identities validated by the desktop/site policy may be offered for manual consent. */
+  observe(sessionId: string, key: string, label: string): void {
+    const map = this.observed.get(sessionId) ?? new Map<string, string>()
+    if (!map.has(key) && map.size >= 200) map.delete(map.keys().next().value!)
+    map.set(key, label)
+    this.observed.set(sessionId, map)
+  }
+  observedApps(sessionId: string): Array<{ key: string; label: string }> {
+    return [...(this.observed.get(sessionId) ?? [])].map(([key, label]) => ({ key, label }))
   }
   grant(sessionId: string, key: string, label = key): void {
     const map = this.grants.get(sessionId) ?? new Map<string, string>()
@@ -183,6 +194,7 @@ export class SessionStates {
   /** Drop everything a finished session owned. */
   forget(sessionId: string): void {
     this.grants.delete(sessionId)
+    this.observed.delete(sessionId)
     this.revokeForeground(sessionId)
     this.logs.delete(sessionId)
     this.paused.delete(sessionId)
@@ -232,7 +244,7 @@ export function refusalText(outcome: Outcome, subject: string): string {
   if (outcome === 'cancelled') return `${subject}的确认已取消，未执行。`
   if (outcome === 'unavailable')
     return `${subject}需要用户确认，但当前无法显示确认（会话可能处于无人值守模式）。未执行；请在回复中说明并等待用户。`
-  return `用户没有允许${subject}（若会话关闭了确认提示，确认会被自动拒绝；用户可在「电脑操作」面板中把应用或网站设为始终允许）。未执行；不要换一种方式绕过，请在回复中说明。`
+  return `用户没有允许${subject}，未执行。应用或网站的普通访问可由用户在「电脑操作 → 应用与网站授权」中允许；具体动作被拒绝时须停止。不要把口头回复当作工具授权，也不要换一种方式绕过。`
 }
 
 /**

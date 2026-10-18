@@ -4,12 +4,16 @@ import { installUiStyles, controlStyle, cardStyle } from '../../shared/ui'
 import { requestJson } from '../../shared/client-http'
 import type { ComputerSettings } from './settings'
 import type { ActivityEntry } from './runtime'
+import type { AccessPolicy } from './authorization'
 
 export const inject: string[] = []
 
 interface View {
   settings: ComputerSettings
   session: {
+    policy?: AccessPolicy
+    observedApps?: Array<{ key: string; label: string }>
+    observedSites?: string[]
     paused: boolean
     apps: Array<{ key: string; label: string }>
     foreground?: Array<{ key: string; label: string }>
@@ -89,6 +93,8 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
   }
   const s = view?.settings
   const supported = view?.status.platform === 'win32'
+  const apps = view?.session.observedApps ?? view?.session.apps ?? []
+  const sites = view?.session.observedSites ?? view?.session.sites ?? []
   return (
     <div
       className="px-ui"
@@ -97,7 +103,7 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
       <h3>电脑操作</h3>
       <p className="px-muted">
         开启后，agent
-        可以在你授权的范围内查看并操作本机应用和网页。第一次操作某个应用都会先询问；删除、发送、付款等动作会再次确认。终端、密码管理器、安全软件、远程控制软件和
+        可以在你授权的范围内查看并操作本机应用和网页。普通访问遵循会话权限：完全权限直接执行，其余模式首次确认；删除、发送、付款等动作仍需单独确认。终端、密码管理器、安全软件、远程控制软件和
         DSH 本身始终不能操作。
       </p>
       {error && <p role="alert">{error}</p>}
@@ -128,10 +134,10 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
                   }
                 >
                   <option value="background">仅后台操作</option>
-                  <option value="ask">允许前台操作（按会话和窗口授权）</option>
+                  <option value="ask">允许前台操作（遵循会话权限）</option>
                 </select>
                 <small className="px-muted">
-                  每个窗口首次授权，普通动作不重复询问。暂停或撤销后结束控制；后台不支持时不会自动抢占前台。
+                  完全权限会话直接控制窗口，其余模式每个窗口首次确认。暂停会中止控制；后台模式不会自动抢占前台。
                 </small>
               </label>
             )}
@@ -175,7 +181,9 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
               </p>
             )}
             {s.browser !== 'off' && s.browser !== 'isolated' && (
-              <p className="px-muted">这个模式包含登录状态：每个会话第一次访问某个网站前会先询问。</p>
+              <p className="px-muted">
+                这个模式包含登录状态：完全权限会话直接访问，其余模式首次访问网站前询问。
+              </p>
             )}
           </div>
 
@@ -228,12 +236,38 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
             </div>
           )}
 
-          {(view.session.apps.length > 0 || view.session.sites.length > 0) && (
+          {view.session.policy === 'full' && (
+            <p role="status">
+              本会话为完全权限：已开启能力内的普通操作直接执行，无需设置始终允许。敏感动作仍单独确认。
+            </p>
+          )}
+          {view.session.policy === 'never' && (
+            <p role="status">
+              本会话关闭了确认提示，但不是完全权限。请在下方授权应用或网站；需要窗口控制或敏感动作确认时，先切换到“工作区内修改”等可询问模式。
+            </p>
+          )}
+          {(apps.length > 0 || sites.length > 0) && (
             <details style={{ ...cardStyle, margin: '12px 0' }} open>
-              <summary>本会话已允许</summary>
-              {view.session.apps.map((app) => (
+              <summary>应用与网站授权</summary>
+              <p className="px-muted">
+                这里列出本会话已识别的目标；未获允许的目标也可直接授权。设置后让 Agent
+                重试，不会自动重放之前的动作。
+              </p>
+              {apps.map((app) => (
                 <div key={app.key} className="px-actions">
                   <span style={{ flex: 1 }}>{app.label}</span>
+                  {!s.alwaysAllowApps.some((a) => a.key === app.key) &&
+                    (view.session.apps.some((a) => a.key === app.key) ? (
+                      <span className="px-muted">本会话已允许</span>
+                    ) : (
+                      <button
+                        style={controlStyle}
+                        disabled={busy}
+                        onClick={() => void act({ action: 'allow-app', key: app.key })}
+                      >
+                        本会话允许
+                      </button>
+                    ))}
                   {s.alwaysAllowApps.some((a) => a.key === app.key) ? (
                     <span className="px-muted">始终允许</span>
                   ) : (
@@ -247,9 +281,21 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
                   )}
                 </div>
               ))}
-              {view.session.sites.map((site) => (
+              {sites.map((site) => (
                 <div key={site} className="px-actions">
                   <span style={{ flex: 1 }}>{site}</span>
+                  {!s.alwaysAllowSites.includes(site) &&
+                    (view.session.sites.includes(site) ? (
+                      <span className="px-muted">本会话已允许</span>
+                    ) : (
+                      <button
+                        style={controlStyle}
+                        disabled={busy}
+                        onClick={() => void act({ action: 'allow-site', site })}
+                      >
+                        本会话允许
+                      </button>
+                    ))}
                   {s.alwaysAllowSites.includes(site) ? (
                     <span className="px-muted">始终允许</span>
                   ) : (

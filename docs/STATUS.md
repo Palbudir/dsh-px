@@ -14,7 +14,7 @@
 | 上下文观测                                 | dsh-context                         | 显示原生上下文构成、用量与演变，不替代任务状态或账本                                 |
 | 模型窗口分档与跨档接续                     | dsh-px-workbench / 原生宿主校验     | 按声明容量分档；同会话固定档位，跨档另建接续会话；详见 [窗口策略](CONTEXT-POLICY.md) |
 | 固定人格、经历、四范围知识与 Skills        | dsh-px-memory / dsh-mnemon          | 会话固定人格；有界接续、同人格历史、知识纠正/共享/来源版本；原生技能目录             |
-| 电脑操作（Windows 应用与浏览器）           | dsh-px-computer                     | 默认关闭；应用与登录态网站逐个授权，敏感动作确认，终端等始终禁止；仅 Windows         |
+| 电脑操作（Windows 应用与浏览器）           | dsh-px-computer                     | 默认关闭；普通访问遵循会话权限，敏感动作确认，终端等始终禁止；仅 Windows             |
 | 运行诊断、工作区入口与活动快照             | dsh-px-workbench                    | 使用原生服务；未知任务状态不能视为空闲                                               |
 | 版本与更新                                 | Desktop 更新器与 dsh-px-updater     | Desktop 签名差分更新、完整下载回退；整个 Pack 独立更新；Web 原生安装                 |
 
