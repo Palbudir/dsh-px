@@ -256,13 +256,15 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
               {apps.map((app) => (
                 <div key={app.key} className="px-actions">
                   <span style={{ flex: 1 }}>{app.label}</span>
-                  {!s.alwaysAllowApps.some((a) => a.key === app.key) &&
+                  {view.session.policy === 'full' && <span className="px-muted">随完全权限允许</span>}
+                  {view.session.policy !== 'full' &&
+                    !s.alwaysAllowApps.some((a) => a.key === app.key) &&
                     (view.session.apps.some((a) => a.key === app.key) ? (
                       <span className="px-muted">本会话已允许</span>
                     ) : (
                       <button
                         style={controlStyle}
-                        disabled={busy}
+                        disabled={busy || view.session.paused || !s.desktop}
                         onClick={() => void act({ action: 'allow-app', key: app.key })}
                       >
                         本会话允许
@@ -270,27 +272,29 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
                     ))}
                   {s.alwaysAllowApps.some((a) => a.key === app.key) ? (
                     <span className="px-muted">始终允许</span>
-                  ) : (
+                  ) : view.session.policy !== 'full' ? (
                     <button
                       style={controlStyle}
-                      disabled={busy}
+                      disabled={busy || view.session.paused || !s.desktop}
                       onClick={() => void act({ action: 'always-allow-app', key: app.key, label: app.label })}
                     >
                       设为始终允许
                     </button>
-                  )}
+                  ) : null}
                 </div>
               ))}
               {sites.map((site) => (
                 <div key={site} className="px-actions">
                   <span style={{ flex: 1 }}>{site}</span>
-                  {!s.alwaysAllowSites.includes(site) &&
+                  {view.session.policy === 'full' && <span className="px-muted">随完全权限允许</span>}
+                  {view.session.policy !== 'full' &&
+                    !s.alwaysAllowSites.includes(site) &&
                     (view.session.sites.includes(site) ? (
                       <span className="px-muted">本会话已允许</span>
                     ) : (
                       <button
                         style={controlStyle}
-                        disabled={busy}
+                        disabled={busy || view.session.paused || s.browser === 'off'}
                         onClick={() => void act({ action: 'allow-site', site })}
                       >
                         本会话允许
@@ -298,15 +302,15 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
                     ))}
                   {s.alwaysAllowSites.includes(site) ? (
                     <span className="px-muted">始终允许</span>
-                  ) : (
+                  ) : view.session.policy !== 'full' ? (
                     <button
                       style={controlStyle}
-                      disabled={busy}
+                      disabled={busy || view.session.paused || s.browser === 'off'}
                       onClick={() => void act({ action: 'always-allow-site', site })}
                     >
                       设为始终允许
                     </button>
-                  )}
+                  ) : null}
                 </div>
               ))}
             </details>

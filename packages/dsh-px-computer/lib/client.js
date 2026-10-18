@@ -401,45 +401,47 @@ function ComputerPanel({ sessionId, visible }) {
             /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { className: "px-muted", children: "\u8FD9\u91CC\u5217\u51FA\u672C\u4F1A\u8BDD\u5DF2\u8BC6\u522B\u7684\u76EE\u6807\uFF1B\u672A\u83B7\u5141\u8BB8\u7684\u76EE\u6807\u4E5F\u53EF\u76F4\u63A5\u6388\u6743\u3002\u8BBE\u7F6E\u540E\u8BA9 Agent \u91CD\u8BD5\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u91CD\u653E\u4E4B\u524D\u7684\u52A8\u4F5C\u3002" }),
             apps.map((app) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-actions", children: [
               /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { style: { flex: 1 }, children: app.label }),
-              !s.alwaysAllowApps.some((a) => a.key === app.key) && (view.session.apps.some((a) => a.key === app.key) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u672C\u4F1A\u8BDD\u5DF2\u5141\u8BB8" }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+              view.session.policy === "full" && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u968F\u5B8C\u5168\u6743\u9650\u5141\u8BB8" }),
+              view.session.policy !== "full" && !s.alwaysAllowApps.some((a) => a.key === app.key) && (view.session.apps.some((a) => a.key === app.key) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u672C\u4F1A\u8BDD\u5DF2\u5141\u8BB8" }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
                 "button",
                 {
                   style: controlStyle,
-                  disabled: busy,
+                  disabled: busy || view.session.paused || !s.desktop,
                   onClick: () => void act({ action: "allow-app", key: app.key }),
                   children: "\u672C\u4F1A\u8BDD\u5141\u8BB8"
                 }
               )),
-              s.alwaysAllowApps.some((a) => a.key === app.key) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u59CB\u7EC8\u5141\u8BB8" }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+              s.alwaysAllowApps.some((a) => a.key === app.key) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u59CB\u7EC8\u5141\u8BB8" }) : view.session.policy !== "full" ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
                 "button",
                 {
                   style: controlStyle,
-                  disabled: busy,
+                  disabled: busy || view.session.paused || !s.desktop,
                   onClick: () => void act({ action: "always-allow-app", key: app.key, label: app.label }),
                   children: "\u8BBE\u4E3A\u59CB\u7EC8\u5141\u8BB8"
                 }
-              )
+              ) : null
             ] }, app.key)),
             sites.map((site) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-actions", children: [
               /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { style: { flex: 1 }, children: site }),
-              !s.alwaysAllowSites.includes(site) && (view.session.sites.includes(site) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u672C\u4F1A\u8BDD\u5DF2\u5141\u8BB8" }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+              view.session.policy === "full" && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u968F\u5B8C\u5168\u6743\u9650\u5141\u8BB8" }),
+              view.session.policy !== "full" && !s.alwaysAllowSites.includes(site) && (view.session.sites.includes(site) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u672C\u4F1A\u8BDD\u5DF2\u5141\u8BB8" }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
                 "button",
                 {
                   style: controlStyle,
-                  disabled: busy,
+                  disabled: busy || view.session.paused || s.browser === "off",
                   onClick: () => void act({ action: "allow-site", site }),
                   children: "\u672C\u4F1A\u8BDD\u5141\u8BB8"
                 }
               )),
-              s.alwaysAllowSites.includes(site) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u59CB\u7EC8\u5141\u8BB8" }) : /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+              s.alwaysAllowSites.includes(site) ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("span", { className: "px-muted", children: "\u59CB\u7EC8\u5141\u8BB8" }) : view.session.policy !== "full" ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
                 "button",
                 {
                   style: controlStyle,
-                  disabled: busy,
+                  disabled: busy || view.session.paused || s.browser === "off",
                   onClick: () => void act({ action: "always-allow-site", site }),
                   children: "\u8BBE\u4E3A\u59CB\u7EC8\u5141\u8BB8"
                 }
-              )
+              ) : null
             ] }, site))
           ] }),
           (s.alwaysAllowApps.length > 0 || s.alwaysAllowSites.length > 0) && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("details", { style: { ...cardStyle, margin: "12px 0" }, children: [

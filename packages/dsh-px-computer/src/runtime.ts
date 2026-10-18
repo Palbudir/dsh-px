@@ -67,7 +67,8 @@ export class SessionStates {
   /** Only identities validated by the desktop/site policy may be offered for manual consent. */
   observe(sessionId: string, key: string, label: string): void {
     const map = this.observed.get(sessionId) ?? new Map<string, string>()
-    if (!map.has(key) && map.size >= 200) map.delete(map.keys().next().value!)
+    map.delete(key)
+    if (map.size >= 200) map.delete(map.keys().next().value!)
     map.set(key, label)
     this.observed.set(sessionId, map)
   }

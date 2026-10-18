@@ -566,7 +566,8 @@ var SessionStates = class {
   /** Only identities validated by the desktop/site policy may be offered for manual consent. */
   observe(sessionId, key, label) {
     const map = this.observed.get(sessionId) ?? /* @__PURE__ */ new Map();
-    if (!map.has(key) && map.size >= 200) map.delete(map.keys().next().value);
+    map.delete(key);
+    if (map.size >= 200) map.delete(map.keys().next().value);
     map.set(key, label);
     this.observed.set(sessionId, map);
   }
@@ -3322,6 +3323,8 @@ function apply(ctx) {
         return;
       case "allow-app":
       case "always-allow-app": {
+        if (states.isPaused(sessionId) || !available("desktop", settings.read()))
+          throw new SettingsError("\u8BF7\u5148\u5F00\u542F\u684C\u9762\u80FD\u529B\u5E76\u6062\u590D\u672C\u4F1A\u8BDD\uFF0C\u518D\u6388\u4E88\u5E94\u7528\u6743\u9650");
         const key = String(body.key ?? "");
         const observed = states.observedApps(sessionId).find((app) => app.key === key);
         if (!observed || key.startsWith("launch|") || key.startsWith("site|"))
@@ -3348,6 +3351,8 @@ function apply(ctx) {
         return;
       case "allow-site":
       case "always-allow-site": {
+        if (states.isPaused(sessionId) || !available("browser", settings.read()))
+          throw new SettingsError("\u8BF7\u5148\u5F00\u542F\u6D4F\u89C8\u5668\u80FD\u529B\u5E76\u6062\u590D\u672C\u4F1A\u8BDD\uFF0C\u518D\u6388\u4E88\u7F51\u7AD9\u6743\u9650");
         const site = String(body.site ?? "");
         if (!states.observedApps(sessionId).some((app) => app.key === `site|${site}`))
           throw new SettingsError("\u53EA\u80FD\u5141\u8BB8\u672C\u4F1A\u8BDD\u5DF2\u8BC6\u522B\u7684\u7F51\u7AD9");

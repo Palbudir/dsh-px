@@ -633,6 +633,8 @@ export function apply(ctx: any): void {
         return
       case 'allow-app':
       case 'always-allow-app': {
+        if (states.isPaused(sessionId) || !available('desktop', settings.read()))
+          throw new SettingsError('请先开启桌面能力并恢复本会话，再授予应用权限')
         const key = String(body.key ?? '')
         const observed = states.observedApps(sessionId).find((app) => app.key === key)
         if (!observed || key.startsWith('launch|') || key.startsWith('site|'))
@@ -659,6 +661,8 @@ export function apply(ctx: any): void {
         return
       case 'allow-site':
       case 'always-allow-site': {
+        if (states.isPaused(sessionId) || !available('browser', settings.read()))
+          throw new SettingsError('请先开启浏览器能力并恢复本会话，再授予网站权限')
         const site = String(body.site ?? '')
         if (!states.observedApps(sessionId).some((app) => app.key === `site|${site}`))
           throw new SettingsError('只能允许本会话已识别的网站')

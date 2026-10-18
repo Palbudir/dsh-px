@@ -42,6 +42,18 @@ import { ComputerUseRefusal, SessionStates } from '../packages/dsh-px-computer/s
 import { apply } from '../packages/dsh-px-computer/src/index'
 import { accessPolicy } from '../packages/dsh-px-computer/src/authorization'
 
+test('recently re-observed refused targets remain available when the bounded consent list fills', () => {
+  const states = new SessionStates()
+  for (let i = 0; i < 200; i++) states.observe('s', `site|target-${i}`, `target-${i}`)
+  states.observe('s', 'site|target-0', 'target-0 refreshed')
+  states.observe('s', 'new-app', 'New app')
+  assert.equal(states.observedApps('s').length, 200)
+  assert.ok(states.observedApps('s').some((target) => target.label === 'target-0 refreshed'))
+  assert.ok(!states.observedApps('s').some((target) => target.key === 'site|target-1'))
+  states.forget('s')
+  assert.deepEqual(states.observedApps('s'), [])
+})
+
 test('ordinary full access requires the effective native full-access bundle and never trusts Auto or missing metadata', () => {
   const agent = { session: { id: 's', header: { id: 's' } } }
   let approval = 'never',
@@ -1206,6 +1218,19 @@ test(
     view = (await request('GET')).json
     assert.deepEqual(view.session.observedSites, ['localhost'])
     assert.deepEqual(view.session.sites, [])
+    await request('POST', { action: 'pause' })
+    for (const action of ['allow-site', 'always-allow-site'])
+      assert.equal(
+        (await request('POST', { action, site: 'localhost', revision: view.settings.revision })).status,
+        400
+      )
+    view = (await request('POST', { action: 'settings', revision: view.settings.revision, browser: 'off' }))
+      .json
+    await request('POST', { action: 'resume' })
+    assert.equal((await request('POST', { action: 'allow-site', site: 'localhost' })).status, 400)
+    view = (
+      await request('POST', { action: 'settings', revision: view.settings.revision, browser: 'profile' })
+    ).json
     assert.equal(
       (
         await request('POST', {
