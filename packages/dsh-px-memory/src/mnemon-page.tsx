@@ -50,14 +50,14 @@ function KnowledgeSourcePage({
       <h3>PX 知识</h3>
       <p>
         人格私有与公共知识分开保存。这里只展示当前原生访问范围；编辑、分享和 Skills
-        管理可从会话的“人格与经历”进入。
+        管理可从统一的“记忆与知识”页面进入。
       </p>
       {!source.sessionId && (
         <p className="px-muted">当前没有绑定会话，仅显示公共范围。私有知识需要先选择对应人格的会话。</p>
       )}
       {source.sessionId && (
         <button style={controlStyle} onClick={() => openSession(source.sessionId!)}>
-          在会话中管理知识与 Skills
+          返回记忆与知识
         </button>
       )}
       {error && <p role="alert">{error}</p>}
@@ -107,20 +107,12 @@ function KnowledgeSourcePage({
   )
 }
 /** Public Mnemon child-slot contract; no hard client import, so disabling Mnemon cannot break the persona panel. */
-export function registerMnemonKnowledgePage(host: any): () => void {
+export function registerMnemonKnowledgePage(host: any, openWorkspace: (id: string) => void): () => void {
   return host.slots.inject('mnemon.source.page', () =>
     host.slots.register(
       { name: 'mnemon.source.page', id: 'px-knowledge/library', order: 100, label: 'PX 知识' },
       Object.assign(
-        (props: MemorySourcePageProps) => (
-          <KnowledgeSourcePage
-            source={props}
-            openSession={(id) => {
-              host.uiWorkspace.openSession(id)
-              host.sidebarRight.openTabIn(id, 'dsh-px-memory')
-            }}
-          />
-        ),
+        (props: MemorySourcePageProps) => <KnowledgeSourcePage source={props} openSession={openWorkspace} />,
         { mnemonNavigation: { group: 'storage', primary: true, glyph: '◇', detail: '人格、项目与共享知识' } }
       )
     )

@@ -3,23 +3,23 @@ import { requestJson } from '../../shared/client-http'
 import { controlStyle, cardStyle } from '../../shared/ui'
 import { createDraftRegistry } from '../../shared/draft-store'
 const drafts = createDraftRegistry(64)
+const newest = (rows: any[]) =>
+  [...rows].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))
 
 const scopes = [
-  ['persona', '人格私有'],
-  ['persona-project', '人格 × 项目'],
-  ['project', '项目共享'],
-  ['global', '全局共享']
+  ['persona', '仅此人格'],
+  ['persona-project', '此人格在本项目'],
+  ['project', '本项目所有人格'],
+  ['global', '全部人格与项目']
 ]
 export function KnowledgePanel({
   sessionId,
   personaId,
-  project,
-  openLegacy
+  project
 }: {
   sessionId: string
   personaId: string
   project: string | null
-  openLegacy: () => void
 }): unknown {
   const initial = {
     editing: false,
@@ -135,7 +135,7 @@ export function KnowledgePanel({
       .then((v) => {
         if (!ac.signal.aborted) {
           setCatalog(v)
-          setRows(v.documents)
+          setRows(newest(v.documents))
         }
       })
       .catch((e) => {
@@ -157,7 +157,7 @@ export function KnowledgePanel({
   const refresh = async () => {
     const next = await call('knowledge', { action: 'catalog', scope })
     setCatalog(next)
-    setRows(next.documents)
+    setRows(newest(next.documents))
     setSelected(null)
   }
   const read = async (id: string, historical = false) => {
@@ -209,9 +209,6 @@ export function KnowledgePanel({
         >
           Skills
         </button>
-        <button style={controlStyle} disabled={busy || editing} onClick={openLegacy}>
-          Mnemon 记忆系统
-        </button>
       </div>
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
@@ -223,26 +220,29 @@ export function KnowledgePanel({
       {tab === 'knowledge' ? (
         <>
           <p className="px-muted">同一主题只维护一份现行结论。纠正时编辑原条目；临时任务进度放在工作账本。</p>
-          <select
-            aria-label="知识范围"
-            style={{ ...controlStyle, width: '100%' }}
-            value={scope}
-            disabled={busy || editing}
-            onChange={(e: any) => {
-              setScope(e.target.value)
-              setQuery('')
-            }}
-          >
-            {scopes.map(([id, label]) => (
-              <option
-                key={id}
-                value={id}
-                disabled={!project && (id === 'project' || id === 'persona-project')}
-              >
-                {label}
-              </option>
-            ))}
-          </select>
+          <label>
+            谁可以使用？
+            <select
+              aria-label="知识范围"
+              style={{ ...controlStyle, width: '100%' }}
+              value={scope}
+              disabled={busy || editing}
+              onChange={(e: any) => {
+                setScope(e.target.value)
+                setQuery('')
+              }}
+            >
+              {scopes.map(([id, label]) => (
+                <option
+                  key={id}
+                  value={id}
+                  disabled={!project && (id === 'project' || id === 'persona-project')}
+                >
+                  {label}
+                </option>
+              ))}
+            </select>
+          </label>
           <p className="px-muted">
             {scope === 'global'
               ? '所有人格、所有项目可用。'
@@ -291,13 +291,20 @@ export function KnowledgePanel({
             rows.map((row) => (
               <button
                 key={row.id}
-                style={{ ...controlStyle, width: '100%', textAlign: 'left', marginTop: 6 }}
+                style={{
+                  ...controlStyle,
+                  width: '100%',
+                  justifyContent: 'flex-start',
+                  textAlign: 'left',
+                  marginTop: 6
+                }}
                 disabled={busy}
                 onClick={() => void run(() => read(row.id))}
               >
                 {row.key}{' '}
                 <small>
                   · v{row.revision}
+                  {row.updatedAt ? ' · ' + new Date(row.updatedAt).toLocaleDateString() : ''}
                   {row.status === 'archived' ? ' · 已归档' : ''}
                 </small>
               </button>

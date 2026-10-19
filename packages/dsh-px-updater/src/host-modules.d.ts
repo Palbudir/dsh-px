@@ -27,6 +27,10 @@ declare module 'react' {
   export function useEffect(effect: () => void | (() => void), deps?: readonly unknown[]): void
   export function useCallback<T extends (...args: never[]) => unknown>(fn: T, deps: readonly unknown[]): T
   export function useMemo<T>(factory: () => T, deps: readonly unknown[]): T
+  export function useSyncExternalStore<T>(
+    subscribe: (callback: () => void) => () => void,
+    getSnapshot: () => T
+  ): T
   const React: {
     createElement: (type: unknown, props?: unknown, ...children: unknown[]) => ReactElement
   }

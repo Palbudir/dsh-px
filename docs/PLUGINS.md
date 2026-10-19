@@ -4,7 +4,7 @@
 
 ## 能力所有者
 
-Desktop 将 updater、workbench、workspace 装配为 installation 层的 `dsh-px-core` 基础包；文件与终端（`dsh-px-files`）、当前任务、产物、引用与批注、定时任务、人格与经历、电脑操作作为七个 profile 功能包安装；社区清单中的原包另外独立安装。基础包和文件包是组合包，不代表另写执行服务。成员继续使用下表的职责、组件 ID 和业务存储。
+Desktop 将 updater、workbench、workspace 装配为 installation 层的 `dsh-px-core` 基础包；文件与终端（`dsh-px-files`）、当前任务、产物、引用与批注、定时任务、记忆与知识、电脑操作作为七个 profile 功能包安装；社区清单中的原包另外独立安装。基础包和文件包是组合包，不代表另写执行服务。成员继续使用下表的职责、组件 ID 和业务存储。
 
 “插件”主页管理七个 PX 可选能力与独立社区成员；基础组件通过真实部署进入内置运行清单。版本与诊断使用常规设置页。独立 `dsh web` 安装聚合 Pack 时仍显示一个可展开成员的整合包；它与 Desktop 使用同一份插件实现。
 
