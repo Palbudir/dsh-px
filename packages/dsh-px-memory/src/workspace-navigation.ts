@@ -31,16 +31,21 @@ export function memoryNavigation(host: any, component: any, icon: any) {
   const stopSelection = host.layout.panelInfo.subscribe(() => {
     if (advanced && host.layout.panelInfo.getSnapshot().activePanelId !== 'mnemon') restore()
   })
+  const hasNative = () =>
+    host.slots
+      .entries('main')
+      .some((entry: any) => entry.options.key === 'mnemon' && entry.component !== component)
+  const stopEntries = host.slots.subscribe('main', () => {
+    // A different window can disable Mnemon while its advanced page is open.
+    if (advanced && ready && !hasNative()) restore()
+  })
   return {
     open: () => {
       restore()
       host.layout.selectPanel('mnemon')
     },
     openNative: () => {
-      const original = host.slots
-        .entries('main')
-        .some((entry: any) => entry.options.key === 'mnemon' && entry.component !== component)
-      if (!original) throw Error('原生记忆管理页未启用。请在 Mnemon 配置中启用页面，并选择侧栏展示。')
+      if (!hasNative()) throw Error('原生记忆管理页未启用。请在 Mnemon 配置中启用页面，并选择侧栏展示。')
       advanced = true
       stopMain?.()
       stopMain = undefined
@@ -49,6 +54,7 @@ export function memoryNavigation(host: any, component: any, icon: any) {
     dispose: () => {
       disposed = true
       stopSelection()
+      stopEntries()
       stop()
       stopMain?.()
       stopMain = undefined

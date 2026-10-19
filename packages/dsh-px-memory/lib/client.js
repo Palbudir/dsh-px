@@ -1176,14 +1176,17 @@ function memoryNavigation(host, component, icon) {
   const stopSelection = host.layout.panelInfo.subscribe(() => {
     if (advanced && host.layout.panelInfo.getSnapshot().activePanelId !== "mnemon") restore();
   });
+  const hasNative = () => host.slots.entries("main").some((entry) => entry.options.key === "mnemon" && entry.component !== component);
+  const stopEntries = host.slots.subscribe("main", () => {
+    if (advanced && ready && !hasNative()) restore();
+  });
   return {
     open: () => {
       restore();
       host.layout.selectPanel("mnemon");
     },
     openNative: () => {
-      const original = host.slots.entries("main").some((entry) => entry.options.key === "mnemon" && entry.component !== component);
-      if (!original) throw Error("\u539F\u751F\u8BB0\u5FC6\u7BA1\u7406\u9875\u672A\u542F\u7528\u3002\u8BF7\u5728 Mnemon \u914D\u7F6E\u4E2D\u542F\u7528\u9875\u9762\uFF0C\u5E76\u9009\u62E9\u4FA7\u680F\u5C55\u793A\u3002");
+      if (!hasNative()) throw Error("\u539F\u751F\u8BB0\u5FC6\u7BA1\u7406\u9875\u672A\u542F\u7528\u3002\u8BF7\u5728 Mnemon \u914D\u7F6E\u4E2D\u542F\u7528\u9875\u9762\uFF0C\u5E76\u9009\u62E9\u4FA7\u680F\u5C55\u793A\u3002");
       advanced = true;
       stopMain?.();
       stopMain = void 0;
@@ -1192,6 +1195,7 @@ function memoryNavigation(host, component, icon) {
     dispose: () => {
       disposed = true;
       stopSelection();
+      stopEntries();
       stop();
       stopMain?.();
       stopMain = void 0;

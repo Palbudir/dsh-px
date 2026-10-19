@@ -49,6 +49,7 @@ function setup(initiallyDeclared = true) {
     slots: {
       register: core.register.bind(core),
       entries: core.entries.bind(core),
+      subscribe: core.subscribe.bind(core),
       inject
     },
     layout: {
@@ -130,6 +131,14 @@ test('opening before native declarations is safe and reconciles once they become
   f.navigation.open()
   assert.equal(f.core.entriesOfSlot('main').length, 0)
   f.declare()
+  assert.equal(f.core.entriesOfSlot('main')[0].component, f.px)
+  f.navigation.dispose()
+})
+test('removing the native owner from another window while advanced is open restores the PX page', async () => {
+  const f = setup()
+  f.navigation.openNative()
+  f.offNative()
+  await Promise.resolve()
   assert.equal(f.core.entriesOfSlot('main')[0].component, f.px)
   f.navigation.dispose()
 })
