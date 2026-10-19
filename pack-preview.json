@@ -5,24 +5,24 @@
     "product": "pack",
     "channel": "preview",
     "platform": "any",
-    "version": "0.7.3-alpha.1",
-    "packVersion": "0.7.3-alpha.1",
+    "version": "0.7.4-alpha.1",
+    "packVersion": "0.7.4-alpha.1",
     "protocolGeneration": 7,
     "upgradeFromGenerations": [],
     "hostVersion": "0.2.0-rc.2",
     "upstreamCommit": "639ed015397290b3745d163aafe02ffee4aa3f84",
-    "sourceCommit": "39ca914ad5f89ba007b58ba86e0c9eb783705b71",
-    "issuedAt": "2026-10-18T15:53:55.323Z",
+    "sourceCommit": "4e6925afde817f809ff842448538cdf57052e248",
+    "issuedAt": "2026-10-19T19:29:28.588Z",
     "files": [
       {
         "role": "pack",
-        "name": "dsh-px-pack-0.7.3-alpha.1.tgz",
-        "url": "https://github.com/Palbudir/dsh-px/releases/download/pack-v0.7.3-alpha.1/dsh-px-pack-0.7.3-alpha.1.tgz",
-        "size": 46704572,
-        "sha256": "439bf05268ebe0d6c1cfc70c50e751d2df83d53db9da24e01e319b0567ed02f9",
-        "sha512": "Q8nB8/nr+EKjDkniRVJm9m8lEFotuweVed0s9cbeVPw85Tl/MirBnqr+xWbaTKtiDU5502lHqasdk5h5N8jMJQ=="
+        "name": "dsh-px-pack-0.7.4-alpha.1.tgz",
+        "url": "https://github.com/Palbudir/dsh-px/releases/download/pack-v0.7.4-alpha.1/dsh-px-pack-0.7.4-alpha.1.tgz",
+        "size": 46710495,
+        "sha256": "3e4a1ce993ea100659b1791872c747dc30f0643a4f300dbadbc1aee5dbe2b4c4",
+        "sha512": "YD1gwZtNNV/xtKLAG3eX1Ho4EpyIwoRyU2+3jQgios3f/ptcSqT4xAVDhJkJme/lCns1yKObf71beWw38sV5Pg=="
       }
     ]
   },
-  "signature": "7upnorcvslCSPaLA405Kfgihnt/4aOHbyVq19t5mxXMdRMG4Yn6LL4x4emACgLJyBpH54RlYHGLtrWhGBQeQAg=="
+  "signature": "WEGzcfOlbFOCw4e8ybS33LYTRjHXc8wkFvcm1t0yZdcls8RpVI7357sGvxnmlslJqXB6TDj/CgnJJYVmdVHRCQ=="
 }
