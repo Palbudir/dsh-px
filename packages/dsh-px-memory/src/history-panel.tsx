@@ -24,7 +24,8 @@ export function HistoryPanel({
     [busy, setBusy] = useState(false),
     [error, setError] = useState('')
   const [data, setData] = useState<any>(null),
-    [detail, setDetail] = useState<any>(null)
+    [detail, setDetail] = useState<any>(null),
+    [detailKey, setDetailKey] = useState('')
   const post = async (args: object) =>
     requestJson<any>(url, {
       method: 'POST',
@@ -50,12 +51,13 @@ export function HistoryPanel({
       setBusy(false)
     }
   }
-  const read = async (row: any, offset = 0) => {
+  const read = async (row: any, offset = 0, key?: string) => {
     setBusy(true)
     setError('')
     try {
       const next = await post({ type: 'read-history', targetSessionId: row.sessionId, seq: row.seq, offset })
       setDetail(next.result)
+      if (key) setDetailKey(key)
     } catch (e: any) {
       setError(e.message)
     } finally {
@@ -117,13 +119,18 @@ export function HistoryPanel({
       )}
       {data?.result?.map((row: any) => (
         <article className="px-card" key={`${row.sessionId}:${row.seq ?? 'session'}:${row.part ?? 0}`}>
-          <strong>{row.title || '历史会话'}</strong>
+          <strong title={row.title}>
+            {row.title?.length > 80 ? row.title.slice(0, 80) + '…' : row.title || '历史会话'}
+          </strong>
           <p className="px-muted">
             {row.kind ? (kinds[row.kind] ?? row.kind) : '会话原文目录'} ·{' '}
             {new Date(row.time ?? row.lastEventAt ?? 0).toLocaleString()}
             {row.seq !== undefined ? ` · 事件 ${row.seq}` : ''}
           </p>
-          <p style={{ whiteSpace: 'pre-wrap' }}>{row.snippet ?? row.lastReply ?? '暂无助手回复'}</p>
+          <p style={{ whiteSpace: 'pre-wrap' }}>
+            {String(row.snippet ?? row.lastReply ?? '暂无助手回复').slice(0, 240)}
+            {String(row.snippet ?? row.lastReply ?? '').length > 240 ? '…' : ''}
+          </p>
           {row.lastState && (
             <details>
               <summary>最近状态记录（历史）</summary>
@@ -134,7 +141,9 @@ export function HistoryPanel({
             <button
               disabled={busy}
               onClick={() =>
-                row.seq === undefined ? void search(row.sessionId) : void read(row, row.readOffset ?? 0)
+                row.seq === undefined
+                  ? void search(row.sessionId)
+                  : void read(row, row.readOffset ?? 0, `${row.sessionId}:${row.seq}:${row.part ?? 0}`)
               }
             >
               {row.seq === undefined ? '查看最近记录' : '读取原文'}
@@ -143,23 +152,23 @@ export function HistoryPanel({
               打开原会话
             </button>
           </div>
+          {detail && detailKey === `${row.sessionId}:${row.seq}:${row.part ?? 0}` && (
+            <section className="px-card" aria-label="历史原文">
+              <strong>
+                {kinds[detail.kind] ?? detail.kind} · 事件 {detail.seq}
+              </strong>
+              <p className="px-muted">原生会话 {detail.sessionId} · 历史内容</p>
+              <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 360, overflow: 'auto' }}>{detail.text}</pre>
+              {detail.nextOffset !== null && (
+                <button disabled={busy} onClick={() => void read(detail, detail.nextOffset)}>
+                  下一段原文
+                </button>
+              )}
+              <button onClick={() => setDetail(null)}>收起原文</button>
+            </section>
+          )}
         </article>
       ))}
-      {detail && (
-        <section className="px-card" aria-label="历史原文">
-          <strong>
-            {kinds[detail.kind] ?? detail.kind} · 事件 {detail.seq}
-          </strong>
-          <p className="px-muted">原生会话 {detail.sessionId} · 历史内容</p>
-          <pre style={{ whiteSpace: 'pre-wrap', maxHeight: 360, overflow: 'auto' }}>{detail.text}</pre>
-          {detail.nextOffset !== null && (
-            <button disabled={busy} onClick={() => void read(detail, detail.nextOffset)}>
-              下一段原文
-            </button>
-          )}
-          <button onClick={() => setDetail(null)}>收起原文</button>
-        </section>
-      )}
     </section>
   )
 }
