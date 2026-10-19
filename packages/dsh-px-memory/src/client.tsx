@@ -41,9 +41,11 @@ export function MemoryPanel({
       storage = sessionStorage
     } catch {}
     return personaDrafts.acquire(
-      'px-persona-form:' + sessionId,
+      'px-persona-form-v2:' + sessionId,
       {
-        view: null as View | null,
+        revision: -1,
+        personaId: '',
+        configDirty: false,
         name: '',
         instructions: '',
         enabled: true,
@@ -56,20 +58,21 @@ export function MemoryPanel({
       (v) =>
         v.note.length <= 2000 &&
         v.instructions.length <= 2000 &&
-        (!v.view ||
-          (Number.isSafeInteger(v.view.revision) &&
-            typeof v.view.persona?.name === 'string' &&
-            Array.isArray(v.view.personas) &&
-            Array.isArray(v.view.persona.memories) &&
-            v.view.persona.memories.every(
-              (m) => typeof m.text === 'string' && typeof m.updatedAt === 'string'
-            ) &&
-            !!v.view.template &&
-            !!v.view.binding))
+        v.name.length <= 60 &&
+        v.newName.length <= 60 &&
+        Number.isSafeInteger(v.revision) &&
+        v.revision >= -1 &&
+        ['project', 'persona'].includes(v.scope)
     )
   }, [sessionId])
   const saved = draft?.getSnapshot()
-  const [view, setView] = useState<View | null>(saved?.view ?? null),
+  const restoring = useRef(!!saved && saved.revision >= 0)
+  const [draftRevision, setDraftRevision] = useState<number | undefined>(
+      saved && saved.revision >= 0 ? saved.revision : undefined
+    ),
+    [draftPersona, setDraftPersona] = useState(saved?.personaId ?? ''),
+    [conflict, setConflict] = useState(false)
+  const [view, setView] = useState<View | null>(null),
     [error, setError] = useState(''),
     [busy, setBusy] = useState(false)
   const [name, setName] = useState(saved?.name ?? ''),
@@ -99,12 +102,63 @@ export function MemoryPanel({
       instructions !== view.template.instructions ||
       enabled !== view.persona.memoryEnabled)
   )
-  const dirty = !!note || !!newName || configDirty
+  const dirty = !!note || !!newName || configDirty || (restoring.current && !!saved?.configDirty)
+  const identityChanged = !!(view && draftPersona && draftPersona !== view.persona.id)
+  const beginEdit = () => {
+    if (draftRevision === undefined && view) {
+      setDraftRevision(view.revision)
+      setDraftPersona(view.persona.id)
+    }
+  }
+  const discardDraft = () => {
+    restoring.current = false
+    draft?.clear()
+    setDraftRevision(undefined)
+    setDraftPersona('')
+    setConflict(false)
+    setNote('')
+    setNewName('')
+    setEditing(undefined)
+    setName('')
+    setInstructions('')
+    setView(null)
+    setError('')
+  }
   useEffect(() => {
-    if (!draft) return
-    if (dirty) draft.set({ view, name, instructions, enabled, newName, note, editing: editing ?? '', scope })
-    else draft.clear()
-  }, [draft, dirty, view, name, instructions, enabled, newName, note, editing, scope])
+    if (!draft || !view) return
+    if (dirty)
+      draft.set({
+        revision: draftRevision ?? view.revision,
+        personaId: draftPersona || view.persona.id,
+        configDirty,
+        name,
+        instructions,
+        enabled,
+        newName,
+        note,
+        editing: editing ?? '',
+        scope
+      })
+    else {
+      draft.clear()
+      setDraftRevision(undefined)
+      setDraftPersona('')
+    }
+  }, [
+    draft,
+    dirty,
+    view,
+    name,
+    instructions,
+    enabled,
+    newName,
+    note,
+    editing,
+    scope,
+    draftRevision,
+    draftPersona,
+    configDirty
+  ])
   const url = `/dsh-px-memory?sessionId=${encodeURIComponent(sessionId)}`
   const accept = (data: View): void => {
     setView(data)
@@ -114,13 +168,34 @@ export function MemoryPanel({
     if (!data.project) setScope('persona')
   }
   useEffect(() => {
-    if (!visible || busy || dirty) return
+    if (!visible || busy || (view && dirty)) return
     const ac = new AbortController()
     let timer: ReturnType<typeof setTimeout>
     const refresh = async () => {
       try {
         const data = await requestJson<View>(url, { signal: ac.signal })
-        if (!ac.signal.aborted) accept(data)
+        if (!ac.signal.aborted) {
+          if (restoring.current) {
+            restoring.current = false
+            setView(data)
+            if (!saved?.configDirty) {
+              setName(data.template.name)
+              setInstructions(data.template.instructions)
+              setEnabled(data.persona.memoryEnabled)
+            }
+            if (saved?.personaId !== data.persona.id) {
+              setConflict(true)
+              setError('此会话的人格已改变。旧人格草稿未提交，请放弃草稿后查看当前人格。')
+            } else if (saved?.revision !== data.revision) {
+              setConflict(true)
+              setError('这份草稿的原版本已变化，不能直接覆盖。请先保留需要的文字，再放弃草稿并读取最新内容。')
+            }
+          } else {
+            accept(data)
+            setError('')
+            setConflict(false)
+          }
+        }
       } catch (e: any) {
         if (!ac.signal.aborted) setError(String(e.message))
       }
@@ -131,8 +206,13 @@ export function MemoryPanel({
       ac.abort()
       clearTimeout(timer)
     }
-  }, [url, visible, busy, dirty])
+  }, [url, visible, busy, dirty, !!view])
   const act = async (action?: object): Promise<boolean> => {
+    if (action && identityChanged) {
+      setConflict(true)
+      setError('人格已改变，旧草稿未提交。请放弃草稿后重新读取。')
+      return false
+    }
     setBusy(true)
     setError('')
     try {
@@ -142,7 +222,7 @@ export function MemoryPanel({
           ? {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ ...action, revision: view?.revision })
+              body: JSON.stringify({ ...action, revision: draftRevision ?? view?.revision })
             }
           : {}
       )
@@ -153,8 +233,12 @@ export function MemoryPanel({
       if (configDirty && (!action || ['save', 'forget'].includes((action as { type: string }).type)))
         setView(data)
       else accept(data)
+      setDraftRevision(undefined)
+      setDraftPersona('')
+      setConflict(false)
       return true
     } catch (e) {
+      if ((e as { status?: number }).status === 409) setConflict(true)
       setError(e instanceof Error ? e.message : String(e))
       return false
     } finally {
@@ -162,6 +246,7 @@ export function MemoryPanel({
     }
   }
   const edit = (entry: MemoryEntry): void => {
+    beginEdit()
     setEditing(entry.id)
     setNote(entry.text)
     setScope(entry.project ? 'project' : 'persona')
@@ -239,8 +324,13 @@ export function MemoryPanel({
         )}
 
         {error && <p role="alert">{error} </p>}
+        {conflict && (
+          <button disabled={busy} onClick={discardDraft}>
+            放弃草稿并读取最新
+          </button>
+        )}
         {!view && !error && <p>正在读取…</p>}
-        {view && (
+        {view && !identityChanged && (
           <>
             <div hidden={tab !== 'history'}>
               <HistoryPanel
@@ -393,7 +483,10 @@ export function MemoryPanel({
                         style={{ ...controlStyle, width: '100%' }}
                         maxLength={60}
                         value={name}
-                        onChange={(e: any) => setName(e.target.value)}
+                        onChange={(e: any) => {
+                          beginEdit()
+                          setName(e.target.value)
+                        }}
                       />
                     </label>
                     <label>
@@ -406,7 +499,10 @@ export function MemoryPanel({
                         style={{ ...controlStyle, width: '100%', resize: 'vertical' }}
                         placeholder="例如：先解释结论；协助研究时标明来源和不确定性。"
                         value={instructions}
-                        onChange={(e: any) => setInstructions(e.target.value)}
+                        onChange={(e: any) => {
+                          beginEdit()
+                          setInstructions(e.target.value)
+                        }}
                       />
                     </label>
                     <label>
@@ -414,7 +510,10 @@ export function MemoryPanel({
                         disabled={busy || view.persona.archived}
                         type="checkbox"
                         checked={enabled}
-                        onChange={(e: any) => setEnabled(e.target.checked)}
+                        onChange={(e: any) => {
+                          beginEdit()
+                          setEnabled(e.target.checked)
+                        }}
                       />{' '}
                       使用并允许保存此人格的记忆
                     </label>
@@ -470,7 +569,10 @@ export function MemoryPanel({
                       placeholder="例如：研究助手"
                       value={newName}
                       maxLength={60}
-                      onChange={(e: any) => setNewName(e.target.value)}
+                      onChange={(e: any) => {
+                        beginEdit()
+                        setNewName(e.target.value)
+                      }}
                     />{' '}
                     <button
                       style={controlStyle}
@@ -543,7 +645,10 @@ export function MemoryPanel({
                 style={{ ...controlStyle, width: '100%', resize: 'vertical' }}
                 placeholder="写下需要在以后的会话中记住的约定…"
                 value={note}
-                onChange={(e: any) => setNote(e.target.value)}
+                onChange={(e: any) => {
+                  beginEdit()
+                  setNote(e.target.value)
+                }}
               />
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
                 <select

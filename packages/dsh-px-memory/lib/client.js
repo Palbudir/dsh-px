@@ -1149,7 +1149,7 @@ function memoryNavigation(host, component, icon) {
   let disposed = false;
   let ready = false;
   const install = () => {
-    if (!disposed && ready && !stopMain)
+    if (!disposed && !advanced && ready && !stopMain)
       stopMain = host.slots.register({ name: "main", key: "mnemon", priority: -10 }, component);
   };
   const stop = host.slots.inject(
@@ -1286,9 +1286,11 @@ function MemoryPanel({
     } catch {
     }
     return personaDrafts.acquire(
-      "px-persona-form:" + sessionId,
+      "px-persona-form-v2:" + sessionId,
       {
-        view: null,
+        revision: -1,
+        personaId: "",
+        configDirty: false,
         name: "",
         instructions: "",
         enabled: true,
@@ -1298,13 +1300,15 @@ function MemoryPanel({
         scope: "project"
       },
       storage,
-      (v) => v.note.length <= 2e3 && v.instructions.length <= 2e3 && (!v.view || Number.isSafeInteger(v.view.revision) && typeof v.view.persona?.name === "string" && Array.isArray(v.view.personas) && Array.isArray(v.view.persona.memories) && v.view.persona.memories.every(
-        (m) => typeof m.text === "string" && typeof m.updatedAt === "string"
-      ) && !!v.view.template && !!v.view.binding)
+      (v) => v.note.length <= 2e3 && v.instructions.length <= 2e3 && v.name.length <= 60 && v.newName.length <= 60 && Number.isSafeInteger(v.revision) && v.revision >= -1 && ["project", "persona"].includes(v.scope)
     );
   }, [sessionId]);
   const saved = draft?.getSnapshot();
-  const [view, setView] = (0, import_react6.useState)(saved?.view ?? null), [error, setError] = (0, import_react6.useState)(""), [busy, setBusy] = (0, import_react6.useState)(false);
+  const restoring = (0, import_react6.useRef)(!!saved && saved.revision >= 0);
+  const [draftRevision, setDraftRevision] = (0, import_react6.useState)(
+    saved && saved.revision >= 0 ? saved.revision : void 0
+  ), [draftPersona, setDraftPersona] = (0, import_react6.useState)(saved?.personaId ?? ""), [conflict, setConflict] = (0, import_react6.useState)(false);
+  const [view, setView] = (0, import_react6.useState)(null), [error, setError] = (0, import_react6.useState)(""), [busy, setBusy] = (0, import_react6.useState)(false);
   const [name, setName] = (0, import_react6.useState)(saved?.name ?? ""), [instructions, setInstructions] = (0, import_react6.useState)(saved?.instructions ?? ""), [enabled, setEnabled] = (0, import_react6.useState)(saved?.enabled ?? true);
   const [newName, setNewName] = (0, import_react6.useState)(saved?.newName ?? ""), [note, setNote] = (0, import_react6.useState)(saved?.note ?? ""), [editing, setEditing] = (0, import_react6.useState)(saved?.editing || void 0);
   const [scope, setScope] = (0, import_react6.useState)(saved?.scope ?? "project");
@@ -1322,12 +1326,63 @@ function MemoryPanel({
     };
   }, []);
   const configDirty = !!(view && (name !== view.template.name || instructions !== view.template.instructions || enabled !== view.persona.memoryEnabled));
-  const dirty = !!note || !!newName || configDirty;
+  const dirty = !!note || !!newName || configDirty || restoring.current && !!saved?.configDirty;
+  const identityChanged = !!(view && draftPersona && draftPersona !== view.persona.id);
+  const beginEdit = () => {
+    if (draftRevision === void 0 && view) {
+      setDraftRevision(view.revision);
+      setDraftPersona(view.persona.id);
+    }
+  };
+  const discardDraft = () => {
+    restoring.current = false;
+    draft?.clear();
+    setDraftRevision(void 0);
+    setDraftPersona("");
+    setConflict(false);
+    setNote("");
+    setNewName("");
+    setEditing(void 0);
+    setName("");
+    setInstructions("");
+    setView(null);
+    setError("");
+  };
   (0, import_react6.useEffect)(() => {
-    if (!draft) return;
-    if (dirty) draft.set({ view, name, instructions, enabled, newName, note, editing: editing ?? "", scope });
-    else draft.clear();
-  }, [draft, dirty, view, name, instructions, enabled, newName, note, editing, scope]);
+    if (!draft || !view) return;
+    if (dirty)
+      draft.set({
+        revision: draftRevision ?? view.revision,
+        personaId: draftPersona || view.persona.id,
+        configDirty,
+        name,
+        instructions,
+        enabled,
+        newName,
+        note,
+        editing: editing ?? "",
+        scope
+      });
+    else {
+      draft.clear();
+      setDraftRevision(void 0);
+      setDraftPersona("");
+    }
+  }, [
+    draft,
+    dirty,
+    view,
+    name,
+    instructions,
+    enabled,
+    newName,
+    note,
+    editing,
+    scope,
+    draftRevision,
+    draftPersona,
+    configDirty
+  ]);
   const url = `/dsh-px-memory?sessionId=${encodeURIComponent(sessionId)}`;
   const accept = (data) => {
     setView(data);
@@ -1337,13 +1392,34 @@ function MemoryPanel({
     if (!data.project) setScope("persona");
   };
   (0, import_react6.useEffect)(() => {
-    if (!visible || busy || dirty) return;
+    if (!visible || busy || view && dirty) return;
     const ac = new AbortController();
     let timer;
     const refresh = async () => {
       try {
         const data = await requestJson(url, { signal: ac.signal });
-        if (!ac.signal.aborted) accept(data);
+        if (!ac.signal.aborted) {
+          if (restoring.current) {
+            restoring.current = false;
+            setView(data);
+            if (!saved?.configDirty) {
+              setName(data.template.name);
+              setInstructions(data.template.instructions);
+              setEnabled(data.persona.memoryEnabled);
+            }
+            if (saved?.personaId !== data.persona.id) {
+              setConflict(true);
+              setError("\u6B64\u4F1A\u8BDD\u7684\u4EBA\u683C\u5DF2\u6539\u53D8\u3002\u65E7\u4EBA\u683C\u8349\u7A3F\u672A\u63D0\u4EA4\uFF0C\u8BF7\u653E\u5F03\u8349\u7A3F\u540E\u67E5\u770B\u5F53\u524D\u4EBA\u683C\u3002");
+            } else if (saved?.revision !== data.revision) {
+              setConflict(true);
+              setError("\u8FD9\u4EFD\u8349\u7A3F\u7684\u539F\u7248\u672C\u5DF2\u53D8\u5316\uFF0C\u4E0D\u80FD\u76F4\u63A5\u8986\u76D6\u3002\u8BF7\u5148\u4FDD\u7559\u9700\u8981\u7684\u6587\u5B57\uFF0C\u518D\u653E\u5F03\u8349\u7A3F\u5E76\u8BFB\u53D6\u6700\u65B0\u5185\u5BB9\u3002");
+            }
+          } else {
+            accept(data);
+            setError("");
+            setConflict(false);
+          }
+        }
       } catch (e) {
         if (!ac.signal.aborted) setError(String(e.message));
       }
@@ -1354,8 +1430,13 @@ function MemoryPanel({
       ac.abort();
       clearTimeout(timer);
     };
-  }, [url, visible, busy, dirty]);
+  }, [url, visible, busy, dirty, !!view]);
   const act = async (action) => {
+    if (action && identityChanged) {
+      setConflict(true);
+      setError("\u4EBA\u683C\u5DF2\u6539\u53D8\uFF0C\u65E7\u8349\u7A3F\u672A\u63D0\u4EA4\u3002\u8BF7\u653E\u5F03\u8349\u7A3F\u540E\u91CD\u65B0\u8BFB\u53D6\u3002");
+      return false;
+    }
     setBusy(true);
     setError("");
     try {
@@ -1364,7 +1445,7 @@ function MemoryPanel({
         action ? {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...action, revision: view?.revision })
+          body: JSON.stringify({ ...action, revision: draftRevision ?? view?.revision })
         } : {}
       );
       if (!action && dirty && data.persona.id !== view?.persona.id) {
@@ -1374,8 +1455,12 @@ function MemoryPanel({
       if (configDirty && (!action || ["save", "forget"].includes(action.type)))
         setView(data);
       else accept(data);
+      setDraftRevision(void 0);
+      setDraftPersona("");
+      setConflict(false);
       return true;
     } catch (e) {
+      if (e.status === 409) setConflict(true);
       setError(e instanceof Error ? e.message : String(e));
       return false;
     } finally {
@@ -1383,6 +1468,7 @@ function MemoryPanel({
     }
   };
   const edit = (entry) => {
+    beginEdit();
     setEditing(entry.id);
     setNote(entry.text);
     setScope(entry.project ? "project" : "persona");
@@ -1450,8 +1536,9 @@ function MemoryPanel({
           error,
           " "
         ] }),
+        conflict && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("button", { disabled: busy, onClick: discardDraft, children: "\u653E\u5F03\u8349\u7A3F\u5E76\u8BFB\u53D6\u6700\u65B0" }),
         !view && !error && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u2026" }),
-        view && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(import_jsx_runtime7.Fragment, { children: [
+        view && !identityChanged && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)(import_jsx_runtime7.Fragment, { children: [
           /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("div", { hidden: tab !== "history", children: /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
             HistoryPanel,
             {
@@ -1606,7 +1693,10 @@ function MemoryPanel({
                         style: { ...controlStyle, width: "100%" },
                         maxLength: 60,
                         value: name,
-                        onChange: (e) => setName(e.target.value)
+                        onChange: (e) => {
+                          beginEdit();
+                          setName(e.target.value);
+                        }
                       }
                     )
                   ] }),
@@ -1622,7 +1712,10 @@ function MemoryPanel({
                         style: { ...controlStyle, width: "100%", resize: "vertical" },
                         placeholder: "\u4F8B\u5982\uFF1A\u5148\u89E3\u91CA\u7ED3\u8BBA\uFF1B\u534F\u52A9\u7814\u7A76\u65F6\u6807\u660E\u6765\u6E90\u548C\u4E0D\u786E\u5B9A\u6027\u3002",
                         value: instructions,
-                        onChange: (e) => setInstructions(e.target.value)
+                        onChange: (e) => {
+                          beginEdit();
+                          setInstructions(e.target.value);
+                        }
                       }
                     )
                   ] }),
@@ -1633,7 +1726,10 @@ function MemoryPanel({
                         disabled: busy || view.persona.archived,
                         type: "checkbox",
                         checked: enabled,
-                        onChange: (e) => setEnabled(e.target.checked)
+                        onChange: (e) => {
+                          beginEdit();
+                          setEnabled(e.target.checked);
+                        }
                       }
                     ),
                     " ",
@@ -1689,7 +1785,10 @@ function MemoryPanel({
                       placeholder: "\u4F8B\u5982\uFF1A\u7814\u7A76\u52A9\u624B",
                       value: newName,
                       maxLength: 60,
-                      onChange: (e) => setNewName(e.target.value)
+                      onChange: (e) => {
+                        beginEdit();
+                        setNewName(e.target.value);
+                      }
                     }
                   ),
                   " ",
@@ -1749,7 +1848,10 @@ function MemoryPanel({
                 style: { ...controlStyle, width: "100%", resize: "vertical" },
                 placeholder: "\u5199\u4E0B\u9700\u8981\u5728\u4EE5\u540E\u7684\u4F1A\u8BDD\u4E2D\u8BB0\u4F4F\u7684\u7EA6\u5B9A\u2026",
                 value: note,
-                onChange: (e) => setNote(e.target.value)
+                onChange: (e) => {
+                  beginEdit();
+                  setNote(e.target.value);
+                }
               }
             ),
             /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }, children: [

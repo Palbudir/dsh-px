@@ -3,30 +3,53 @@ import assert from 'node:assert/strict'
 import { SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
 import { memoryNavigation } from '../packages/dsh-px-memory/src/workspace-navigation'
 
-function setup() {
+function setup(initiallyDeclared = true) {
   const core = new SlotCore() as any
-  core.register(
-    {
-      name: 'root',
-      children: {
-        main: { kind: 'keyed', scope: 'root' },
-        'sidebar.panellist': { kind: 'list', scope: 'root' }
-      }
-    },
-    () => null
-  )
   const native = () => 'native',
     px = () => 'px',
     icon = () => 'icon'
-  const offNative = core.register({ name: 'main', key: 'mnemon' }, native)
-  core.register({ name: 'sidebar.panellist', id: 'mnemon', label: '记忆系统' }, icon)
+  let offRoot = () => {},
+    offNative = () => {}
+  const declare = () => {
+    offRoot = core.register(
+      {
+        name: 'root',
+        children: {
+          main: { kind: 'keyed', scope: 'root' },
+          'sidebar.panellist': { kind: 'list', scope: 'root' }
+        }
+      },
+      () => null
+    )
+    offNative = core.register({ name: 'main', key: 'mnemon' }, native)
+    core.register({ name: 'sidebar.panellist', id: 'mnemon', label: '记忆系统' }, icon)
+  }
+  if (initiallyDeclared) declare()
+  const inject = (slot: string, setup: () => () => void) => {
+    let cleanup: (() => void) | undefined,
+      epoch = -1
+    const refresh = () => {
+      const next = core.declarationEpoch(slot)
+      if (next === epoch) return
+      epoch = next
+      cleanup?.()
+      cleanup = undefined
+      if (core.spec(slot)) cleanup = setup()
+    }
+    const off = core.subscribeDeclaration(slot, refresh)
+    refresh()
+    return () => {
+      off()
+      cleanup?.()
+    }
+  }
   let activePanelId: string | null = 'mnemon'
   const listeners = new Set<() => void>()
   const host = {
     slots: {
       register: core.register.bind(core),
       entries: core.entries.bind(core),
-      inject: (_slot: string, setup: () => () => void) => setup()
+      inject
     },
     layout: {
       panelInfo: {
@@ -43,7 +66,16 @@ function setup() {
     }
   }
   const navigation = memoryNavigation(host, px, icon)
-  return { core, host, native, px, navigation, offNative }
+  return {
+    core,
+    host,
+    native,
+    px,
+    navigation,
+    offNative: () => offNative(),
+    declare,
+    collapse: () => offRoot()
+  }
 }
 test('native priority shadowing keeps one entry and restores the community owner when PX stops', () => {
   const f = setup()
@@ -80,4 +112,24 @@ test('disposing PX while the advanced view is open does not remove the native vi
   f.host.layout.selectPanel(null)
   assert.equal(f.core.entriesOfSlot('main')[0].component, f.native)
   assert.equal(f.core.entries('main').length, 1)
+})
+
+test('advanced navigation survives native declaration teardown and recreation', () => {
+  const f = setup()
+  f.navigation.openNative()
+  f.collapse()
+  f.declare()
+  assert.equal(f.core.entriesOfSlot('main')[0].component, f.native)
+  f.host.layout.selectPanel(null)
+  f.navigation.open()
+  assert.equal(f.core.entriesOfSlot('main')[0].component, f.px)
+  f.navigation.dispose()
+})
+test('opening before native declarations is safe and reconciles once they become available', () => {
+  const f = setup(false)
+  f.navigation.open()
+  assert.equal(f.core.entriesOfSlot('main').length, 0)
+  f.declare()
+  assert.equal(f.core.entriesOfSlot('main')[0].component, f.px)
+  f.navigation.dispose()
 })

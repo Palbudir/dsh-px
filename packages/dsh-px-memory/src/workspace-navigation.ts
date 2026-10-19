@@ -5,7 +5,7 @@ export function memoryNavigation(host: any, component: any, icon: any) {
   let disposed = false
   let ready = false
   const install = () => {
-    if (!disposed && ready && !stopMain)
+    if (!disposed && !advanced && ready && !stopMain)
       stopMain = host.slots.register({ name: 'main', key: 'mnemon', priority: -10 }, component)
   }
   const stop = host.slots.inject('main', () =>
