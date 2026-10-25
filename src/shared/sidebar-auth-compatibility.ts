@@ -36,15 +36,15 @@ export function patchSidebarSessionDirectory(source: string): string {
 
 export const SIDEBAR_CLIENT_SOURCE = {
   sourceSha256: '53b70b1b5317205247c074b8121e1ececec1df2dc3771b0641f0a66b8fd127e1',
-  patchedSha256: '0791e5438b868c86bac7beeb808b568c2a127835dd49ef9c0b59336daab80687',
-  patchId: 'px-sidebar-native-client-v4'
+  patchedSha256: 'a8ffcaa713ffda6836c5f654942854f97ad5a6445f22840561dd0e168c313908',
+  patchId: 'px-sidebar-native-client-v5'
 } as const
 /** Native shell owns transport/auth; HTML receives an absolute path before the upstream URL codec. */
 export function patchSidebarClientTransport(source: string): { code: string; sha256: string } {
   if (createHash('sha256').update(source).digest('hex') !== SIDEBAR_CLIENT_SOURCE.sourceSha256)
     throw Error('侧栏客户端来源与固定版本不一致')
   if (!source.includes('globalThis.__DSH_TRANSPORT__?.streamBaseUrl')) throw Error('侧栏原生连接合约已变化')
-  const code = patchSidebarLocalFileLinks(patchSidebarHtmlViewer(source))
+  const code = patchSidebarMarkdownMedia(patchSidebarLocalFileLinks(patchSidebarHtmlViewer(source)))
   const sha256 = createHash('sha256').update(code).digest('hex')
   if (sha256 !== SIDEBAR_CLIENT_SOURCE.patchedSha256) throw Error('侧栏客户端补丁摘要不一致：' + sha256)
   return { code, sha256 }
@@ -81,8 +81,8 @@ export function patchSidebarHtmlViewer(source: string): string {
 
 export const SIDEBAR_EDITOR_SOURCE = {
   sourceSha256: 'e899df938ceb8ea29ff2319e15a89e76155775ba07c8cf65a970a1c8596b69fd',
-  patchedSha256: '4c923a51c362333b280702a4e4e62fe4f95b1b7f535db19289c07ffeb3e8dc53',
-  patchId: 'px-sidebar-native-html-v3'
+  patchedSha256: 'cc9f8f2eba6a70b135294935eba9996aaee23585c67d28a167ad62d459582371',
+  patchId: 'px-sidebar-native-html-v4'
 } as const
 /** Retain the upstream editor/draft/save controls; delegate preview bytes to the PX native-file renderer. */
 export function patchSidebarHtmlRenderer(source: string): { code: string; sha256: string } {
@@ -121,12 +121,28 @@ export function patchSidebarLocalFileLinks(source: string): string {
 /** Reuse upstream's tolerant URL decoder once, before the media route encodes the filesystem path. */
 export function patchSidebarMarkdownMedia(source: string): string {
   const candidate = 'const candidate = isAbsolutePath$1(trimmed) ? trimmed : directory + trimmed;'
+  const props = /(function markdownTextProps\(text, labels\) \{\s*return \{)(\s*text,)/u
   if (source.split(candidate).length !== 2 || source.split('function decodePercent(value) {').length !== 2)
     throw Error('侧栏 Markdown 图片路径合约已变化')
-  return source.replace(
-    candidate,
-    'const local = decodePercent(trimmed);\n\t\tconst candidate = isAbsolutePath$1(local) ? local : directory + local;'
-  )
+  if (!props.test(source)) throw Error('侧栏 Markdown 图片渲染合约已变化')
+  // Match native fileMediaUrl/pathImages: Desktop must use its authenticated
+  // same-origin protocol forwarder, not a bare cross-origin HTTP image request.
+  return source
+    .replace(
+      candidate,
+      String.raw`const local = decodePercent(trimmed);
+      const candidate = isAbsolutePath$1(local) ? local : directory + local;
+      const page = typeof document === "undefined" ? "" : document.baseURI;
+      if (page?.startsWith("dsh-app://app/")) {
+        const absolute = normalizeLocalPath(candidate);
+        if (!isAbsolutePath$1(absolute) || /^[\\/]{2}/u.test(absolute) || /[\u0000-\u001f\u007f]/u.test(absolute)) return dest;
+        return new URL("api/file?path=" + encodeURIComponent(absolute), page).href;
+      }`
+    )
+    .replace(
+      props,
+      '$1\npathImages: { resolve: (value) => typeof document !== "undefined" && document.baseURI.startsWith("dsh-app://app/") && value.startsWith("dsh-app://app/api/file?") ? value : void 0 },$2'
+    )
 }
 
 /** Preserve changes typed during an in-flight native save; the native write owns format and revision checks. */
