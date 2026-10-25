@@ -477,6 +477,7 @@ function createDraftRegistry(limit = 48, canEvict = () => true) {
 var import_react3 = require("react");
 var import_jsx_runtime4 = require("react/jsx-runtime");
 var drafts = createDraftRegistry(64);
+var startedNotice = "\u5DF2\u5F00\u59CB\u540E\u53F0\u5904\u7406\uFF0C\u53EF\u4EE5\u7EE7\u7EED\u5BF9\u8BDD\u3002";
 var active = (task) => ["starting", "running", "stopping"].includes(task.phase);
 var pendingRun = (run) => run.status === "running" && !run.awaitingRecovery;
 var hasActivity = (value) => !!(value?.tasks?.some(active) || value?.runs?.some(pendingRun));
@@ -543,11 +544,19 @@ function ExperiencePanel({
         pendingView = next;
         again = hasActivity(next);
         const snapshot = latest.current, edited = editEpoch.current;
-        const shouldRefresh = first || snapshot.selected?.revision !== next.revision || snapshot.selected?.value.runs.some((run2) => next.runs.some((current) => current.id === run2.id && (current.status !== run2.status || current.awaitingRecovery !== run2.awaitingRecovery)));
+        const shouldRefresh = first || snapshot.selected?.revision !== next.revision || snapshot.selected?.value.runs.some(
+          (run2) => next.runs.some(
+            (current) => current.id === run2.id && (current.status !== run2.status || current.awaitingRecovery !== run2.awaitingRecovery)
+          )
+        );
         first = false;
         if (snapshot.selected && !snapshot.busy && snapshot.body === snapshot.selected.value.draft.content && shouldRefresh) {
-          const detail = await call({ action: "read", kind: "draft", id: snapshot.selected.value.draft.id }, controller.signal);
-          if (controller.signal.aborted || epoch !== actionEpoch.current || edited !== editEpoch.current || latest.current.selected !== snapshot.selected || latest.current.body !== snapshot.body || latest.current.busy) return;
+          const detail = await call(
+            { action: "read", kind: "draft", id: snapshot.selected.value.draft.id },
+            controller.signal
+          );
+          if (controller.signal.aborted || epoch !== actionEpoch.current || edited !== editEpoch.current || latest.current.selected !== snapshot.selected || latest.current.body !== snapshot.body || latest.current.busy)
+            return;
           if (detail.value.draft.status !== "ready") {
             setSelected(null);
             setBody("");
@@ -608,16 +617,24 @@ function ExperiencePanel({
     const admitted = await call({ action, id, requestId }, signal);
     if (signal.aborted) return;
     actionEpoch.current++;
-    setView((current) => current && { ...current, tasks: [{
-      requestId,
-      jobId: admitted.jobId,
-      phase: "starting",
-      startedAt: Date.now(),
-      progress: action === "review" ? "\u6574\u7406\u5DE5\u4F5C\u7ECF\u5386" : action === "draft" ? "\u751F\u6210 Skill \u8349\u7A3F" : "\u6A21\u62DF\u56DE\u6D4B Skill \u8349\u7A3F"
-    }, ...current.tasks.filter((task) => task.requestId !== requestId)] });
+    setView(
+      (current) => current && {
+        ...current,
+        tasks: [
+          {
+            requestId,
+            jobId: admitted.jobId,
+            phase: "starting",
+            startedAt: Date.now(),
+            progress: action === "review" ? "\u6574\u7406\u5DE5\u4F5C\u7ECF\u5386" : action === "draft" ? "\u751F\u6210 Skill \u8349\u7A3F" : "\u6A21\u62DF\u56DE\u6D4B Skill \u8349\u7A3F"
+          },
+          ...current.tasks.filter((task) => task.requestId !== requestId)
+        ]
+      }
+    );
     setSelected(null);
     setEvidence(null);
-    setNotice("\u5DF2\u5F00\u59CB\u540E\u53F0\u5904\u7406\uFF0C\u53EF\u4EE5\u7EE7\u7EED\u5BF9\u8BDD\u3002");
+    setNotice(startedNotice);
   });
   const readDraft = (id) => void run(async (signal) => {
     const next = await call({ action: "read", kind: "draft", id }, signal);
@@ -648,7 +665,7 @@ function ExperiencePanel({
     ] }),
     /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "px-muted", children: "\u4ECE\u5DF2\u7ED3\u675F\u7684\u8F6E\u6B21\u63D0\u70BC\u65B9\u6CD5\uFF0C\u5019\u9009\u4EC5\u6B64\u4EBA\u683C\u5728\u672C\u9879\u76EE\u53EF\u89C1\u3002\u4F7F\u7528\u6765\u6E90\u6A21\u578B\u7684\u8F83\u4F4E\u63A8\u7406\u6863\uFF08\u82E5\u652F\u6301\uFF09\uFF1B\u7531\u4F60\u91C7\u7EB3\u540E\u624D\u5199\u5165\u5171\u4EAB Skill\u3002" }),
     error && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "alert", children: error }),
-    notice && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "status", children: notice }),
+    notice && (notice !== startedNotice || working) && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "status", children: notice }),
     (working ? view?.tasks?.filter(active) : view?.tasks?.slice(0, 1))?.map((task) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { role: "status", children: [
       phase[task.phase] ?? task.phase,
       " \xB7 ",
