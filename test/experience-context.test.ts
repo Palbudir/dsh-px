@@ -3,7 +3,11 @@ import assert from 'node:assert/strict'
 import { experienceWindow, redactExperienceText } from '../packages/dsh-px-memory/src/experience-context'
 import { inspectMemorySession } from '../packages/dsh-px-memory/src/session-context'
 import { experienceRunView } from '../packages/dsh-px-memory/src/experience-run-state'
-import { experienceModel, experienceSessionModel } from '../packages/dsh-px-memory/src/experience-context'
+import {
+  experienceModel,
+  experienceSessionModel,
+  createExperienceParent
+} from '../packages/dsh-px-memory/src/experience-context'
 
 test('bounded background analysis selects only a declared low effort and leaves source configuration untouched', () => {
   const source = { provider: 'p', model: 'm', reasoningEffort: 'high' }
@@ -165,4 +169,45 @@ test('a previous-host running record is visibly unconfirmed without rewriting it
   assert.equal(experienceRunView({ ...old, status: 'interrupted' }, 2000).awaitingRecovery, false)
   assert.equal(experienceRunView({ ...old, status: 'completed' }, 2000).awaitingRecovery, false)
   assert.equal(old.status, 'running')
+})
+
+test('identity cleanup failure cannot rewrite native completion or mask the original creation failure', async () => {
+  const original = new Error('native creation failed'),
+    warnings: unknown[] = []
+  let fail = false,
+    disposed = 0
+  const host = {
+    logger: { warn: (...args: unknown[]) => warnings.push(args) },
+    get: (name: string) =>
+      name === 'agents'
+        ? {
+            create: async () => {
+              if (fail) throw original
+              return {
+                agent: { id: 'task' },
+                dispose: async () => {
+                  disposed++
+                }
+              }
+            }
+          }
+        : undefined
+  }
+  const store = {
+    bind: () => {},
+    releaseExperienceBindings: () => {
+      throw Error('storage unavailable during cleanup')
+    }
+  } as any
+  const caller = { sessionId: 'source', project: 'project', actor: 'human' as const },
+    model = { provider: 'p', model: 'm' }
+  const owned = await createExperienceParent(host, store, caller, model, new AbortController().signal)
+  await owned.dispose()
+  assert.equal(disposed, 1)
+  fail = true
+  await assert.rejects(
+    createExperienceParent(host, store, caller, model, new AbortController().signal),
+    (error) => error === original
+  )
+  assert.equal(warnings.length, 2)
 })

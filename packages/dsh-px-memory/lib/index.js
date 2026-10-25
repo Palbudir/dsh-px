@@ -2079,6 +2079,13 @@ async function createExperienceParent(host, store, caller, model, signal) {
     purpose: "experience",
     createdFrom: caller.sessionId
   });
+  const release = () => {
+    try {
+      store.releaseExperienceBindings([id]);
+    } catch (error62) {
+      host.logger?.warn?.("\u5185\u90E8\u7ECF\u9A8C\u8EAB\u4EFD\u6682\u672A\u56DE\u6536\uFF0C\u5C06\u5728\u540E\u7EED\u542F\u52A8\u65F6\u91CD\u8BD5\uFF1A%s", String(error62));
+    }
+  };
   try {
     signal.throwIfAborted();
     const owned = await agents.create({
@@ -2095,12 +2102,12 @@ async function createExperienceParent(host, store, caller, model, signal) {
         try {
           await owned.dispose();
         } finally {
-          store.releaseExperienceBindings([id]);
+          release();
         }
       }
     };
   } catch (error62) {
-    store.releaseExperienceBindings([id]);
+    release();
     throw error62;
   }
 }
@@ -2234,9 +2241,11 @@ var ExperienceJobs = class {
           }
         })();
         void record2.settled.catch((error62) => {
-          record2.phase = "failed";
-          record2.result = void 0;
-          record2.error = String(error62).slice(0, 500);
+          if (!terminal(record2.phase)) {
+            record2.phase = "failed";
+            record2.result = void 0;
+          }
+          record2.error = [record2.error, "\u540E\u53F0\u6E05\u7406\u672A\u5B8C\u6210\uFF1A" + String(error62)].filter(Boolean).join("\uFF1B").slice(0, 500);
         });
         return { requestId, jobId: record2.jobId };
       } catch (error62) {

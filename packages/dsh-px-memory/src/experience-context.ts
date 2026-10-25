@@ -169,6 +169,13 @@ export async function createExperienceParent(
     purpose: 'experience',
     createdFrom: caller.sessionId
   })
+  const release = () => {
+    try {
+      store.releaseExperienceBindings([id])
+    } catch (error) {
+      host.logger?.warn?.('内部经验身份暂未回收，将在后续启动时重试：%s', String(error))
+    }
+  }
   try {
     signal.throwIfAborted()
     const owned = await agents.create({
@@ -185,12 +192,12 @@ export async function createExperienceParent(
         try {
           await owned.dispose()
         } finally {
-          store.releaseExperienceBindings([id])
+          release()
         }
       }
     }
   } catch (error) {
-    store.releaseExperienceBindings([id])
+    release()
     throw error
   }
 }

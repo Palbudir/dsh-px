@@ -166,9 +166,14 @@ export class ExperienceJobs {
         })()
         // Keep a rejected cleanup observable without creating an unhandled rejection.
         void record.settled.catch((error) => {
-          record.phase = 'failed'
-          record.result = undefined
-          record.error = String(error).slice(0, 500)
+          if (!terminal(record.phase)) {
+            record.phase = 'failed'
+            record.result = undefined
+          }
+          record.error = [record.error, '后台清理未完成：' + String(error)]
+            .filter(Boolean)
+            .join('；')
+            .slice(0, 500)
         })
         return { requestId, jobId: record.jobId! }
       } catch (error) {
