@@ -9,6 +9,8 @@ import { releaseAssetNames } from './release-version.mjs'
 import { nsisAppGuid } from './nsis-guid.mjs'
 import { validDistribution, compositionMembers, componentFile } from '../src/shared/distribution.ts'
 import { patchNativeModelGuard, patchNativeCompactionBudget } from '../src/shared/native-model-guard.ts'
+import { DESKTOP_PNPM_ENTRY } from '../src/shared/native-desktop-runtime.ts'
+import { applyRuntimeDependencyOverrides } from './native-runtime-dependencies.mjs'
 const root = fileURLToPath(new URL('../', import.meta.url))
 if (!process.argv[2] || process.argv[2].startsWith('--'))
   throw Error(
@@ -25,6 +27,8 @@ if (execFileSync('git', ['status', '--porcelain'], { cwd: upstream, encoding: 'u
 const app = join(upstream, 'apps/desktop'),
   lib = join(app, 'lib'),
   output = join(app, '.desktop-build/px')
+if (!existsSync(join(app, '.desktop-build/targets/win-x64', DESKTOP_PNPM_ENTRY)))
+  throw Error('The prepared official runtime is missing its pinned pnpm entry')
 mkdirSync(output, { recursive: true })
 const products = JSON.parse(readFileSync(join(root, 'config/products.json'), 'utf8'))
 if (
@@ -127,15 +131,26 @@ assertDigest(nativeHost, pin.compiledHostSha256, 'Desktop Host')
 let patchedHost = replaceOnce(
   nativeHost,
   'return liveAgents.some((agent) => agent.status === "running" || agent.inbox.nextTurn.length > 0 || agent.inbox.nextStep.length > 0) || [void 0, ...liveAgents].some((agent) => jobs.list(agent?.id).some((job) => job.status === "running" || job.status === "stopping"));',
-  'pxTaskInspection = inspectNativeTasks(liveAgents, jobs); return pxTaskInspection.active;'
+  'return inspectNativeTasks(liveAgents, jobs).active;'
+)
+// The native helper is also used by quit inspection. Keep that boolean path intact;
+// only update admission carries a per-request snapshot, never a shared mutable last result.
+patchedHost = replaceOnce(
+  patchedHost,
+  'return hasDesktopActiveTasks(agents.list(), jobs);',
+  'return inspectNativeTasks(agents.list(), jobs);'
+)
+patchedHost = replaceOnce(
+  patchedHost,
+  'const active = await control.updateTasks(message.action);',
+  'const inspection = await control.updateTasks(message.action); const active = inspection.active;'
 )
 patchedHost = replaceOnce(
   patchedHost,
   'requestId: message.requestId,\n\t\t\t\t\tactive\n',
-  'requestId: message.requestId,\n\t\t\t\t\tactive, inspection: pxTaskInspection\n'
+  'requestId: message.requestId,\n\t\t\t\t\tactive, inspection\n'
 )
-patchedHost =
-  'import {inspectNativeTasks} from "./px-task-inspection.mjs";\nlet pxTaskInspection;\n' + patchedHost
+patchedHost = 'import {inspectNativeTasks} from "./px-task-inspection.mjs";\n' + patchedHost
 writeFileSync(join(pxRuntime, hostRelative), patchedHost)
 const helperRelative = 'node_modules/@deepseek-ai/dsh-desktop-host/lib/px-task-inspection.mjs'
 await build({
@@ -170,6 +185,7 @@ for (const path of [hostRelative, helperRelative, modelControllerRelative, compa
   if (at < 0) runtimeInventory.files.push(record)
   else runtimeInventory.files[at] = record
 }
+const fixedDependencies = applyRuntimeDependencyOverrides(pxRuntime, runtimeInventory)
 runtimeInventory.files.sort((a, b) => a.path.localeCompare(b.path))
 writeFileSync(join(pxRuntime, 'desktop-runtime.json'), JSON.stringify(runtimeInventory, null, 2) + '\n')
 if (
@@ -427,7 +443,7 @@ export async function preparePxPack(profile,runtimeDir){
     const require=createRequire(join(runtimeDir,'package.json'));
     const {runPluginCommand}=await import(pathToFileURL(require.resolve('@deepseek-ai/dsh-plugin-manager/operations')).href);
     const result=await runPluginCommand({profile:'desktop',dir:profile,installAnchor:join(runtimeDir,'node_modules/@deepseek-ai/dsh/package.json'),cwd:profile},args,{
-      execution:'service',command:process.execPath,args:['--expose-internals',join(process.resourcesPath,'runtime/pnpm/bin/pnpm.mjs')],outputBytes:16384,idleTimeoutMs:120000,signal:AbortSignal.timeout(300000),
+      execution:'service',command:process.execPath,args:['--expose-internals',join(process.resourcesPath,${JSON.stringify(DESKTOP_PNPM_ENTRY)})],outputBytes:16384,idleTimeoutMs:120000,signal:AbortSignal.timeout(300000),
       env:{ELECTRON_RUN_AS_NODE:'1',DSH_DESKTOP_NODE_EXECUTABLE:process.execPath,PATH:join(process.resourcesPath,'runtime/bin')+delimiter+(process.env.PATH||'')}
     });if(result.exitCode!==0||result.timedOut)throw Error('Native Pack installation failed; see '+result.logPath);
   }});
@@ -510,7 +526,7 @@ const originalFactory = readFileSync(factoryPath, 'utf8')
 assertDigest(originalFactory, pin.builderFactorySha256, 'Builder factory')
 let factory = replaceOnce(
   originalFactory,
-  'const policy = resolveDesktopPolicyEnvironment(env)',
+  'const policy = packagesMacOS && unsigned ? undefined : resolveDesktopPolicyEnvironment(env)',
   'const policy = undefined'
 )
 factory = factory
@@ -533,6 +549,7 @@ config.win.icon=${JSON.stringify(join(root, 'build/icon.png'))};config.extraReso
 config.extraResources.push({from:${JSON.stringify(packArchive)},to:'px-pack.tgz'});
 config.extraResources.push({from:${JSON.stringify(distributionDir)},to:'px-distribution',filter:['distribution.json','distribution/*.tgz']});
 config.files=config.files.map(f=>typeof f==='object'&&f.to==='dsh'?{...f,from:${JSON.stringify(pxRuntime)}}:typeof f==='object'&&f.to==='dsh/node_modules'?{...f,from:${JSON.stringify(join(pxRuntime, 'node_modules'))}}:f);
+config.files.push('!node_modules/zod/**',{from:${JSON.stringify(fixedDependencies.directory)},to:'node_modules/zod',filter:['**/*']});
 config.extraResources=config.extraResources.map(r=>r.to==='runtime'?{...r,filter:['**/*','!cli/bin/dsh.cmd']}:r);
 config.extraResources.push({from:${JSON.stringify(cliPath)},to:'runtime/cli/bin/dsh.cmd'});
 config.extraResources.push({from:${JSON.stringify(join(output, 'px-cli.cjs'))},to:'runtime/cli/bin/px-cli.cjs'});

@@ -14,6 +14,7 @@ import { delimiter, join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { sameArchiveSpec } from './native-pack-spec.mjs'
 import { validDistribution, componentFile } from '../src/shared/distribution.ts'
+import { DESKTOP_PNPM_ENTRY } from '../src/shared/native-desktop-runtime.ts'
 
 const upstream = process.argv[2] && !process.argv[2].startsWith('--') ? resolve(process.argv[2]) : ''
 const packOption = process.argv.find((arg) => arg.startsWith('--pack='))
@@ -22,7 +23,7 @@ if (!upstream || !packOption)
 const archive = resolve(packOption.slice('--pack='.length))
 const target = join(upstream, 'apps/desktop/.desktop-build/targets/win-x64')
 const dsh = join(target, 'dsh')
-const pnpm = join(target, 'runtime/pnpm/bin/pnpm.mjs')
+const pnpm = join(target, DESKTOP_PNPM_ENTRY)
 const bin = join(target, 'runtime/bin')
 for (const path of [archive, join(dsh, 'package.json'), pnpm, bin])
   if (!existsSync(path)) throw Error(`Pack install check is missing ${path}`)

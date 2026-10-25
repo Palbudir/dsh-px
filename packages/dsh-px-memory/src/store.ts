@@ -45,6 +45,8 @@ export interface SessionBinding {
   handoff?: Handoff
   pending?: boolean
   createdFrom?: string
+  /** Internal analysis remains auditable in native storage, outside conversational recall. */
+  purpose?: 'experience'
 }
 export interface MemoryState {
   schemaVersion: 2
@@ -160,6 +162,7 @@ function validate(s: MemoryState): void {
     throw new MemoryError('人格或会话绑定无效', 503)
   for (const [id, b] of Object.entries(s.bindings)) {
     validId(id)
+    if (b.purpose !== undefined && b.purpose !== 'experience') throw new MemoryError('会话用途无效', 503)
     if (b.createdFrom !== undefined) {
       validId(b.createdFrom)
       if (b.createdFrom === id) throw new MemoryError('会话创建来源无效', 503)
@@ -256,6 +259,7 @@ export class MemoryStore {
       handoff?: Handoff
       pending?: boolean
       createdFrom?: string
+      purpose?: 'experience'
     } = {}
   ): MemoryState {
     validId(sessionId)
@@ -281,6 +285,7 @@ export class MemoryStore {
         createdAt: new Date().toISOString(),
         ...(options.pending ? { pending: true } : {}),
         ...(options.createdFrom ? { createdFrom: options.createdFrom } : {}),
+        ...((options.purpose ?? parent?.purpose) ? { purpose: options.purpose ?? parent?.purpose } : {}),
         ...(options.handoff ? { handoff: options.handoff } : {})
       }
     })

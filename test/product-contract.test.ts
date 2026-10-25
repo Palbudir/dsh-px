@@ -26,11 +26,11 @@ test('independent patches and prereleases retain the same generation', () => {
   validateProductCatalog(next)
 })
 
-test('the active products are official-derived on the pinned 0.2.0-rc.2 host', () => {
+test('the active products are official-derived on the pinned 0.2.1-rc.3 host', () => {
   validateProductCatalog(products)
   assert.equal(products.desktop.architecture, 'official-derived')
-  assert.equal(products.desktop.hostVersion, '0.2.0-rc.2')
-  assert.deepEqual(products.pack.hostVersions, ['0.2.0-rc.2'])
+  assert.equal(products.desktop.hostVersion, '0.2.1-rc.3')
+  assert.deepEqual(products.pack.hostVersions, ['0.2.1-rc.3'])
   // Current release qualification follows PX Desktop and its Web surface.
   assert.deepEqual(products.pack.surfaces, ['web', 'px-desktop'])
   assertNativeHostPins(products, { pack: nativePack, desktop: nativeDesktop })
@@ -60,7 +60,7 @@ test('native Pack, native Desktop and products must pin one host version and com
   drifted.pack.hostVersions = ['0.2.0-rc.9']
   assert.throws(() => assertNativeHostPins(drifted, pins()), /pinned native Desktop/)
   const packOnly = structuredClone(products)
-  packOnly.pack.hostVersions = ['0.2.0-rc.2', '0.2.0-rc.9']
+  packOnly.pack.hostVersions = ['0.2.1-rc.3', '0.2.0-rc.9']
   assertNativeHostPins(packOnly, pins())
 })
 

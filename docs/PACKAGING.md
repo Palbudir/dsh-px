@@ -16,7 +16,7 @@ Pack 的依赖与 peer 固定在 [native-pack.json](../config/native-pack.json)�
 
 可信构建在 `windows-2025` runner 上执行，不读取任何 secret：
 
-1. 按锁定提交检出官方源码并核对 `native-desktop.json`；`pnpm@11.7.0 install --frozen-lockfile`。
+1. 按锁定提交检出官方源码并核对 `native-desktop.json`；`pnpm@11.28.5 install --frozen-lockfile`。
 2. `build:official`，打包官方 dsh / vendor / landlock 闭包，再运行 `prepare:runtime`、`prepare:packages`、`prepare:dsh`；随后确认上游 tracked 树保持干净。
 3. 在 PX 检出中运行质量门禁，构建同提交的干净 release Pack。
 4. `scripts/prepare-native-desktop.mjs` 生成覆盖层及独立的运行时装配副本：应用身份、签名更新源、基础包与配套功能包预装，不修改官方原始文件。基础包加入副本的 installation 清单，避免多个文件映射覆盖同一清单。
@@ -24,6 +24,8 @@ Pack 的依赖与 peer 固定在 [native-pack.json](../config/native-pack.json)�
 6. `electron-builder --win nsis --x64 --publish never`，接受一个完整安装程序及同名 `.exe.blockmap`，索引必须进入签名清单；发布目录不携带任何 `*.yml`。
 
 安装器依赖官方安装界面辅助库，需要 x86 VC++ 编译器与 Windows SDK，因此正式构建只在 CI 进行。本机调试可用官方目录构建（`--dir`）配合 `DSH_PX_DIRECTORY_PROBE=1`，该模式不生成安装程序，也不能证明 NSIS 可用。
+
+0.2.1 官方运行时将 pnpm 放在 `runtime/primary-runtime/dependencies/pnpm/bin/pnpm.mjs`。首次 Pack 装配、安装验证和发布检查共用 [运行时路径契约](../src/shared/native-desktop-runtime.ts)；宿主升级时须同时核对实际文件，不能沿用旧版独立 `runtime/pnpm` 目录。
 
 ## 数据与卸载
 

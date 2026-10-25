@@ -135,9 +135,10 @@ export class HistoryIndex {
     const s = this.store.read(),
       b = s.bindings[sessionId]
     if (!b) throw new MemoryError('会话尚未绑定人格', 409)
+    if (b.purpose === 'experience') return Object.create(null)
     const allowed = Object.fromEntries(
       Object.entries(s.bindings)
-        .filter(([, v]) => v.personaId === b.personaId && !v.pending)
+        .filter(([, v]) => v.personaId === b.personaId && !v.pending && v.purpose !== 'experience')
         .map(([id]) => [id, Number.MAX_SAFE_INTEGER])
     )
     Object.setPrototypeOf(allowed, null)

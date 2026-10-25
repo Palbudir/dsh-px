@@ -5,8 +5,40 @@ import { tmpdir } from 'node:os'
 import {
   nativeSkillProjectRoot,
   skillAction,
-  observeFile
+  observeFile,
+  awaitSkillDiscovery
 } from '../packages/dsh-px-memory/src/native-resources'
+
+test('Skill adoption discovery confirms native content instead of file existence or an older cached skill', async () => {
+  const expected = {
+    name: 'review-result',
+    path: '/isolated/SKILL.md',
+    content: '---\nname: review-result\ndescription: Check receipts\n---\nNew procedure.\n'
+  }
+  let calls = 0
+  const host = {
+    get: (name: string) =>
+      name === 'skills'
+        ? {
+            get: async () => {
+              calls++
+              return {
+                name: expected.name,
+                path: expected.path,
+                description: 'Check receipts',
+                content: calls === 1 ? 'Old procedure.' : 'New procedure.'
+              }
+            }
+          }
+        : undefined
+  }
+  assert.equal(await awaitSkillDiscovery(host, { sessionId: 's', project: '/isolated' }, expected), 'ready')
+  assert.equal(calls, 2)
+  assert.equal(
+    await awaitSkillDiscovery({ get: () => undefined }, { sessionId: 's', project: '/isolated' }, expected),
+    'pending'
+  )
+})
 
 test('Skills management follows native Git-root discovery and fences explicit destination/version', async () => {
   const root = resolve(tmpdir(), 'px-skill-repo'),

@@ -6,6 +6,7 @@ import {
   type ContextTier
 } from '../../shared/context-policy'
 import { contextState } from './context-state'
+import { skipRepeatedCheckpoint } from './compaction-progress'
 
 const get = (ctx: any, key: string): any => ctx.get?.(key) ?? ctx[key]
 export interface ModelRoute {
@@ -82,6 +83,7 @@ export function installContextPolicy(ctx: any): void {
   const policy = {
     state,
     describe,
+    skipPressureCompaction: skipRepeatedCheckpoint,
     budget: (agent: any) => contextBudget(assembling.get(agent)?.capacity),
     async compaction(config: any, agent: any, target: ModelRoute, signal?: AbortSignal, summary = false) {
       const route = summary

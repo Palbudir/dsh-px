@@ -78,6 +78,23 @@ const user = (seq: number, text: string) =>
   event(seq, 'user/message', { source: { kind: 'user' }, content: [{ type: 'text', text }] })
 const reply = (seq: number, text: string) =>
   event(seq, 'assistant/message', { message: { content: [{ type: 'text', text }] } })
+
+test('experience task descendants retain source identity but do not pollute human history retrieval', async (t) => {
+  const f = fixture(t)
+  f.store.bind('human', { locked: true })
+  f.store.bind('analysis', { parent: 'human', purpose: 'experience', locked: true })
+  f.store.bind('analysis-child', { parent: 'analysis', locked: true })
+  assert.equal(f.store.read().bindings['analysis-child'].purpose, 'experience')
+  assert.equal(f.store.read().bindings.analysis.personaId, f.store.read().bindings.human.personaId)
+  f.histories.set('human', [user(0, 'REAL_WORK_EVIDENCE')])
+  f.histories.set('analysis', [reply(0, 'INTERNAL_GENERATED_SUGGESTION')])
+  f.histories.set('analysis-child', [reply(0, 'INTERNAL_GENERATED_SUGGESTION')])
+  const index = f.index()
+  await index.refresh(f.host, 'human')
+  assert.equal((index.search('human', 'INTERNAL_GENERATED_SUGGESTION') as any[]).length, 0)
+  assert.equal((index.search('human', 'REAL_WORK_EVIDENCE') as any[]).length, 1)
+  assert.equal((index.search('analysis', 'REAL_WORK_EVIDENCE') as any[]).length, 0)
+})
 function other(store: MemoryStore, id = 'other-session'): string {
   const s = store.action(store.read().revision, { type: 'create', name: 'Other' }, id, null)
   return store.persona(s, id).id

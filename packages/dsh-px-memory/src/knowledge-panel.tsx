@@ -2,6 +2,7 @@ import { useEffect, useState, useMemo } from 'react'
 import { requestJson } from '../../shared/client-http'
 import { controlStyle, cardStyle } from '../../shared/ui'
 import { createDraftRegistry } from '../../shared/draft-store'
+import { ExperiencePanel } from './experience-panel'
 const drafts = createDraftRegistry(64)
 const newest = (rows: any[]) =>
   [...rows].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))
@@ -485,6 +486,16 @@ export function KnowledgePanel({
         </>
       ) : (
         <>
+          <ExperiencePanel
+            sessionId={sessionId}
+            personaId={personaId}
+            project={project}
+            onAdopted={async () => {
+              const value = await call('skills', { action: 'list' })
+              setSkills(value.skills)
+              setSkillDirectories(value.directories)
+            }}
+          />
           <p className="px-muted">
             列表与加载使用 DSH 原生 Skills。项目技能优先于全局技能；只有本页创建的技能可在此编辑。
           </p>

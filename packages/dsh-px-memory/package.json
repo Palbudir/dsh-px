@@ -1,6 +1,6 @@
 {
   "name": "dsh-px-memory",
-  "version": "0.7.4-alpha.1",
+  "version": "0.8.0-alpha.1",
   "private": true,
   "type": "module",
   "description": "统一管理人格记忆、经历检索、知识与 Skills",
@@ -14,15 +14,17 @@
   },
   "files": [
     "lib",
+    "licenses",
     "cordis.patch.yml",
     "locale",
     "icon.svg"
   ],
   "license": "MIT",
   "dependencies": {
-    "dsh-mnemon": "0.5.29",
-    "dsh-mnemon-source-documents": "0.5.10",
-    "yaml": "2.9.1"
+    "dsh-mnemon": "0.5.34",
+    "dsh-mnemon-source-documents": "0.5.11",
+    "yaml": "2.9.1",
+    "dsh-mnemon-source-skills": "0.5.1"
   },
   "dsh": {
     "bundle": {

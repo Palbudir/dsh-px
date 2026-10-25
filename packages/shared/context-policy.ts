@@ -21,7 +21,9 @@ export function contextBudget(capacity?: number) {
     headroomTokens: Math.max(1, Math.floor(Math.min(planningWindow / 16, 65_536))),
     summaryTokens: Math.max(1, Math.floor(Math.min(planningWindow / 16, 32_768))),
     retainRatio: 0.12,
-    thresholdRatio: 0.75,
+    // The native engine also caps this by window - completion reserve - headroom.
+    // Small windows otherwise re-summarize tiny prefixes while the current user input is pinned.
+    thresholdRatio: tier === 'minimum' ? 0.85 : 0.75,
     memoryChars: tier === 'minimum' ? 2048 : tier === 'brief' ? 8192 : 24_000,
     handoffChars: tier === 'minimum' ? 2000 : tier === 'brief' ? 6000 : 12_000,
     ledgerChars: tier === 'minimum' ? 2400 : tier === 'brief' ? 8000 : 24_000

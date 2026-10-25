@@ -17,6 +17,8 @@ import { knowledgeAction, pxKnowledgeSource, knowledgeContractText } from './kno
 import { observeFile, skillAction } from './native-resources'
 import { installKnowledgeToolRouting } from './knowledge-tools'
 import { delegatedContract, delegatedKnowledgeCaller } from './knowledge-delegation'
+import { ExperienceService } from './experience-service'
+import { inspectMemorySession } from './session-context'
 
 export const name = 'dsh-px-memory'
 export const inject: string[] = []
@@ -278,8 +280,10 @@ export function apply(ctx: any): void {
       }
     })
   })
-  ctx.inject(['connection', 'webServer', 'sessionController'], (host: any) =>
-    host.effect(
+  ctx.inject(['connection', 'webServer', 'sessionController'], (host: any) => {
+    const experience = new ExperienceService(host, store, join(root, 'storages', 'dsh-px-experience'), root)
+    host.effect(() => () => experience.dispose(), 'memory: experience lifecycle')
+    return host.effect(
       () =>
         host.webServer.register({
           kind: 'exact',
@@ -297,7 +301,7 @@ export function apply(ctx: any): void {
               if (req.method !== 'GET' && req.method !== 'POST')
                 return send(405, { error: '请使用 GET 或 POST' })
               const id = validId(new URL(req.url, 'http://127.0.0.1').searchParams.get('sessionId'))
-              const { meta, events = [] } = await host.sessionController.inspect(id)
+              const { meta, events = [] } = await inspectMemorySession(host, store, id)
               const project = projectKey(meta.cwd)
               store.bind(id, {
                 parent: meta.parentSession,
@@ -387,6 +391,11 @@ export function apply(ctx: any): void {
                     200,
                     await skillAction(host, { sessionId: id, project: meta.cwd }, root, args.input)
                   )
+                if (args.type === 'experience')
+                  return send(
+                    200,
+                    await experience.request({ sessionId: id, project: meta.cwd, actor: 'human' }, args.input)
+                  )
                 if (args.type === 'search-history' || args.type === 'read-history') {
                   if (args.projectOnly !== undefined && typeof args.projectOnly !== 'boolean')
                     throw new MemoryError('项目范围无效')
@@ -439,5 +448,5 @@ export function apply(ctx: any): void {
         }),
       'memory: routes'
     )
-  )
+  })
 }
