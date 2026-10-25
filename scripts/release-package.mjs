@@ -18,9 +18,12 @@ import {
   rmSync,
   writeFileSync
 } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join, resolve, normalize } from 'node:path'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { verifyPackOutput, runQualityGates } from './release-quality.mjs'
+import { DESKTOP_PNPM_ENTRY } from '../src/shared/native-desktop-runtime.ts'
+import { verifyPackagedDependencyOverrides } from './native-runtime-dependencies.mjs'
 import {
   assertPublishableAssetName,
   parseReleaseTag,
@@ -270,13 +273,22 @@ function main() {
     const px = join(resolve(upstream), 'apps/desktop/.desktop-build/px')
     // First-start Pack provisioning runs pnpm through these packaged resources.
     const resources = join(px, 'dist/win-unpacked/resources')
-    for (const path of ['runtime/pnpm/bin/pnpm.mjs', 'runtime/bin', 'px-pack.tgz'])
+    for (const path of [DESKTOP_PNPM_ENTRY, 'runtime/bin', 'px-pack.tgz'])
       if (!existsSync(join(resources, path)))
         throw new Error(`Packaged Desktop lacks resources/${path} required for Pack provisioning`)
     // The signed update provider imports electron-updater from the app at first start; a missing
     // module would abort every launch, so the packaged app.asar must contain it.
     if (!asarEntries(join(resources, 'app.asar')).has('node_modules/electron-updater/package.json'))
       throw new Error('Packaged app.asar lacks node_modules/electron-updater required by the update provider')
+    const appRequire = createRequire(join(resolve(upstream), 'apps/desktop/package.json'))
+    const asar = createRequire(appRequire.resolve('app-builder-lib'))('@electron/asar')
+    const archive = join(resources, 'app.asar')
+    const read = (path) => asar.extractFile(archive, normalize(path))
+    verifyPackagedDependencyOverrides(
+      [...asarEntries(archive)],
+      read,
+      JSON.parse(read('dsh/desktop-runtime.json').toString('utf8'))
+    )
     const overlay = readJson(join(px, 'overlay.json'))
     const bundled = createHash('sha256')
       .update(regularFile(join(resources, 'px-pack.tgz')))

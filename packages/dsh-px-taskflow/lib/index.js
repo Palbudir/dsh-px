@@ -765,6 +765,93 @@ async function readNativeWork(host, sessionId, suppliedAgent) {
   return result;
 }
 
+// packages/dsh-px-taskflow/src/work-wait.ts
+var EXECUTION_POLICY = `For substantive tasks, deliver a useful draft or a verified intermediate artifact as soon as it is ready. Report material findings and blockers; do not replace results with repeated status text. Batch independent concurrency-safe reads, and use bounded native PTC programs for deterministic short sequences. Start long commands as native background Jobs and retain their ids; do other ready work while they run. When the user explicitly requests a workflow or large multi-agent orchestration and the native workflow tool is available, prefer run_in_background: true for long workflows; retain its Job id and inspect native progress/output instead of launching a duplicate. Use Team only when permitted. Coordinate native task dependencies, revisions and disjoint write scopes; a ready task does not itself wake its inactive owner. Wake required inactive owners through the native Team tools before waiting. When genuinely blocked on owned Jobs or active teammates, prefer task_wait over long blocking job_output/wait_agent calls: new steering can end this observation. After wake, reconcile current user corrections and task revisions before consuming results with job_output or the native Team tools. Do not restart a job because a wait returned, treat an accepted message as completion, or give a final completion claim before required work and checks settle.`;
+var active = (job) => job.status === "running" || job.status === "stopping";
+var service2 = (host, name2) => host.get?.(name2) ?? host[name2];
+async function waitForNativeWork(host, agent, signal, timeoutMs = 3e4) {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1e3 || timeoutMs > 6e4)
+    throw Error("\u7B49\u5F85\u65F6\u957F\u987B\u4E3A 1000\uFF5E60000 \u6BEB\u79D2");
+  signal.throwIfAborted();
+  const started = Date.now(), jobs = service2(host, "jobs"), teams = service2(host, "agentTeams"), local = new AbortController();
+  if (!jobs?.events?.subscribe || typeof jobs.list !== "function")
+    throw Error("\u539F\u751F\u540E\u53F0\u4F5C\u4E1A\u72B6\u6001\u4E0D\u53EF\u7528\uFF0C\u65E0\u6CD5\u786E\u8BA4\u53EF\u7B49\u5F85\u7684\u5DE5\u4F5C");
+  let resolveWake, rejectWake;
+  const wake = new Promise((resolve, reject) => {
+    resolveWake = resolve;
+    rejectWake = reject;
+  });
+  let settled = false, timer, teamWait;
+  const cleanup = [];
+  const finish = (reason) => {
+    if (settled) return;
+    settled = true;
+    resolveWake(reason);
+  };
+  const abort = () => {
+    if (settled) return;
+    settled = true;
+    rejectWake(signal.reason);
+  };
+  const jobIds = /* @__PURE__ */ new Set();
+  try {
+    signal.addEventListener("abort", abort, { once: true });
+    cleanup.push(() => signal.removeEventListener("abort", abort));
+    cleanup.push(
+      host.on("agent/inbox/inserted", ({ agent: target, message }) => {
+        if (target === agent && agent.inbox?.nextStep?.some((item) => item.id === message.id))
+          finish("message");
+      })
+    );
+    if (jobs?.events?.subscribe && jobs.list) {
+      cleanup.push(
+        jobs.events.subscribe({ owner: agent.id }, (event) => {
+          if (jobIds.has(event.job.id) && ["settled", "removed", "stopping"].includes(event.type))
+            finish("job-change");
+        })
+      );
+      for (const job of jobs.list(agent.id)) if (active(job)) jobIds.add(job.id);
+    }
+    let peerActive = false;
+    if (teams?.listMembers && teams.waitForChange) {
+      try {
+        peerActive = teams.listMembers(agent).some(
+          (member) => member.id !== agent.id && ["running", "provisioning"].includes(member.status)
+        );
+      } catch (error) {
+        if (error?.code !== "TEAM_NOT_MEMBER") throw error;
+      }
+      if (peerActive) {
+        teamWait = Promise.resolve(teams.waitForChange(agent, Math.max(1e4, timeoutMs), local.signal)).then((result) => {
+          if (!result?.timedOut) finish("team-change");
+        }).catch((error) => {
+          if (!local.signal.aborted && !settled) {
+            settled = true;
+            rejectWake(error);
+          }
+        });
+      }
+    }
+    if (agent.inbox?.nextStep?.length) finish("message");
+    else if (!jobIds.size && !peerActive) finish("no-progress");
+    timer = setTimeout(() => finish("timeout"), timeoutMs);
+    if (signal.aborted) abort();
+    const reason = await wake;
+    signal.throwIfAborted();
+    return {
+      reason,
+      elapsedMs: Math.max(0, Date.now() - started),
+      jobIds: [...jobIds],
+      note: reason === "no-progress" ? "\u6CA1\u6709\u89C2\u5BDF\u5230\u53EF\u7B49\u5F85\u7684\u539F\u751F\u540E\u53F0\u4F5C\u4E1A\u6216\u6D3B\u52A8\u6210\u5458\u3002\u68C0\u67E5\u4EFB\u52A1\u4F9D\u8D56\u4E0E\u8D1F\u8D23\u4EBA\uFF1B\u7B49\u5F85\u4E0D\u4F1A\u542F\u52A8\u5DE5\u4F5C\u3002" : "\u7B49\u5F85\u5DF2\u8FD4\u56DE\u3002\u5148\u5904\u7406\u65B0\u6307\u4EE4\uFF0C\u518D\u6838\u5BF9\u539F\u751F\u4EFB\u52A1\u72B6\u6001\uFF1B\u4F5C\u4E1A\u8F93\u51FA\u4ECD\u901A\u8FC7 job_output \u8BFB\u53D6\u3002\u4E0D\u8981\u91CD\u590D\u542F\u52A8\u5DF2\u6709\u5DE5\u4F5C\u3002"
+    };
+  } finally {
+    if (timer) clearTimeout(timer);
+    for (const dispose of cleanup.reverse()) dispose();
+    local.abort(new Error("PX work observation ended"));
+    await teamWait;
+  }
+}
+
 // packages/shared/request-trust.ts
 function rejectUnauthenticatedRequest(req, res, connection) {
   const rejection = connection?.requestRejection({ headers: req.headers ?? {} });
@@ -849,7 +936,11 @@ function apply(ctx) {
   };
   ctx.inject(["systemPrompt"], (host) => {
     host.effect(
-      () => host.systemPrompt.section({ name: "dsh-px-delivery-workflow", order: 9900, text: POLICY }),
+      () => host.systemPrompt.section({
+        name: "dsh-px-delivery-workflow",
+        order: 9900,
+        text: POLICY + "\n\n" + EXECUTION_POLICY
+      }),
       "taskflow: workflow"
     );
     if (typeof host.systemPrompt.context === "function")
@@ -877,8 +968,27 @@ function apply(ctx) {
       if (!exec.agent) throw new Error("\u6B64\u5DE5\u5177\u9700\u8981\u5F53\u524D\u4F1A\u8BDD");
       return exec.agent.session;
     };
+    if (typeof host.on === "function")
+      host.tools.register({
+        name: "task_wait",
+        description: "\u6CA1\u6709\u53EF\u72EC\u7ACB\u63A8\u8FDB\u7684\u5DE5\u4F5C\u65F6\uFF0C\u7B49\u5F85\u5F53\u524D\u4F1A\u8BDD\u7684\u539F\u751F Job/Team \u6216\u65B0\u7528\u6237\u6307\u4EE4\u3002\u65B0\u6D88\u606F\u4F1A\u53CA\u65F6\u7ED3\u675F\u7B49\u5F85\uFF1B\u4E0D\u8BFB\u53D6\u6216\u6D88\u8017\u4F5C\u4E1A\u8F93\u51FA\u3001\u4E0D\u5524\u9192\u6210\u5458\u3001\u4E0D\u53D6\u6D88\u5DE5\u4F5C\u3002\u8FD4\u56DE\u540E\u7528 task_state/job_output \u6838\u5BF9\uFF1B\u65E0\u6D3B\u52A8\u5DE5\u4F5C\u4F1A\u7ACB\u5373\u8FD4\u56DE\u3002",
+        parameters: {
+          type: "object",
+          additionalProperties: false,
+          properties: { timeout_ms: { type: "integer", minimum: 1e3, maximum: 6e4 } }
+        },
+        output,
+        execute: async (args, exec) => {
+          session(exec);
+          const agent = exec.agent;
+          if (typeof agent.id !== "string" || !agent.id) throw Error("\u5F53\u524D\u4F1A\u8BDD\u8EAB\u4EFD\u4E0D\u53EF\u7528");
+          return JSON.stringify(await waitForNativeWork(host, agent, exec.signal, args.timeout_ms));
+        }
+      });
     host.tools.register({
       name: "task_state",
+      // Native state reads never consume outputs, mutate tasks or wake other Agents.
+      isConcurrencySafe: () => true,
       description: "\u53EA\u8BFB\u67E5\u770B\u5F53\u524D\u4F1A\u8BDD\u7684\u539F\u751F Goal \u548C Team\uFF1A\u7A33\u5B9A\u4EFB\u52A1\u7F16\u53F7\u3001revision\u3001\u72B6\u6001\u3001\u8D1F\u8D23\u4EBA\u3001\u4F9D\u8D56\u4E0E\u6210\u5458\u3002\u4E0D\u4F1A\u521B\u5EFA\u4EFB\u52A1\u3001\u6062\u590D\u76EE\u6807\u6216\u5524\u9192\u6210\u5458\uFF1Bpaused \u548C completed \u4E0E\u5DE5\u4F5C\u6458\u8981\u5206\u5F00\u5224\u65AD\u3002",
       parameters: { type: "object", properties: {}, additionalProperties: false },
       output,
@@ -891,6 +1001,8 @@ function apply(ctx) {
     });
     host.tools.register({
       name: "task_review",
+      // The shared index is updated and serialized synchronously; no mutable cursor is consumed.
+      isConcurrencySafe: () => true,
       description: "\u8BFB\u53D6\u5F53\u524D\u4EFB\u52A1\u5DE5\u4F5C\u8BB0\u5F55\u4E0E\u6267\u884C\u6458\u8981\uFF0C\u9ED8\u8BA4\u6700\u8FD1 20 \u6761\u3002\u7528 nextBeforeSeq \u4F5C\u4E3A beforeSeq \u7FFB\u9605\u5386\u53F2\uFF1B\u9700\u8F93\u51FA\u6B63\u6587\u65F6\u7528 task_evidence\u3002returned \u4E0D\u4EE3\u8868\u6D4B\u8BD5\u901A\u8FC7\u3002",
       parameters: {
         type: "object",
@@ -905,6 +1017,7 @@ function apply(ctx) {
     });
     host.tools.register({
       name: "task_evidence",
+      isConcurrencySafe: () => true,
       description: "\u6309\u771F\u5B9E callId \u8BFB\u53D6\u5F53\u524D\u4F1A\u8BDD\u7684\u4E00\u6761\u6267\u884C\u53CA\u5176\u6301\u4E45\u8F93\u51FA\uFF0C\u652F\u6301\u5386\u53F2\u8BB0\u5F55\u3002\u9ED8\u8BA4 4000 \u5B57\u7B26\uFF0C\u7528 nextOutputOffset \u7EE7\u7EED\u8BFB\u53D6\u3002\u53EA\u8BFB\u53D6\u65E5\u5FD7\uFF0C\u4E0D\u91CD\u8DD1\u547D\u4EE4\uFF1B\u4E0A\u6E38\u5DF2\u622A\u65AD\u6216\u672A\u4FDD\u5B58\u7684\u5185\u5BB9\u65E0\u6CD5\u6062\u590D\u3002",
       parameters: {
         type: "object",

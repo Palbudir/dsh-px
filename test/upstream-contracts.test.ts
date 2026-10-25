@@ -287,8 +287,8 @@ test('cache is re-verified on every read, damaged entries are quarantined and of
   )
 })
 
-test('pinned lock covers both hosts, is immutable and its digest identifies the selection', () => {
-  assert.deepEqual(UPSTREAM_LOCK.hosts, ['0.2.0-rc.2'])
+test('pinned lock covers supported hosts, is immutable and its digest identifies the selection', () => {
+  assert.deepEqual(UPSTREAM_LOCK.hosts, ['0.2.1-rc.3'])
   for (const [name, entry] of Object.entries<any>(UPSTREAM_LOCK.packages)) {
     for (const host of UPSTREAM_LOCK.hosts)
       assert.match(entry.integrity[host], /^sha512-[A-Za-z0-9+/]{86}==$/, name)

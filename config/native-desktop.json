@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
   "repository": "https://github.com/deepseek-ai/deepseek-harness.git",
-  "commit": "639ed015397290b3745d163aafe02ffee4aa3f84",
-  "version": "0.2.0-rc.2",
-  "compiledMainSha256": "10325004a1ddbd8118ed0607ea28d50a7b0d692dcaeb25a67a7d8aea9165019d",
-  "compiledHostSha256": "6c6182cbd9ff7df144145065885fbc5873e9a9db9651c5152e785c84a55689d6",
-  "builderFactorySha256": "1402156a2760de1ae1b79727344807ae7be002c62be6dd49ac202efb3c03fd8d",
+  "commit": "1f81c047fc48fa190a683e469daa699857e9afe8",
+  "version": "0.2.1-rc.3",
+  "compiledMainSha256": "f05dd366f6c468bedd83f07372bc59d3d6b3f6bcc6950565c8b4173597e3ba93",
+  "compiledHostSha256": "6ae7cb9d57516b73c8aa4317c514ed81d28f2680efcee56d8faf2e588bb28c48",
+  "builderFactorySha256": "5f5fe52e0c5d275eac1344eef55ef16448edb4cea74ddd44f421fda9463d6dd0",
   "preloadSha256": {
     "preload-app.cjs": "f323eb67f7ace407d3b1d858f264f7846e436d9ba3e80c02b0454a6da0aed968",
     "preload-welcome.cjs": "1072a4a17bc1161e639e99c41efeb0e2dfa13404dc752bdf5579a168f9a5cf1f"

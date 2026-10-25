@@ -20,12 +20,12 @@ import { gunzipSync } from 'node:zlib'
 export const UPSTREAM_LOCK = deepFreeze({
   schemaVersion: 1,
   registry: 'https://registry.npmjs.org',
-  hosts: ['0.2.0-rc.2'],
+  hosts: ['0.2.1-rc.3'],
   packages: {
     '@deepseek-ai/dsh-client-connection': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-eL66YSZ0+HlWRzAPGU8jtCLd322WXBoMGN1g1OsM5T7Skqbbo9hSwV1FO3Lm0IcMZR3Y07sGPQBwZwf/l66T3w=='
+        '0.2.1-rc.3':
+          'sha512-jExb/DXrXmBVrfFkE0QlNkB6P0jGpIdRjR335DB6ADJVbulqPj0QmrJPahOmHa7XmnvuwoTm90asUR3DM7Tj+w=='
       },
       files: [
         'package.json',
@@ -48,15 +48,15 @@ export const UPSTREAM_LOCK = deepFreeze({
     },
     '@deepseek-ai/dsh-host-webserver': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-0zvI44emJMRr928Tfl//cPJlx/hiTGWfD1zaDlXu35eGIgOATFJlTPkJLApJvJOPVPPAlSOSdhI2L+j1TnzStw=='
+        '0.2.1-rc.3':
+          'sha512-zLv507HZ20pDoICxRH9+XOFzjZ/cNcVm/fy3QXHDAqXJWcl4buFmGc2BaYZtaWkWoBZ1YHj2+Dx7Wy8Q3H5q/g=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/index.d.ts']
     },
     '@deepseek-ai/dsh-client-ui-slots': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-zfILCyG3ijHT7S8+WDXFz4RMxBJtG9A3ngtDBnqcLbD5wzKz8H7E+HC657USa6RgG13C2RGSs73sfKcSs4WtWQ=='
+        '0.2.1-rc.3':
+          'sha512-KV/f/yOm4YXSuDK2N0XtKNWqHZRxMbmZdtblVpx/D2s3mKoLHOdAxEyVp4F+lgjzuhUCGUovQHWjBcVhho5WuA=='
       },
       files: [
         'package.json',
@@ -68,8 +68,8 @@ export const UPSTREAM_LOCK = deepFreeze({
     },
     '@deepseek-ai/dsh-client-ui-layout': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-OZzGxqoAV5zHPgFveJnw599J0j0pWbJiD5c5hdPeLyNMdRdTa2CC2gR7fbn63XGu08O+OruTDXHkCrOVuvkdQw=='
+        '0.2.1-rc.3':
+          'sha512-paMhkX7ojTT2UipKy8LMO9PUAdJsMcwDI9EIuic0yNrbpKqGJpGFjwHjm4Ps9GoFAEWzTBnwG94NxH25agphGQ=='
       },
       files: [
         'package.json',
@@ -82,8 +82,8 @@ export const UPSTREAM_LOCK = deepFreeze({
     },
     '@deepseek-ai/dsh-client-ui-sidebar': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-qAvv42Jt36dVVHNuuZFUbR5kMofhPmGeFafBcOU1mlmUJitZFf31MFFF34UER3JSnByxwAeHsMx9JMq4k7nA4w=='
+        '0.2.1-rc.3':
+          'sha512-Y/TSAS0INBhUqgo4CsdEOnunDmDP5kE4Uz0n51CdCsA9jBVcvrKockuNa8Y9WVBY0O7qgtOUWVNCfua66yjV3w=='
       },
       files: [
         'package.json',
@@ -94,8 +94,8 @@ export const UPSTREAM_LOCK = deepFreeze({
     },
     '@deepseek-ai/dsh-client-ui-sidebar-right': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-ocVUP6v3X7vShYeJ5I1Z3t1lDC02hJdZ49/kIRj29Xbe+BIfMY9HSDyUVUUDdijdd3jP8dpmhmbHbDJudwFUtQ=='
+        '0.2.1-rc.3':
+          'sha512-BmBbGjHwP/q+DoNc0suvVTFlqcU0Bv0QGZJ67pfKNNkUjMtQtt77+r43vJHsSfDQIO+EzxoXUSfTdnTWxE42Bg=='
       },
       files: [
         'package.json',
@@ -111,8 +111,8 @@ export const UPSTREAM_LOCK = deepFreeze({
     },
     '@deepseek-ai/dsh-client-modules': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-eDF7dycEl8QJ8CAZTSTz+dZh2PFHsf/ESAsjWjhcHxueLji7LF8/MY54PgU051Ho0V7zQKCAAeFWK2/GyIpgIg=='
+        '0.2.1-rc.3':
+          'sha512-ovpZsbNuz731kFlvBtxLsS4UREMPUHUxOjmi7+LiS/tnHGr0FOFOtgRsIdc9eVe0keWSUz1QaAA8tFg3FTPVIQ=='
       },
       files: [
         'package.json',
@@ -125,8 +125,8 @@ export const UPSTREAM_LOCK = deepFreeze({
     },
     '@deepseek-ai/dsh-app-boot': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-WvgNhBHSj85Z7u9vC1oQr9C7yZQ/L/JS+eVK4bueWEkaoqdEna504V5bi7qtWXxAz5JkeVZTy1sX86p8XG7LJg=='
+        '0.2.1-rc.3':
+          'sha512-Vngr+bTqXbIqS+epr8Nt7GWI9u6tsoHoxx6xcJ3ta6pCE2Oy246kiy/3xS+CDUlM/WOPB6NZoSyrANH3bCIU+g=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/index.d.ts'],
       slices: [
@@ -140,22 +140,22 @@ export const UPSTREAM_LOCK = deepFreeze({
     },
     '@deepseek-ai/dsh-client-locale': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-JdZPMv/8hLOQNxHk1dM6YbNbChB5S6lGaGAPtraP0670i9Tb4dX+yKOAUgkS7nSoO5TYZztXgI1kgcEregRPJA=='
+        '0.2.1-rc.3':
+          'sha512-/WpBT8gEivbD/yndgefYM09SysDcLcd8/Ov5zmC+A1EPNv6UoQ+4avPT6tkwT46XaG4XoJXmVglDOmfg/vUFGg=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/client/index.d.ts']
     },
     '@deepseek-ai/dsh-client-ui-settings': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-Kyho8FvRGYb7Ok1t7T429d4Dj/XF8+tE/+MX6T1s41RkXCe7v0sP89i4DUMo6OeUxyE+/uGoAVa5QZXY4O/y+g=='
+        '0.2.1-rc.3':
+          'sha512-vBH1A1DU85yeqZ02VeaOCZd5z7Pr77Bq0pSBH6ehFus2iZ88n4LuEhZxwMIYHf55LrRRxOQCpIbtEjmSbN5jzw=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/client/index.d.ts']
     },
     '@deepseek-ai/dsh-api-session-controller': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-WDmk1aWOHbzIKRRt7rtHDxSupw/XLB+BgMyKHlzB7QGinXrK/Dnht6JIdgE1iSShnf1RNANGAGh2G94VzDpl5Q=='
+        '0.2.1-rc.3':
+          'sha512-RcTw//tAdNVa1uHhoomtsafsjtUZCJoi5O8KA+FT3O9O2DVUhEEL7vlOwjSx1mxs2llE2u+5mlph2NeQzaoqlA=='
       },
       files: [
         'package.json',
@@ -167,99 +167,99 @@ export const UPSTREAM_LOCK = deepFreeze({
     },
     '@deepseek-ai/dsh-client-ui-workspace': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-dGKLOFJXBiGDKl+qWMQ0cYF0AT485JMzSk+AUM6/81tZPapJuirxP7Yf5ZFMfsmgQFv6m4jjYlnOc6KcIfUUZQ=='
+        '0.2.1-rc.3':
+          'sha512-ulJYTPrQQlyeBRbEtfO0U1nlqKE2iLB3kF2/adnSEco01AThel0joQ2kvy26yFpLkNnSjFkRAcv1ceaUoWgWNg=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/client/navigation.d.ts']
     },
     '@deepseek-ai/dsh-client-ui-session': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-QbavrwYkWqdmR4Be7Bv2tNqf+Gh1LV6+rlDkdukMWvdJFSeAmX9Fsctwn8yqgnPRGEHZUfZIjef8zKXIWexuYQ=='
+        '0.2.1-rc.3':
+          'sha512-077WBukIHzJpTlRC9PrJtYA0RBwi2KB4z9IiPb8H5xMRYtonf1w97FX9toPZdcci/ONkVqDH9HHF/sK9AMsGAw=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/client/index.d.ts']
     },
     '@deepseek-ai/dsh-client-ui-sidebar-files': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-QapGZ5bpiGRFFOT4tw32nJxgkFdTkbEw7qO32vYLkcSdmbuWMETCutVBp77HLGsizB1RtYUtW/Y3IMT3uGb3Xw=='
+        '0.2.1-rc.3':
+          'sha512-N0kMy+lDhUMQYJ1nKyf6IXHSdx3u5LBaGvz8gKLJb4ahKJXHvG0JtXfprhdk3V+7k39r1JQVUpmYoMAMhhZmnA=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/client/definition.d.ts', 'lib/types/client/index.d.ts']
     },
     '@deepseek-ai/dsh-util-workspace-path': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-pjjpi+hN29dVf9HMitxo5gUAXKNdYcJ75vNVjKp2T6sdBy0wxcMKlfddu/bYx/xDL3teNBhh17EH7w1asYNNZQ=='
+        '0.2.1-rc.3':
+          'sha512-YdzyWd+i8xRYMtdLEQa4se/UGnc/j8mJQxNW/wV50eCddgUKxbTKSnJZScBwnEBfq1wrMBee9cha2uMc6xQnsw=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/file-address.d.ts', 'lib/index.js']
     },
     '@deepseek-ai/dsh-client-ui-renderer': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-vQ/LH4A53K1J/UeF5fQs1Dj8km5cnVos7vO0rmj+pJROhE6Vs7pAAKGz5P2e02t2/2to6+iMDu2+SSITrcYWTQ=='
+        '0.2.1-rc.3':
+          'sha512-6f6napNu32kzW8wbC8Uz/5pgqBwcqNQtPm6854evy+bcGFRR9jj3UjtgHZ4VuyStCKd7zhdDR/tKnyxvWYsdIg=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/client/index.d.ts']
     },
     '@deepseek-ai/dsh-client-ui-conversation': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-Y1eWKVeh84cbB0fcV0MFOMUHBeptlzBCzsw6xslZS7p1a8l9PeFcjx5ZVTkKFuFMCfwEHWTeV9HcYqWLYH0bhw=='
+        '0.2.1-rc.3':
+          'sha512-S76D4VjvYyVf56mYMFnnoUjOgsywfVvIKaG5UP7uNSFP7GN7ZxW6BC6Vkraef5zGdG+0FYvP+tpfx0jhBo6sjg=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/client/index.d.ts']
     },
     '@deepseek-ai/dsh-session': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-wj+6MeqCYbDcbEvKH3puHyEGdjyu51JwBoN6Ua2tz6griLufDgLM5HpSU40L5xgpbOfrYVhXZs4vRgOrMlFY2g=='
+        '0.2.1-rc.3':
+          'sha512-z1Dfn6yB2YMm9iNThPHaIYCx0Y/mKjm+fMrWFtnPZmX0fJXVmTIr4RAfLF7ZFJk6qd52SUl8d2uX+uNbrPJESg=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/index.d.ts']
     },
     '@deepseek-ai/dsh-session-persistence': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-2OoRHZYWi5Vy0+1bPU37Y/NTh6uQiZ3VdpvDmW1oCgsapQr2JS/Lbody1gXOMJ1KXglCSLmePgTMC00uKw/UIg=='
+        '0.2.1-rc.3':
+          'sha512-++TPRibILQ9BMQ7c4t/0Qk+OgbxZDqJuoRse97opfwv2D6jIRl8sLMIG41qIEIT3B9Lh8yxAgHFdlF9zP3UBxQ=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/index.d.ts']
     },
     '@deepseek-ai/dsh-api-workspace-controller': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-3CoKQUgGxJ8yH++j/HurB4ZTrVLMZXS0cMm8Fb3ZaMB1dTseroaMoepvnBtzJF1hQx6YArNu8XvXO5qPRA6Fgg=='
+        '0.2.1-rc.3':
+          'sha512-gv+3JdeZkVixYhiQ9sJ1YNLmJ49B1TSWB+xZ9C+dETOEm4ke+uS0oGpBPWcGEowvJUmerDgm7Ov5LleF58qVKA=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/index.d.ts']
     },
     '@deepseek-ai/dsh-web': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-d44eM9mMqGnQUGsjqUc6k1G9QrC0w+TWx6Cw6I1iXJkVw5LZ/hpVVzsuCqck8GGS8+GK20kqjGUJSyomfEgd1A=='
+        '0.2.1-rc.3':
+          'sha512-TgWmI5G/qxBRsZ0dTiKN+qM0MOKiOJX2sZlHQXjzcTADq2S9t0ul+zPzovWBKk41M2OJcY3RGIjjl7QIBOp3fQ=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/index.d.ts']
     },
     '@deepseek-ai/dsh-jobs': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-SuCCfXZDabBxsKbHoulXEeQrRSYuOYLSfhvnflQf+CYeb68wggKraejkLyO60LrCGnBJsgCqKIdIKLCUvIeN+g=='
+        '0.2.1-rc.3':
+          'sha512-8DYn/4EhboytSrfo89fR0/o9r8bpX0Mf6dOzFd6ms3fRih7Wjmb1v4MhWXZovI3n7Ks7h1XzyX8ZL4c3BR0liw=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/index.d.ts']
     },
     '@deepseek-ai/dsh-agent': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-CUkbU+c1G0ETXkpoLkpAFo5midz66FQGtlgQOP9pzvU9H3zJQVl4H5LrhhGVbEXKLFgdbtQiOynEW8hpWn3y0Q=='
+        '0.2.1-rc.3':
+          'sha512-S6x/deneAsd+pOgecRLM1PC1No9O472kHjS9pS57nuTXi2Vtdo9l7qF+q7PfiHRezL5dxv5gUBQMORPmIYDNvQ=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/index.d.ts']
     },
     '@deepseek-ai/dsh-system-prompt': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-ZZNk2gkXFV8CIT0IOZXS+pFaxNVJaRknYyH2vc4ZgZAiHKT+RqUYNr8e1F5Kp0AaN0DNlcTkjOGP5MCxeXfDjg=='
+        '0.2.1-rc.3':
+          'sha512-2CXnigUF0N2Ps0AG/lOvvY9qeEhvo5uUCGCqvoGrH9IWbhoh/tfvzo9KTa5svyZIBW6mLMAyLyHOdi7f1T9tfg=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/index.d.ts']
     },
     '@deepseek-ai/dsh-tools': {
       integrity: {
-        '0.2.0-rc.2':
-          'sha512-vquUz8PjHWE4zaS3wH70IpYjL441p2UlUcG8TN2yJZN1RhDkuiHum4bWCsjEPyWLS/aB1QJvzdXC2EK/PRkbsQ=='
+        '0.2.1-rc.3':
+          'sha512-fHmhIFaztPt9+uvOlk3p4wXMU62F+TRe0ozVPasV3seIsFcxpca74QGSK5dFHICDhKIY1T9MUh0F3itMTdMi3A=='
       },
       files: ['package.json', 'LICENSE', 'lib/types/index.d.ts']
     }

@@ -151,7 +151,7 @@ test('native compaction policy leaves small models space and respects stricter u
   const small = await p.compaction(defaults, h.agent, { provider: 'test', model: 'small' })
   assert.equal(small.headroomTokens, 2048)
   assert.equal(small.maxTokens, 2048)
-  assert.equal(small.thresholdRatio, 0.75)
+  assert.equal(small.thresholdRatio, defaults.thresholdRatio)
   const strict = await p.compaction(
     { ...defaults, maxTokens: 512, headroomTokens: 0, thresholdRatio: 0.5, retainTokens: 64 },
     h.agent,

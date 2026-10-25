@@ -5,8 +5,74 @@ import { tmpdir } from 'node:os'
 import {
   nativeSkillProjectRoot,
   skillAction,
-  observeFile
+  observeFile,
+  awaitSkillDiscovery
 } from '../packages/dsh-px-memory/src/native-resources'
+
+test('Skill adoption discovery confirms native content instead of file existence or an older cached skill', async () => {
+  const expected = {
+    name: 'review-result',
+    path: '/isolated/SKILL.md',
+    content: '---\nname: review-result\ndescription: Check receipts\n---\nNew procedure.\n'
+  }
+  let calls = 0
+  const host = {
+    get: (name: string) =>
+      name === 'skills'
+        ? {
+            get: async () => {
+              calls++
+              return {
+                name: expected.name,
+                path: expected.path,
+                description: 'Check receipts',
+                content: calls === 1 ? 'Old procedure.' : 'New procedure.'
+              }
+            }
+          }
+        : undefined
+  }
+  assert.equal(await awaitSkillDiscovery(host, { sessionId: 's', project: '/isolated' }, expected), 'ready')
+  assert.equal(calls, 2)
+  assert.equal(
+    await awaitSkillDiscovery({ get: () => undefined }, { sessionId: 's', project: '/isolated' }, expected),
+    'pending'
+  )
+})
+
+test('Skill discovery compares native target identity for path aliases and rejects another file with identical content', async () => {
+  const expected = {
+    name: 'review-result',
+    path: 'c:/project/SKILL.md',
+    content: '---\nname: review-result\ndescription: Check receipts\n---\nProcedure.\n'
+  }
+  let foundKey = 'native-file-a'
+  const host = {
+    get: (name: string) =>
+      name === 'skills'
+        ? {
+            get: async () => ({
+              name: expected.name,
+              path: 'C:/Project/SKILL.md',
+              description: 'Check receipts',
+              content: 'Procedure.'
+            })
+          }
+        : name === 'fs'
+          ? {
+              resolve: async (path: string) => ({
+                targetKey: path === expected.path ? 'native-file-a' : foundKey
+              })
+            }
+          : undefined
+  }
+  assert.equal(await awaitSkillDiscovery(host, { sessionId: 's', project: 'c:/project' }, expected), 'ready')
+  foundKey = 'native-file-b'
+  assert.equal(
+    await awaitSkillDiscovery(host, { sessionId: 's', project: 'c:/project' }, expected),
+    'pending'
+  )
+})
 
 test('Skills management follows native Git-root discovery and fences explicit destination/version', async () => {
   const root = resolve(tmpdir(), 'px-skill-repo'),

@@ -51,19 +51,23 @@ Desktop 将 updater、workbench、workspace 装配为 installation 层的 `dsh-p
 
 ## 社区能力组合
 
-0.5 的发行清单 schema 2 在 PX 基础包、七个功能包之外，单独声明社区原包。固定来源、版本、许可与完整性见 [community-plugins.json](../config/community-plugins.json)：dsh-context 0.72.0 与 dsh-mnemon 0.5.29。构建器保存上游原始归档，Desktop 在原生 profile 中分别安装，保留原包身份与配置页，不把它们嵌进 PX 功能包。
+自 0.5 起的发行清单 schema 2 在 PX 基础包、七个功能包之外，单独声明社区原包。当前固定来源、版本、许可与完整性见 [community-plugins.json](../config/community-plugins.json)：dsh-context 0.75.1、dsh-mnemon 0.5.34、@xmanrui/dsh-im 5.6.0。构建器保存上游原始归档，Desktop 在原生 profile 中分别安装，保留原包身份与配置页，不把它们嵌进 PX 功能包。
 
-0.6 受管组合通过 `px-knowledge-v2` 默认装配标记，一次性启用 General 策略和 PX 四范围知识 Source；原项目档案保留为手动来源，避免重复自动注入。启用原生生命周期以组装可调用 View，关闭闲时复盘；不默认启用运行时记忆、外部 Provider 或自动历史提炼。完成装配后保留用户后续设置。PX 知识复用公开的 Documents 引擎 0.5.10，各范围分开存于 DSH_HOME 的 `storages/dsh-px-knowledge-scopes`；原 Mnemon 存储目录保留。
+0.6 受管组合通过 `px-knowledge-v2` 默认装配标记，一次性启用 General 策略和 PX 四范围知识 Source；原项目档案保留为手动来源，避免重复自动注入。启用原生生命周期以组装可调用 View，关闭闲时复盘；不默认启用运行时记忆、外部 Provider 或自动历史提炼。完成装配后保留用户后续设置。PX 知识当前复用公开的 Documents 引擎 0.5.11，各范围分开存于 DSH_HOME 的 `storages/dsh-px-knowledge-scopes`；原 Mnemon 存储目录保留。
+
+经验流程复用 Skills Source 0.5.1 的候选、修订、回测记录与文件采纳，以人格和项目分开实例化。生成器通过原生 Job 和仅能提交结构化结果的子智能体运行；它没有交互式 Agent 预设，不继承预设中的终端和委派工具。后台记录仍由 DSH 保存，但不加入普通人格历史检索。模拟回测检查方案覆盖，真实工具执行与采纳决策另行核对。
+
+IM 保留原生机器人配置与渠道管理入口。机器人 App ID、密钥、可访问用户及目标会话由用户在原生配置页设置；PX 不预置机器人、不自动发送消息。新建的 IM 会话同样遵循 PX 人格绑定、上下文档位和电脑操作开关；渠道接入不会自动开启电脑或浏览器权限。不同使用者若共用一个会话，就共用该会话的上下文；这不是独立账户的租户隔离系统。
 
 社区成员保留原名称、版本与许可，详见 [第三方声明](../NOTICE.md)。用户已有独立 dsh-context 或 Mnemon 时，保留其版本、声明、禁用选择和配置；不转成 PX 受管安装。用户已删除的成员不因启动或更新而复活。安装失败一并恢复 profile 清单、锁文件与配置。
 
 独立 Web 通过原生插件管理器安装聚合 PX Pack，并分别安装需要的社区原包；下载归档的 `package/distribution/` 中附有经过校验的原始 tarball，也可按上述固定版本从 npm 安装。已有社区安装不重复添加或覆盖。Mnemon 的 Web 配置由用户通过其原生配置页设置：建议 General 策略、PX 知识自动参与召回/写入/投影、原项目档案仅手动参与，开启生命周期和路由说明，关闭闲时复盘、运行时记忆与记忆空间。浏览器连接 PX Desktop 的同一服务时，直接共用 Desktop 已安装的组合。
 
-taskflow 的 `task_state` 读取原生权威状态；冷读取只使用原生投影恢复与只读存储，不唤醒 Agent。账本保存时的 Goal/Team 引用由宿主校验，并与当前状态分开。电脑驱动使用可取消的子进程；异常后旧观察失效，不自动重发动作。0.6 代际新增默认知识装配标记及 Desktop/Host 具体任务诊断接口；先更新 Desktop，再使用同代际 Pack 独立更新，DSH 核心仍锁定 0.2.0-rc.2。
+taskflow 的 `task_state` 读取原生权威状态；冷读取只使用原生投影恢复与只读存储，不唤醒 Agent。账本保存时的 Goal/Team 引用由宿主校验，并与当前状态分开。`task_wait` 只观察当前会话的原生 Job、Team 变化和插话，最长等待 60 秒；它不读取作业输出、不唤醒成员、不启动或取消工作。电脑驱动使用可取消的子进程；异常后旧观察失效，不自动重发动作。0.8 代际升级到 DSH 0.2.1-rc.3，并复验模型选择及压缩预算覆盖层；先更新 Desktop，再使用同代际 Pack 独立更新。
 
-## 侧栏认证补丁
+## 侧栏兼容补丁
 
-随附的 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 0.24.1 使用其 MIT 许可。构建器对固定 SRI 的原始归档应用宿主 Connection 认证补丁，以及客户端文件监听/打开记录的 WebSocket 地址补丁；后者使用公开 `__DSH_TRANSPORT__.streamBaseUrl`，兼容 Electron 自定义页面协议，认证仍由宿主处理。来源 SRI、原始与结果 SHA-256 定义于 [sidebar-auth-compatibility.ts](../src/shared/sidebar-auth-compatibility.ts)，补丁只作用于构建目录中的私有拷贝。
+随附的 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 0.28.0 使用其 MIT 许可。它已使用宿主 Connection 认证与 `__DSH_TRANSPORT__` 地址，PX 保留这些原生实现。宿主补丁保留会话的实际执行目录，避免嵌套项目的相对路径跳到外层 Git 根目录；客户端补丁处理 HTML/Markdown 相对路径、含转义字符的图片地址、普通本地文件链接、HTML 沙箱预览，以及保存过程中继续输入时的草稿状态。文件版本与编码检查沿用该版上游实现。来源 SRI、原始与结果 SHA-256 定义于 [sidebar-auth-compatibility.ts](../src/shared/sidebar-auth-compatibility.ts)，补丁只作用于构建目录中的私有拷贝。
 
 该版本没有自己的终端注册表，不需要旧补丁的终端计数服务。workbench 读取已观察会话中的两类终端资源：各 Agent 的工具终端（`terminals` 服务，官方预设把它装在每个预设版本共享的隔离插件组里，按 Agent 通过 `agentPresets.serviceFor` 查找）和用户在侧栏打开的交互 shell（宿主的 `terminalController`）。官方接口没有完整终端所有者枚举；后台任务读取也只覆盖当前 Agent 和无主任务。因此活动接口返回 `scope: observed-sessions`、`known: false`，`observedKnown` 仅表示该范围内读取成功。数量是观测下界，零不表示宿主空闲；该接口不参与停机决策。缺少服务或接口不兼容时，连观测结果也报告为未知。
 

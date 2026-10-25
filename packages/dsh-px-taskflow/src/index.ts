@@ -1,6 +1,7 @@
 import { readFailure } from '../../shared/session-errors'
 import { LedgerIndex } from './ledger'
 import { readNativeWork, checkpointNativeRefs } from './native-work'
+import { waitForNativeWork, EXECUTION_POLICY } from './work-wait'
 export { readFailure } from '../../shared/session-errors'
 import { rejectUnauthenticatedRequest as rejectUntrustedRequest } from '../../shared/request-trust'
 import {
@@ -63,7 +64,12 @@ export function apply(ctx: Context): void {
   }
   ctx.inject(['systemPrompt'], (host) => {
     host.effect(
-      () => host.systemPrompt.section({ name: 'dsh-px-delivery-workflow', order: 9900, text: POLICY }),
+      () =>
+        host.systemPrompt.section({
+          name: 'dsh-px-delivery-workflow',
+          order: 9900,
+          text: POLICY + '\n\n' + EXECUTION_POLICY
+        }),
       'taskflow: workflow'
     )
     if (typeof host.systemPrompt.context === 'function')
@@ -92,8 +98,28 @@ export function apply(ctx: Context): void {
       if (!exec.agent) throw new Error('此工具需要当前会话')
       return exec.agent.session
     }
+    if (typeof host.on === 'function')
+      host.tools.register({
+        name: 'task_wait',
+        description:
+          '没有可独立推进的工作时，等待当前会话的原生 Job/Team 或新用户指令。新消息会及时结束等待；不读取或消耗作业输出、不唤醒成员、不取消工作。返回后用 task_state/job_output 核对；无活动工作会立即返回。',
+        parameters: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { timeout_ms: { type: 'integer', minimum: 1000, maximum: 60000 } }
+        },
+        output,
+        execute: async (args: { timeout_ms?: number }, exec: Run) => {
+          session(exec)
+          const agent = exec.agent as { id: string; session: Session }
+          if (typeof agent.id !== 'string' || !agent.id) throw Error('当前会话身份不可用')
+          return JSON.stringify(await waitForNativeWork(host, agent, exec.signal, args.timeout_ms))
+        }
+      })
     host.tools.register({
       name: 'task_state',
+      // Native state reads never consume outputs, mutate tasks or wake other Agents.
+      isConcurrencySafe: () => true,
       description:
         '只读查看当前会话的原生 Goal 和 Team：稳定任务编号、revision、状态、负责人、依赖与成员。不会创建任务、恢复目标或唤醒成员；paused 和 completed 与工作摘要分开判断。',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
@@ -107,6 +133,8 @@ export function apply(ctx: Context): void {
     })
     host.tools.register({
       name: 'task_review',
+      // The shared index is updated and serialized synchronously; no mutable cursor is consumed.
+      isConcurrencySafe: () => true,
       description:
         '读取当前任务工作记录与执行摘要，默认最近 20 条。用 nextBeforeSeq 作为 beforeSeq 翻阅历史；需输出正文时用 task_evidence。returned 不代表测试通过。',
       parameters: {
@@ -123,6 +151,7 @@ export function apply(ctx: Context): void {
     })
     host.tools.register({
       name: 'task_evidence',
+      isConcurrencySafe: () => true,
       description:
         '按真实 callId 读取当前会话的一条执行及其持久输出，支持历史记录。默认 4000 字符，用 nextOutputOffset 继续读取。只读取日志，不重跑命令；上游已截断或未保存的内容无法恢复。',
       parameters: {

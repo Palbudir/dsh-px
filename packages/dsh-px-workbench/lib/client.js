@@ -5086,12 +5086,42 @@ var TIER_LABELS = {
   full: "\u5B8C\u6574"
 };
 
+// packages/dsh-px-workbench/src/model-selection-observer.ts
+var routeKey = (route) => JSON.stringify([route?.provider, route?.model, route?.reasoningEffort]);
+function observeRejectedModelSelection(store, inspect, receive) {
+  let attempted;
+  let check;
+  let checkedFrom;
+  const stop = store.subscribe(() => {
+    const state = store.getSnapshot();
+    if (checkedFrom !== void 0 && routeKey(state.current) !== checkedFrom) check?.abort();
+    if (state.pending) {
+      check?.abort();
+      attempted = state.pending;
+      return;
+    }
+    const selection = attempted;
+    attempted = void 0;
+    if (state.status !== "error" || !selection) return;
+    const controller = check = new AbortController();
+    checkedFrom = routeKey(state.current);
+    void inspect(selection, controller.signal).then((value) => {
+      if (!controller.signal.aborted) receive(selection, value);
+    }).catch(() => {
+    });
+  });
+  return () => {
+    stop();
+    check?.abort();
+  };
+}
+
 // packages/dsh-px-workbench/src/context-model-select.tsx
 var import_jsx_runtime3 = require("react/jsx-runtime");
 function query(sessionId, selection) {
   return "/dsh-px-workbench/context-policy?" + new URLSearchParams({ sessionId, provider: selection.provider, model: selection.model });
 }
-function ModelSeat({ Native, openSession, pxSessionId, ...props }) {
+function ModelSeat({ openSession, pxSessionId, ...props }) {
   const [snapshot, setSnapshot] = (0, import_react3.useState)(props.directory.getSnapshot);
   (0, import_react3.useEffect)(() => {
     const refresh = () => setSnapshot(props.directory.getSnapshot());
@@ -5105,6 +5135,19 @@ function ModelSeat({ Native, openSession, pxSessionId, ...props }) {
   );
   const [busy, setBusy] = (0, import_react3.useState)(false), alive = (0, import_react3.useRef)(true);
   const dialog = (0, import_react3.useRef)(null);
+  (0, import_react3.useEffect)(
+    () => observeRejectedModelSelection(
+      props.directory,
+      (selection, signal) => requestJson(query(pxSessionId, selection), { signal }),
+      (selection, value) => {
+        if (value.requiresContinuation) {
+          setError("");
+          setPending({ selection, status: value, requestId: crypto.randomUUID() });
+        }
+      }
+    ),
+    [props.directory, pxSessionId]
+  );
   (0, import_react3.useEffect)(() => {
     if (pending && dialog.current && !dialog.current.open) dialog.current.showModal();
   }, [pending]);
@@ -5124,21 +5167,6 @@ function ModelSeat({ Native, openSession, pxSessionId, ...props }) {
       });
     return () => ac.abort();
   }, [pxSessionId, snapshot.current?.provider, snapshot.current?.model, snapshot.groups]);
-  async function select(selection) {
-    setError("");
-    try {
-      const value = await requestJson(query(pxSessionId, selection));
-      if (!alive.current) return;
-      if (value.requiresContinuation) {
-        setPending({ selection, status: value, requestId: crypto.randomUUID() });
-        return void 0;
-      }
-      return await props.select(selection);
-    } catch (e) {
-      if (alive.current) setError(e.message);
-      return void 0;
-    }
-  }
   async function continueSession() {
     if (!pending || busy) return;
     setBusy(true);
@@ -5167,7 +5195,6 @@ function ModelSeat({ Native, openSession, pxSessionId, ...props }) {
     }
   }
   return /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(import_jsx_runtime3.Fragment, { children: [
-    /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(Native, { ...props, select }, pending?.requestId ?? "picker"),
     status && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)(
       "span",
       {
@@ -5251,54 +5278,30 @@ function ModelSeat({ Native, openSession, pxSessionId, ...props }) {
 }
 function installContextModelSelect(ctx) {
   ctx.inject(
-    ["slots", "uiWorkspace", "modelDirectories"],
-    (host) => host.effect(() => {
-      const key = "conversation.input.model", tag = "dsh-px-context", slots = host.slots;
-      let current, dispose, closed = false, scheduled = false;
-      const refresh = () => {
-        if (closed) return;
-        const original = slots.entries(key).find((e) => e.registrant !== tag);
-        if (original === current) return;
-        dispose?.();
-        dispose = void 0;
-        current = original;
-        if (!original) return;
-        dispose = slots.register(
+    ["slots", "uiWorkspace", "modelDirectories", "sessions"],
+    (host) => host.slots.inject(
+      "conversation.input.right",
+      () => host.slots.register(
+        {
+          name: "conversation.input.right",
+          id: "dsh-px-context",
+          order: 80,
+          inject: (sessionId) => ({
+            pxSessionId: sessionId,
+            available: host.sessions.subagentAddress(sessionId) === void 0,
+            directory: host.modelDirectories.directoryFor(sessionId).store
+          })
+        },
+        (props) => props.available ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+          ModelSeat,
           {
-            name: key,
-            registrant: tag,
-            priority: (original.options.priority ?? 0) - 1,
-            locale: original.locale,
-            inject: (...args) => ({ ...original.inject?.(...args), pxSessionId: args[0] })
+            ...props,
+            openSession: (id) => host.uiWorkspace.openSession(id)
           },
-          (props) => /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
-            ModelSeat,
-            {
-              ...props,
-              Native: original.component,
-              openSession: (id) => host.uiWorkspace.openSession(id)
-            },
-            props.pxSessionId
-          )
-        );
-      };
-      const schedule = () => {
-        if (!scheduled) {
-          scheduled = true;
-          queueMicrotask(() => {
-            scheduled = false;
-            refresh();
-          });
-        }
-      };
-      const unsubscribe = slots.subscribe(key, schedule);
-      schedule();
-      return () => {
-        closed = true;
-        unsubscribe();
-        dispose?.();
-      };
-    }, "workbench: native model tier picker")
+          props.pxSessionId
+        ) : null
+      )
+    )
   );
 }
 

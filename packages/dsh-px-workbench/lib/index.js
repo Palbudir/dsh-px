@@ -436,7 +436,9 @@ function contextBudget(capacity) {
     headroomTokens: Math.max(1, Math.floor(Math.min(planningWindow / 16, 65536))),
     summaryTokens: Math.max(1, Math.floor(Math.min(planningWindow / 16, 32768))),
     retainRatio: 0.12,
-    thresholdRatio: 0.75,
+    // The native engine also caps this by window - completion reserve - headroom.
+    // Small windows otherwise re-summarize tiny prefixes while the current user input is pinned.
+    thresholdRatio: tier === "minimum" ? 0.85 : 0.75,
     memoryChars: tier === "minimum" ? 2048 : tier === "brief" ? 8192 : 24e3,
     handoffChars: tier === "minimum" ? 2e3 : tier === "brief" ? 6e3 : 12e3,
     ledgerChars: tier === "minimum" ? 2400 : tier === "brief" ? 8e3 : 24e3
@@ -1661,6 +1663,23 @@ function contextState(ctx) {
   };
 }
 
+// node_modules/@deepseek-ai/dsh-compaction/lib/types/checkpoint.js
+var COMPACT_CHECKPOINT_MARKER = Object.freeze({ kind: "compact-checkpoint" });
+function isCompactCheckpointSource(source) {
+  return source.kind === "compact-checkpoint";
+}
+
+// packages/dsh-px-workbench/src/compaction-progress.ts
+function skipRepeatedCheckpoint(agent, range, measurement, spec) {
+  if (!range || range.start !== range.end || !Number.isSafeInteger(range.start)) return false;
+  if (!Number.isSafeInteger(spec?.maxTokens) || spec.maxTokens <= 0) return false;
+  const priced = measurement?.nodes?.find((node) => node.seq === range.start);
+  if (!priced || !Number.isFinite(priced.tokens) || priced.tokens <= 0 || priced.tokens > spec.maxTokens)
+    return false;
+  const event = agent.session?.eventAt?.(range.start);
+  return event?.type === "user/message" && !!event.data?.source && isCompactCheckpointSource(event.data.source);
+}
+
 // packages/dsh-px-workbench/src/context-policy.ts
 var get = (ctx, key) => ctx.get?.(key) ?? ctx[key];
 async function modelCapacity(ctx, route2, signal) {
@@ -1712,6 +1731,7 @@ function installContextPolicy(ctx) {
   const policy = {
     state,
     describe: describe2,
+    skipPressureCompaction: skipRepeatedCheckpoint,
     budget: (agent) => contextBudget(assembling.get(agent)?.capacity),
     async compaction(config2, agent, target, signal, summary = false) {
       const route2 = summary ? {

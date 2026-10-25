@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { requestJson } from '../../shared/client-http'
 import { controlStyle, cardStyle } from '../../shared/ui'
 import { TIER_LABELS, type ContextTier } from '../../shared/context-policy'
+import { observeRejectedModelSelection } from './model-selection-observer'
 
 type Selection = { provider: string; model: string; reasoningEffort?: string }
 type Status = {
@@ -17,7 +18,7 @@ function query(sessionId: string, selection: Selection): string {
     new URLSearchParams({ sessionId, provider: selection.provider, model: selection.model })
   )
 }
-function ModelSeat({ Native, openSession, pxSessionId, ...props }: any): unknown {
+function ModelSeat({ openSession, pxSessionId, ...props }: any): unknown {
   const [snapshot, setSnapshot] = useState<any>(props.directory.getSnapshot)
   useEffect(() => {
     const refresh = () => setSnapshot(props.directory.getSnapshot())
@@ -33,6 +34,20 @@ function ModelSeat({ Native, openSession, pxSessionId, ...props }: any): unknown
   const [busy, setBusy] = useState(false),
     alive = useRef(true)
   const dialog = useRef<any>(null)
+  useEffect(
+    () =>
+      observeRejectedModelSelection<Status>(
+        props.directory,
+        (selection, signal) => requestJson<Status>(query(pxSessionId, selection), { signal }),
+        (selection, value) => {
+          if (value.requiresContinuation) {
+            setError('')
+            setPending({ selection, status: value, requestId: crypto.randomUUID() })
+          }
+        }
+      ),
+    [props.directory, pxSessionId]
+  )
   useEffect(() => {
     if (pending && dialog.current && !dialog.current.open) dialog.current.showModal()
   }, [pending])
@@ -56,21 +71,6 @@ function ModelSeat({ Native, openSession, pxSessionId, ...props }: any): unknown
     return () => ac.abort()
     // Native catalog refreshes after provider settings change, even when the selected route is unchanged.
   }, [pxSessionId, snapshot.current?.provider, snapshot.current?.model, snapshot.groups])
-  async function select(selection: Selection): Promise<any> {
-    setError('')
-    try {
-      const value = await requestJson<Status>(query(pxSessionId, selection))
-      if (!alive.current) return
-      if (value.requiresContinuation) {
-        setPending({ selection, status: value, requestId: crypto.randomUUID() })
-        return undefined
-      }
-      return await props.select(selection)
-    } catch (e: any) {
-      if (alive.current) setError(e.message)
-      return undefined
-    }
-  }
   async function continueSession(): Promise<void> {
     if (!pending || busy) return
     setBusy(true)
@@ -100,7 +100,6 @@ function ModelSeat({ Native, openSession, pxSessionId, ...props }: any): unknown
   }
   return (
     <>
-      <Native key={pending?.requestId ?? 'picker'} {...props} select={select} />
       {status && (
         <span
           title={
@@ -185,59 +184,30 @@ function ModelSeat({ Native, openSession, pxSessionId, ...props }: any): unknown
     </>
   )
 }
-/** Reuse the native picker and its store; add the continuation action around its public select callback. */
+/** Keep native controls and child-slot ownership intact; use their shared directory to offer a continuation. */
 export function installContextModelSelect(ctx: any): void {
-  ctx.inject(['slots', 'uiWorkspace', 'modelDirectories'], (host: any) =>
-    host.effect(() => {
-      const key = 'conversation.input.model',
-        tag = 'dsh-px-context',
-        slots = host.slots
-      let current: any,
-        dispose: (() => void) | undefined,
-        closed = false,
-        scheduled = false
-      const refresh = () => {
-        if (closed) return
-        const original = slots.entries(key).find((e: any) => e.registrant !== tag)
-        if (original === current) return
-        dispose?.()
-        dispose = undefined
-        current = original
-        if (!original) return
-        dispose = slots.register(
-          {
-            name: key,
-            registrant: tag,
-            priority: (original.options.priority ?? 0) - 1,
-            locale: original.locale,
-            inject: (...args: any[]) => ({ ...original.inject?.(...args), pxSessionId: args[0] })
-          },
-          (props: any) => (
+  ctx.inject(['slots', 'uiWorkspace', 'modelDirectories', 'sessions'], (host: any) =>
+    host.slots.inject('conversation.input.right', () =>
+      host.slots.register(
+        {
+          name: 'conversation.input.right',
+          id: 'dsh-px-context',
+          order: 80,
+          inject: (sessionId: string) => ({
+            pxSessionId: sessionId,
+            available: host.sessions.subagentAddress(sessionId) === undefined,
+            directory: host.modelDirectories.directoryFor(sessionId).store
+          })
+        },
+        (props: any) =>
+          props.available ? (
             <ModelSeat
               key={props.pxSessionId}
               {...props}
-              Native={original.component}
               openSession={(id: string) => host.uiWorkspace.openSession(id)}
             />
-          )
-        )
-      }
-      const schedule = () => {
-        if (!scheduled) {
-          scheduled = true
-          queueMicrotask(() => {
-            scheduled = false
-            refresh()
-          })
-        }
-      }
-      const unsubscribe = slots.subscribe(key, schedule)
-      schedule()
-      return () => {
-        closed = true
-        unsubscribe()
-        dispose?.()
-      }
-    }, 'workbench: native model tier picker')
+          ) : null
+      )
+    )
   )
 }

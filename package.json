@@ -1,6 +1,6 @@
 {
   "name": "dsh-px",
-  "version": "0.7.1-alpha.1",
+  "version": "0.8.0-alpha.1",
   "private": true,
   "description": "DSH-PX: a native DeepSeek Harness plugin Pack and an official-source derived Windows Desktop.",
   "license": "MIT",
@@ -31,13 +31,18 @@
     "quality": "node scripts/release-quality.mjs",
     "check:roadmap": "node scripts/check-roadmap.mjs"
   },
+  "overrides": {
+    "zod@4.4.3": "4.6.7"
+  },
   "devDependencies": {
-    "@deepseek-ai/dsh-client-ui-slots": "0.2.0-rc.2",
-    "@deepseek-ai/dsh-tools": "0.2.0-rc.2",
+    "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-compaction": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-tools": "0.2.1-rc.3",
     "@types/node": "^26.6.2",
     "@types/semver": "^7.8.0",
-    "dsh-mnemon": "0.5.29",
-    "dsh-mnemon-source-documents": "0.5.10",
+    "dsh-mnemon": "0.5.34",
+    "dsh-mnemon-source-documents": "0.5.11",
+    "dsh-mnemon-source-skills": "0.5.1",
     "electron-updater": "6.8.9",
     "esbuild": "^0.25.12",
     "marked": "16.4.2",

@@ -51,6 +51,49 @@ async function frontmatter(raw: string): Promise<{ metadata: any; body: string }
     throw new MemoryError('技能元数据无效')
   return { metadata, body: raw.slice(match[0].length) }
 }
+/** File adoption and provider discovery are distinct; report pending when the native cache has not caught up. */
+export async function awaitSkillDiscovery(
+  host: any,
+  caller: KnowledgeCaller,
+  expected: { name: string; path: string; content: string }
+) {
+  const skills = scopedService(host, caller, 'skills'),
+    fs = scopedService(host, caller, 'fs'),
+    agent = service(host, 'agents')?.get(caller.sessionId)
+  if (!skills?.get || typeof expected?.content !== 'string') return 'pending'
+  const parsed = await frontmatter(expected.content)
+  for (let attempt = 0; attempt < 12; attempt++) {
+    try {
+      const current = await skills.get(expected.name, {
+        cwd: caller.project,
+        ...(agent ? { scope: agent } : {})
+      })
+      let samePath = current?.path === expected.path
+      if (!samePath && typeof current?.path === 'string' && fs?.resolve) {
+        const [found, wanted] = await Promise.all([
+          fs.resolve(current.path, { cwd: caller.project }),
+          fs.resolve(expected.path, { cwd: caller.project })
+        ])
+        // Resolve both through the same native filesystem; do not lowercase paths
+        // or compare content-version tokens that may be shared by different files.
+        samePath =
+          typeof found.targetKey === 'string' &&
+          found.targetKey.length > 0 &&
+          found.targetKey === wanted.targetKey
+      }
+      if (
+        samePath &&
+        current.description === parsed.metadata.description &&
+        current.content?.trim() === parsed.body.trim()
+      )
+        return 'ready'
+    } catch {
+      return 'pending'
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  return 'pending'
+}
 /** All discovery/loading remains owned by the native registry; only explicit human edits write managed filesystem skills. */
 export async function skillAction(host: any, caller: KnowledgeCaller, home: string, args: any): Promise<any> {
   const skills = scopedService(host, caller, 'skills'),
