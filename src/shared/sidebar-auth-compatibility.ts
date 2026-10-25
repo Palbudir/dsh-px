@@ -36,7 +36,7 @@ export function patchSidebarSessionDirectory(source: string): string {
 
 export const SIDEBAR_CLIENT_SOURCE = {
   sourceSha256: '53b70b1b5317205247c074b8121e1ececec1df2dc3771b0641f0a66b8fd127e1',
-  patchedSha256: 'a8ffcaa713ffda6836c5f654942854f97ad5a6445f22840561dd0e168c313908',
+  patchedSha256: '2b397f98efcbb58e536c3370ea7568f891e7488fd6eebe23f702e2653867ed57',
   patchId: 'px-sidebar-native-client-v5'
 } as const
 /** Native shell owns transport/auth; HTML receives an absolute path before the upstream URL codec. */
@@ -81,7 +81,7 @@ export function patchSidebarHtmlViewer(source: string): string {
 
 export const SIDEBAR_EDITOR_SOURCE = {
   sourceSha256: 'e899df938ceb8ea29ff2319e15a89e76155775ba07c8cf65a970a1c8596b69fd',
-  patchedSha256: 'cc9f8f2eba6a70b135294935eba9996aaee23585c67d28a167ad62d459582371',
+  patchedSha256: '09421d5e1cd4efa0284f64998045a700db56cb9decacba0a44a27f9664b32051',
   patchId: 'px-sidebar-native-html-v4'
 } as const
 /** Retain the upstream editor/draft/save controls; delegate preview bytes to the PX native-file renderer. */
@@ -134,6 +134,7 @@ export function patchSidebarMarkdownMedia(source: string): string {
       const candidate = isAbsolutePath$1(local) ? local : directory + local;
       const page = typeof document === "undefined" ? "" : document.baseURI;
       if (page?.startsWith("dsh-app://app/")) {
+        if (!isAbsolutePath$1(candidate) || /^[\\/]{2}/u.test(candidate) || /[\u0000-\u001f\u007f]/u.test(candidate)) return dest;
         const absolute = normalizeLocalPath(candidate);
         if (!isAbsolutePath$1(absolute) || /^[\\/]{2}/u.test(absolute) || /[\u0000-\u001f\u007f]/u.test(absolute)) return dest;
         return new URL("api/file?path=" + encodeURIComponent(absolute), page).href;
@@ -141,7 +142,17 @@ export function patchSidebarMarkdownMedia(source: string): string {
     )
     .replace(
       props,
-      '$1\npathImages: { resolve: (value) => typeof document !== "undefined" && document.baseURI.startsWith("dsh-app://app/") && value.startsWith("dsh-app://app/api/file?") ? value : void 0 },$2'
+      (_match: string, head: string, text: string) =>
+        head +
+        String.raw`
+pathImages: { resolve: (value) => {
+  if (typeof document === "undefined" || !document.baseURI.startsWith("dsh-app://app/") || !value.startsWith("dsh-app://app/api/file?")) return void 0;
+  try {
+    const path = new URL(value).searchParams.get("path");
+    return path && isAbsolutePath$1(path) && !/^[\\/]{2}/u.test(path) && !/[\u0000-\u001f\u007f]/u.test(path) ? value : void 0;
+  } catch { return void 0; }
+} },` +
+        text
     )
 }
 
