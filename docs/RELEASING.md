@@ -46,9 +46,11 @@ Pack 构建产物包含归档和 `artifact.json`；Desktop 另含配套 blockmap
 公开后在本机离线签名更新清单：
 
 ```powershell
-node scripts/run.mjs sign-release-manifest sign --product desktop --channel preview --file installer=<安装程序> --file blockmap=<配套索引> --artifact <该构建的 artifact.json> --upgrade-from 2 --upgrade-from 3 --upgrade-from 4 --upgrade-from 5 --upgrade-from 6 --upgrade-from 7 --key <仓库外私钥> --out <desktop-preview.json>
+node scripts/run.mjs sign-release-manifest sign --product desktop --channel preview --file installer=<安装程序> --file blockmap=<配套索引> --artifact <该构建的 artifact.json> --upgrade-from 2 --upgrade-from 3 --upgrade-from 4 --upgrade-from 5 --upgrade-from 6 --upgrade-from 7 --upgrade-from 8 --key <仓库外私钥> --out <desktop-preview.json>
 node scripts/run.mjs sign-release-manifest sign --product pack --channel preview --file pack=<Pack 归档> --artifact <该构建的 artifact.json> --key <仓库外私钥> --out <pack-preview.json>
 ```
+
+Desktop 的 `--upgrade-from` 必须包含当前协议代际，以及已经验证支持的旧代际；Pack 不传该参数。提升代际时同步调整示例，不能漏掉当前代际。
 
 签名器从干净检出读取产品与宿主锁定，要求检出提交等于 `artifact.json` 的 `sourceCommit`、本地文件的名称、大小与两种摘要都与 `artifact.json` 一致，并用固定公钥复核结果。清单发布到 `updates` 分支；CI 从不接触私钥。发布说明只写用户可见变化、已知限制和升级影响，不放开发对话、临时路径、PID、原始日志或验收流水账。
 
