@@ -478,6 +478,8 @@ var import_react3 = require("react");
 var import_jsx_runtime4 = require("react/jsx-runtime");
 var drafts = createDraftRegistry(64);
 var active = (task) => ["starting", "running", "stopping"].includes(task.phase);
+var pendingRun = (run) => run.status === "running" && !run.awaitingRecovery;
+var hasActivity = (value) => !!(value?.tasks?.some(active) || value?.runs?.some(pendingRun));
 var phase = {
   starting: "\u51C6\u5907\u4E2D",
   running: "\u5904\u7406\u4E2D",
@@ -510,6 +512,10 @@ function ExperiencePanel({
     saved?.selected?.value?.draft?.baseKey?.startsWith("user-dsh:") ? "global" : "project"
   ), [evidence, setEvidence] = (0, import_react3.useState)(null);
   const lifetime = (0, import_react3.useRef)(null);
+  const actionEpoch = (0, import_react3.useRef)(0);
+  const editEpoch = (0, import_react3.useRef)(0);
+  const latest = (0, import_react3.useRef)({ selected, body, busy });
+  latest.current = { selected, body, busy };
   const url = `/dsh-px-memory?sessionId=${encodeURIComponent(sessionId)}`;
   const call = (input, signal) => requestJson(url, {
     method: "POST",
@@ -526,14 +532,39 @@ function ExperiencePanel({
     if (!project) return;
     const controller = new AbortController();
     let timer;
+    let first = true;
     const refresh = async () => {
+      const epoch = actionEpoch.current;
+      let again = false;
+      let pendingView;
       try {
         const next = await call({ action: "view" }, controller.signal);
-        if (controller.signal.aborted) return;
-        setView(next);
-        if (next.tasks.some(active)) timer = setTimeout(() => void refresh(), 1e3);
+        if (controller.signal.aborted || epoch !== actionEpoch.current) return;
+        pendingView = next;
+        again = hasActivity(next);
+        const snapshot = latest.current, edited = editEpoch.current;
+        const shouldRefresh = first || snapshot.selected?.revision !== next.revision || snapshot.selected?.value.runs.some((run2) => next.runs.some((current) => current.id === run2.id && (current.status !== run2.status || current.awaitingRecovery !== run2.awaitingRecovery)));
+        first = false;
+        if (snapshot.selected && !snapshot.busy && snapshot.body === snapshot.selected.value.draft.content && shouldRefresh) {
+          const detail = await call({ action: "read", kind: "draft", id: snapshot.selected.value.draft.id }, controller.signal);
+          if (controller.signal.aborted || epoch !== actionEpoch.current || edited !== editEpoch.current || latest.current.selected !== snapshot.selected || latest.current.body !== snapshot.body || latest.current.busy) return;
+          if (detail.value.draft.status !== "ready") {
+            setSelected(null);
+            setBody("");
+            setNotice("\u6B64\u8349\u7A3F\u5DF2\u88AB\u5904\u7406\uFF0C\u5217\u8868\u5DF2\u5237\u65B0\u3002");
+          } else {
+            setSelected(detail);
+            setBody(detail.value.draft.content);
+            if (detail.value.draft.content !== snapshot.body) setNotice("\u8349\u7A3F\u5DF2\u6709\u65B0\u7248\u672C\uFF0C\u8BF7\u91CD\u65B0\u5BA1\u9605\u5185\u5BB9\u3002");
+          }
+        }
       } catch (error2) {
         if (!controller.signal.aborted) setError(String(error2.message));
+      } finally {
+        if (!controller.signal.aborted && epoch === actionEpoch.current) {
+          if (pendingView) setView(pendingView);
+          if (again) timer = setTimeout(() => void refresh(), 1e3);
+        }
       }
     };
     void refresh();
@@ -551,11 +582,12 @@ function ExperiencePanel({
       });
     else draft?.clear();
   }, [draft, dirty, selected, body]);
-  const working = view?.tasks?.some(active) ?? false;
+  const working = hasActivity(view);
   const disabled = busy || working || dirty || !view;
   const run = async (action) => {
     const signal = lifetime.current?.signal;
     if (!signal || signal.aborted) return;
+    actionEpoch.current++;
     setBusy(true);
     setError("");
     setNotice("");
@@ -565,14 +597,24 @@ function ExperiencePanel({
       if (!signal.aborted) setError(String(error2.message));
     } finally {
       if (!signal.aborted) {
+        actionEpoch.current++;
         setBusy(false);
         setGeneration((value) => value + 1);
       }
     }
   };
   const start = (action, id) => void run(async (signal) => {
-    await call({ action, id, requestId: crypto.randomUUID() }, signal);
+    const requestId = crypto.randomUUID();
+    const admitted = await call({ action, id, requestId }, signal);
     if (signal.aborted) return;
+    actionEpoch.current++;
+    setView((current) => current && { ...current, tasks: [{
+      requestId,
+      jobId: admitted.jobId,
+      phase: "starting",
+      startedAt: Date.now(),
+      progress: action === "review" ? "\u6574\u7406\u5DE5\u4F5C\u7ECF\u5386" : action === "draft" ? "\u751F\u6210 Skill \u8349\u7A3F" : "\u6A21\u62DF\u56DE\u6D4B Skill \u8349\u7A3F"
+    }, ...current.tasks.filter((task) => task.requestId !== requestId)] });
     setSelected(null);
     setEvidence(null);
     setNotice("\u5DF2\u5F00\u59CB\u540E\u53F0\u5904\u7406\uFF0C\u53EF\u4EE5\u7EE7\u7EED\u5BF9\u8BDD\u3002");
@@ -596,6 +638,7 @@ function ExperiencePanel({
           style: controlStyle,
           disabled: busy || dirty,
           onClick: () => {
+            actionEpoch.current++;
             setError("");
             setGeneration((value) => value + 1);
           },
@@ -606,7 +649,7 @@ function ExperiencePanel({
     /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "px-muted", children: "\u4ECE\u5DF2\u7ED3\u675F\u7684\u8F6E\u6B21\u63D0\u70BC\u65B9\u6CD5\uFF0C\u5019\u9009\u4EC5\u6B64\u4EBA\u683C\u5728\u672C\u9879\u76EE\u53EF\u89C1\u3002\u4F7F\u7528\u6765\u6E90\u6A21\u578B\u7684\u8F83\u4F4E\u63A8\u7406\u6863\uFF08\u82E5\u652F\u6301\uFF09\uFF1B\u7531\u4F60\u91C7\u7EB3\u540E\u624D\u5199\u5165\u5171\u4EAB Skill\u3002" }),
     error && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "alert", children: error }),
     notice && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "status", children: notice }),
-    view?.tasks?.slice(0, working ? 8 : 1).map((task) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { role: "status", children: [
+    (working ? view?.tasks?.filter(active) : view?.tasks?.slice(0, 1))?.map((task) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { role: "status", children: [
       phase[task.phase] ?? task.phase,
       " \xB7 ",
       task.progress,
@@ -623,6 +666,7 @@ function ExperiencePanel({
         }
       )
     ] }, task.requestId)),
+    working && !view?.tasks?.some(active) && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "status", children: "\u672C\u9879\u76EE\u6709\u56DE\u6D4B\u6B63\u5728\u5904\u7406\uFF0C\u7ED3\u679C\u4F1A\u81EA\u52A8\u5237\u65B0\u3002" }),
     view && !working && !view.suggestions.length && !view.drafts.length && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { className: "px-muted", children: "\u8FD8\u6CA1\u6709\u5F85\u5904\u7406\u5EFA\u8BAE\u3002\u5B8C\u6210\u4E00\u9879\u5DE5\u4F5C\u540E\uFF0C\u70B9\u51FB\u201C\u6574\u7406\u672C\u6B21\u7ECF\u5386\u201D\u3002" }),
     view?.suggestions.filter((s) => !view.drafts.some((d) => d.suggestionId === s.id)).map((suggestion) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { style: cardStyle, children: [
       /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("strong", { children: suggestion.skillName }),
@@ -702,7 +746,10 @@ function ExperiencePanel({
             maxLength: 16e3,
             value: body,
             disabled: busy || working || !draft,
-            onChange: (event) => setBody(event.target.value)
+            onChange: (event) => {
+              editEpoch.current++;
+              setBody(event.target.value);
+            }
           }
         )
       ] }),
@@ -749,7 +796,10 @@ function ExperiencePanel({
           {
             style: controlStyle,
             disabled: busy || working || !dirty,
-            onClick: () => setBody(selected.value.draft.content),
+            onClick: () => {
+              editEpoch.current++;
+              setBody(selected.value.draft.content);
+            },
             children: "\u64A4\u9500\u672C\u6B21\u7F16\u8F91"
           }
         )
@@ -765,7 +815,7 @@ function ExperiencePanel({
             result.awaitingRecovery ? "\u4E0A\u6B21\u8FD0\u884C\u672A\u7ED3\u7B97" : result.status === "completed" ? "\u6A21\u62DF\u5B8C\u6210" : result.status === "running" ? "\u8FDB\u884C\u4E2D" : "\u672A\u5B8C\u6210"
           ] }),
           result.awaitingRecovery && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "status", children: "\u8FD9\u6761\u8BB0\u5F55\u6765\u81EA\u4E0A\u6B21\u670D\u52A1\uFF0C\u5F53\u524D\u6CA1\u6709\u5BF9\u5E94\u7684\u7ECF\u9A8C\u4EFB\u52A1\uFF1B\u5DF2\u6709\u7ED3\u679C\u4FDD\u7559\uFF0C\u4E0D\u8BA1\u4E3A\u56DE\u6D4B\u5B8C\u6210\u3002" }),
-          !result.matchesCurrentContent && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "status", children: "\u65E7\u7248\u672C\u7ED3\u679C\uFF1A\u5185\u5BB9\u5DF2\u53D8\u5316\uFF0C\u9700\u8981\u91CD\u65B0\u56DE\u6D4B\u3002" }),
+          (!result.matchesCurrentContent || dirty && result.target.kind === "draft") && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "status", children: "\u65E7\u7248\u672C\u7ED3\u679C\uFF1A\u5185\u5BB9\u5DF2\u53D8\u5316\uFF0C\u9700\u8981\u91CD\u65B0\u56DE\u6D4B\u3002" }),
           /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("p", { children: [
             result.progress.done,
             " / ",

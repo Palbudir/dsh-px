@@ -67,7 +67,7 @@ taskflow 的 `task_state` 读取原生权威状态；冷读取只使用原生投
 
 ## 侧栏兼容补丁
 
-随附的 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 0.28.0 使用其 MIT 许可。它已使用宿主 Connection 认证与 `__DSH_TRANSPORT__` 地址，PX 保留这些原生实现；兼容补丁只处理 HTML/Markdown 相对路径、HTML 沙箱预览入口，以及保存过程中继续输入时的草稿状态。文件版本与编码检查沿用该版上游实现。来源 SRI、原始与结果 SHA-256 定义于 [sidebar-auth-compatibility.ts](../src/shared/sidebar-auth-compatibility.ts)，补丁只作用于构建目录中的私有拷贝。
+随附的 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 0.28.0 使用其 MIT 许可。它已使用宿主 Connection 认证与 `__DSH_TRANSPORT__` 地址，PX 保留这些原生实现。宿主补丁保留会话的实际执行目录，避免嵌套项目的相对路径跳到外层 Git 根目录；客户端补丁处理 HTML/Markdown 相对路径、含转义字符的图片地址、普通本地文件链接、HTML 沙箱预览，以及保存过程中继续输入时的草稿状态。文件版本与编码检查沿用该版上游实现。来源 SRI、原始与结果 SHA-256 定义于 [sidebar-auth-compatibility.ts](../src/shared/sidebar-auth-compatibility.ts)，补丁只作用于构建目录中的私有拷贝。
 
 该版本没有自己的终端注册表，不需要旧补丁的终端计数服务。workbench 读取已观察会话中的两类终端资源：各 Agent 的工具终端（`terminals` 服务，官方预设把它装在每个预设版本共享的隔离插件组里，按 Agent 通过 `agentPresets.serviceFor` 查找）和用户在侧栏打开的交互 shell（宿主的 `terminalController`）。官方接口没有完整终端所有者枚举；后台任务读取也只覆盖当前 Agent 和无主任务。因此活动接口返回 `scope: observed-sessions`、`known: false`，`observedKnown` 仅表示该范围内读取成功。数量是观测下界，零不表示宿主空闲；该接口不参与停机决策。缺少服务或接口不兼容时，连观测结果也报告为未知。
 

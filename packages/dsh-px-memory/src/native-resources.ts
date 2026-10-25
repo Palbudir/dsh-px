@@ -58,6 +58,7 @@ export async function awaitSkillDiscovery(
   expected: { name: string; path: string; content: string }
 ) {
   const skills = scopedService(host, caller, 'skills'),
+    fs = scopedService(host, caller, 'fs'),
     agent = service(host, 'agents')?.get(caller.sessionId)
   if (!skills?.get || typeof expected?.content !== 'string') return 'pending'
   const parsed = await frontmatter(expected.content)
@@ -67,8 +68,21 @@ export async function awaitSkillDiscovery(
         cwd: caller.project,
         ...(agent ? { scope: agent } : {})
       })
+      let samePath = current?.path === expected.path
+      if (!samePath && typeof current?.path === 'string' && fs?.resolve) {
+        const [found, wanted] = await Promise.all([
+          fs.resolve(current.path, { cwd: caller.project }),
+          fs.resolve(expected.path, { cwd: caller.project })
+        ])
+        // Resolve both through the same native filesystem; do not lowercase paths
+        // or compare content-version tokens that may be shared by different files.
+        samePath =
+          typeof found.targetKey === 'string' &&
+          found.targetKey.length > 0 &&
+          found.targetKey === wanted.targetKey
+      }
       if (
-        current?.path === expected.path &&
+        samePath &&
         current.description === parsed.metadata.description &&
         current.content?.trim() === parsed.body.trim()
       )

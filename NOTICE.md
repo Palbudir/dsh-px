@@ -37,7 +37,7 @@ DSH-PX Desktop 由锁定提交的 [DeepSeek Harness](https://github.com/deepseek
 
 0.8 的私有 Desktop 装配将宿主和桌面进程使用的 Zod 4.4.3 替换为同一官方运行包已随附的 Zod 4.6.7（MIT），修复 [GHSA-mrhx-c7xc-m3w5](https://github.com/advisories/GHSA-mrhx-c7xc-m3w5)。来源逐文件校验；原始包声明保留，实际替换记录在运行包的 `px-dependency-overrides.json` 和文件摘要清单中。官方源码与已发布的社区原包不做改写。
 
-DSH-PX Pack 随附 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 0.28.0（MIT，`Copyright (c) 2026 dsh-external`）。该版沿用上游原生认证与传输地址；PX 对固定摘要的客户端应用文件预览和编辑状态兼容补丁，来源与范围见 [插件合约](docs/PLUGINS.md)。
+DSH-PX Pack 随附 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) 0.28.0（MIT，`Copyright (c) 2026 dsh-external`）。该版沿用上游原生认证与传输地址；PX 对固定摘要的宿主和客户端应用会话目录、文件预览及编辑状态兼容补丁，来源与范围见 [插件合约](docs/PLUGINS.md)。
 
 “电脑操作”功能包声明以下精确版本的运行时依赖，由 DSH 插件管理器从 npm 安装，并随 Pack 分发经过摘要校验的匹配 Windows 原生驱动：
 

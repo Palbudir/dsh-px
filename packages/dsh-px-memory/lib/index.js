@@ -1555,7 +1555,7 @@ async function frontmatter(raw) {
   return { metadata, body: raw.slice(match[0].length) };
 }
 async function awaitSkillDiscovery(host, caller, expected) {
-  const skills = scopedService(host, caller, "skills"), agent = service(host, "agents")?.get(caller.sessionId);
+  const skills = scopedService(host, caller, "skills"), fs = scopedService(host, caller, "fs"), agent = service(host, "agents")?.get(caller.sessionId);
   if (!skills?.get || typeof expected?.content !== "string") return "pending";
   const parsed = await frontmatter(expected.content);
   for (let attempt = 0; attempt < 12; attempt++) {
@@ -1564,7 +1564,15 @@ async function awaitSkillDiscovery(host, caller, expected) {
         cwd: caller.project,
         ...agent ? { scope: agent } : {}
       });
-      if (current?.path === expected.path && current.description === parsed.metadata.description && current.content?.trim() === parsed.body.trim())
+      let samePath = current?.path === expected.path;
+      if (!samePath && typeof current?.path === "string" && fs?.resolve) {
+        const [found, wanted] = await Promise.all([
+          fs.resolve(current.path, { cwd: caller.project }),
+          fs.resolve(expected.path, { cwd: caller.project })
+        ]);
+        samePath = typeof found.targetKey === "string" && found.targetKey.length > 0 && found.targetKey === wanted.targetKey;
+      }
+      if (samePath && current.description === parsed.metadata.description && current.content?.trim() === parsed.body.trim())
         return "ready";
     } catch {
       return "pending";

@@ -6,8 +6,8 @@ export const SIDEBAR_AUTH_SOURCE = {
   integrity:
     'sha512-x7+/YmH/HrSlXWOBZkhL7qQqcDgZEnDcWrhR5GlizzUZjz+w84FbQ6jo8trJC9tyaQxMaNvXVnXwDxn4I330Ew==',
   sourceSha256: '00080091516184efe0005d8521cb890ae89032b9abcd514b752c4ef7642fa129',
-  patchedSha256: '00080091516184efe0005d8521cb890ae89032b9abcd514b752c4ef7642fa129',
-  patchId: 'upstream-native-auth-v1'
+  patchedSha256: 'faf9b055bfce04aa87648dd8ecb8e7ea5ca02ab85609ef3e199b796e61fac66f',
+  patchId: 'px-sidebar-native-cwd-v1'
 } as const
 
 /** Applied only to a private copied payload, never to an installed package or pnpm's shared store. */
@@ -16,21 +16,35 @@ export function patchSidebarAuthentication(source: string): { code: string; sha2
     throw new Error('侧栏来源与已核验版本不一致，拒绝应用认证补丁')
   const fence = 'const fence = (req) => ctx.connection.requestRejection(req) === void 0;'
   if (source.split(fence).length !== 2) throw new Error('侧栏认证合约已变化，拒绝应用补丁')
-  // Upstream now owns authentication and revision-aware, encoding-preserving writes.
-  return { code: source, sha256: SIDEBAR_AUTH_SOURCE.sourceSha256 }
+  // Keep native auth and writes. Relative files must keep the execution directory,
+  // rather than silently jumping to an enclosing repository root.
+  const code = patchSidebarSessionDirectory(source)
+  const sha256 = createHash('sha256').update(code).digest('hex')
+  if (sha256 !== SIDEBAR_AUTH_SOURCE.patchedSha256) throw Error('侧栏目录补丁摘要不一致：' + sha256)
+  return { code, sha256 }
+}
+
+export function patchSidebarSessionDirectory(source: string): string {
+  const base = 'const effectiveBase = pathUnderOf(base, canonicalTop) ? base : canonicalTop;'
+  const ancestor = 'if (topKey === baseKey) continue;'
+  for (const anchor of [base, ancestor])
+    if (source.split(anchor).length !== 2) throw Error('侧栏会话目录合约已变化')
+  return source
+    .replace(base, 'const effectiveBase = base;')
+    .replace(ancestor, 'if (topKey === baseKey || pathUnderOf(top, base)) continue;')
 }
 
 export const SIDEBAR_CLIENT_SOURCE = {
   sourceSha256: '53b70b1b5317205247c074b8121e1ececec1df2dc3771b0641f0a66b8fd127e1',
-  patchedSha256: '9c7e709f4e7c69c7afeb95933977abec2281862a35300d38f86b1c446dbe6a31',
-  patchId: 'px-sidebar-native-client-v3'
+  patchedSha256: '0791e5438b868c86bac7beeb808b568c2a127835dd49ef9c0b59336daab80687',
+  patchId: 'px-sidebar-native-client-v4'
 } as const
 /** Native shell owns transport/auth; HTML receives an absolute path before the upstream URL codec. */
 export function patchSidebarClientTransport(source: string): { code: string; sha256: string } {
   if (createHash('sha256').update(source).digest('hex') !== SIDEBAR_CLIENT_SOURCE.sourceSha256)
     throw Error('侧栏客户端来源与固定版本不一致')
   if (!source.includes('globalThis.__DSH_TRANSPORT__?.streamBaseUrl')) throw Error('侧栏原生连接合约已变化')
-  const code = patchSidebarHtmlViewer(source)
+  const code = patchSidebarLocalFileLinks(patchSidebarHtmlViewer(source))
   const sha256 = createHash('sha256').update(code).digest('hex')
   if (sha256 !== SIDEBAR_CLIENT_SOURCE.patchedSha256) throw Error('侧栏客户端补丁摘要不一致：' + sha256)
   return { code, sha256 }
@@ -67,8 +81,8 @@ export function patchSidebarHtmlViewer(source: string): string {
 
 export const SIDEBAR_EDITOR_SOURCE = {
   sourceSha256: 'e899df938ceb8ea29ff2319e15a89e76155775ba07c8cf65a970a1c8596b69fd',
-  patchedSha256: '0ed015f181f1c9ab628b32bc7709cfa2ef092394b54a38dd5819362290490ff2',
-  patchId: 'px-sidebar-native-html-v2'
+  patchedSha256: '4c923a51c362333b280702a4e4e62fe4f95b1b7f535db19289c07ffeb3e8dc53',
+  patchId: 'px-sidebar-native-html-v3'
 } as const
 /** Retain the upstream editor/draft/save controls; delegate preview bytes to the PX native-file renderer. */
 export function patchSidebarHtmlRenderer(source: string): { code: string; sha256: string } {
@@ -86,10 +100,33 @@ export function patchSidebarHtmlRenderer(source: string): { code: string; sha256
     )
     .replace(end, '})] })),\n\t\t\tselectionPopup.popup !== null')
   code = patchSidebarEditorSave(code)
+  code = patchSidebarMarkdownMedia(code)
+  code = patchSidebarLocalFileLinks(code)
   // Upstream now supplies the Markdown navigation/media delegate.
   const sha256 = createHash('sha256').update(code).digest('hex')
   if (sha256 !== SIDEBAR_EDITOR_SOURCE.patchedSha256) throw Error('侧栏 HTML 补丁产物摘要不一致：' + sha256)
   return { code, sha256 }
+}
+
+/** Ordinary local file links use the native tab registry; heading anchors remain Markdown-only. */
+export function patchSidebarLocalFileLinks(source: string): string {
+  const anchor = 'if (!MARKDOWN_EXT_RE.test(path)) return null;'
+  if (source.split(anchor).length !== 2) throw Error('侧栏 Markdown 文件导航合约已变化')
+  return source.replace(
+    anchor,
+    'if (!MARKDOWN_EXT_RE.test(path) && fragment !== "" && !isHostLineFragment(fragment)) return null;'
+  )
+}
+
+/** Reuse upstream's tolerant URL decoder once, before the media route encodes the filesystem path. */
+export function patchSidebarMarkdownMedia(source: string): string {
+  const candidate = 'const candidate = isAbsolutePath$1(trimmed) ? trimmed : directory + trimmed;'
+  if (source.split(candidate).length !== 2 || source.split('function decodePercent(value) {').length !== 2)
+    throw Error('侧栏 Markdown 图片路径合约已变化')
+  return source.replace(
+    candidate,
+    'const local = decodePercent(trimmed);\n\t\tconst candidate = isAbsolutePath$1(local) ? local : directory + local;'
+  )
 }
 
 /** Preserve changes typed during an in-flight native save; the native write owns format and revision checks. */

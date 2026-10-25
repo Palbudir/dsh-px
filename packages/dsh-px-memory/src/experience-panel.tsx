@@ -4,8 +4,11 @@ import { cardStyle, controlStyle } from '../../shared/ui'
 import { createDraftRegistry } from '../../shared/draft-store'
 
 const drafts = createDraftRegistry(64)
+const startedNotice = '已开始后台处理，可以继续对话。'
 
 const active = (task: any) => ['starting', 'running', 'stopping'].includes(task.phase)
+const pendingRun = (run: any) => run.status === 'running' && !run.awaitingRecovery
+const hasActivity = (value: any): boolean => !!(value?.tasks?.some(active) || value?.runs?.some(pendingRun))
 const phase: Record<string, string> = {
   starting: '准备中',
   running: '处理中',
@@ -55,6 +58,10 @@ export function ExperiencePanel({
     ),
     [evidence, setEvidence] = useState<any>(null)
   const lifetime = useRef<AbortController | null>(null)
+  const actionEpoch = useRef(0)
+  const editEpoch = useRef(0)
+  const latest = useRef({ selected, body, busy })
+  latest.current = { selected, body, busy }
   const url = `/dsh-px-memory?sessionId=${encodeURIComponent(sessionId)}`
   const call = (input: any, signal?: AbortSignal) =>
     requestJson<any>(url, {
@@ -72,14 +79,69 @@ export function ExperiencePanel({
     if (!project) return
     const controller = new AbortController()
     let timer: ReturnType<typeof setTimeout>
+    let first = true
     const refresh = async () => {
+      const epoch = actionEpoch.current
+      let again = false
+      let pendingView: any
       try {
         const next = await call({ action: 'view' }, controller.signal)
-        if (controller.signal.aborted) return
-        setView(next)
-        if (next.tasks.some(active)) timer = setTimeout(() => void refresh(), 1000)
+        if (controller.signal.aborted || epoch !== actionEpoch.current) return
+        pendingView = next
+        again = hasActivity(next)
+        const snapshot = latest.current,
+          edited = editEpoch.current
+        const shouldRefresh =
+          first ||
+          snapshot.selected?.revision !== next.revision ||
+          snapshot.selected?.value.runs.some((run: any) =>
+            next.runs.some(
+              (current: any) =>
+                current.id === run.id &&
+                (current.status !== run.status || current.awaitingRecovery !== run.awaitingRecovery)
+            )
+          )
+        first = false
+        // A clean detail follows native progress. Never overwrite typing, a newer selection,
+        // or another action that started while this read was in flight.
+        if (
+          snapshot.selected &&
+          !snapshot.busy &&
+          snapshot.body === snapshot.selected.value.draft.content &&
+          shouldRefresh
+        ) {
+          const detail = await call(
+            { action: 'read', kind: 'draft', id: snapshot.selected.value.draft.id },
+            controller.signal
+          )
+          if (
+            controller.signal.aborted ||
+            epoch !== actionEpoch.current ||
+            edited !== editEpoch.current ||
+            latest.current.selected !== snapshot.selected ||
+            latest.current.body !== snapshot.body ||
+            latest.current.busy
+          )
+            return
+          if (detail.value.draft.status !== 'ready') {
+            setSelected(null)
+            setBody('')
+            setNotice('此草稿已被处理，列表已刷新。')
+          } else {
+            setSelected(detail)
+            setBody(detail.value.draft.content)
+            if (detail.value.draft.content !== snapshot.body) setNotice('草稿已有新版本，请重新审阅内容。')
+          }
+        }
       } catch (error: any) {
         if (!controller.signal.aborted) setError(String(error.message))
+      } finally {
+        if (!controller.signal.aborted && epoch === actionEpoch.current) {
+          // Publish terminal task status together with refreshed detail, so an old
+          // revision cannot briefly become actionable between these two reads.
+          if (pendingView) setView(pendingView)
+          if (again) timer = setTimeout(() => void refresh(), 1000)
+        }
       }
     }
     void refresh()
@@ -97,11 +159,12 @@ export function ExperiencePanel({
       })
     else draft?.clear()
   }, [draft, dirty, selected, body])
-  const working = view?.tasks?.some(active) ?? false
+  const working = hasActivity(view)
   const disabled = busy || working || dirty || !view
   const run = async (action: (signal: AbortSignal) => Promise<void>) => {
     const signal = lifetime.current?.signal
     if (!signal || signal.aborted) return
+    actionEpoch.current++
     setBusy(true)
     setError('')
     setNotice('')
@@ -111,6 +174,7 @@ export function ExperiencePanel({
       if (!signal.aborted) setError(String(error.message))
     } finally {
       if (!signal.aborted) {
+        actionEpoch.current++
         setBusy(false)
         setGeneration((value) => value + 1)
       }
@@ -118,11 +182,34 @@ export function ExperiencePanel({
   }
   const start = (action: string, id?: string) =>
     void run(async (signal) => {
-      await call({ action, id, requestId: crypto.randomUUID() }, signal)
+      const requestId = crypto.randomUUID()
+      const admitted = await call({ action, id, requestId }, signal)
       if (signal.aborted) return
+      actionEpoch.current++
+      setView(
+        (current: any) =>
+          current && {
+            ...current,
+            tasks: [
+              {
+                requestId,
+                jobId: admitted.jobId,
+                phase: 'starting',
+                startedAt: Date.now(),
+                progress:
+                  action === 'review'
+                    ? '整理工作经历'
+                    : action === 'draft'
+                      ? '生成 Skill 草稿'
+                      : '模拟回测 Skill 草稿'
+              },
+              ...current.tasks.filter((task: any) => task.requestId !== requestId)
+            ]
+          }
+      )
       setSelected(null)
       setEvidence(null)
-      setNotice('已开始后台处理，可以继续对话。')
+      setNotice(startedNotice)
     })
   const readDraft = (id: string) =>
     void run(async (signal) => {
@@ -145,6 +232,7 @@ export function ExperiencePanel({
           style={controlStyle}
           disabled={busy || dirty}
           onClick={() => {
+            actionEpoch.current++
             setError('')
             setGeneration((value) => value + 1)
           }}
@@ -157,8 +245,8 @@ export function ExperiencePanel({
         Skill。
       </p>
       {error && <p role="alert">{error}</p>}
-      {notice && <p role="status">{notice}</p>}
-      {view?.tasks?.slice(0, working ? 8 : 1).map((task: any) => (
+      {notice && (notice !== startedNotice || working) && <p role="status">{notice}</p>}
+      {(working ? view?.tasks?.filter(active) : view?.tasks?.slice(0, 1))?.map((task: any) => (
         <div key={task.requestId} role="status">
           {phase[task.phase] ?? task.phase} · {task.progress}
           {task.error && <p role="alert">{task.error}</p>}
@@ -177,6 +265,7 @@ export function ExperiencePanel({
           )}
         </div>
       ))}
+      {working && !view?.tasks?.some(active) && <p role="status">本项目有回测正在处理，结果会自动刷新。</p>}
       {view && !working && !view.suggestions.length && !view.drafts.length && (
         <p className="px-muted">还没有待处理建议。完成一项工作后，点击“整理本次经历”。</p>
       )}
@@ -268,7 +357,10 @@ export function ExperiencePanel({
               maxLength={16000}
               value={body}
               disabled={busy || working || !draft}
-              onChange={(event: any) => setBody(event.target.value)}
+              onChange={(event: any) => {
+                editEpoch.current++
+                setBody(event.target.value)
+              }}
             />
           </label>
           {dirty && <p className="px-muted">有未保存修改，保留在当前窗口。保存后再回测或采纳。</p>}
@@ -310,7 +402,10 @@ export function ExperiencePanel({
             <button
               style={controlStyle}
               disabled={busy || working || !dirty}
-              onClick={() => setBody(selected.value.draft.content)}
+              onClick={() => {
+                editEpoch.current++
+                setBody(selected.value.draft.content)
+              }}
             >
               撤销本次编辑
             </button>
@@ -338,7 +433,7 @@ export function ExperiencePanel({
                       这条记录来自上次服务，当前没有对应的经验任务；已有结果保留，不计为回测完成。
                     </p>
                   )}
-                  {!result.matchesCurrentContent && (
+                  {(!result.matchesCurrentContent || (dirty && result.target.kind === 'draft')) && (
                     <p role="status">旧版本结果：内容已变化，需要重新回测。</p>
                   )}
                   <p>
