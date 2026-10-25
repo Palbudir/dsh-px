@@ -120,7 +120,8 @@ export class ExperienceJobs {
                     job.updateProgress(record.progress)
                   }
                 )
-                record.controller.signal.throwIfAborted()
+                // Each work path checks cancellation before its durable writes. Once all work
+                // has committed successfully, a late stop must not relabel saved results as killed.
                 this.bank.identity(record.source)
                 record.result = value
                 return {
@@ -213,7 +214,7 @@ export class ExperienceJobs {
     if (terminal(record.phase)) return
     record.phase = 'stopping'
     try {
-      if (record.jobId) record.jobs.kill(record.jobId, reason, record.ownerId)
+      if (record.jobId) record.jobs.kill(record.jobId, record.ownerId, reason)
       else record.controller.abort(new Error(reason))
     } catch (error) {
       record.controller.abort(error)

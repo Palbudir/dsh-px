@@ -1,9 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
-import { MemoryStore } from '../packages/dsh-px-memory/src/store'
+import { MemoryStore, isExperienceSession } from '../packages/dsh-px-memory/src/store'
+import { randomUUID } from 'node:crypto'
 import { ExperienceBank, type ExperienceCaller } from '../packages/dsh-px-memory/src/experience'
 
 function fixture(t: any) {
@@ -120,4 +121,86 @@ test('cancelling a queued analysis write prevents its candidate from being commi
   controller.abort(new Error('analysis cancelled'))
   await assert.rejects(pending, /analysis cancelled/)
   assert.equal((await bank.read(a, 'drafts')).value.length, 0)
+})
+
+test('completed reviews append atomically despite concurrent reviews and unrelated draft revisions', async (t) => {
+  const { bank, a } = fixture(t)
+  const input = (summary: string) => ({
+    review: { at: new Date().toISOString(), sessionId: 'a', trigger: 'manual', outcome: 'nothing', summary },
+    trajectory: {
+      sessionId: 'a',
+      startedAt: new Date().toISOString(),
+      endedAt: new Date().toISOString(),
+      steps: [{ index: 1, turn: 1, kind: 'user', text: 'Verify evidence', at: new Date().toISOString() }],
+      stats: { turns: 1, skills: [] }
+    },
+    suggestions: [],
+    cases: []
+  })
+  await draft(bank, a)
+  await Promise.all([
+    bank.appendReview(a, input('first completed')),
+    bank.appendReview(a, input('second completed'))
+  ])
+  const overview = (await bank.read(a, 'overview')).value
+  assert.equal(overview.reviews.length, 2)
+  assert.deepEqual(
+    new Set(overview.reviews.map((r: any) => r.summary)),
+    new Set(['first completed', 'second completed'])
+  )
+  assert.equal((await bank.read(a, 'drafts')).value.length, 1)
+})
+
+test('temporary experience identities are reclaimable without touching human bindings or cold-log classification', (t) => {
+  const { store } = fixture(t),
+    root = 'px-experience-root-' + randomUUID(),
+    child = 'px-experience-' + randomUUID()
+  store.bind(root, { parent: 'a', purpose: 'experience', locked: true })
+  store.bind(child, { parent: root, locked: true })
+  const ordinary = store.read().bindings.a
+  store.releaseExperienceBindings(['a', root, child])
+  assert.equal(store.read().bindings[root], undefined)
+  assert.equal(store.read().bindings[child], undefined)
+  assert.deepEqual(store.read().bindings.a, ordinary)
+  assert.equal(isExperienceSession(root), true)
+  assert.equal(isExperienceSession(child), true)
+  assert.equal(isExperienceSession('ordinary-human-session'), false)
+  store.bind(child, { locked: true })
+  assert.equal(
+    store.read().bindings[child].purpose,
+    'experience',
+    'cold internal ids cannot become ordinary recall sources'
+  )
+})
+
+test('native Skills source marks expired persisted runs interrupted across run, list and linked draft views', async (t) => {
+  const { bank, a, root } = fixture(t),
+    candidate = await draft(bank, a)
+  const write = async (operation: string, input: any) =>
+    bank.write(a, operation, input, (await bank.read(a, 'overview')).revision)
+  const entry = await write('case-save', {
+    skillName: 'checked-procedure',
+    title: 'Recovery case',
+    prompt: 'Inspect the result',
+    checks: [{ text: 'Checks result', must: true }]
+  })
+  const run = await write('run-start', {
+    skillName: 'checked-procedure',
+    target: { kind: 'none' },
+    caseIds: [entry.value.id]
+  })
+  await write('run-link', { draftId: candidate.value.id, runId: run.value.id })
+  const files = readdirSync(join(root, 'experience'), { recursive: true }).filter((name) =>
+    String(name).endsWith('evals.json')
+  )
+  assert.equal(files.length, 1)
+  const file = join(root, 'experience', String(files[0])),
+    saved = JSON.parse(readFileSync(file, 'utf8'))
+  saved.runs.find((r: any) => r.id === run.value.id).startedAt = new Date(
+    Date.now() - 46 * 60_000
+  ).toISOString()
+  writeFileSync(file, JSON.stringify(saved))
+  assert.equal((await bank.read(a, 'run', { id: run.value.id })).value.status, 'interrupted')
+  assert.equal((await bank.read(a, 'runs')).value[0].status, 'interrupted')
+  assert.equal((await bank.read(a, 'draft', { id: candidate.value.id })).value.runs[0].status, 'interrupted')
 })

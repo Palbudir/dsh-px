@@ -118,7 +118,7 @@ export function apply(ctx: Context): void {
       })
     host.tools.register({
       name: 'task_state',
-      // Model calls always supply their live Agent; this path reads native snapshots without awaiting I/O.
+      // Native state reads never consume outputs, mutate tasks or wake other Agents.
       isConcurrencySafe: () => true,
       description:
         '只读查看当前会话的原生 Goal 和 Team：稳定任务编号、revision、状态、负责人、依赖与成员。不会创建任务、恢复目标或唤醒成员；paused 和 completed 与工作摘要分开判断。',

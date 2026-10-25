@@ -48,6 +48,9 @@ export interface SessionBinding {
   /** Internal analysis remains auditable in native storage, outside conversational recall. */
   purpose?: 'experience'
 }
+/** Reserved PX task ids remain excluded from recall even after their temporary binding is released. */
+export const isExperienceSession = (id: string): boolean =>
+  /^px-experience-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)
 export interface MemoryState {
   schemaVersion: 2
   revision: number
@@ -285,9 +288,22 @@ export class MemoryStore {
         createdAt: new Date().toISOString(),
         ...(options.pending ? { pending: true } : {}),
         ...(options.createdFrom ? { createdFrom: options.createdFrom } : {}),
-        ...((options.purpose ?? parent?.purpose) ? { purpose: options.purpose ?? parent?.purpose } : {}),
+        ...((options.purpose ??
+        parent?.purpose ??
+        (isExperienceSession(sessionId) ? 'experience' : undefined))
+          ? { purpose: options.purpose ?? parent?.purpose ?? ('experience' as const) }
+          : {}),
         ...(options.handoff ? { handoff: options.handoff } : {})
       }
+    })
+  }
+  /** Drop internal identities only; native logs and ordinary conversation bindings are untouched. */
+  releaseExperienceBindings(ids: readonly string[]): void {
+    const state = this.read(),
+      removable = ids.filter((id) => isExperienceSession(id) && state.bindings[id]?.purpose === 'experience')
+    if (!removable.length) return
+    this.change(state.revision, (next) => {
+      for (const id of removable) delete next.bindings[id]
     })
   }
   action(revision: unknown, action: any, sessionId: string, project: string | null): MemoryState {

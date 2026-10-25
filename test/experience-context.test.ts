@@ -2,7 +2,8 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { experienceWindow, redactExperienceText } from '../packages/dsh-px-memory/src/experience-context'
 import { inspectMemorySession } from '../packages/dsh-px-memory/src/session-context'
-import { experienceModel } from '../packages/dsh-px-memory/src/experience-context'
+import { experienceRunView } from '../packages/dsh-px-memory/src/experience-run-state'
+import { experienceModel, experienceSessionModel } from '../packages/dsh-px-memory/src/experience-context'
 
 test('bounded background analysis selects only a declared low effort and leaves source configuration untouched', () => {
   const source = { provider: 'p', model: 'm', reasoningEffort: 'high' }
@@ -121,4 +122,47 @@ test('locked session UI polling reads and closes only the header; unknown identi
   await inspectMemorySession(host, store, 's', true)
   await inspectMemorySession(host, store, 'unknown')
   assert.equal(inspected, 2)
+})
+
+test('draft and simulation routing use the exact native projection, never inspect or resume the full source', async () => {
+  let reads = 0
+  const controller = {
+    inspect: () => {
+      throw Error('full log must not be requested')
+    },
+    resolveAgent: () => {
+      throw Error('source must not wake')
+    },
+    projections: async ({ sessionId }: any, signal: AbortSignal) => {
+      assert.equal(sessionId, 'source')
+      assert.equal(signal.aborted, false)
+      reads++
+      return {
+        kind: 'sequenced',
+        values: {
+          modelSelection: {
+            lastUsed: { provider: 'p', model: 'used', reasoningEffort: 'low' },
+            next: { provider: 'p', model: 'pending' }
+          }
+        }
+      }
+    }
+  }
+  assert.deepEqual(await experienceSessionModel({ sessionController: controller }, 'source'), {
+    provider: 'p',
+    model: 'used',
+    reasoningEffort: 'low'
+  })
+  assert.equal(reads, 1)
+  controller.projections = async () => ({ kind: 'migration-required', values: {} }) as any
+  await assert.rejects(experienceSessionModel({ sessionController: controller }, 'source'), /没有可用/)
+})
+
+test('a previous-host running record is visibly unconfirmed without rewriting its native status or score', () => {
+  const old = { status: 'running', startedAt: new Date(1000).toISOString(), passRate: 0.5 }
+  assert.deepEqual(experienceRunView(old, 2000), { ...old, awaitingRecovery: true })
+  assert.equal(experienceRunView(old, 0).awaitingRecovery, false)
+  assert.equal(experienceRunView({ ...old, status: 'interrupted' }, 2000).awaitingRecovery, false)
+  assert.equal(experienceRunView({ ...old, status: 'completed' }, 2000).awaitingRecovery, false)
+  assert.equal(old.status, 'running')
 })

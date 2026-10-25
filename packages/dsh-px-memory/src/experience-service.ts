@@ -1,12 +1,14 @@
 import { createHash } from 'node:crypto'
 import { ExperienceBank, type ExperienceCaller } from './experience'
 import { ExperienceJobs } from './experience-jobs'
-import { experienceWindow } from './experience-context'
+import { experienceWindow, experienceSessionModel } from './experience-context'
 import { runExperienceTask } from './experience-task'
-import { MemoryError, projectKey, type MemoryStore } from './store'
+import { MemoryError, projectKey, isExperienceSession, type MemoryStore } from './store'
 import type { HistoryEvent } from './history'
 import { awaitSkillDiscovery } from './native-resources'
 import { skillDraftContent } from './experience-format'
+import { inspectMemorySession } from './session-context'
+import { experienceRunView } from './experience-run-state'
 import type {
   SuggestionView,
   DraftView,
@@ -46,6 +48,7 @@ const newest = (rows: any[]) =>
 
 /** Bounded product workflow over the native Skills source, native Jobs and restricted native children. */
 export class ExperienceService {
+  private readonly startedAt = Date.now()
   readonly bank: ExperienceBank
   readonly jobs: ExperienceJobs
   constructor(
@@ -74,7 +77,7 @@ export class ExperienceService {
         drafts: newest(drafts.value.filter((d: any) => d.status === 'ready')).map(
           ({ id, skillName, suggestionId, status }) => ({ id, skillName, suggestionId, status })
         ),
-        runs: newest(runs.value).map(({ results, ...summary }) => summary),
+        runs: newest(runs.value).map(({ results, ...summary }) => experienceRunView(summary, this.startedAt)),
         tasks: this.jobs.list(caller)
       }
     }
@@ -93,7 +96,7 @@ export class ExperienceService {
         value: {
           ...value,
           runs: newest(value.runs).map((run) => ({
-            ...run,
+            ...experienceRunView(run, this.startedAt),
             matchesCurrentContent:
               run.target.kind === 'none'
                 ? !value.base
@@ -131,7 +134,7 @@ export class ExperienceService {
     throw new MemoryError('不支持的经验操作')
   }
   private async source(caller: ExperienceCaller, id = caller.sessionId) {
-    if (this.store.read().bindings[id]?.purpose === 'experience')
+    if (isExperienceSession(id) || this.store.read().bindings[id]?.purpose === 'experience')
       throw new MemoryError('内部整理记录不作为新的工作经历提炼', 409)
     const inspected = await this.host.sessionController.inspect(id)
     const identity = this.bank.identity(caller),
@@ -150,6 +153,21 @@ export class ExperienceService {
       on: this.host.on.bind(this.host),
       get: (name: string) => parent.ctx.get?.(name) ?? this.host.get?.(name) ?? this.host[name]
     }
+  }
+  private async sourceModel(caller: ExperienceCaller, id = caller.sessionId) {
+    if (isExperienceSession(id) || this.store.read().bindings[id]?.purpose === 'experience')
+      throw new MemoryError('内部整理记录不作为新的工作经历提炼', 409)
+    const { meta } = await inspectMemorySession(this.host, this.store, id)
+    const current = this.bank.identity(caller),
+      original = this.bank.identity({
+        ...caller,
+        sessionId: id,
+        project: meta.cwd,
+        personaId: undefined
+      })
+    if (current.personaId !== original.personaId || current.project !== original.project)
+      throw new MemoryError('来源不属于当前人格与项目', 403)
+    return experienceSessionModel(this.host, id)
   }
   private async review(caller: ExperienceCaller, requestId: string) {
     const fingerprint = hash(['review', caller.sessionId]),
@@ -211,26 +229,21 @@ export class ExperienceService {
           if (!value.cases.some((c: any) => c.skillName === suggestion.skillName && c.checks.length))
             throw new MemoryError('模型没有提供建议对应的可检查用例，未保存不完整建议', 422)
         progress('正在保存建议与原始依据')
-        return this.bank.write(
-          source,
-          'review-record',
-          {
-            review: {
-              at: new Date().toISOString(),
-              sessionId: caller.sessionId,
-              trigger: 'manual',
-              durationMs: Date.now() - started,
-              outcome: value.suggestions.length ? 'suggested' : 'nothing',
-              summary: value.summary,
-              turn: window.trajectory.steps.at(-1)!.turn
-            },
-            trajectory: window.trajectory,
-            annotations: [],
-            suggestions: value.suggestions,
-            cases: value.cases
+        return this.bank.appendReview(source, {
+          review: {
+            at: new Date().toISOString(),
+            sessionId: caller.sessionId,
+            trigger: 'manual',
+            durationMs: Date.now() - started,
+            outcome: value.suggestions.length ? 'suggested' : 'nothing',
+            summary: value.summary,
+            turn: window.trajectory.steps.at(-1)!.turn
           },
-          before.revision
-        )
+          trajectory: window.trajectory,
+          annotations: [],
+          suggestions: value.suggestions,
+          cases: value.cases
+        })
       }
     )
   }
@@ -246,7 +259,7 @@ export class ExperienceService {
       skill: suggestion.skillName,
       suggestionId
     })
-    const source = await this.source(caller, suggestion.sourceSessionId)
+    const model = await this.sourceModel(caller, suggestion.sourceSessionId)
     const schema = object({
       description: text(500),
       body: text(14_000),
@@ -258,7 +271,7 @@ export class ExperienceService {
       caller,
       requestId,
       fingerprint,
-      source.model,
+      model,
       '生成 Skill 草稿',
       async (parent, pinned, signal, progress) => {
         progress('正在编写带适用条件的 Skill 草稿')
@@ -325,7 +338,7 @@ export class ExperienceService {
       throw new MemoryError('当前 Skill 已变化，请重新整理或核对草稿后再回测', 409)
     const cases = pack.cases.filter((c: any) => c.enabled && c.checks?.length).slice(0, 2)
     if (!cases.length) throw new MemoryError('此建议还没有可用的回测用例', 409)
-    const source = await this.source(caller, suggestion.sourceSessionId)
+    const model = await this.sourceModel(caller, suggestion.sourceSessionId)
     const snapshots = await Promise.all([
       this.bank.read(caller, 'target-content', {
         skillName: draft.skillName,
@@ -342,7 +355,7 @@ export class ExperienceService {
       caller,
       requestId,
       fingerprint,
-      source.model,
+      model,
       '模拟回测 Skill 草稿',
       async (parent, pinned, signal, progress) => {
         const ids: string[] = []

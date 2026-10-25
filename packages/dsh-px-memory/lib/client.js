@@ -762,8 +762,9 @@ function ExperiencePanel({
             result.target.kind === "draft" ? "\u8349\u7A3F" : "\u73B0\u884C\u65B9\u6CD5",
             " \xB7",
             " ",
-            result.status === "completed" ? "\u6A21\u62DF\u5B8C\u6210" : result.status === "running" ? "\u8FDB\u884C\u4E2D" : "\u672A\u5B8C\u6210"
+            result.awaitingRecovery ? "\u4E0A\u6B21\u8FD0\u884C\u672A\u7ED3\u7B97" : result.status === "completed" ? "\u6A21\u62DF\u5B8C\u6210" : result.status === "running" ? "\u8FDB\u884C\u4E2D" : "\u672A\u5B8C\u6210"
           ] }),
+          result.awaitingRecovery && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "status", children: "\u8FD9\u6761\u8BB0\u5F55\u6765\u81EA\u4E0A\u6B21\u670D\u52A1\uFF0C\u5F53\u524D\u6CA1\u6709\u5BF9\u5E94\u7684\u7ECF\u9A8C\u4EFB\u52A1\uFF1B\u5DF2\u6709\u7ED3\u679C\u4FDD\u7559\uFF0C\u4E0D\u8BA1\u4E3A\u56DE\u6D4B\u5B8C\u6210\u3002" }),
           !result.matchesCurrentContent && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "status", children: "\u65E7\u7248\u672C\u7ED3\u679C\uFF1A\u5185\u5BB9\u5DF2\u53D8\u5316\uFF0C\u9700\u8981\u91CD\u65B0\u56DE\u6D4B\u3002" }),
           /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("p", { children: [
             result.progress.done,
@@ -1284,7 +1285,8 @@ function KnowledgePanel({
             setSkills(value.skills);
             setSkillDirectories(value.directories);
           }
-        }
+        },
+        sessionId + ":" + personaId
       ),
       /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { className: "px-muted", children: "\u5217\u8868\u4E0E\u52A0\u8F7D\u4F7F\u7528 DSH \u539F\u751F Skills\u3002\u9879\u76EE\u6280\u80FD\u4F18\u5148\u4E8E\u5168\u5C40\u6280\u80FD\uFF1B\u53EA\u6709\u672C\u9875\u521B\u5EFA\u7684\u6280\u80FD\u53EF\u5728\u6B64\u7F16\u8F91\u3002" }),
       /* @__PURE__ */ (0, import_jsx_runtime5.jsx)(

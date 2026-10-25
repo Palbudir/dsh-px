@@ -34,6 +34,8 @@ export async function waitForNativeWork(
     jobs = service(host, 'jobs'),
     teams = service(host, 'agentTeams'),
     local = new AbortController()
+  if (!jobs?.events?.subscribe || typeof jobs.list !== 'function')
+    throw Error('原生后台作业状态不可用，无法确认可等待的工作')
   let resolveWake!: (reason: WorkWakeReason) => void, rejectWake!: (reason: unknown) => void
   const wake = new Promise<WorkWakeReason>((resolve, reject) => {
     resolveWake = resolve

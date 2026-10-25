@@ -115,4 +115,7 @@ test('unknown native state fails rather than reporting idle, and timeouts are bo
   await assert.rejects(waitForNativeWork(f.host, f.agent, new AbortController().signal), /native unavailable/)
   assert.equal(f.inbox.size + f.jobs.size, 0)
   await assert.rejects(waitForNativeWork(f.host, f.agent, new AbortController().signal, 60_001), /等待时长/)
+  delete f.host.jobs
+  await assert.rejects(waitForNativeWork(f.host, f.agent, new AbortController().signal), /状态不可用/)
+  assert.equal(f.inbox.size + f.jobs.size, 0)
 })

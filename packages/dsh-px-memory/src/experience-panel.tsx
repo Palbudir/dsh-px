@@ -325,12 +325,19 @@ export function ExperiencePanel({
                 <div key={result.id} style={cardStyle}>
                   <strong>
                     {result.target.kind === 'draft' ? '草稿' : '现行方法'} ·{' '}
-                    {result.status === 'completed'
-                      ? '模拟完成'
-                      : result.status === 'running'
-                        ? '进行中'
-                        : '未完成'}
+                    {result.awaitingRecovery
+                      ? '上次运行未结算'
+                      : result.status === 'completed'
+                        ? '模拟完成'
+                        : result.status === 'running'
+                          ? '进行中'
+                          : '未完成'}
                   </strong>
+                  {result.awaitingRecovery && (
+                    <p role="status">
+                      这条记录来自上次服务，当前没有对应的经验任务；已有结果保留，不计为回测完成。
+                    </p>
+                  )}
                   {!result.matchesCurrentContent && (
                     <p role="status">旧版本结果：内容已变化，需要重新回测。</p>
                   )}

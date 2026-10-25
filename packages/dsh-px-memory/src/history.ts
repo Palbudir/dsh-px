@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { mkdirSync, existsSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { MemoryError, projectKey, type MemoryStore } from './store'
+import { MemoryError, projectKey, isExperienceSession, type MemoryStore } from './store'
 
 export interface HistoryEvent {
   seq: number
@@ -135,14 +135,25 @@ export class HistoryIndex {
     const s = this.store.read(),
       b = s.bindings[sessionId]
     if (!b) throw new MemoryError('会话尚未绑定人格', 409)
-    if (b.purpose === 'experience') return Object.create(null)
+    if (b.purpose === 'experience' || isExperienceSession(sessionId)) return Object.create(null)
     const allowed = Object.fromEntries(
       Object.entries(s.bindings)
-        .filter(([, v]) => v.personaId === b.personaId && !v.pending && v.purpose !== 'experience')
+        .filter(
+          ([id, v]) =>
+            v.personaId === b.personaId &&
+            !v.pending &&
+            v.purpose !== 'experience' &&
+            !isExperienceSession(id)
+        )
         .map(([id]) => [id, Number.MAX_SAFE_INTEGER])
     )
     Object.setPrototypeOf(allowed, null)
-    if (b.handoff && !Object.hasOwn(allowed, b.handoff.sessionId))
+    if (
+      b.handoff &&
+      !isExperienceSession(b.handoff.sessionId) &&
+      s.bindings[b.handoff.sessionId]?.purpose !== 'experience' &&
+      !Object.hasOwn(allowed, b.handoff.sessionId)
+    )
       allowed[b.handoff.sessionId] = b.handoff.throughSeq
     return allowed
   }

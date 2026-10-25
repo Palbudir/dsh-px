@@ -40,6 +40,7 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+var isExperienceSession = (id) => /^px-experience-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id);
 var MemoryError = class extends Error {
   constructor(message, status = 400) {
     super(message);
@@ -216,9 +217,17 @@ var MemoryStore = class {
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
         ...options.pending ? { pending: true } : {},
         ...options.createdFrom ? { createdFrom: options.createdFrom } : {},
-        ...options.purpose ?? parent?.purpose ? { purpose: options.purpose ?? parent?.purpose } : {},
+        ...options.purpose ?? parent?.purpose ?? (isExperienceSession(sessionId) ? "experience" : void 0) ? { purpose: options.purpose ?? parent?.purpose ?? "experience" } : {},
         ...options.handoff ? { handoff: options.handoff } : {}
       };
+    });
+  }
+  /** Drop internal identities only; native logs and ordinary conversation bindings are untouched. */
+  releaseExperienceBindings(ids) {
+    const state = this.read(), removable = ids.filter((id) => isExperienceSession(id) && state.bindings[id]?.purpose === "experience");
+    if (!removable.length) return;
+    this.change(state.revision, (next) => {
+      for (const id of removable) delete next.bindings[id];
     });
   }
   action(revision, action, sessionId, project) {
@@ -523,12 +532,14 @@ var HistoryIndex = class {
   allowed(sessionId) {
     const s = this.store.read(), b = s.bindings[sessionId];
     if (!b) throw new MemoryError("\u4F1A\u8BDD\u5C1A\u672A\u7ED1\u5B9A\u4EBA\u683C", 409);
-    if (b.purpose === "experience") return /* @__PURE__ */ Object.create(null);
+    if (b.purpose === "experience" || isExperienceSession(sessionId)) return /* @__PURE__ */ Object.create(null);
     const allowed = Object.fromEntries(
-      Object.entries(s.bindings).filter(([, v]) => v.personaId === b.personaId && !v.pending && v.purpose !== "experience").map(([id]) => [id, Number.MAX_SAFE_INTEGER])
+      Object.entries(s.bindings).filter(
+        ([id, v]) => v.personaId === b.personaId && !v.pending && v.purpose !== "experience" && !isExperienceSession(id)
+      ).map(([id]) => [id, Number.MAX_SAFE_INTEGER])
     );
     Object.setPrototypeOf(allowed, null);
-    if (b.handoff && !Object.hasOwn(allowed, b.handoff.sessionId))
+    if (b.handoff && !isExperienceSession(b.handoff.sessionId) && s.bindings[b.handoff.sessionId]?.purpose !== "experience" && !Object.hasOwn(allowed, b.handoff.sessionId))
       allowed[b.handoff.sessionId] = b.handoff.throughSeq;
     return allowed;
   }
@@ -1876,6 +1887,11 @@ var ExperienceBank = class {
       throw new MemoryError("\u6B64\u4EBA\u683C\u7684\u8BB0\u5FC6\u5DF2\u5173\u95ED\u6216\u5DF2\u5F52\u6863", 409);
     return this.manage(caller, operation, input2, revision);
   }
+  /** A completed review appends evidence; unrelated edits must not discard its model result. */
+  async appendReview(caller, input2) {
+    if (!this.identity(caller).enabled) throw new MemoryError("\u6B64\u4EBA\u683C\u7684\u8BB0\u5FC6\u5DF2\u5173\u95ED\u6216\u5DF2\u5F52\u6863", 409);
+    return this.manage(caller, "review-record", input2, void 0, true);
+  }
   async adopt(caller, draftId, revision, share) {
     if (caller.actor !== "human" || !["project", "global"].includes(share))
       throw new MemoryError("\u91C7\u7EB3 Skill \u9700\u8981\u4F60\u660E\u786E\u9009\u62E9\u5171\u4EAB\u8303\u56F4", 403);
@@ -1887,9 +1903,9 @@ var ExperienceBank = class {
       revision
     );
   }
-  async manage(caller, operation, input2, revision) {
+  async manage(caller, operation, input2, revision, appendReview = false) {
     const mutation = writes.has(operation) || operation === "draft-adopt";
-    if (mutation && (typeof revision !== "string" || !revision))
+    if (mutation && !appendReview && (typeof revision !== "string" || !revision))
       throw new MemoryError("\u8BF7\u91CD\u65B0\u8BFB\u53D6\u7ECF\u9A8C\u7248\u672C\u540E\u518D\u4FEE\u6539", 409);
     return this.withRuntime(caller, async (runtime, key, project) => {
       const request = {
@@ -1904,7 +1920,8 @@ var ExperienceBank = class {
           input: {},
           confirmed: false
         });
-        if (current.value.revision !== revision)
+        if (appendReview) revision = current.value.revision;
+        else if (current.value.revision !== revision)
           throw new MemoryError("\u7ECF\u9A8C\u5DF2\u88AB\u5176\u4ED6\u64CD\u4F5C\u66F4\u65B0\uFF0C\u8BF7\u5237\u65B0\u540E\u518D\u4FEE\u6539", 409);
       }
       caller.signal?.throwIfAborted();
@@ -2036,6 +2053,19 @@ function experienceWindow(events, sessionId, project) {
     }
   };
 }
+async function experienceSessionModel(host, sessionId) {
+  if (typeof host.sessionController?.projections !== "function")
+    throw new MemoryError("\u539F\u751F\u6A21\u578B\u6295\u5F71\u6682\u4E0D\u53EF\u7528", 503);
+  const snapshot = await host.sessionController.projections({ sessionId }, new AbortController().signal);
+  const model = snapshot?.kind === "sequenced" ? snapshot.values?.modelSelection?.lastUsed : void 0;
+  if (typeof model?.provider !== "string" || !model.provider || typeof model?.model !== "string" || !model.model)
+    throw new MemoryError("\u6765\u6E90\u4F1A\u8BDD\u6CA1\u6709\u53EF\u7528\u7684\u6A21\u578B\u8BB0\u5F55", 409);
+  return {
+    provider: model.provider,
+    model: model.model,
+    ...typeof model.reasoningEffort === "string" ? { reasoningEffort: model.reasoningEffort } : {}
+  };
+}
 async function createExperienceParent(host, store, caller, model, signal) {
   const agents = service(host, "agents");
   if (!agents?.create) throw new MemoryError("\u539F\u751F\u540E\u53F0\u4EFB\u52A1\u670D\u52A1\u4E0D\u53EF\u7528", 503);
@@ -2049,15 +2079,30 @@ async function createExperienceParent(host, store, caller, model, signal) {
     purpose: "experience",
     createdFrom: caller.sessionId
   });
-  signal.throwIfAborted();
-  return agents.create({
-    sessionId: id,
-    // Analysis has no interactive preset. Children inherit this native preset-free composition,
-    // not a user preset's scoped delegation tools, terminal services or persona prompt.
-    meta: { cwd: caller.project, origin: "subagent" },
-    agentOptions: { ...route, maxTokens: 8e3 },
-    signal
-  });
+  try {
+    signal.throwIfAborted();
+    const owned = await agents.create({
+      sessionId: id,
+      // Analysis has no interactive preset. Children inherit this native preset-free composition,
+      // not a user preset's scoped delegation tools, terminal services or persona prompt.
+      meta: { cwd: caller.project, origin: "subagent" },
+      agentOptions: { ...route, maxTokens: 8e3 },
+      signal
+    });
+    return {
+      agent: owned.agent,
+      dispose: async () => {
+        try {
+          await owned.dispose();
+        } finally {
+          store.releaseExperienceBindings([id]);
+        }
+      }
+    };
+  } catch (error62) {
+    store.releaseExperienceBindings([id]);
+    throw error62;
+  }
 }
 function experienceModel(model, reasoning) {
   const selected = model.reasoningEffort ?? reasoning?.defaultEffort;
@@ -2149,7 +2194,6 @@ var ExperienceJobs = class {
                   job.updateProgress(record2.progress);
                 }
               );
-              record2.controller.signal.throwIfAborted();
               this.bank.identity(record2.source);
               record2.result = value;
               return {
@@ -2234,7 +2278,7 @@ var ExperienceJobs = class {
     if (terminal(record2.phase)) return;
     record2.phase = "stopping";
     try {
-      if (record2.jobId) record2.jobs.kill(record2.jobId, reason, record2.ownerId);
+      if (record2.jobId) record2.jobs.kill(record2.jobId, record2.ownerId, reason);
       else record2.controller.abort(new Error(reason));
     } catch (error62) {
       record2.controller.abort(error62);
@@ -22115,6 +22159,28 @@ async function skillDraftContent(name2, value, previousFrontmatter) {
   return content;
 }
 
+// packages/dsh-px-memory/src/session-context.ts
+async function inspectMemorySession(host, identities, id, needEvents = false) {
+  if (needEvents || !identities.read().bindings[id]?.locked) return host.sessionController.inspect(id);
+  const live = service(host, "sessions")?.get(id);
+  if (live) return { meta: live.header, events: [] };
+  const reader = await nativeReader(host, id);
+  try {
+    return { meta: reader.header, events: [] };
+  } finally {
+    await reader.close?.();
+  }
+}
+
+// packages/dsh-px-memory/src/experience-run-state.ts
+function experienceRunView(run, serviceStartedAt) {
+  const started = Date.parse(run.startedAt);
+  return {
+    ...run,
+    awaitingRecovery: run.status === "running" && (!Number.isFinite(started) || started < serviceStartedAt)
+  };
+}
+
 // packages/dsh-px-memory/src/experience-service.ts
 var text2 = (maxLength) => ({ type: "string", maxLength });
 var array2 = (items, maxItems) => ({ type: "array", items, maxItems });
@@ -22148,6 +22214,7 @@ var ExperienceService = class {
     this.bank = new ExperienceBank(root, home, store, agentsHome);
     this.jobs = new ExperienceJobs(host, store, this.bank);
   }
+  startedAt = Date.now();
   bank;
   jobs;
   async request(caller, input2) {
@@ -22166,7 +22233,7 @@ var ExperienceService = class {
         drafts: newest(drafts.value.filter((d) => d.status === "ready")).map(
           ({ id, skillName: skillName3, suggestionId, status }) => ({ id, skillName: skillName3, suggestionId, status })
         ),
-        runs: newest(runs.value).map(({ results, ...summary }) => summary),
+        runs: newest(runs.value).map(({ results, ...summary }) => experienceRunView(summary, this.startedAt)),
         tasks: this.jobs.list(caller)
       };
     }
@@ -22185,7 +22252,7 @@ var ExperienceService = class {
         value: {
           ...value,
           runs: newest(value.runs).map((run) => ({
-            ...run,
+            ...experienceRunView(run, this.startedAt),
             matchesCurrentContent: run.target.kind === "none" ? !value.base : run.target.kind === "draft" ? run.target.hash === digest2(value.draft.content) : run.target.kind === "current" && !!value.base && run.target.hash === digest2(value.base.content)
           }))
         }
@@ -22216,7 +22283,7 @@ var ExperienceService = class {
     throw new MemoryError("\u4E0D\u652F\u6301\u7684\u7ECF\u9A8C\u64CD\u4F5C");
   }
   async source(caller, id = caller.sessionId) {
-    if (this.store.read().bindings[id]?.purpose === "experience")
+    if (isExperienceSession(id) || this.store.read().bindings[id]?.purpose === "experience")
       throw new MemoryError("\u5185\u90E8\u6574\u7406\u8BB0\u5F55\u4E0D\u4F5C\u4E3A\u65B0\u7684\u5DE5\u4F5C\u7ECF\u5386\u63D0\u70BC", 409);
     const inspected = await this.host.sessionController.inspect(id);
     const identity = this.bank.identity(caller), original = this.bank.identity({
@@ -22234,6 +22301,20 @@ var ExperienceService = class {
       on: this.host.on.bind(this.host),
       get: (name2) => parent.ctx.get?.(name2) ?? this.host.get?.(name2) ?? this.host[name2]
     };
+  }
+  async sourceModel(caller, id = caller.sessionId) {
+    if (isExperienceSession(id) || this.store.read().bindings[id]?.purpose === "experience")
+      throw new MemoryError("\u5185\u90E8\u6574\u7406\u8BB0\u5F55\u4E0D\u4F5C\u4E3A\u65B0\u7684\u5DE5\u4F5C\u7ECF\u5386\u63D0\u70BC", 409);
+    const { meta: meta3 } = await inspectMemorySession(this.host, this.store, id);
+    const current = this.bank.identity(caller), original = this.bank.identity({
+      ...caller,
+      sessionId: id,
+      project: meta3.cwd,
+      personaId: void 0
+    });
+    if (current.personaId !== original.personaId || current.project !== original.project)
+      throw new MemoryError("\u6765\u6E90\u4E0D\u5C5E\u4E8E\u5F53\u524D\u4EBA\u683C\u4E0E\u9879\u76EE", 403);
+    return experienceSessionModel(this.host, id);
   }
   async review(caller, requestId) {
     const fingerprint = hash4(["review", caller.sessionId]), prior = this.jobs.reuse(caller, requestId, fingerprint);
@@ -22289,26 +22370,21 @@ var ExperienceService = class {
           if (!value.cases.some((c) => c.skillName === suggestion.skillName && c.checks.length))
             throw new MemoryError("\u6A21\u578B\u6CA1\u6709\u63D0\u4F9B\u5EFA\u8BAE\u5BF9\u5E94\u7684\u53EF\u68C0\u67E5\u7528\u4F8B\uFF0C\u672A\u4FDD\u5B58\u4E0D\u5B8C\u6574\u5EFA\u8BAE", 422);
         progress("\u6B63\u5728\u4FDD\u5B58\u5EFA\u8BAE\u4E0E\u539F\u59CB\u4F9D\u636E");
-        return this.bank.write(
-          source,
-          "review-record",
-          {
-            review: {
-              at: (/* @__PURE__ */ new Date()).toISOString(),
-              sessionId: caller.sessionId,
-              trigger: "manual",
-              durationMs: Date.now() - started,
-              outcome: value.suggestions.length ? "suggested" : "nothing",
-              summary: value.summary,
-              turn: window.trajectory.steps.at(-1).turn
-            },
-            trajectory: window.trajectory,
-            annotations: [],
-            suggestions: value.suggestions,
-            cases: value.cases
+        return this.bank.appendReview(source, {
+          review: {
+            at: (/* @__PURE__ */ new Date()).toISOString(),
+            sessionId: caller.sessionId,
+            trigger: "manual",
+            durationMs: Date.now() - started,
+            outcome: value.suggestions.length ? "suggested" : "nothing",
+            summary: value.summary,
+            turn: window.trajectory.steps.at(-1).turn
           },
-          before.revision
-        );
+          trajectory: window.trajectory,
+          annotations: [],
+          suggestions: value.suggestions,
+          cases: value.cases
+        });
       }
     );
   }
@@ -22323,7 +22399,7 @@ var ExperienceService = class {
       skill: suggestion.skillName,
       suggestionId
     });
-    const source = await this.source(caller, suggestion.sourceSessionId);
+    const model = await this.sourceModel(caller, suggestion.sourceSessionId);
     const schema2 = object2({
       description: text2(500),
       body: text2(14e3),
@@ -22335,7 +22411,7 @@ var ExperienceService = class {
       caller,
       requestId,
       fingerprint,
-      source.model,
+      model,
       "\u751F\u6210 Skill \u8349\u7A3F",
       async (parent, pinned, signal, progress) => {
         progress("\u6B63\u5728\u7F16\u5199\u5E26\u9002\u7528\u6761\u4EF6\u7684 Skill \u8349\u7A3F");
@@ -22388,7 +22464,7 @@ var ExperienceService = class {
       throw new MemoryError("\u5F53\u524D Skill \u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u6574\u7406\u6216\u6838\u5BF9\u8349\u7A3F\u540E\u518D\u56DE\u6D4B", 409);
     const cases = pack.cases.filter((c) => c.enabled && c.checks?.length).slice(0, 2);
     if (!cases.length) throw new MemoryError("\u6B64\u5EFA\u8BAE\u8FD8\u6CA1\u6709\u53EF\u7528\u7684\u56DE\u6D4B\u7528\u4F8B", 409);
-    const source = await this.source(caller, suggestion.sourceSessionId);
+    const model = await this.sourceModel(caller, suggestion.sourceSessionId);
     const snapshots = await Promise.all([
       this.bank.read(caller, "target-content", {
         skillName: draft.skillName,
@@ -22405,7 +22481,7 @@ var ExperienceService = class {
       caller,
       requestId,
       fingerprint,
-      source.model,
+      model,
       "\u6A21\u62DF\u56DE\u6D4B Skill \u8349\u7A3F",
       async (parent, pinned, signal, progress) => {
         const ids = [];
@@ -22509,19 +22585,6 @@ var ExperienceService = class {
     await this.bank.dispose();
   }
 };
-
-// packages/dsh-px-memory/src/session-context.ts
-async function inspectMemorySession(host, identities, id, needEvents = false) {
-  if (needEvents || !identities.read().bindings[id]?.locked) return host.sessionController.inspect(id);
-  const live = service(host, "sessions")?.get(id);
-  if (live) return { meta: live.header, events: [] };
-  const reader = await nativeReader(host, id);
-  try {
-    return { meta: reader.header, events: [] };
-  } finally {
-    await reader.close?.();
-  }
-}
 
 // packages/dsh-px-memory/src/index.ts
 var name = "dsh-px-memory";
@@ -22645,6 +22708,21 @@ function apply(ctx) {
   );
   const history = new HistoryIndex(join4(root, "storages", name, "history.sqlite"), store);
   ctx.effect(() => () => history.close(), "memory: history index");
+  ctx.inject(["agents"], (host) => {
+    try {
+      const live = new Set(host.agents.list().map((agent) => agent.id));
+      store.releaseExperienceBindings(Object.keys(store.read().bindings).filter((id) => !live.has(id)));
+    } catch (error62) {
+      ctx.logger?.warn("\u5185\u90E8\u7ECF\u9A8C\u8EAB\u4EFD\u6682\u672A\u56DE\u6536\uFF1A%s", String(error62));
+    }
+  });
+  ctx.on("agent/disposed", ({ agent }) => {
+    try {
+      store.releaseExperienceBindings([agent.session.id]);
+    } catch (error62) {
+      ctx.logger?.warn("\u5185\u90E8\u7ECF\u9A8C\u8EAB\u4EFD\u6682\u672A\u56DE\u6536\uFF1A%s", String(error62));
+    }
+  });
   ctx.on("agent/created", ({ agent }) => {
     try {
       store.bind(agent.session.id, {
@@ -22771,6 +22849,7 @@ ${!budget || handoff2.summary.length <= budget.handoffChars ? handoff2.summary :
             if (req.method !== "GET" && req.method !== "POST")
               return send(405, { error: "\u8BF7\u4F7F\u7528 GET \u6216 POST" });
             const id = validId(new URL(req.url, "http://127.0.0.1").searchParams.get("sessionId"));
+            if (isExperienceSession(id)) throw new MemoryError("\u5185\u90E8\u7ECF\u9A8C\u4EFB\u52A1\u8BF7\u4ECE\u6765\u6E90\u4F1A\u8BDD\u67E5\u770B", 409);
             const { meta: meta3, events = [] } = await inspectMemorySession(host, store, id);
             const project = projectKey(meta3.cwd);
             store.bind(id, {

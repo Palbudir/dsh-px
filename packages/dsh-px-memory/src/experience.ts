@@ -140,6 +140,11 @@ export class ExperienceBank {
       throw new MemoryError('此人格的记忆已关闭或已归档', 409)
     return this.manage(caller, operation, input, revision)
   }
+  /** A completed review appends evidence; unrelated edits must not discard its model result. */
+  async appendReview(caller: ExperienceCaller, input: any): Promise<any> {
+    if (!this.identity(caller).enabled) throw new MemoryError('此人格的记忆已关闭或已归档', 409)
+    return this.manage(caller, 'review-record', input, undefined, true)
+  }
   async adopt(
     caller: ExperienceCaller,
     draftId: string,
@@ -160,10 +165,11 @@ export class ExperienceBank {
     caller: ExperienceCaller,
     operation: string,
     input: any,
-    revision?: string
+    revision?: string,
+    appendReview = false
   ): Promise<any> {
     const mutation = writes.has(operation) || operation === 'draft-adopt'
-    if (mutation && (typeof revision !== 'string' || !revision))
+    if (mutation && !appendReview && (typeof revision !== 'string' || !revision))
       throw new MemoryError('请重新读取经验版本后再修改', 409)
     return this.withRuntime(caller, async (runtime, key, project) => {
       const request = {
@@ -178,7 +184,8 @@ export class ExperienceBank {
           input: {},
           confirmed: false
         })
-        if ((current.value as any).revision !== revision)
+        if (appendReview) revision = (current.value as any).revision
+        else if ((current.value as any).revision !== revision)
           throw new MemoryError('经验已被其他操作更新，请刷新后再修改', 409)
       }
       caller.signal?.throwIfAborted()

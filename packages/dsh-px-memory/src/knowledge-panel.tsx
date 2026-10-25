@@ -487,6 +487,7 @@ export function KnowledgePanel({
       ) : (
         <>
           <ExperiencePanel
+            key={sessionId + ':' + personaId}
             sessionId={sessionId}
             personaId={personaId}
             project={project}

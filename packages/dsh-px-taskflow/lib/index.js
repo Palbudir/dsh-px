@@ -774,6 +774,8 @@ async function waitForNativeWork(host, agent, signal, timeoutMs = 3e4) {
     throw Error("\u7B49\u5F85\u65F6\u957F\u987B\u4E3A 1000\uFF5E60000 \u6BEB\u79D2");
   signal.throwIfAborted();
   const started = Date.now(), jobs = service2(host, "jobs"), teams = service2(host, "agentTeams"), local = new AbortController();
+  if (!jobs?.events?.subscribe || typeof jobs.list !== "function")
+    throw Error("\u539F\u751F\u540E\u53F0\u4F5C\u4E1A\u72B6\u6001\u4E0D\u53EF\u7528\uFF0C\u65E0\u6CD5\u786E\u8BA4\u53EF\u7B49\u5F85\u7684\u5DE5\u4F5C");
   let resolveWake, rejectWake;
   const wake = new Promise((resolve, reject) => {
     resolveWake = resolve;
@@ -985,7 +987,7 @@ function apply(ctx) {
       });
     host.tools.register({
       name: "task_state",
-      // Model calls always supply their live Agent; this path reads native snapshots without awaiting I/O.
+      // Native state reads never consume outputs, mutate tasks or wake other Agents.
       isConcurrencySafe: () => true,
       description: "\u53EA\u8BFB\u67E5\u770B\u5F53\u524D\u4F1A\u8BDD\u7684\u539F\u751F Goal \u548C Team\uFF1A\u7A33\u5B9A\u4EFB\u52A1\u7F16\u53F7\u3001revision\u3001\u72B6\u6001\u3001\u8D1F\u8D23\u4EBA\u3001\u4F9D\u8D56\u4E0E\u6210\u5458\u3002\u4E0D\u4F1A\u521B\u5EFA\u4EFB\u52A1\u3001\u6062\u590D\u76EE\u6807\u6216\u5524\u9192\u6210\u5458\uFF1Bpaused \u548C completed \u4E0E\u5DE5\u4F5C\u6458\u8981\u5206\u5F00\u5224\u65AD\u3002",
       parameters: { type: "object", properties: {}, additionalProperties: false },

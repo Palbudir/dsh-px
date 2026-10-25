@@ -129,6 +129,26 @@ export function experienceWindow(events: readonly HistoryEvent[], sessionId: str
   }
 }
 
+/** Native non-activating projection owns the last used route; no full event log is requested here. */
+export async function experienceSessionModel(host: any, sessionId: string) {
+  if (typeof host.sessionController?.projections !== 'function')
+    throw new MemoryError('原生模型投影暂不可用', 503)
+  const snapshot = await host.sessionController.projections({ sessionId }, new AbortController().signal)
+  const model = snapshot?.kind === 'sequenced' ? snapshot.values?.modelSelection?.lastUsed : undefined
+  if (
+    typeof model?.provider !== 'string' ||
+    !model.provider ||
+    typeof model?.model !== 'string' ||
+    !model.model
+  )
+    throw new MemoryError('来源会话没有可用的模型记录', 409)
+  return {
+    provider: model.provider,
+    model: model.model,
+    ...(typeof model.reasoningEffort === 'string' ? { reasoningEffort: model.reasoningEffort } : {})
+  }
+}
+
 /** A clean native task root avoids waking or resuming the source conversation and its Goal. */
 export async function createExperienceParent(
   host: any,
@@ -149,15 +169,30 @@ export async function createExperienceParent(
     purpose: 'experience',
     createdFrom: caller.sessionId
   })
-  signal.throwIfAborted()
-  return agents.create({
-    sessionId: id,
-    // Analysis has no interactive preset. Children inherit this native preset-free composition,
-    // not a user preset's scoped delegation tools, terminal services or persona prompt.
-    meta: { cwd: caller.project, origin: 'subagent' },
-    agentOptions: { ...route, maxTokens: 8000 },
-    signal
-  })
+  try {
+    signal.throwIfAborted()
+    const owned = await agents.create({
+      sessionId: id,
+      // Analysis has no interactive preset. Children inherit this native preset-free composition,
+      // not a user preset's scoped delegation tools, terminal services or persona prompt.
+      meta: { cwd: caller.project, origin: 'subagent' },
+      agentOptions: { ...route, maxTokens: 8000 },
+      signal
+    })
+    return {
+      agent: owned.agent,
+      dispose: async () => {
+        try {
+          await owned.dispose()
+        } finally {
+          store.releaseExperienceBindings([id])
+        }
+      }
+    }
+  } catch (error) {
+    store.releaseExperienceBindings([id])
+    throw error
+  }
 }
 
 /** This bounded analysis uses a supported low effort; never changes the source conversation. */

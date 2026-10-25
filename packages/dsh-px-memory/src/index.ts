@@ -3,6 +3,7 @@ import {
   MemoryStore,
   MemoryError,
   validId,
+  isExperienceSession,
   projectKey,
   memoryContext,
   selectedMemories,
@@ -154,6 +155,21 @@ export function apply(ctx: any): void {
   )
   const history = new HistoryIndex(join(root, 'storages', name, 'history.sqlite'), store)
   ctx.effect(() => () => history.close(), 'memory: history index')
+  ctx.inject(['agents'], (host: any) => {
+    try {
+      const live = new Set(host.agents.list().map((agent: any) => agent.id))
+      store.releaseExperienceBindings(Object.keys(store.read().bindings).filter((id) => !live.has(id)))
+    } catch (error) {
+      ctx.logger?.warn('内部经验身份暂未回收：%s', String(error))
+    }
+  })
+  ctx.on('agent/disposed', ({ agent }: { agent: Agent }) => {
+    try {
+      store.releaseExperienceBindings([agent.session.id])
+    } catch (error) {
+      ctx.logger?.warn('内部经验身份暂未回收：%s', String(error))
+    }
+  })
   ctx.on('agent/created', ({ agent }: { agent: Agent }) => {
     try {
       store.bind(agent.session.id, {
@@ -301,6 +317,7 @@ export function apply(ctx: any): void {
               if (req.method !== 'GET' && req.method !== 'POST')
                 return send(405, { error: '请使用 GET 或 POST' })
               const id = validId(new URL(req.url, 'http://127.0.0.1').searchParams.get('sessionId'))
+              if (isExperienceSession(id)) throw new MemoryError('内部经验任务请从来源会话查看', 409)
               const { meta, events = [] } = await inspectMemorySession(host, store, id)
               const project = projectKey(meta.cwd)
               store.bind(id, {
