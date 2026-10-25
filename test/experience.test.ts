@@ -190,6 +190,28 @@ test('native Skills source marks expired persisted runs interrupted across run, 
     caseIds: [entry.value.id]
   })
   await write('run-link', { draftId: candidate.value.id, runId: run.value.id })
+  const beforeProgress = await bank.read(a, 'draft', { id: candidate.value.id })
+  await write('run-progress', {
+    id: run.value.id,
+    result: {
+      caseId: entry.value.id,
+      title: entry.value.title,
+      verdict: 'pass',
+      score: 1,
+      steps: ['Inspect actual evidence'],
+      answer: 'Verified',
+      checks: [{ checkId: entry.value.checks[0].id, pass: true, note: 'Checked' }]
+    }
+  })
+  const afterProgress = await bank.read(a, 'draft', { id: candidate.value.id })
+  assert.notEqual(
+    afterProgress.revision,
+    beforeProgress.revision,
+    'native progress invalidates the clean-detail revision'
+  )
+  assert.equal(afterProgress.value.runs[0].status, 'running')
+  assert.equal(afterProgress.value.runs[0].progress.done, 1)
+  assert.equal((await bank.read(a, 'runs')).revision, afterProgress.revision)
   const files = readdirSync(join(root, 'experience'), { recursive: true }).filter((name) =>
     String(name).endsWith('evals.json')
   )

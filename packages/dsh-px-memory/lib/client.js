@@ -568,7 +568,7 @@ function ExperiencePanel({
           }
         }
       } catch (error2) {
-        if (!controller.signal.aborted) setError(String(error2.message));
+        if (!controller.signal.aborted && epoch === actionEpoch.current) setError(String(error2.message));
       } finally {
         if (!controller.signal.aborted && epoch === actionEpoch.current) {
           if (pendingView) setView(pendingView);

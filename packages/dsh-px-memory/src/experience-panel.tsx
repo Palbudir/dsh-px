@@ -134,7 +134,7 @@ export function ExperiencePanel({
           }
         }
       } catch (error: any) {
-        if (!controller.signal.aborted) setError(String(error.message))
+        if (!controller.signal.aborted && epoch === actionEpoch.current) setError(String(error.message))
       } finally {
         if (!controller.signal.aborted && epoch === actionEpoch.current) {
           // Publish terminal task status together with refreshed detail, so an old

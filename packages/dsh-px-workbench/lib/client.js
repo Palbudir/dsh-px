@@ -5087,13 +5087,16 @@ var TIER_LABELS = {
 };
 
 // packages/dsh-px-workbench/src/model-selection-observer.ts
+var routeKey = (route) => JSON.stringify([route?.provider, route?.model, route?.reasoningEffort]);
 function observeRejectedModelSelection(store, inspect, receive) {
   let attempted;
   let check;
+  let checkedFrom;
   const stop = store.subscribe(() => {
     const state = store.getSnapshot();
-    check?.abort();
+    if (checkedFrom !== void 0 && routeKey(state.current) !== checkedFrom) check?.abort();
     if (state.pending) {
+      check?.abort();
       attempted = state.pending;
       return;
     }
@@ -5101,6 +5104,7 @@ function observeRejectedModelSelection(store, inspect, receive) {
     attempted = void 0;
     if (state.status !== "error" || !selection) return;
     const controller = check = new AbortController();
+    checkedFrom = routeKey(state.current);
     void inspect(selection, controller.signal).then((value) => {
       if (!controller.signal.aborted) receive(selection, value);
     }).catch(() => {
