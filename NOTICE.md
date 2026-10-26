@@ -48,6 +48,8 @@ DSH-PX Pack 随附 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-
 
 Pack 以独立社区成员声明 [dsh-context](https://github.com/bowenliang123/dsh-context) 0.75.1（Apache-2.0）、[dsh-mnemon](https://github.com/omdsh-dev/dsh-mnemon) 0.5.34（MIT）及 [@xmanrui/dsh-im](https://github.com/xmanrui/dsh-im) 5.6.0（MIT）。社区原包核对固定 SRI 后保持原样，依赖由 DSH 原生插件管理器安装，保留上游名称、许可、版本、配置页与组件信息。
 
+QQ 账号通道另外分发 [dsh-onebot-qq](https://github.com/mario841859784/dsh-onebot) 0.9.6 的 PX 兼容派生版本 0.9.6-px.2（BSD-3-Clause）。原始归档 SRI、源码提交与逐文件修改记录见 [QQ 来源清单](config/qq-community.json)及包内 `dshPx` 元数据；上游 LICENSE 保留。兼容层另附 PX 的 MIT 许可。QQ 文本格式化内联 Marked 16.4.2（MIT），完整许可保存在该派生包的 `LICENSE.marked`。QQ 与 NapCat 由用户另行安装，不随 Pack 分发。
+
 PX 知识通过公开 Source 合约复用 `dsh-mnemon-source-documents` 0.5.11；经验候选、草稿、回测记录与采纳复用 `dsh-mnemon-source-skills` 0.5.1（均为同项目，MIT）。这些包、Mnemon 合约及 YAML 2.9.1（ISC）作为人格功能包的固定运行依赖安装。经验结果校验内联使用 Zod 4.6.7（MIT），完整许可随功能包保存在 `licenses/zod.txt`。
 
 0.6 受管组合一次性采用 PX 四范围知识与 General 策略，原项目档案改为手动来源；保留用户自行安装的 Mnemon 配置及后续设置。经验整理由用户主动发起，不默认启用外部 Provider、自动历史提炼或闲时复盘，不分发 Mnemon CLI。IM 渠道需要用户另行配置自己的机器人。

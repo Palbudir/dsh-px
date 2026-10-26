@@ -2,7 +2,15 @@ import { DatabaseSync } from 'node:sqlite'
 import { createHash } from 'node:crypto'
 import { mkdirSync, existsSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { MemoryError, projectKey, isExperienceSession, type MemoryStore } from './store'
+import { conversationalSource } from '../../shared/channel-source'
+import {
+  MemoryError,
+  projectKey,
+  isExperienceSession,
+  publicSession,
+  samePublicConversation,
+  type MemoryStore
+} from './store'
 
 export interface HistoryEvent {
   seq: number
@@ -34,7 +42,7 @@ export function historyRecord(
 ): HistoryRecord | undefined {
   const d = event.data ?? {}
   let kind: string, text: string, toolName: string | undefined
-  if (event.type === 'user/message' && d.source?.kind === 'user') {
+  if (event.type === 'user/message' && conversationalSource(d.source)) {
     kind = 'user'
     text = texts(d.content)
   } else if (event.type === 'assistant/message') {
@@ -141,6 +149,7 @@ export class HistoryIndex {
         .filter(
           ([id, v]) =>
             v.personaId === b.personaId &&
+            (!publicSession(b) || samePublicConversation(b, v)) &&
             !v.pending &&
             v.purpose !== 'experience' &&
             !isExperienceSession(id)
@@ -150,6 +159,7 @@ export class HistoryIndex {
     Object.setPrototypeOf(allowed, null)
     if (
       b.handoff &&
+      (!publicSession(b) || samePublicConversation(b, s.bindings[b.handoff.sessionId])) &&
       !isExperienceSession(b.handoff.sessionId) &&
       s.bindings[b.handoff.sessionId]?.purpose !== 'experience' &&
       !Object.hasOwn(allowed, b.handoff.sessionId)

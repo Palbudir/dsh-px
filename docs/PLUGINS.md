@@ -4,9 +4,9 @@
 
 ## 能力所有者
 
-Desktop 将 updater、workbench、workspace 装配为 installation 层的 `dsh-px-core` 基础包；文件与终端（`dsh-px-files`）、当前任务、产物、引用与批注、定时任务、记忆与知识、电脑操作作为七个 profile 功能包安装；社区清单中的原包另外独立安装。基础包和文件包是组合包，不代表另写执行服务。成员继续使用下表的职责、组件 ID 和业务存储。
+Desktop 将 updater、workbench、workspace 装配为 installation 层的 `dsh-px-core` 基础包；文件与终端（`dsh-px-files`）、当前任务、产物、引用与批注、定时任务、记忆与知识、电脑操作、QQ 账号作为八个 profile 功能包安装；社区清单中的成员另外独立安装。基础包和文件包是组合包，不代表另写执行服务。成员继续使用下表的职责、组件 ID 和业务存储。
 
-“插件”主页管理七个 PX 可选能力与独立社区成员；基础组件通过真实部署进入内置运行清单。版本与诊断使用常规设置页。独立 `dsh web` 安装聚合 Pack 时仍显示一个可展开成员的整合包；它与 Desktop 使用同一份插件实现。
+“插件”主页管理八个 PX 可选能力与独立社区成员；基础组件通过真实部署进入内置运行清单。版本与诊断使用常规设置页。独立 `dsh web` 安装聚合 Pack 时仍显示一个可展开成员的整合包；它与 Desktop 使用同一份插件实现。
 
 | 插件               | 功能                                                           | 必需或可降级的依赖                                                         |
 | ------------------ | -------------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -19,6 +19,7 @@ Desktop 将 updater、workbench、workspace 装配为 installation 层的 `dsh-p
 | dsh-px-schedules   | 定时任务配置与调度启停                                         | workspace 与原生会话输入服务；停用会停止新的调度                           |
 | dsh-px-memory      | 固定人格、接续与原生历史检索，以及 Mnemon 项目知识入口         | 原生 systemPrompt、工具、会话与侧栏；默认不启用自动记忆模型请求            |
 | dsh-px-computer    | 经授权操作 Windows 应用与浏览器，默认关闭                      | 原生工具、确认与侧栏；npm 安装的 Cua Driver、Playwright MCP 与本机 Edge    |
+| dsh-px-qq          | 普通 QQ 账号配置、受众边界、固定人格与授权任务，默认关闭       | 配套 dsh-onebot-qq、原生配置与凭据、会话与工具权限；外部本机 OneBot 桥     |
 | dsh-better-sidebar | 文件、编辑器、终端、文件变动与任务视图                         | 原生终端及对应工具依赖；随 Pack 提供已认证补丁的固定版本                   |
 
 “已安装”“已加入组合包”和“实际服务已激活”是不同状态。在“运行与帮助”检查实际依赖。禁用 betterSidebar 会影响由它提供的文件变动等面板；PX 的产物、批注、定时任务和执行记录使用原生侧栏注册，官方会话侧栏仍可使用。
@@ -51,7 +52,7 @@ Desktop 将 updater、workbench、workspace 装配为 installation 层的 `dsh-p
 
 ## 社区能力组合
 
-自 0.5 起的发行清单 schema 2 在 PX 基础包、七个功能包之外，单独声明社区原包。当前固定来源、版本、许可与完整性见 [community-plugins.json](../config/community-plugins.json)：dsh-context 0.75.1、dsh-mnemon 0.5.34、@xmanrui/dsh-im 5.6.0。构建器保存上游原始归档，Desktop 在原生 profile 中分别安装，保留原包身份与配置页，不把它们嵌进 PX 功能包。
+自 0.5 起的发行清单 schema 2 在 PX 基础包、八个功能包之外，单独声明社区原包。当前固定来源、版本、许可与完整性见 [community-plugins.json](../config/community-plugins.json)：dsh-context 0.75.1、dsh-mnemon 0.5.34、@xmanrui/dsh-im 5.6.0。构建器保存上游原始归档，Desktop 在原生 profile 中分别安装，保留原包身份与配置页，不把它们嵌进 PX 功能包。
 
 0.6 受管组合通过 `px-knowledge-v2` 默认装配标记，一次性启用 General 策略和 PX 四范围知识 Source；原项目档案保留为手动来源，避免重复自动注入。启用原生生命周期以组装可调用 View，关闭闲时复盘；不默认启用运行时记忆、外部 Provider 或自动历史提炼。完成装配后保留用户后续设置。PX 知识当前复用公开的 Documents 引擎 0.5.11，各范围分开存于 DSH_HOME 的 `storages/dsh-px-knowledge-scopes`；原 Mnemon 存储目录保留。
 
@@ -64,6 +65,12 @@ IM 保留原生机器人配置与渠道管理入口。机器人 App ID、密钥�
 独立 Web 通过原生插件管理器安装聚合 PX Pack，并分别安装需要的社区原包；下载归档的 `package/distribution/` 中附有经过校验的原始 tarball，也可按上述固定版本从 npm 安装。已有社区安装不重复添加或覆盖。Mnemon 的 Web 配置由用户通过其原生配置页设置：建议 General 策略、PX 知识自动参与召回/写入/投影、原项目档案仅手动参与，开启生命周期和路由说明，关闭闲时复盘、运行时记忆与记忆空间。浏览器连接 PX Desktop 的同一服务时，直接共用 Desktop 已安装的组合。
 
 taskflow 的 `task_state` 读取原生权威状态；冷读取只使用原生投影恢复与只读存储，不唤醒 Agent。账本保存时的 Goal/Team 引用由宿主校验，并与当前状态分开。`task_wait` 只观察当前会话的原生 Job、Team 变化和插话，最长等待 60 秒；它不读取作业输出、不唤醒成员、不启动或取消工作。电脑驱动使用可取消的子进程；异常后旧观察失效，不自动重发动作。0.8 代际升级到 DSH 0.2.1-rc.3，并复验模型选择及压缩预算覆盖层；先更新 Desktop，再使用同代际 Pack 独立更新。
+
+## QQ 兼容成员
+
+QQ 社区成员使用独立包身份 `dsh-onebot-qq`，从上游 0.9.6 派生为 0.9.6-px.2。构建首先核对固定 npm SRI 和文件摘要，再应用可审查的兼容修改；发行验收重新生成派生结果并逐文件对照。上游名称、许可与来源保留，不能把派生版本称为未修改的社区原包。原始来源在 [qq-community.json](../config/qq-community.json)，修改在 [qq-compatibility.ts](../src/shared/qq-compatibility.ts)。
+
+QQ 原生传输、会话工厂和发送仍由社区成员实现；PX 负责可信发送者标记、公共预设、原聊天任务路由、会话模型校验、投递去重及单一设置页。公共权限使用原生工具 guard，配置和凭据分别归原生 configEditor / credentials；原生审批和提问通过同一等待请求交回答案。投递回执不是另一套任务状态。账号配置只保存在社区成员的 `pxQq` 字段，既有第三方字段不覆盖；自行安装的上游版本保留，只有配套兼容成员可以启用 PX QQ 接入。详见 [QQ 使用说明](QQ.md)。
 
 ## 侧栏兼容补丁
 

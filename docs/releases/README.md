@@ -2,6 +2,7 @@
 
 可下载的安装包、完整 tag 和发布时间见 [GitHub Releases](https://github.com/Palbudir/dsh-px/releases)。这些说明描述对应历史版本的用户可见变化；当前行为和后续工作以 [状态](../STATUS.md) 与 [路线图](../ROADMAP.md) 为准。
 
+- [Pack / Desktop 0.8.1-alpha.1 · 普通 QQ 账号与原聊天任务交付](0.8.1-alpha.1.md)（下载安装状态以 Releases 为准）
 - [Pack / Desktop 0.8.0-alpha.1 · 原生升级、执行效率与经验转 Skill](0.8.0-alpha.1.md)（下载安装状态以 Releases 为准）
 - [Pack 0.7.4-alpha.1 · 统一记忆与知识工作台](0.7.4-alpha.1.md)
 - [Desktop 0.7.1 / Pack 0.7.3 · 修复大体积 Pack 更新](0.7.3-alpha.1.md)

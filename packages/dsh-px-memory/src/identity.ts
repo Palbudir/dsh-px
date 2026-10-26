@@ -1,4 +1,5 @@
 import { MemoryError, MemoryStore, type Persona } from './store'
+import { conversationalSource } from '../../shared/channel-source'
 export interface AgentIdentity {
   session: {
     id: string
@@ -38,6 +39,6 @@ export class TurnIdentity {
 }
 export function hasStarted(events: readonly any[]): boolean {
   return events.some(
-    (e) => e.type === 'turn/start' || (e.type === 'user/message' && e.data?.source?.kind === 'user')
+    (e) => e.type === 'turn/start' || (e.type === 'user/message' && conversationalSource(e.data?.source))
   )
 }

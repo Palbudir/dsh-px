@@ -15,6 +15,7 @@ import {
 import { buildDistribution } from './pack-distribution'
 import { stageComputerDriver } from './stage-computer-driver'
 import { validCommunityList, type CommunityBundle } from '../src/shared/distribution'
+import { stageQqCommunity } from './stage-qq-community'
 
 const root = repoRoot()
 const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
@@ -151,7 +152,7 @@ writeFileSync(
 copyFileSync(join(modules, 'dsh-px-workspace/icon.svg'), join(bundle, 'icon.svg'))
 copyFileSync(join(root, 'LICENSE'), join(bundle, 'LICENSE'))
 const community = await Promise.all(
-  communityCatalog.bundles.map(async (entry: CommunityBundle & { url: string }) => {
+  communityCatalog.bundles.map(async (entry: CommunityBundle & { url: string; compatibility?: string }) => {
     const expected = `https://registry.npmjs.org/${entry.name}/-/${entry.name.split('/').at(-1)}-${entry.version}.tgz`
     if (entry.url !== expected) throw Error('Unexpected community archive source')
     const response = await fetch(entry.url, { signal: AbortSignal.timeout(60000) })
@@ -159,6 +160,11 @@ const community = await Promise.all(
     const archive = Buffer.from(await response.arrayBuffer())
     if ('sha512-' + createHash('sha512').update(archive).digest('base64') !== entry.integrity)
       throw Error(`Community archive integrity mismatch: ${entry.name}`)
+    if (entry.compatibility !== undefined) {
+      if (entry.name !== 'dsh-onebot-qq' || entry.compatibility !== 'qq-v1')
+        throw Error('Unknown community compatibility adapter')
+      return stageQqCommunity(archive, join(output, 'qq-community-source'))
+    }
     return {
       archive,
       metadata: {

@@ -14,6 +14,17 @@ export function patchNativeModelGuard(source: string): string {
     'this.agents.selectForNextRequest(agent, selected);',
     'await this.ctx.get("pxContextPolicy")?.select(agent, selected);\n\t\t\t\tthis.agents.selectForNextRequest(agent, selected);'
   )
+  // The existing UI/RPC method keeps its default-saving behavior. IM plugins use
+  // the local-only companion method; it shares validation and native admission.
+  replace('async selectModel(request) {', 'async selectModel(request, rememberDefault = true) {')
+  replace(
+    'this.ctx.agentDefaultModel.saveSelection(selected).catch((error) => {',
+    'if (rememberDefault) this.ctx.agentDefaultModel.saveSelection(selected).catch((error) => {'
+  )
+  replace(
+    'selectModel(request) {\n\t\t\treturn this.commands.selectModel(request);\n\t\t}',
+    'selectModel(request) {\n\t\t\treturn this.commands.selectModel(request);\n\t\t}\n\t\tselectModelForSession(request) {\n\t\t\treturn this.commands.selectModel(request, false);\n\t\t}'
+  )
   replace(
     'super(ctx, "sessionController", { namespace: "session" });',
     'super(ctx, "sessionController", { namespace: "session" });\n\t\t\tthis.pxModelSelectionGuardVersion = 1;'

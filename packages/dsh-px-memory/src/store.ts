@@ -47,6 +47,34 @@ export interface SessionBinding {
   createdFrom?: string
   /** Internal analysis remains auditable in native storage, outside conversational recall. */
   purpose?: 'experience'
+  channel?: SessionChannel
+}
+/** An IM conversation keeps its audience boundary across restarts and child Agents. */
+export interface SessionChannel {
+  provider: 'qq'
+  accountId: string
+  conversationId: string
+  access: 'owner' | 'public'
+  publicInstructions: string
+  /** A native task root with a group audience. Execution authority never changes its memory audience. */
+  task?: { requesterId: string; rootSessionId: string }
+  workspace?: string
+}
+export const publicSession = (binding?: Pick<SessionBinding, 'channel'>): boolean =>
+  binding?.channel?.access === 'public'
+export function samePublicConversation(
+  a?: Pick<SessionBinding, 'channel'>,
+  b?: Pick<SessionBinding, 'channel'>
+): boolean {
+  return (
+    !!a?.channel &&
+    !!b?.channel &&
+    publicSession(a) &&
+    publicSession(b) &&
+    a.channel.provider === b.channel.provider &&
+    a.channel.accountId === b.channel.accountId &&
+    a.channel.conversationId === b.channel.conversationId
+  )
 }
 /** Reserved PX task ids remain excluded from recall even after their temporary binding is released. */
 export const isExperienceSession = (id: string): boolean =>
@@ -165,6 +193,20 @@ function validate(s: MemoryState): void {
     throw new MemoryError('人格或会话绑定无效', 503)
   for (const [id, b] of Object.entries(s.bindings)) {
     validId(id)
+    if (b.channel) {
+      if (b.channel.provider !== 'qq' || !['owner', 'public'].includes(b.channel.access))
+        throw new MemoryError('会话渠道边界无效', 503)
+      validId(b.channel.accountId)
+      validId(b.channel.conversationId)
+      text(b.channel.publicInstructions, 2000)
+      if (b.channel.workspace !== undefined) text(b.channel.workspace, 4000)
+      if (b.channel.task) {
+        if (b.channel.access !== 'public' || !/^group:\d+$/.test(b.channel.conversationId))
+          throw new MemoryError('群任务受众无效', 503)
+        validId(b.channel.task.requesterId)
+        validId(b.channel.task.rootSessionId)
+      }
+    }
     if (b.purpose !== undefined && b.purpose !== 'experience') throw new MemoryError('会话用途无效', 503)
     if (b.createdFrom !== undefined) {
       validId(b.createdFrom)
@@ -194,6 +236,25 @@ function validate(s: MemoryState): void {
 /** Native logs own conversation history; this store owns identity and explicit private memory. */
 export class MemoryStore {
   constructor(private path: string) {}
+  createPersona(name: unknown): { id: string; name: string } {
+    const label = text(name, 60, true),
+      state = this.read()
+    if (state.personas.some((p) => p.name === label && !p.archived))
+      throw new MemoryError('已有同名人格，请直接选择或使用其他名字', 409)
+    const id = randomUUID()
+    this.change(state.revision, (next) =>
+      next.personas.push({
+        id,
+        name: label,
+        instructions: '',
+        memoryEnabled: true,
+        memories: [],
+        revision: 1,
+        versions: [{ revision: 1, name: label, instructions: '' }]
+      })
+    )
+    return { id, name: label }
+  }
   read(): MemoryState {
     if (!existsSync(this.path)) return initial()
     const raw = readFileSync(this.path, 'utf8')
@@ -251,7 +312,16 @@ export class MemoryStore {
     if (!p) throw new MemoryError('会话的人格不存在', 503)
     const v = b ? p.versions.find((v) => v.revision === b.personaRevision) : config(p)
     if (!v) throw new MemoryError('会话的人格版本不存在', 503)
-    return { ...p, ...v }
+    return publicSession(b)
+      ? {
+          ...p,
+          ...v,
+          instructions: b.channel!.publicInstructions,
+          memories: [],
+          versions: [],
+          memoryEnabled: false
+        }
+      : { ...p, ...v }
   }
   bind(
     sessionId: string,
@@ -263,6 +333,7 @@ export class MemoryStore {
       pending?: boolean
       createdFrom?: string
       purpose?: 'experience'
+      channel?: SessionChannel
     } = {}
   ): MemoryState {
     validId(sessionId)
@@ -271,6 +342,8 @@ export class MemoryStore {
     if (existing) {
       if (options.personaId && options.personaId !== existing.personaId)
         throw new MemoryError('会话已绑定人格', 409)
+      if (options.channel && JSON.stringify(options.channel) !== JSON.stringify(existing.channel))
+        throw new MemoryError('会话的渠道或授权范围已变化，请新建会话', 409)
       if ((!options.locked || existing.locked) && (!existing.pending || options.pending === true)) return s
       return this.change(s.revision, (n) => {
         if (options.locked) n.bindings[sessionId].locked = true
@@ -278,6 +351,15 @@ export class MemoryStore {
       })
     }
     const parent = options.parent ? s.bindings[options.parent] : undefined
+    const channel = options.channel ?? parent?.channel
+    if (publicSession(parent) && options.channel && !samePublicConversation(parent, { channel }))
+      throw new MemoryError('公共会话不能提升为私有任务会话', 409)
+    if (
+      channel?.access === 'public' &&
+      options.handoff &&
+      !samePublicConversation({ channel }, s.bindings[options.handoff.sessionId])
+    )
+      throw new MemoryError('公共会话不能接续其他私有或群聊上下文', 409)
     const p = s.personas.find((p) => p.id === (options.personaId ?? parent?.personaId ?? 'default'))
     if (!p || p.archived) throw new MemoryError('人格不存在或已归档')
     return this.change(s.revision, (n) => {
@@ -288,6 +370,7 @@ export class MemoryStore {
         createdAt: new Date().toISOString(),
         ...(options.pending ? { pending: true } : {}),
         ...(options.createdFrom ? { createdFrom: options.createdFrom } : {}),
+        ...(channel ? { channel: structuredClone(channel) } : {}),
         ...((options.purpose ??
         parent?.purpose ??
         (isExperienceSession(sessionId) ? 'experience' : undefined))

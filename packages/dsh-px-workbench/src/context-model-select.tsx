@@ -186,28 +186,33 @@ function ModelSeat({ openSession, pxSessionId, ...props }: any): unknown {
 }
 /** Keep native controls and child-slot ownership intact; use their shared directory to offer a continuation. */
 export function installContextModelSelect(ctx: any): void {
-  ctx.inject(['slots', 'uiWorkspace', 'modelDirectories', 'sessions'], (host: any) =>
-    host.slots.inject('conversation.input.right', () =>
-      host.slots.register(
-        {
-          name: 'conversation.input.right',
-          id: 'dsh-px-context',
-          order: 80,
-          inject: (sessionId: string) => ({
-            pxSessionId: sessionId,
-            available: host.sessions.subagentAddress(sessionId) === undefined,
-            directory: host.modelDirectories.directoryFor(sessionId).store
-          })
-        },
-        (props: any) =>
-          props.available ? (
-            <ModelSeat
-              key={props.pxSessionId}
-              {...props}
-              openSession={(id: string) => host.uiWorkspace.openSession(id)}
-            />
-          ) : null
+  ctx.inject(
+    ['slots', 'uiWorkspace', 'modelDirectories', 'sessions', 'remote', 'remote.session'],
+    (host: any) =>
+      host.slots.inject('conversation.input.right', () =>
+        host.slots.register(
+          {
+            name: 'conversation.input.right',
+            id: 'dsh-px-context',
+            order: 80,
+            inject: (sessionId: string) => {
+              const available = host.sessions.subagentAddress(sessionId) === undefined
+              return {
+                pxSessionId: sessionId,
+                available,
+                ...(available ? { directory: host.modelDirectories.directoryFor(sessionId).store } : {})
+              }
+            }
+          },
+          (props: any) =>
+            props.available ? (
+              <ModelSeat
+                key={props.pxSessionId}
+                {...props}
+                openSession={(id: string) => host.uiWorkspace.openSession(id)}
+              />
+            ) : null
+        )
       )
-    )
   )
 }

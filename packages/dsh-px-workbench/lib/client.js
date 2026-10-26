@@ -5278,7 +5278,7 @@ function ModelSeat({ openSession, pxSessionId, ...props }) {
 }
 function installContextModelSelect(ctx) {
   ctx.inject(
-    ["slots", "uiWorkspace", "modelDirectories", "sessions"],
+    ["slots", "uiWorkspace", "modelDirectories", "sessions", "remote", "remote.session"],
     (host) => host.slots.inject(
       "conversation.input.right",
       () => host.slots.register(
@@ -5286,11 +5286,14 @@ function installContextModelSelect(ctx) {
           name: "conversation.input.right",
           id: "dsh-px-context",
           order: 80,
-          inject: (sessionId) => ({
-            pxSessionId: sessionId,
-            available: host.sessions.subagentAddress(sessionId) === void 0,
-            directory: host.modelDirectories.directoryFor(sessionId).store
-          })
+          inject: (sessionId) => {
+            const available = host.sessions.subagentAddress(sessionId) === void 0;
+            return {
+              pxSessionId: sessionId,
+              available,
+              ...available ? { directory: host.modelDirectories.directoryFor(sessionId).store } : {}
+            };
+          }
         },
         (props) => props.available ? /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
           ModelSeat,

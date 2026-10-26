@@ -1,5 +1,6 @@
 import { MemoryError, type MemoryStore, type Handoff } from './store'
 import { historyRecord, service, type HistoryEvent, type HistoryRecord } from './history'
+import { conversationalSource } from '../../shared/channel-source'
 
 /** Collapse retries while a native creation/selection is in flight; persisted bindings handle later retries. */
 export function continuationRequests() {
@@ -31,7 +32,7 @@ export function handoffFrom(events: readonly HistoryEvent[], sessionId: string):
   }
   if (
     cut < 0 ||
-    !events.some((e) => e.type === 'user/message' && e.data?.source?.kind === 'user' && e.seq <= cut)
+    !events.some((e) => e.type === 'user/message' && conversationalSource(e.data?.source) && e.seq <= cut)
   )
     throw new MemoryError('原会话还没有可交接的已完成对话')
   const calls = new Map<string, string>(),
@@ -114,7 +115,14 @@ export async function createPersonaSession(
     handoff = handoffFrom(source.events, sourceId)
   }
   signal?.throwIfAborted()
-  store.bind(id, { personaId: persona.id, locked: !!handoff, handoff, pending: true, createdFrom: sourceId })
+  store.bind(id, {
+    personaId: persona.id,
+    locked: !!handoff,
+    handoff,
+    pending: true,
+    createdFrom: sourceId,
+    channel: state.bindings[sourceId]?.channel
+  })
   // Explicit IDs make retry after an uncertain HTTP response adopt the same native Session.
   const workspace = service(host, 'workspaceRegistry')
     ?.list?.()

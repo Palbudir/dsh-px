@@ -40,6 +40,10 @@ import {
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+var publicSession = (binding) => binding?.channel?.access === "public";
+function samePublicConversation(a, b) {
+  return !!a?.channel && !!b?.channel && publicSession(a) && publicSession(b) && a.channel.provider === b.channel.provider && a.channel.accountId === b.channel.accountId && a.channel.conversationId === b.channel.conversationId;
+}
 var isExperienceSession = (id) => /^px-experience-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id);
 var MemoryError = class extends Error {
   constructor(message, status = 400) {
@@ -116,6 +120,20 @@ function validate(s) {
     throw new MemoryError("\u4EBA\u683C\u6216\u4F1A\u8BDD\u7ED1\u5B9A\u65E0\u6548", 503);
   for (const [id, b] of Object.entries(s.bindings)) {
     validId(id);
+    if (b.channel) {
+      if (b.channel.provider !== "qq" || !["owner", "public"].includes(b.channel.access))
+        throw new MemoryError("\u4F1A\u8BDD\u6E20\u9053\u8FB9\u754C\u65E0\u6548", 503);
+      validId(b.channel.accountId);
+      validId(b.channel.conversationId);
+      text(b.channel.publicInstructions, 2e3);
+      if (b.channel.workspace !== void 0) text(b.channel.workspace, 4e3);
+      if (b.channel.task) {
+        if (b.channel.access !== "public" || !/^group:\d+$/.test(b.channel.conversationId))
+          throw new MemoryError("\u7FA4\u4EFB\u52A1\u53D7\u4F17\u65E0\u6548", 503);
+        validId(b.channel.task.requesterId);
+        validId(b.channel.task.rootSessionId);
+      }
+    }
     if (b.purpose !== void 0 && b.purpose !== "experience") throw new MemoryError("\u4F1A\u8BDD\u7528\u9014\u65E0\u6548", 503);
     if (b.createdFrom !== void 0) {
       validId(b.createdFrom);
@@ -135,6 +153,25 @@ function validate(s) {
 var MemoryStore = class {
   constructor(path) {
     this.path = path;
+  }
+  createPersona(name2) {
+    const label = text(name2, 60, true), state = this.read();
+    if (state.personas.some((p) => p.name === label && !p.archived))
+      throw new MemoryError("\u5DF2\u6709\u540C\u540D\u4EBA\u683C\uFF0C\u8BF7\u76F4\u63A5\u9009\u62E9\u6216\u4F7F\u7528\u5176\u4ED6\u540D\u5B57", 409);
+    const id = randomUUID();
+    this.change(
+      state.revision,
+      (next) => next.personas.push({
+        id,
+        name: label,
+        instructions: "",
+        memoryEnabled: true,
+        memories: [],
+        revision: 1,
+        versions: [{ revision: 1, name: label, instructions: "" }]
+      })
+    );
+    return { id, name: label };
   }
   read() {
     if (!existsSync(this.path)) return initial();
@@ -192,7 +229,14 @@ var MemoryStore = class {
     if (!p) throw new MemoryError("\u4F1A\u8BDD\u7684\u4EBA\u683C\u4E0D\u5B58\u5728", 503);
     const v = b ? p.versions.find((v2) => v2.revision === b.personaRevision) : config(p);
     if (!v) throw new MemoryError("\u4F1A\u8BDD\u7684\u4EBA\u683C\u7248\u672C\u4E0D\u5B58\u5728", 503);
-    return { ...p, ...v };
+    return publicSession(b) ? {
+      ...p,
+      ...v,
+      instructions: b.channel.publicInstructions,
+      memories: [],
+      versions: [],
+      memoryEnabled: false
+    } : { ...p, ...v };
   }
   bind(sessionId, options = {}) {
     validId(sessionId);
@@ -200,6 +244,8 @@ var MemoryStore = class {
     if (existing) {
       if (options.personaId && options.personaId !== existing.personaId)
         throw new MemoryError("\u4F1A\u8BDD\u5DF2\u7ED1\u5B9A\u4EBA\u683C", 409);
+      if (options.channel && JSON.stringify(options.channel) !== JSON.stringify(existing.channel))
+        throw new MemoryError("\u4F1A\u8BDD\u7684\u6E20\u9053\u6216\u6388\u6743\u8303\u56F4\u5DF2\u53D8\u5316\uFF0C\u8BF7\u65B0\u5EFA\u4F1A\u8BDD", 409);
       if ((!options.locked || existing.locked) && (!existing.pending || options.pending === true)) return s;
       return this.change(s.revision, (n) => {
         if (options.locked) n.bindings[sessionId].locked = true;
@@ -207,6 +253,11 @@ var MemoryStore = class {
       });
     }
     const parent = options.parent ? s.bindings[options.parent] : void 0;
+    const channel = options.channel ?? parent?.channel;
+    if (publicSession(parent) && options.channel && !samePublicConversation(parent, { channel }))
+      throw new MemoryError("\u516C\u5171\u4F1A\u8BDD\u4E0D\u80FD\u63D0\u5347\u4E3A\u79C1\u6709\u4EFB\u52A1\u4F1A\u8BDD", 409);
+    if (channel?.access === "public" && options.handoff && !samePublicConversation({ channel }, s.bindings[options.handoff.sessionId]))
+      throw new MemoryError("\u516C\u5171\u4F1A\u8BDD\u4E0D\u80FD\u63A5\u7EED\u5176\u4ED6\u79C1\u6709\u6216\u7FA4\u804A\u4E0A\u4E0B\u6587", 409);
     const p = s.personas.find((p2) => p2.id === (options.personaId ?? parent?.personaId ?? "default"));
     if (!p || p.archived) throw new MemoryError("\u4EBA\u683C\u4E0D\u5B58\u5728\u6216\u5DF2\u5F52\u6863");
     return this.change(s.revision, (n) => {
@@ -217,6 +268,7 @@ var MemoryStore = class {
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
         ...options.pending ? { pending: true } : {},
         ...options.createdFrom ? { createdFrom: options.createdFrom } : {},
+        ...channel ? { channel: structuredClone(channel) } : {},
         ...options.purpose ?? parent?.purpose ?? (isExperienceSession(sessionId) ? "experience" : void 0) ? { purpose: options.purpose ?? parent?.purpose ?? "experience" } : {},
         ...options.handoff ? { handoff: options.handoff } : {}
       };
@@ -401,6 +453,22 @@ function rejectUntrustedRequest(req, res) {
   return true;
 }
 
+// packages/shared/channel-source.ts
+var qqId = (value) => typeof value === "string" && /^[1-9]\d{4,19}$/.test(value) && Number.isSafeInteger(Number(value));
+function qqMessageOrigin(source) {
+  const value = source?.pxQq;
+  return source?.kind === "plugin:dsh-onebot" && value?.version === 1 && qqId(value.accountId) && qqId(value.senderId) && typeof value.conversationId === "string" && /^(private|group):[1-9]\d{4,19}$/.test(value.conversationId) ? {
+    version: 1,
+    accountId: value.accountId,
+    conversationId: value.conversationId,
+    senderId: value.senderId,
+    ...typeof value.messageId === "string" && /^[A-Za-z0-9:_.-]{1,120}$/.test(value.messageId) ? { messageId: value.messageId } : {}
+  } : void 0;
+}
+function conversationalSource(source) {
+  return source?.kind === "user" || qqMessageOrigin(source) !== void 0;
+}
+
 // packages/dsh-px-memory/src/identity.ts
 var TurnIdentity = class {
   constructor(store, boundary) {
@@ -433,7 +501,7 @@ var TurnIdentity = class {
 };
 function hasStarted(events) {
   return events.some(
-    (e) => e.type === "turn/start" || e.type === "user/message" && e.data?.source?.kind === "user"
+    (e) => e.type === "turn/start" || e.type === "user/message" && conversationalSource(e.data?.source)
   );
 }
 
@@ -448,7 +516,7 @@ var hash = (event) => createHash("sha256").update(JSON.stringify(event)).digest(
 function historyRecord(event, resolveTool) {
   const d = event.data ?? {};
   let kind, text3, toolName;
-  if (event.type === "user/message" && d.source?.kind === "user") {
+  if (event.type === "user/message" && conversationalSource(d.source)) {
     kind = "user";
     text3 = texts(d.content);
   } else if (event.type === "assistant/message") {
@@ -535,11 +603,11 @@ var HistoryIndex = class {
     if (b.purpose === "experience" || isExperienceSession(sessionId)) return /* @__PURE__ */ Object.create(null);
     const allowed = Object.fromEntries(
       Object.entries(s.bindings).filter(
-        ([id, v]) => v.personaId === b.personaId && !v.pending && v.purpose !== "experience" && !isExperienceSession(id)
+        ([id, v]) => v.personaId === b.personaId && (!publicSession(b) || samePublicConversation(b, v)) && !v.pending && v.purpose !== "experience" && !isExperienceSession(id)
       ).map(([id]) => [id, Number.MAX_SAFE_INTEGER])
     );
     Object.setPrototypeOf(allowed, null);
-    if (b.handoff && !isExperienceSession(b.handoff.sessionId) && s.bindings[b.handoff.sessionId]?.purpose !== "experience" && !Object.hasOwn(allowed, b.handoff.sessionId))
+    if (b.handoff && (!publicSession(b) || samePublicConversation(b, s.bindings[b.handoff.sessionId])) && !isExperienceSession(b.handoff.sessionId) && s.bindings[b.handoff.sessionId]?.purpose !== "experience" && !Object.hasOwn(allowed, b.handoff.sessionId))
       allowed[b.handoff.sessionId] = b.handoff.throughSeq;
     return allowed;
   }
@@ -787,7 +855,7 @@ function handoffFrom(events, sessionId) {
     if (e.type === "turn/end") open2 = false;
     if (!open2) cut = e.seq;
   }
-  if (cut < 0 || !events.some((e) => e.type === "user/message" && e.data?.source?.kind === "user" && e.seq <= cut))
+  if (cut < 0 || !events.some((e) => e.type === "user/message" && conversationalSource(e.data?.source) && e.seq <= cut))
     throw new MemoryError("\u539F\u4F1A\u8BDD\u8FD8\u6CA1\u6709\u53EF\u4EA4\u63A5\u7684\u5DF2\u5B8C\u6210\u5BF9\u8BDD");
   const calls = /* @__PURE__ */ new Map(), rows = [];
   for (const e of events) {
@@ -848,7 +916,14 @@ async function createPersonaSession(host, store, sourceId, args, signal) {
     handoff2 = handoffFrom(source.events, sourceId);
   }
   signal?.throwIfAborted();
-  store.bind(id, { personaId: persona.id, locked: !!handoff2, handoff: handoff2, pending: true, createdFrom: sourceId });
+  store.bind(id, {
+    personaId: persona.id,
+    locked: !!handoff2,
+    handoff: handoff2,
+    pending: true,
+    createdFrom: sourceId,
+    channel: state.bindings[sourceId]?.channel
+  });
   const workspace = service(host, "workspaceRegistry")?.list?.().find((w) => w.sessionIds?.includes(sourceId));
   await controller.create({
     sessionId: id,
@@ -913,9 +988,13 @@ var KnowledgeBank = class {
   namespace(caller, scope) {
     if (!KNOWLEDGE_SCOPES.includes(scope)) throw new MemoryError("\u77E5\u8BC6\u8303\u56F4\u65E0\u6548");
     const state = this.identities.read(), binding = state.bindings[caller.sessionId];
+    if (publicSession(binding) && (scope === "persona" || scope === "persona-project"))
+      throw new MemoryError("\u516C\u5171\u804A\u5929\u4E0D\u80FD\u8BFB\u53D6\u4EBA\u683C\u79C1\u6709\u77E5\u8BC6", 403);
     if ((scope === "persona" || scope === "persona-project") && (!binding || binding.pending))
       throw new MemoryError("\u8BF7\u5148\u5EFA\u7ACB\u5F53\u524D\u4F1A\u8BDD\u4EBA\u683C", 409);
-    const project = projectKey(caller.project);
+    const project = projectKey(
+      publicSession(binding) && binding.channel?.workspace ? binding.channel.workspace : caller.project
+    );
     if ((scope === "project" || scope === "persona-project") && !project)
       throw new MemoryError("\u6B64\u8303\u56F4\u9700\u8981\u5F53\u524D\u9879\u76EE\u76EE\u5F55");
     return {
@@ -22610,6 +22689,42 @@ function apply(ctx) {
   const root = process.env.DSH_HOME;
   if (!root) throw new Error("DSH_HOME \u672A\u8BBE\u7F6E\uFF0C\u65E0\u6CD5\u4FDD\u5B58\u4EBA\u683C\u4E0E\u8BB0\u5FC6");
   const store = new MemoryStore(join4(root, "storages", name, "memory.json"));
+  const channelBindings = /* @__PURE__ */ new WeakMap();
+  const bindingFor = (agent) => {
+    if (!agent) return;
+    if (!channelBindings.has(agent) || channelBindings.get(agent) === null)
+      channelBindings.set(agent, store.read().bindings[agent.session.id] ?? null);
+    return channelBindings.get(agent) ?? void 0;
+  };
+  ctx.on(
+    "system-prompt/assemble",
+    async (_assembly, context, next) => {
+      const assembly = await next();
+      if (publicSession(bindingFor(context.agent)) && !assembly.sections.some((section) => section.name === "px-qq-public-persona"))
+        throw new MemoryError("QQ \u516C\u5171\u4F1A\u8BDD\u7684\u6743\u9650\u9884\u8BBE\u672A\u5C31\u7EEA\uFF0C\u8BF7\u542F\u7528\u914D\u5957 QQ \u80FD\u529B\u6216\u65B0\u5EFA\u666E\u901A\u4F1A\u8BDD", 409);
+      return assembly;
+    },
+    { prepend: true }
+  );
+  ctx.inject(
+    ["tools"],
+    (host) => host.effect(
+      () => host.tools.guard((exec) => {
+        const binding = bindingFor(exec.agent);
+        if (!publicSession(binding)) return;
+        if (binding.channel?.task) {
+          if (!service(host, "pxQq")?.canRunGroupTask(exec.agent?.session.id))
+            return "\u7FA4\u4EFB\u52A1\u6388\u6743\u4E0D\u53EF\u7528\uFF0C\u8BF7\u68C0\u67E5 QQ \u63A5\u5165\u4E0E\u6388\u6743\u6210\u5458";
+          return;
+        }
+        if (!["qq_public_knowledge", "qq_task"].includes(exec.name))
+          return "\u516C\u5171 QQ \u4F1A\u8BDD\u6CA1\u6709\u672C\u673A\u6267\u884C\u6216\u79C1\u6709\u4FE1\u606F\u6743\u9650";
+        if (exec.name === "qq_task" && !service(host, "pxQq")?.canDelegate(exec, binding.channel))
+          return "\u5F53\u524D QQ \u8BF7\u6C42\u6CA1\u6709\u79C1\u6709\u4EFB\u52A1\u6388\u6743";
+      }),
+      "memory: durable public channel boundary"
+    )
+  );
   const modelContinuation = continuationRequests();
   const identity = new TurnIdentity(
     store,
@@ -22623,6 +22738,34 @@ function apply(ctx) {
     store,
     (caller, path) => observeFile(ctx, caller, path)
   );
+  ctx.provide("pxMemoryChannels", {
+    version: 1,
+    createPersona: (name2) => store.createPersona(name2),
+    personas: () => store.read().personas.filter((p) => !p.archived).map((p) => ({ id: p.id, name: p.name })),
+    channelBindings: (accountId) => Object.entries(store.read().bindings).filter(
+      ([, binding]) => binding.channel?.provider === "qq" && binding.channel.accountId === accountId
+    ).map(([sessionId, binding]) => ({
+      sessionId,
+      channel: binding.channel,
+      createdAt: binding.createdAt,
+      pending: binding.pending
+    })),
+    bind: (sessionId, personaId, channel) => store.bind(sessionId, { personaId, channel, pending: !service(ctx, "agents")?.get(sessionId) }),
+    inherit: (sessionId, parent) => {
+      if (parent && store.read().bindings[parent]?.channel) store.bind(sessionId, { parent, locked: true });
+    },
+    inspect: (sessionId) => {
+      const state = store.read();
+      return { binding: state.bindings[sessionId], persona: store.persona(state, sessionId) };
+    },
+    sharedKnowledge: async (sessionId, project, input2) => {
+      if (!["project", "global"].includes(input2.scope) || !store.read().bindings[sessionId])
+        throw new MemoryError("\u516C\u5171\u77E5\u8BC6\u8BF7\u6C42\u8303\u56F4\u65E0\u6548", 403);
+      const caller = { sessionId, project, actor: "model" };
+      return input2.id ? knowledge.read(caller, input2.scope, input2.id) : knowledge.search(caller, input2.scope, input2.query ?? "");
+    },
+    continue: (sessionId, args, signal) => createPersonaSession(ctx, store, sessionId, args, signal)
+  });
   ctx.effect(() => () => knowledge.dispose(), "memory: knowledge sources");
   ctx.inject(
     ["mnemonMemory", "tools", "agents"],
@@ -22832,8 +22975,10 @@ ${!budget || handoff2.summary.length <= budget.handoffChars ? handoff2.summary :
             revision: state.revision,
             persona: p.name,
             memoryEnabled: p.memoryEnabled,
-            memories: selectedMemories(state.personas.find((v) => v.id === p.id) ?? p, project)
+            memories: selectedMemories(store.persona(state, agent.session.id), project)
           });
+        if (publicSession(state.bindings[agent.session.id]))
+          throw new MemoryError("\u516C\u5171\u804A\u5929\u4E0D\u80FD\u4FEE\u6539\u4EBA\u683C\u79C1\u6709\u8BB0\u5FC6", 403);
         if (!p.memoryEnabled) throw new MemoryError("\u5F53\u524D\u4EBA\u683C\u7684\u8BB0\u5FC6\u5DF2\u5173\u95ED");
         if (store.persona(state, agent.session.id).id !== p.id)
           throw new MemoryError("\u4EBA\u683C\u5207\u6362\u5C06\u5728\u4E0B\u4E00\u8F6E\u751F\u6548\uFF0C\u8BF7\u5230\u4E0B\u4E00\u8F6E\u518D\u4FEE\u6539\u8BB0\u5FC6", 409);
