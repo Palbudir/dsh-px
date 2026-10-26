@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
+import { isAbsolute, relative } from 'node:path'
 import { channelFor, conversation, messageSource, taskRequester, QqError, type QqSettings } from './policy'
 import type { SessionChannel } from '../../dsh-px-memory/src/store'
 import { QqReceipts, QqReceiptStorageError, receiptKey, type AdmissionMetadata } from './receipts'
@@ -387,6 +388,11 @@ export class QqSessionPolicy {
     const path = channelFor(this.settings, chatId).workspace ?? this.settings.workspace
     mkdirSync(path, { recursive: true })
     return path
+  }
+  isManagedWorkspace(path: string): boolean {
+    if (!isAbsolute(path) || !isAbsolute(this.settings.workspace)) return false
+    const child = relative(this.settings.workspace, path).replaceAll('\\', '/')
+    return new RegExp('^(groups|visitors)/' + this.settings.accountId + '/[1-9]\\d{4,19}$').test(child)
   }
   created(agent: any): void {
     this.memory().inherit?.(agent.session.id, agent.session.header.parentSession)

@@ -72,7 +72,11 @@ export class QqGroupTasks {
       const previous = fresh
         ? undefined
         : this.entries(chatId).find((row: any) => row.channel.task.requesterId === senderId)
-      if (previous && agents.get(previous.sessionId)) return agents.get(previous.sessionId)
+      if (previous && agents.get(previous.sessionId)) {
+        const existing = agents.get(previous.sessionId)
+        await this.ports().attachWorkspace(existing.session.id, existing.session.header.cwd)
+        return existing
+      }
       const sessionId = previous?.sessionId ?? 'px-qq-task-' + randomUUID()
       const channel: SessionChannel = previous?.channel ?? {
         ...channelFor(this.settings, chatId),

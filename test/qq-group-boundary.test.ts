@@ -47,6 +47,11 @@ test('group task authorization is separate from private memory and stays bound a
   )
   try {
     assert.equal(policy.canRunGroupTask('guest'), false)
+    assert.equal(policy.isManagedWorkspace(join(dir, 'groups', '12001', '34007')), true)
+    assert.equal(policy.isManagedWorkspace(join(dir, 'visitors', '12001', '45009')), true)
+    assert.equal(policy.isManagedWorkspace(join(dir, 'groups', '99999', '34007')), false)
+    assert.equal(policy.isManagedWorkspace(join(dir, '..', 'foreign')), false)
+    assert.equal(policy.isManagedWorkspace(join(dir, 'arbitrary-project')), false)
     assert.equal(policy.canRunGroupTask('task-root'), true)
     assert.equal(policy.canRunGroupTask('task-child'), true)
     assert.equal(JSON.stringify(store.persona(store.read(), 'task-child')).includes('PRIVATE_093'), false)

@@ -41,6 +41,10 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
     )
   } else if (file === 'registry.js') {
     replace(
+      "if (headerCwd !== this.effectiveCwd()) {\n                    this.deps.log('debug', 'workspace attach skipped:",
+      "if (headerCwd !== this.effectiveCwd() && !this.deps.px.isManagedWorkspace(headerCwd)) {\n                    this.deps.log('debug', 'workspace attach skipped:"
+    )
+    replace(
       'effectiveCwd(chatId) {',
       'effectiveCwd(chatId) {\n        if (chatId && this.deps.px.preset(chatId)) return this.deps.px.workspace(chatId);'
     )

@@ -254,6 +254,7 @@ var NativeQqSettings = class {
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID as randomUUID3 } from "node:crypto";
 import { mkdirSync as mkdirSync2 } from "node:fs";
+import { isAbsolute as isAbsolute2, relative } from "node:path";
 
 // packages/dsh-px-qq/src/receipts.ts
 import { readFile as readFile2 } from "node:fs/promises";
@@ -756,7 +757,11 @@ var QqGroupTasks = class {
       if (this.disposed) throw new QqError("\u7FA4\u4EFB\u52A1\u63A5\u5165\u5DF2\u505C\u6B62", 409);
       const agents = get2(this.host, "agents"), presets = get2(this.host, "agentPresets");
       const previous = fresh ? void 0 : this.entries(chatId).find((row) => row.channel.task.requesterId === senderId);
-      if (previous && agents.get(previous.sessionId)) return agents.get(previous.sessionId);
+      if (previous && agents.get(previous.sessionId)) {
+        const existing = agents.get(previous.sessionId);
+        await this.ports().attachWorkspace(existing.session.id, existing.session.header.cwd);
+        return existing;
+      }
       const sessionId = previous?.sessionId ?? "px-qq-task-" + randomUUID2();
       const channel = previous?.channel ?? {
         ...channelFor(this.settings, chatId),
@@ -1227,6 +1232,11 @@ var QqSessionPolicy = class {
     const path = channelFor(this.settings, chatId).workspace ?? this.settings.workspace;
     mkdirSync2(path, { recursive: true });
     return path;
+  }
+  isManagedWorkspace(path) {
+    if (!isAbsolute2(path) || !isAbsolute2(this.settings.workspace)) return false;
+    const child = relative(this.settings.workspace, path).replaceAll("\\", "/");
+    return new RegExp("^(groups|visitors)/" + this.settings.accountId + "/[1-9]\\d{4,19}$").test(child);
   }
   created(agent) {
     this.memory().inherit?.(agent.session.id, agent.session.header.parentSession);
