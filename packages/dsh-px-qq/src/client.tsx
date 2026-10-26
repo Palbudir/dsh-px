@@ -59,6 +59,7 @@ export function QqSettingsPanel(): unknown {
     'settings'
   )
   const [answers, setAnswers] = useState<Record<string, string>>({})
+  const [feedbackInteraction, setFeedbackInteraction] = useState('')
   function adopt(value: Snapshot) {
     setView(value)
     setDraft(value.settings)
@@ -108,6 +109,7 @@ export function QqSettingsPanel(): unknown {
     }
   }
   async function action(kind: string, fields: Record<string, unknown> = {}) {
+    setFeedbackInteraction(kind === 'answer-interaction' ? String(fields.id ?? '') : '')
     setFeedbackAt(kind === 'answer-interaction' ? 'interaction' : 'connection')
     setBusy(true)
     setError('')
@@ -191,9 +193,13 @@ export function QqSettingsPanel(): unknown {
     .find((g) => g.id === draft.model?.provider)
     ?.models.find((m) => m.id === draft.model?.model)
   const modelValue = draft.model ? JSON.stringify([draft.model.provider, draft.model.model]) : ''
-  const feedback = (location: typeof feedbackAt) =>
-    feedbackAt === location && (
+  const feedback = (location: typeof feedbackAt, interactionId?: string) =>
+    feedbackAt === location &&
+    (!interactionId || interactionId === feedbackInteraction) && (
       <>
+        {location === 'interaction' && !interactionId && feedbackInteraction && (error || message) && (
+          <p className="px-muted">请求 {feedbackInteraction} 的操作结果</p>
+        )}
         {error && <p role="alert">{error}</p>}
         {message && (
           <p role="status" className="px-feedback">
@@ -267,13 +273,16 @@ export function QqSettingsPanel(): unknown {
       {!!view?.pendingInteractions?.length && (
         <section className="px-card" aria-label="QQ 待处理请求">
           <h3>待处理请求</h3>
-          {feedback('interaction')}
+          {error &&
+            !view.pendingInteractions.some((p) => p.id === feedbackInteraction) &&
+            feedback('interaction')}
           <p className="px-muted">与对应的 QQ 聊天是同一个原生请求；任一处处理后，另一处的旧回复即失效。</p>
           {view.pendingInteractions.map((p) => (
             <div key={p.id} style={{ borderTop: '1px solid var(--px-border)', padding: '12px 0' }}>
               <strong>
                 {p.id} · {p.chatId}
               </strong>
+              {feedback('interaction', p.id)}
               <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: 'inherit' }}>
                 {p.text}
               </pre>

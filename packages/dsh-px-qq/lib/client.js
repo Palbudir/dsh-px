@@ -193,6 +193,7 @@ function QqSettingsPanel() {
     "settings"
   );
   const [answers, setAnswers] = (0, import_react2.useState)({});
+  const [feedbackInteraction, setFeedbackInteraction] = (0, import_react2.useState)("");
   function adopt(value) {
     setView(value);
     setDraft(value.settings);
@@ -240,6 +241,7 @@ function QqSettingsPanel() {
     }
   }
   async function action(kind, fields = {}) {
+    setFeedbackInteraction(kind === "answer-interaction" ? String(fields.id ?? "") : "");
     setFeedbackAt(kind === "answer-interaction" ? "interaction" : "connection");
     setBusy(true);
     setError("");
@@ -314,7 +316,12 @@ function QqSettingsPanel() {
   const online = !loadError && view?.connection.state === "online";
   const selectedModel = catalog?.groups.find((g) => g.id === draft.model?.provider)?.models.find((m) => m.id === draft.model?.model);
   const modelValue = draft.model ? JSON.stringify([draft.model.provider, draft.model.model]) : "";
-  const feedback = (location) => feedbackAt === location && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+  const feedback = (location, interactionId) => feedbackAt === location && (!interactionId || interactionId === feedbackInteraction) && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)(import_jsx_runtime2.Fragment, { children: [
+    location === "interaction" && !interactionId && feedbackInteraction && (error || message) && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { className: "px-muted", children: [
+      "\u8BF7\u6C42 ",
+      feedbackInteraction,
+      " \u7684\u64CD\u4F5C\u7ED3\u679C"
+    ] }),
     error && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { role: "alert", children: error }),
     message && /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { role: "status", className: "px-feedback", children: message })
   ] });
@@ -362,7 +369,7 @@ function QqSettingsPanel() {
     ] }),
     !!view?.pendingInteractions?.length && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "px-card", "aria-label": "QQ \u5F85\u5904\u7406\u8BF7\u6C42", children: [
       /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { children: "\u5F85\u5904\u7406\u8BF7\u6C42" }),
-      feedback("interaction"),
+      error && !view.pendingInteractions.some((p) => p.id === feedbackInteraction) && feedback("interaction"),
       /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "px-muted", children: "\u4E0E\u5BF9\u5E94\u7684 QQ \u804A\u5929\u662F\u540C\u4E00\u4E2A\u539F\u751F\u8BF7\u6C42\uFF1B\u4EFB\u4E00\u5904\u5904\u7406\u540E\uFF0C\u53E6\u4E00\u5904\u7684\u65E7\u56DE\u590D\u5373\u5931\u6548\u3002" }),
       view.pendingInteractions.map((p) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { borderTop: "1px solid var(--px-border)", padding: "12px 0" }, children: [
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("strong", { children: [
@@ -370,6 +377,7 @@ function QqSettingsPanel() {
           " \xB7 ",
           p.chatId
         ] }),
+        feedback("interaction", p.id),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("pre", { style: { whiteSpace: "pre-wrap", fontFamily: "inherit", fontSize: "inherit" }, children: p.text }),
         p.kind === "approval" ? /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { className: "px-actions", children: [
           /* @__PURE__ */ (0, import_jsx_runtime2.jsx)(

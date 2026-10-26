@@ -340,6 +340,7 @@ async function activateHost(ctx: any): Promise<void> {
               })
             }
             if (input.action === 'stop') {
+              current?.cancelPendingInputs()
               for (const agent of busyAgents(state.settings.accountId)) agent.cancel({ kind: 'user' })
               return send(200, { message: '已请求停止 QQ 会话的当前回合；后台任务仍按 DSH 原生规则处理' })
             }

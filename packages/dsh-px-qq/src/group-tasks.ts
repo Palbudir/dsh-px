@@ -197,10 +197,23 @@ export class QqGroupTasks {
           .join('\n')
       : '本群尚无任务。授权成员可使用 /task 内容；结果留在本群。'
   }
-  async stop(chatId: string): Promise<void> {
-    this.stopEpoch.set(chatId, (this.stopEpoch.get(chatId) ?? 0) + 1)
+  cancelAdmissions(chatId?: string): void {
+    const chats = new Set<string>(
+      chatId
+        ? [chatId]
+        : this.memory()
+            .channelBindings(this.settings.accountId)
+            .filter((row: any) => row.channel.task)
+            .map((row: any) => row.channel.conversationId)
+    )
+    for (const key of this.creationControllers.keys())
+      if (!chatId || key.startsWith(chatId + ':')) chats.add(key.slice(0, key.lastIndexOf(':')))
+    for (const chat of chats) this.stopEpoch.set(chat, (this.stopEpoch.get(chat) ?? 0) + 1)
     for (const [key, controller] of this.creationControllers)
-      if (key.startsWith(chatId + ':')) controller.abort(new QqError('群任务已停止', 409))
+      if (!chatId || key.startsWith(chatId + ':')) controller.abort(new QqError('群任务已停止', 409))
+  }
+  async stop(chatId: string): Promise<void> {
+    this.cancelAdmissions(chatId)
     for (const row of this.entries(chatId)) {
       const agent = get(this.host, 'agents')?.get(row.sessionId)
       if (!agent) continue

@@ -10,6 +10,8 @@ import { QqInteractions } from './interactions'
 import { QqGroupTasks, installGroupTaskAudience } from './group-tasks'
 
 interface Caller {
+  epoch: number
+  chatEpoch: number
   chatId: string
   senderId: string
   messageId: string
@@ -45,6 +47,8 @@ export class QqSessionPolicy {
   private deliveryProblem = false
   private connection: any
   private generation = 0
+  private admissionEpoch = 0
+  private chatAdmissionEpoch = new Map<string, number>()
   private healthTimer?: ReturnType<typeof setTimeout>
   private ready: Promise<boolean> = Promise.resolve(false)
   private connectionState: {
@@ -183,6 +187,20 @@ export class QqSessionPolicy {
   pendingInteractions() {
     return this.interactions.list()
   }
+  cancelPendingInputs(): void {
+    this.admissionEpoch++
+    this.groupTasks.cancelAdmissions()
+  }
+  private inputEpoch(chatId: string) {
+    return { epoch: this.admissionEpoch, chatEpoch: this.chatAdmissionEpoch.get(chatId) ?? 0 }
+  }
+  private assertInputCurrent(caller: Pick<Caller, 'chatId' | 'epoch' | 'chatEpoch'>): void {
+    if (
+      caller.epoch !== this.admissionEpoch ||
+      caller.chatEpoch !== (this.chatAdmissionEpoch.get(caller.chatId) ?? 0)
+    )
+      throw new QqError('这条请求已被停止，未继续投递。需要继续时请重新发送。', 409)
+  }
   runTool(exec: any, next: () => Promise<unknown>): Promise<any> {
     this.assertActive()
     if (!this.isExecutionSession(exec.agent?.session.id))
@@ -240,6 +258,7 @@ export class QqSessionPolicy {
   }
   async receive(event: any, next: () => Promise<void>): Promise<void> {
     this.assertActive()
+    const receivedEpoch = this.admissionEpoch
     if (!(await this.ready)) throw new QqError('QQ 登录账号尚未核对，未处理此消息', 503)
     if (String(event?.self_id) !== this.settings.accountId)
       throw new QqError('OneBot 登录账号与设置不一致，未处理消息', 403)
@@ -263,10 +282,12 @@ export class QqSessionPolicy {
         : ''
     if (!/^[A-Za-z0-9:_.-]{1,120}$/.test(messageId)) throw new QqError('QQ 消息缺少稳定标识，未受理请求', 400)
     messageSource(this.settings, chatId, senderId, messageId)
+    const epoch = { ...this.inputEpoch(chatId), epoch: receivedEpoch }
     try {
       await this.receipts.once(receiptKey('inbound', [this.settings.accountId, chatId, messageId]), () =>
         this.caller.run(
           {
+            ...epoch,
             chatId,
             senderId,
             messageId,
@@ -300,6 +321,7 @@ export class QqSessionPolicy {
     this.assertActive()
     const caller = this.caller.getStore()
     if (!caller || caller.chatId !== chatId) throw new QqError('缺少可信 QQ 发送者，未投递消息', 403)
+    this.assertInputCurrent(caller)
     return messageSource(this.settings, chatId, caller.senderId, caller.messageId)
   }
   admitted(chatId: string, sessionId: string, messageId: string): void {
@@ -518,6 +540,8 @@ export class QqSessionPolicy {
       args = (match[2] ?? '').trim()
     const owner = this.settings.authorizedUsers.includes(sender)
     const channel = channelFor(this.settings, chatId)
+    if (command === 'stop' && owner)
+      this.chatAdmissionEpoch.set(chatId, (this.chatAdmissionEpoch.get(chatId) ?? 0) + 1)
     if (['approve', 'reject', 'answer'].includes(command)) {
       if (!owner) {
         await this.bridge.send(chatId, '确认和回答只接受已授权成员操作。')
@@ -579,7 +603,8 @@ export class QqSessionPolicy {
           sender,
           args,
           new AbortController().signal,
-          chatId
+          chatId,
+          caller
         )
         await this.bridge.send(
           chatId,
@@ -727,14 +752,17 @@ export class QqSessionPolicy {
     sender: string,
     text: string,
     signal: AbortSignal,
-    chatId: string
+    chatId: string,
+    caller?: Caller
   ): Promise<void> {
     try {
-      await this.receipts.once(key, () =>
-        chatId.startsWith('group:')
+      await this.receipts.once(key, () => {
+        signal.throwIfAborted()
+        if (caller) this.assertInputCurrent(caller)
+        return chatId.startsWith('group:')
           ? this.groupTasks.submit(chatId, sender, text, 'px-task-' + key, signal)
-          : this.deliverPrivateTask(sender, text, signal, key)
-      )
+          : this.deliverPrivateTask(sender, text, signal, key, caller)
+      })
     } catch (error) {
       if (error instanceof QqReceiptStorageError) this.persistenceError(error)
       throw error
@@ -754,7 +782,8 @@ export class QqSessionPolicy {
     sender: string,
     text: string,
     signal: AbortSignal,
-    key: string
+    key: string,
+    caller?: Caller
   ): Promise<AdmissionMetadata> {
     const port = this.bridge!
     const event = {
@@ -777,7 +806,14 @@ export class QqSessionPolicy {
     signal.throwIfAborted()
     let admission: AdmissionMetadata | undefined
     await this.caller.run(
-      { chatId: 'private:' + sender, senderId: sender, messageId: event.message_id },
+      {
+        ...(caller
+          ? { epoch: caller.epoch, chatEpoch: caller.chatEpoch }
+          : this.inputEpoch('private:' + sender)),
+        chatId: 'private:' + sender,
+        senderId: sender,
+        messageId: event.message_id
+      },
       async () => {
         await port.receive(event)
         admission = this.caller.getStore()?.admission

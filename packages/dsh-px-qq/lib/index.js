@@ -860,10 +860,18 @@ var QqGroupTasks = class {
       return `${row.sessionId}\uFF1A${agent ? agent.status + (agent.inbox.nextTurn.length ? "\uFF08\u6709\u6392\u961F\u8BF7\u6C42\uFF09" : "") : "\u5DF2\u4FDD\u5B58\uFF0C\u672A\u5728\u8FD0\u884C"}`;
     }).join("\n") : "\u672C\u7FA4\u5C1A\u65E0\u4EFB\u52A1\u3002\u6388\u6743\u6210\u5458\u53EF\u4F7F\u7528 /task \u5185\u5BB9\uFF1B\u7ED3\u679C\u7559\u5728\u672C\u7FA4\u3002";
   }
-  async stop(chatId) {
-    this.stopEpoch.set(chatId, (this.stopEpoch.get(chatId) ?? 0) + 1);
+  cancelAdmissions(chatId) {
+    const chats = new Set(
+      chatId ? [chatId] : this.memory().channelBindings(this.settings.accountId).filter((row) => row.channel.task).map((row) => row.channel.conversationId)
+    );
+    for (const key of this.creationControllers.keys())
+      if (!chatId || key.startsWith(chatId + ":")) chats.add(key.slice(0, key.lastIndexOf(":")));
+    for (const chat of chats) this.stopEpoch.set(chat, (this.stopEpoch.get(chat) ?? 0) + 1);
     for (const [key, controller] of this.creationControllers)
-      if (key.startsWith(chatId + ":")) controller.abort(new QqError("\u7FA4\u4EFB\u52A1\u5DF2\u505C\u6B62", 409));
+      if (!chatId || key.startsWith(chatId + ":")) controller.abort(new QqError("\u7FA4\u4EFB\u52A1\u5DF2\u505C\u6B62", 409));
+  }
+  async stop(chatId) {
+    this.cancelAdmissions(chatId);
     for (const row of this.entries(chatId)) {
       const agent = get2(this.host, "agents")?.get(row.sessionId);
       if (!agent) continue;
@@ -969,6 +977,8 @@ var QqSessionPolicy = class {
   deliveryProblem = false;
   connection;
   generation = 0;
+  admissionEpoch = 0;
+  chatAdmissionEpoch = /* @__PURE__ */ new Map();
   healthTimer;
   ready = Promise.resolve(false);
   connectionState = {
@@ -1078,6 +1088,17 @@ var QqSessionPolicy = class {
   pendingInteractions() {
     return this.interactions.list();
   }
+  cancelPendingInputs() {
+    this.admissionEpoch++;
+    this.groupTasks.cancelAdmissions();
+  }
+  inputEpoch(chatId) {
+    return { epoch: this.admissionEpoch, chatEpoch: this.chatAdmissionEpoch.get(chatId) ?? 0 };
+  }
+  assertInputCurrent(caller) {
+    if (caller.epoch !== this.admissionEpoch || caller.chatEpoch !== (this.chatAdmissionEpoch.get(caller.chatId) ?? 0))
+      throw new QqError("\u8FD9\u6761\u8BF7\u6C42\u5DF2\u88AB\u505C\u6B62\uFF0C\u672A\u7EE7\u7EED\u6295\u9012\u3002\u9700\u8981\u7EE7\u7EED\u65F6\u8BF7\u91CD\u65B0\u53D1\u9001\u3002", 409);
+  }
   runTool(exec, next) {
     this.assertActive();
     if (!this.isExecutionSession(exec.agent?.session.id))
@@ -1125,6 +1146,7 @@ var QqSessionPolicy = class {
   }
   async receive(event, next) {
     this.assertActive();
+    const receivedEpoch = this.admissionEpoch;
     if (!await this.ready) throw new QqError("QQ \u767B\u5F55\u8D26\u53F7\u5C1A\u672A\u6838\u5BF9\uFF0C\u672A\u5904\u7406\u6B64\u6D88\u606F", 503);
     if (String(event?.self_id) !== this.settings.accountId)
       throw new QqError("OneBot \u767B\u5F55\u8D26\u53F7\u4E0E\u8BBE\u7F6E\u4E0D\u4E00\u81F4\uFF0C\u672A\u5904\u7406\u6D88\u606F", 403);
@@ -1141,11 +1163,13 @@ var QqSessionPolicy = class {
     const messageId = typeof event.message_id === "string" || typeof event.message_id === "number" ? String(event.message_id) : "";
     if (!/^[A-Za-z0-9:_.-]{1,120}$/.test(messageId)) throw new QqError("QQ \u6D88\u606F\u7F3A\u5C11\u7A33\u5B9A\u6807\u8BC6\uFF0C\u672A\u53D7\u7406\u8BF7\u6C42", 400);
     messageSource(this.settings, chatId, senderId, messageId);
+    const epoch = { ...this.inputEpoch(chatId), epoch: receivedEpoch };
     try {
       await this.receipts.once(
         receiptKey("inbound", [this.settings.accountId, chatId, messageId]),
         () => this.caller.run(
           {
+            ...epoch,
             chatId,
             senderId,
             messageId,
@@ -1174,6 +1198,7 @@ var QqSessionPolicy = class {
     this.assertActive();
     const caller = this.caller.getStore();
     if (!caller || caller.chatId !== chatId) throw new QqError("\u7F3A\u5C11\u53EF\u4FE1 QQ \u53D1\u9001\u8005\uFF0C\u672A\u6295\u9012\u6D88\u606F", 403);
+    this.assertInputCurrent(caller);
     return messageSource(this.settings, chatId, caller.senderId, caller.messageId);
   }
   admitted(chatId, sessionId, messageId) {
@@ -1338,6 +1363,8 @@ var QqSessionPolicy = class {
     const command = match[1].toLowerCase(), args = (match[2] ?? "").trim();
     const owner = this.settings.authorizedUsers.includes(sender);
     const channel = channelFor(this.settings, chatId);
+    if (command === "stop" && owner)
+      this.chatAdmissionEpoch.set(chatId, (this.chatAdmissionEpoch.get(chatId) ?? 0) + 1);
     if (["approve", "reject", "answer"].includes(command)) {
       if (!owner) {
         await this.bridge.send(chatId, "\u786E\u8BA4\u548C\u56DE\u7B54\u53EA\u63A5\u53D7\u5DF2\u6388\u6743\u6210\u5458\u64CD\u4F5C\u3002");
@@ -1383,7 +1410,8 @@ var QqSessionPolicy = class {
           sender,
           args,
           new AbortController().signal,
-          chatId
+          chatId,
+          caller
         );
         await this.bridge.send(
           chatId,
@@ -1503,12 +1531,13 @@ var QqSessionPolicy = class {
       message: "\u5DF2\u4EA4\u7ED9\u672C\u804A\u5929\u7684\u539F\u751F\u4EFB\u52A1\u4F1A\u8BDD\uFF0C\u7ED3\u679C\u7559\u5728\u8FD9\u91CC\uFF1B\u7528 /stop \u505C\u6B62\u3002\u7FA4\u4EFB\u52A1\u4E0D\u4F1A\u81EA\u52A8\u8BFB\u53D6\u79C1\u6709\u8D44\u6599\u3002\u91CD\u590D\u8C03\u7528\u4E0D\u4F1A\u91CD\u8DD1\u3002"
     };
   }
-  async transfer(key, sender, text, signal, chatId) {
+  async transfer(key, sender, text, signal, chatId, caller) {
     try {
-      await this.receipts.once(
-        key,
-        () => chatId.startsWith("group:") ? this.groupTasks.submit(chatId, sender, text, "px-task-" + key, signal) : this.deliverPrivateTask(sender, text, signal, key)
-      );
+      await this.receipts.once(key, () => {
+        signal.throwIfAborted();
+        if (caller) this.assertInputCurrent(caller);
+        return chatId.startsWith("group:") ? this.groupTasks.submit(chatId, sender, text, "px-task-" + key, signal) : this.deliverPrivateTask(sender, text, signal, key, caller);
+      });
     } catch (error) {
       if (error instanceof QqReceiptStorageError) this.persistenceError(error);
       throw error;
@@ -1523,7 +1552,7 @@ var QqSessionPolicy = class {
       throw new QqReceiptStorageError("\u539F\u751F\u4F1A\u8BDD\u5C1A\u672A\u786E\u8BA4\u4FDD\u5B58\uFF0C\u672A\u81EA\u52A8\u91CD\u8DD1\u8BF7\u6C42");
     }
   }
-  async deliverPrivateTask(sender, text, signal, key) {
+  async deliverPrivateTask(sender, text, signal, key, caller) {
     const port = this.bridge;
     const event = {
       post_type: "message",
@@ -1545,7 +1574,12 @@ var QqSessionPolicy = class {
     signal.throwIfAborted();
     let admission;
     await this.caller.run(
-      { chatId: "private:" + sender, senderId: sender, messageId: event.message_id },
+      {
+        ...caller ? { epoch: caller.epoch, chatEpoch: caller.chatEpoch } : this.inputEpoch("private:" + sender),
+        chatId: "private:" + sender,
+        senderId: sender,
+        messageId: event.message_id
+      },
       async () => {
         await port.receive(event);
         admission = this.caller.getStore()?.admission;
@@ -1945,6 +1979,7 @@ async function activateHost(ctx) {
             });
           }
           if (input.action === "stop") {
+            current?.cancelPendingInputs();
             for (const agent of busyAgents(state.settings.accountId)) agent.cancel({ kind: "user" });
             return send(200, { message: "\u5DF2\u8BF7\u6C42\u505C\u6B62 QQ \u4F1A\u8BDD\u7684\u5F53\u524D\u56DE\u5408\uFF1B\u540E\u53F0\u4EFB\u52A1\u4ECD\u6309 DSH \u539F\u751F\u89C4\u5219\u5904\u7406" });
           }
