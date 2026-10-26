@@ -6,7 +6,7 @@ import type { SessionChannel } from '../../dsh-px-memory/src/store'
 import { QqReceipts, QqReceiptStorageError, receiptKey, type AdmissionMetadata } from './receipts'
 import { qqMessageOrigin } from '../../shared/channel-source'
 import { QqInteractions } from './interactions'
-import { groupWorkspace, QqGroupTasks, installGroupTaskAudience } from './group-tasks'
+import { QqGroupTasks, installGroupTaskAudience } from './group-tasks'
 
 interface Caller {
   chatId: string
@@ -384,7 +384,7 @@ export class QqSessionPolicy {
       : undefined
   }
   workspace(chatId: string): string {
-    const path = groupWorkspace(this.settings, chatId)
+    const path = channelFor(this.settings, chatId).workspace ?? this.settings.workspace
     mkdirSync(path, { recursive: true })
     return path
   }

@@ -290,6 +290,7 @@ export function apply(ctx: any): void {
         host.systemPrompt.context({
           name: 'dsh-px-persona-memory',
           order: 500,
+          interpolate: false,
           text: ({ agent }: { agent?: Agent }) => {
             if (!agent) return ''
             return renderMemory(agent)
@@ -321,7 +322,9 @@ export function apply(ctx: any): void {
         run.signal.throwIfAborted()
         if (!run.agent) throw new MemoryError('需要当前会话')
         const p = current(run.agent)
-        if (!p.memoryEnabled) throw new MemoryError('当前人格的记忆已关闭')
+        const binding = store.read().bindings[run.agent.session.id]
+        if (!p.memoryEnabled && !(publicSession(binding) && binding?.channel?.task))
+          throw new MemoryError('当前人格的记忆已关闭')
         const id = run.agent.session.id,
           coverage = await history.refresh(ctx, id, run.signal)
         const result =

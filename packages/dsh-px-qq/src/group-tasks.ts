@@ -3,6 +3,8 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { channelFor, messageSource, QqError, type QqSettings } from './policy'
 import type { SessionChannel } from '../../dsh-px-memory/src/store'
+import { registerSharedQqKnowledge } from './public-agent'
+import { publicInputBoundary } from './public-input'
 
 const get = (ctx: any, name: string): any => (ctx.get ? ctx.get(name) : ctx[name])
 export function groupWorkspace(settings: QqSettings, chatId: string): string {
@@ -15,6 +17,8 @@ export function groupWorkspace(settings: QqSettings, chatId: string): string {
 export class QqGroupTasks {
   private handles = new Map<string, any>()
   private creating = new Map<string, Promise<any>>()
+  private creationControllers = new Map<string, AbortController>()
+  private stopEpoch = new Map<string, number>()
   private sends = new Map<string, Promise<unknown>>()
   private disposed = false
   private roots = new Map<string, any>()
@@ -48,6 +52,7 @@ export class QqGroupTasks {
           row.channel.conversationId === chatId &&
           row.channel.task?.rootSessionId === row.sessionId
       )
+      .reverse()
       .sort((a: any, b: any) => b.createdAt.localeCompare(a.createdAt))
   }
   private async root(chatId: string, senderId: string, signal: AbortSignal, fresh = false): Promise<any> {
@@ -57,6 +62,9 @@ export class QqGroupTasks {
       if (fresh) throw new QqError('群任务正在创建，请稍后重试', 409)
       return creating
     }
+    const creation = new AbortController()
+    this.creationControllers.set(key, creation)
+    const creationSignal = AbortSignal.any([signal, creation.signal])
     const pending = (async () => {
       if (this.disposed) throw new QqError('群任务接入已停止', 409)
       const agents = get(this.host, 'agents'),
@@ -81,16 +89,16 @@ export class QqGroupTasks {
       }
       const handle = await agents.withoutInitiator(() =>
         previous
-          ? agents.resume({ resumeSessionId: sessionId, agentOptions: route, signal, setup })
+          ? agents.resume({ resumeSessionId: sessionId, agentOptions: route, signal: creationSignal, setup })
           : agents.create({
               sessionId,
               meta: { cwd, agentPreset: presets.defaultId },
               agentOptions: route,
-              signal,
+              signal: creationSignal,
               setup
             })
       )
-      if (this.disposed || !this.allowed(sessionId)) {
+      if (this.disposed || creationSignal.aborted || !this.allowed(sessionId)) {
         await handle.dispose()
         throw new QqError('群任务授权已撤销，未受理请求', 403)
       }
@@ -108,14 +116,17 @@ export class QqGroupTasks {
       return await pending
     } finally {
       if (this.creating.get(key) === pending) this.creating.delete(key)
+      if (this.creationControllers.get(key) === creation) this.creationControllers.delete(key)
     }
   }
   async submit(chatId: string, senderId: string, text: string, messageId: string, signal: AbortSignal) {
     if (!chatId.startsWith('group:') || !this.settings.authorizedUsers.includes(senderId))
       throw new QqError('此成员没有群任务权限', 403)
+    const epoch = this.stopEpoch.get(chatId) ?? 0
     const agent = await this.root(chatId, senderId, signal)
     signal.throwIfAborted()
-    if (this.disposed || !this.allowed(agent.session.id)) throw new QqError('群任务已停止', 409)
+    if (this.disposed || (this.stopEpoch.get(chatId) ?? 0) !== epoch || !this.allowed(agent.session.id))
+      throw new QqError('群任务已停止', 409)
     const recent: string[] = []
     let length = 0
     const events = this.ports().chat?.(chatId)?.agent.session.snapshotEvents() ?? []
@@ -183,6 +194,9 @@ export class QqGroupTasks {
       : '本群尚无任务。授权成员可使用 /task 内容；结果留在本群。'
   }
   async stop(chatId: string): Promise<void> {
+    this.stopEpoch.set(chatId, (this.stopEpoch.get(chatId) ?? 0) + 1)
+    for (const [key, controller] of this.creationControllers)
+      if (key.startsWith(chatId + ':')) controller.abort(new QqError('群任务已停止', 409))
     for (const row of this.entries(chatId)) {
       const agent = get(this.host, 'agents')?.get(row.sessionId)
       if (!agent) continue
@@ -220,6 +234,8 @@ export class QqGroupTasks {
   dispose(): Promise<void> {
     if (this.cleanup) return this.cleanup
     this.disposed = true
+    for (const controller of this.creationControllers.values())
+      controller.abort(new QqError('QQ 接入已停止', 409))
     // Host service lookup is no longer valid during Cordis teardown. Retain only the
     // Agent capabilities we observed, and never dispose a writer owned by the GUI.
     for (const agent of this.roots.values()) agent.cancel({ kind: 'disposed' })
@@ -235,9 +251,13 @@ export class QqGroupTasks {
 
 /** Installed on native agent/created, so GUI resume and native children retain the same public audience. */
 export function installGroupTaskAudience(ctx: any, channel: SessionChannel, personaName: string): void {
+  const refreshInputBoundary = publicInputBoundary(ctx)
+  ctx.effect(() => registerSharedQqKnowledge(ctx), 'qq: group shared knowledge')
   const excluded = (name: string) =>
     name.startsWith('dsh_im_') ||
     name.startsWith('schedule_') ||
+    name.startsWith('mnemon_') ||
+    name === 'persona_memory' ||
     name === 'qq_napcat_api' ||
     name === 'session_query'
   ctx.tools.guard((exec: any) =>
@@ -258,11 +278,16 @@ export function installGroupTaskAudience(ctx: any, channel: SessionChannel, pers
   })
   ctx.on(
     'system-prompt/assemble',
-    async (_assembly: any, _context: any, next: () => Promise<any>) => {
+    async (_assembly: any, context: any, next: () => Promise<any>) => {
       const result = await next()
+      refreshInputBoundary(context.agent?.ctx)
       // Native optional contexts can contain user-level instructions, history or Mnemon providers.
       // Group evidence is retrieved explicitly through the scoped tools instead.
-      return { ...result, contexts: [], tools: result.tools.filter((tool: any) => !excluded(tool.name)) }
+      return {
+        ...result,
+        contexts: result.contexts.filter((entry: any) => entry.name === 'dsh-px-persona-memory'),
+        tools: result.tools.filter((tool: any) => !excluded(tool.name))
+      }
     },
     { prepend: true }
   )

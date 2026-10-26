@@ -1,9 +1,11 @@
 import { QqError } from './policy'
+import { publicInputBoundary } from './public-input'
 const allowed = ['qq_public_knowledge', 'qq_task']
 const get = (ctx: any, key: string) => ctx.get?.(key) ?? ctx[key]
 
 /** Mounted by the native preset for every entry path, including GUI resume with QQ disconnected. */
 export function installPublicQqAgent(ctx: any): void {
+  const refreshInputBoundary = publicInputBoundary(ctx)
   const memory = () => {
     const service = get(ctx, 'pxMemoryChannels')
     if (service?.version !== 1) throw new QqError('公共聊天的记忆边界服务不可用，已停止请求', 503)
@@ -35,6 +37,7 @@ export function installPublicQqAgent(ctx: any): void {
       name: 'px-qq-public-persona',
       order: 0,
       complete: true,
+      interpolate: false,
       text: ({ agent }: any) => {
         if (!agent) return 'QQ 公共交流：只使用公开介绍、当前聊天和明确共享的知识。'
         const { persona, binding } = audience(agent)
@@ -55,6 +58,7 @@ export function installPublicQqAgent(ctx: any): void {
       async (_assembly: any, context: any, next: () => Promise<any>) => {
         if (context.agent) audience(context.agent)
         const result = await next()
+        refreshInputBoundary(context.agent?.ctx)
         return {
           ...result,
           contexts: [],
@@ -63,39 +67,7 @@ export function installPublicQqAgent(ctx: any): void {
       },
       { prepend: true }
     )
-    yield ctx.tools.register({
-      name: 'qq_public_knowledge',
-      description: '只读查询明确分享的项目或全局知识，不能读取人格私有资料。',
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['scope'],
-        properties: {
-          scope: { type: 'string', enum: ['project', 'global'] },
-          query: { type: 'string', maxLength: 256 },
-          id: { type: 'string', maxLength: 300 }
-        }
-      },
-      output: {
-        schema: { type: 'string' },
-        render: (_: unknown, value: string) => [{ type: 'text', text: value }]
-      },
-      execute: async (args: any, exec: any) => {
-        audience(exec.agent)
-        exec.signal.throwIfAborted()
-        const value = await memory().sharedKnowledge(
-          exec.agent.session.id,
-          get(ctx, 'pxQq')?.workspace(audience(exec.agent).binding.channel.conversationId) ??
-            exec.agent.session.header.cwd,
-          args
-        )
-        exec.signal.throwIfAborted()
-        const text = JSON.stringify(value)
-        return text.length <= 16000
-          ? text
-          : JSON.stringify({ truncated: true, message: '匹配内容过多，请缩小关键词或按条目编号读取。' })
-      }
-    })
+    yield registerSharedQqKnowledge(ctx)
     yield ctx.tools.register({
       name: 'qq_task',
       description:
@@ -114,4 +86,45 @@ export function installPublicQqAgent(ctx: any): void {
       }
     })
   }, 'qq: public native capability boundary')
+}
+
+/** The native Documents engine remains the only knowledge store; channel scope selects its namespace. */
+export function registerSharedQqKnowledge(ctx: any): () => void {
+  return ctx.tools.register({
+    name: 'qq_public_knowledge',
+    description: '只读查询本群项目共享或全局共享知识，不能读取人格私有资料。',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['scope'],
+      properties: {
+        scope: { type: 'string', enum: ['project', 'global'] },
+        query: { type: 'string', maxLength: 256 },
+        id: { type: 'string', maxLength: 300 }
+      }
+    },
+    output: {
+      schema: { type: 'string' },
+      render: (_: unknown, value: string) => [{ type: 'text', text: value }]
+    },
+    execute: async (args: any, exec: any) => {
+      const memory = get(ctx, 'pxMemoryChannels')
+      const binding = memory?.inspect(exec.agent?.session.id)?.binding
+      if (memory?.version !== 1 || binding?.channel?.provider !== 'qq' || binding.channel.access !== 'public')
+        throw new QqError('公共知识请求缺少当前聊天身份', 403)
+      exec.signal.throwIfAborted()
+      const value = await memory.sharedKnowledge(
+        exec.agent.session.id,
+        binding.channel.workspace ??
+          get(ctx, 'pxQq')?.workspace(binding.channel.conversationId) ??
+          exec.agent.session.header.cwd,
+        args
+      )
+      exec.signal.throwIfAborted()
+      const text = JSON.stringify(value)
+      return text.length <= 16000
+        ? text
+        : JSON.stringify({ truncated: true, message: '匹配内容过多，请缩小关键词或按条目编号读取。' })
+    }
+  })
 }

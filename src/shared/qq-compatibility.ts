@@ -42,7 +42,7 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
   } else if (file === 'registry.js') {
     replace(
       'effectiveCwd(chatId) {',
-      "effectiveCwd(chatId) {\n        if (chatId?.startsWith('group:')) return this.deps.px.workspace(chatId);"
+      'effectiveCwd(chatId) {\n        if (chatId && this.deps.px.preset(chatId)) return this.deps.px.workspace(chatId);'
     )
     code = "import { qqAtomicText, qqReadMetadata } from './px-persistence.js';\n" + code
     replace(
@@ -208,6 +208,10 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
       'async pxAdopt(chatId, targetSessionId) {\n        this.deps.px.prepareSession(targetSessionId, chatId);\n        this.recordSwitchable(chatId, targetSessionId);\n        return this.switchSession(chatId, targetSessionId);\n    }\n    async switchSession(chatId, targetSessionId) {'
     )
   } else if (file === 'bridge.js') {
+    replace(
+      "this.deps.log('error', 'inbound handling failed: ' + describeError(error) + errorStack(error));",
+      "this.deps.log('error', 'inbound handling failed: ' + describeError(error) + errorStack(error));\n            throw error;"
+    )
     replace(
       'relayCards(this.cardRelayCtx, chatId, content);',
       '// PX relays live native question/approval requests, not guessed answers to tool-call text.'

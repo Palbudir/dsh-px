@@ -115,13 +115,20 @@ export async function createPersonaSession(
     handoff = handoffFrom(source.events, sourceId)
   }
   signal?.throwIfAborted()
+  const sourceChannel = state.bindings[sourceId]?.channel
+  const channel = sourceChannel?.task
+    ? {
+        ...sourceChannel,
+        task: { ...sourceChannel.task, rootSessionId: id }
+      }
+    : sourceChannel
   store.bind(id, {
     personaId: persona.id,
     locked: !!handoff,
     handoff,
     pending: true,
     createdFrom: sourceId,
-    channel: state.bindings[sourceId]?.channel
+    channel
   })
   // Explicit IDs make retry after an uncertain HTTP response adopt the same native Session.
   const workspace = service(host, 'workspaceRegistry')

@@ -268,7 +268,7 @@ export function QqSettingsPanel(): unknown {
         <section className="px-card" aria-label="QQ 待处理请求">
           <h3>待处理请求</h3>
           {feedback('interaction')}
-          <p className="px-muted">与 QQ 私聊是同一个原生请求；任一处处理后，另一处的旧回复即失效。</p>
+          <p className="px-muted">与对应的 QQ 聊天是同一个原生请求；任一处处理后，另一处的旧回复即失效。</p>
           {view.pendingInteractions.map((p) => (
             <div key={p.id} style={{ borderTop: '1px solid var(--px-border)', padding: '12px 0' }}>
               <strong>

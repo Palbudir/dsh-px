@@ -66,10 +66,14 @@ export function channelFor(settings: QqSettings, chatId: string): SessionChannel
     conversationId: chatId,
     access: chat.kind === 'private' && settings.authorizedUsers.includes(chat.peer) ? 'owner' : 'public',
     publicInstructions: settings.publicIntroduction,
-    ...(chat.kind === 'group'
+    ...(chat.kind === 'group' || !settings.authorizedUsers.includes(chat.peer)
       ? {
           workspace:
-            settings.workspace.replace(/[\\/]$/, '') + '/groups/' + settings.accountId + '/' + chat.peer
+            settings.workspace.replace(/[\\/]$/, '') +
+            (chat.kind === 'group' ? '/groups/' : '/visitors/') +
+            settings.accountId +
+            '/' +
+            chat.peer
         }
       : {})
   }

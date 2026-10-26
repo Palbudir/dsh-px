@@ -363,7 +363,7 @@ function QqSettingsPanel() {
     !!view?.pendingInteractions?.length && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("section", { className: "px-card", "aria-label": "QQ \u5F85\u5904\u7406\u8BF7\u6C42", children: [
       /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("h3", { children: "\u5F85\u5904\u7406\u8BF7\u6C42" }),
       feedback("interaction"),
-      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "px-muted", children: "\u4E0E QQ \u79C1\u804A\u662F\u540C\u4E00\u4E2A\u539F\u751F\u8BF7\u6C42\uFF1B\u4EFB\u4E00\u5904\u5904\u7406\u540E\uFF0C\u53E6\u4E00\u5904\u7684\u65E7\u56DE\u590D\u5373\u5931\u6548\u3002" }),
+      /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { className: "px-muted", children: "\u4E0E\u5BF9\u5E94\u7684 QQ \u804A\u5929\u662F\u540C\u4E00\u4E2A\u539F\u751F\u8BF7\u6C42\uFF1B\u4EFB\u4E00\u5904\u5904\u7406\u540E\uFF0C\u53E6\u4E00\u5904\u7684\u65E7\u56DE\u590D\u5373\u5931\u6548\u3002" }),
       view.pendingInteractions.map((p) => /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("div", { style: { borderTop: "1px solid var(--px-border)", padding: "12px 0" }, children: [
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("strong", { children: [
           p.id,

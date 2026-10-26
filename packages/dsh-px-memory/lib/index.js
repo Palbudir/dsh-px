@@ -916,13 +916,18 @@ async function createPersonaSession(host, store, sourceId, args, signal) {
     handoff2 = handoffFrom(source.events, sourceId);
   }
   signal?.throwIfAborted();
+  const sourceChannel = state.bindings[sourceId]?.channel;
+  const channel = sourceChannel?.task ? {
+    ...sourceChannel,
+    task: { ...sourceChannel.task, rootSessionId: id }
+  } : sourceChannel;
   store.bind(id, {
     personaId: persona.id,
     locked: !!handoff2,
     handoff: handoff2,
     pending: true,
     createdFrom: sourceId,
-    channel: state.bindings[sourceId]?.channel
+    channel
   });
   const workspace = service(host, "workspaceRegistry")?.list?.().find((w) => w.sessionIds?.includes(sourceId));
   await controller.create({
@@ -22910,6 +22915,7 @@ ${!budget || handoff2.summary.length <= budget.handoffChars ? handoff2.summary :
       () => host.systemPrompt.context({
         name: "dsh-px-persona-memory",
         order: 500,
+        interpolate: false,
         text: ({ agent }) => {
           if (!agent) return "";
           return renderMemory(agent);
@@ -22940,7 +22946,9 @@ ${!budget || handoff2.summary.length <= budget.handoffChars ? handoff2.summary :
         run.signal.throwIfAborted();
         if (!run.agent) throw new MemoryError("\u9700\u8981\u5F53\u524D\u4F1A\u8BDD");
         const p = current(run.agent);
-        if (!p.memoryEnabled) throw new MemoryError("\u5F53\u524D\u4EBA\u683C\u7684\u8BB0\u5FC6\u5DF2\u5173\u95ED");
+        const binding = store.read().bindings[run.agent.session.id];
+        if (!p.memoryEnabled && !(publicSession(binding) && binding?.channel?.task))
+          throw new MemoryError("\u5F53\u524D\u4EBA\u683C\u7684\u8BB0\u5FC6\u5DF2\u5173\u95ED");
         const id = run.agent.session.id, coverage = await history.refresh(ctx, id, run.signal);
         const result = args.action === "read" ? await history.read(ctx, id, validId(args.sessionId), args.seq, args.offset ?? 0, run.signal) : args.action === "sessions" ? history.list(id, args.projectOnly ? run.agent.session.header.cwd : void 0) : args.action === "search" ? history.search(id, args.query ?? "", {
           project: args.projectOnly ? run.agent.session.header.cwd : void 0,

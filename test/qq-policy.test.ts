@@ -33,6 +33,12 @@ test('everyone may have a public conversation, only a configured member has an o
   assert.equal(channelFor(settings, 'private:22002').access, 'owner')
   assert.equal(channelFor(settings, 'private:44004').access, 'public')
   assert.equal(group.access, 'public')
+  assert.notEqual(channelFor(settings, 'private:44004').workspace, settings.workspace)
+  assert.notEqual(
+    channelFor(settings, 'private:44004').workspace,
+    channelFor(settings, 'private:44005').workspace
+  )
+  assert.match(channelFor(settings, 'private:44004').workspace!, /visitors\/11001\/44004$/)
   assert.throws(() => messageSource(settings, 'private:22002', '44004'), /不一致/)
 })
 
