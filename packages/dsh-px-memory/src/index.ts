@@ -1,4 +1,6 @@
 import { join } from 'node:path'
+import { ChannelNotes, type ChannelNoteInput } from './channel-notes'
+import { QQ_CONVERSATION_TOOLS, qqMessageOrigin } from '../../shared/channel-source'
 import {
   MemoryStore,
   MemoryError,
@@ -68,7 +70,7 @@ export function apply(ctx: any): void {
               return '群任务授权不可用，请检查 QQ 接入与授权成员'
             return
           }
-          if (!['qq_public_knowledge', 'qq_task'].includes(exec.name))
+          if (!['qq_public_knowledge', 'qq_task', ...QQ_CONVERSATION_TOOLS].includes(exec.name))
             return '公共 QQ 会话没有本机执行或私有信息权限'
           if (exec.name === 'qq_task' && !service(host, 'pxQq')?.canDelegate(exec, binding!.channel))
             return '当前 QQ 请求没有私有任务授权'
@@ -92,8 +94,42 @@ export function apply(ctx: any): void {
     (caller, path) => observeFile(ctx, caller, path)
   )
   // Local plugin contract only: remote callers still go through their authenticated channel owner.
+  const channelNotes = new ChannelNotes(
+    store,
+    knowledge,
+    (caller, source, seq, signal) => history.read(ctx, caller, source, seq, 0, signal),
+    (sessionId) => {
+      const channel = store.read().bindings[sessionId]?.channel
+      const events: any[] = service(ctx, 'agents')?.get(sessionId)?.session.snapshotEvents() ?? []
+      const start = events.findLastIndex((event) => event.type === 'turn/start')
+      if (start < 0 || !channel) return []
+      return events
+        .slice(start + 1)
+        .filter((event) => {
+          const origin = qqMessageOrigin(event.data?.source)
+          return (
+            event.type === 'user/message' &&
+            origin?.accountId === channel.accountId &&
+            origin.conversationId === channel.conversationId
+          )
+        })
+        .slice(-6)
+        .map((event) => ({
+          sessionId,
+          seq: event.seq,
+          userId: qqMessageOrigin(event.data.source)!.senderId,
+          excerpt: (event.data.content ?? [])
+            .filter((block: any) => block.type === 'text')
+            .map((block: any) => block.text)
+            .join('\n')
+            .slice(0, 2000)
+        }))
+    }
+  )
   ctx.provide('pxMemoryChannels', {
     version: 1,
+    conversationNotes: (sessionId: string, input: ChannelNoteInput, signal: AbortSignal) =>
+      channelNotes.execute(sessionId, input, signal),
     createPersona: (name: string) => store.createPersona(name),
     personas: () =>
       store
@@ -323,8 +359,14 @@ export function apply(ctx: any): void {
         if (!run.agent) throw new MemoryError('需要当前会话')
         const p = current(run.agent)
         const binding = store.read().bindings[run.agent.session.id]
-        if (!p.memoryEnabled && !(publicSession(binding) && binding?.channel?.task))
-          throw new MemoryError('当前人格的记忆已关闭')
+        const channelMemory =
+          publicSession(binding) &&
+          store
+            .read()
+            .personas.some(
+              (persona) => persona.id === binding?.personaId && persona.memoryEnabled && !persona.archived
+            )
+        if (!p.memoryEnabled && !channelMemory) throw new MemoryError('当前人格的记忆已关闭')
         const id = run.agent.session.id,
           coverage = await history.refresh(ctx, id, run.signal)
         const result =

@@ -1,7 +1,7 @@
 {
   "name": "dsh-onebot-qq",
   "version": "0.9.6",
-  "derivedVersion": "0.9.6-px.2",
+  "derivedVersion": "0.9.6-px.3",
   "url": "https://registry.npmjs.org/dsh-onebot-qq/-/dsh-onebot-qq-0.9.6.tgz",
   "integrity": "sha512-FxeIJB0TI6BUpRIolLKrXZnbIYn9cdw7WLTlzbjVGZBC/ZPz89mEAmguZ1Gya1EmgcXBqEGuKbu6AHEDFbjSBg==",
   "sourceCommit": "bc3aa23fcf7a11f9be7440ce2539a0a8889da3f7",

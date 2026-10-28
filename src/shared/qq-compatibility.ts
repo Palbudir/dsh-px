@@ -37,7 +37,7 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
     replace('await connection.stop();', 'await connection.stop();\n            px.dispose();')
     replace(
       'adopt: (chatId, sessionId) => bridge.registry.pxAdopt(chatId, sessionId),',
-      'adopt: (chatId, sessionId) => bridge.registry.pxAdopt(chatId, sessionId),\n        flush: () => bridge.registry.pxFlush(),\n        message: input => bridge.pxMessage(input),\n        scope: (ctx, sessionId, chatId) => bridge.installChannelScope(ctx, sessionId, chatId),\n        model: (ctx, sessionId) => bridge.registry.pxModel(ctx, sessionId),\n        recordedPreset: sessionId => bridge.registry.recordedPresetFor(sessionId),\n        attachWorkspace: (sessionId, cwd) => bridge.registry.attachToWorkspace(sessionId, cwd),'
+      'adopt: (chatId, sessionId) => bridge.registry.pxAdopt(chatId, sessionId),\n        segments: (chatId, segments) => bridge.sendSegments(chatId, segments),\n        flush: () => bridge.registry.pxFlush(),\n        message: input => bridge.pxMessage(input),\n        scope: (ctx, sessionId, chatId) => bridge.installChannelScope(ctx, sessionId, chatId),\n        model: (ctx, sessionId) => bridge.registry.pxModel(ctx, sessionId),\n        recordedPreset: sessionId => bridge.registry.recordedPresetFor(sessionId),\n        attachWorkspace: (sessionId, cwd) => bridge.registry.attachToWorkspace(sessionId, cwd),'
     )
   } else if (file === 'registry.js') {
     replace(

@@ -19,7 +19,9 @@ function fixture() {
   )
   policy.installScope(
     {
+      effect: (run: any) => run(),
       tools: {
+        register: () => () => {},
         guard: (g: any) => {
           guards.push(g)
         }

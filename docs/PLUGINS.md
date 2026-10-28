@@ -68,7 +68,7 @@ taskflow 的 `task_state` 读取原生权威状态；冷读取只使用原生投
 
 ## QQ 兼容成员
 
-QQ 社区成员使用独立包身份 `dsh-onebot-qq`，从上游 0.9.6 派生为 0.9.6-px.2。构建首先核对固定 npm SRI 和文件摘要，再应用可审查的兼容修改；发行验收重新生成派生结果并逐文件对照。上游名称、许可与来源保留，不能把派生版本称为未修改的社区原包。原始来源在 [qq-community.json](../config/qq-community.json)，修改在 [qq-compatibility.ts](../src/shared/qq-compatibility.ts)。
+QQ 社区成员使用独立包身份 `dsh-onebot-qq`，从上游 0.9.6 派生为 0.9.6-px.3。构建首先核对固定 npm SRI 和文件摘要，再应用可审查的兼容修改；发行验收重新生成派生结果并逐文件对照。上游名称、许可与来源保留，不能把派生版本称为未修改的社区原包。原始来源在 [qq-community.json](../config/qq-community.json)，修改在 [qq-compatibility.ts](../src/shared/qq-compatibility.ts)。
 
 QQ 原生传输、会话工厂和发送仍由社区成员实现；PX 负责可信发送者标记、公共预设、原聊天任务路由、会话模型校验、投递去重及单一设置页。公共权限使用原生工具 guard，配置和凭据分别归原生 configEditor / credentials；原生审批和提问通过同一等待请求交回答案。投递回执不是另一套任务状态。账号配置只保存在社区成员的 `pxQq` 字段，既有第三方字段不覆盖；自行安装的上游版本保留，只有配套兼容成员可以启用 PX QQ 接入。详见 [QQ 使用说明](QQ.md)。
 

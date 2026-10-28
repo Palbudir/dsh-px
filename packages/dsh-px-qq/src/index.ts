@@ -110,7 +110,12 @@ async function activateHost(ctx: any): Promise<void> {
       throw error
     }))
   ctx.provide('pxQq', {
+    conversation: (tool: string, args: unknown, exec: any) => {
+      if (!current) throw new QqError('QQ 接入未开启', 409)
+      return current.conversationAction(tool, args, exec)
+    },
     version: 1,
+    authority: (agent: any, messages: any[]) => current?.authority(agent, messages),
     canRunGroupTask: (sessionId: string) => current?.canRunGroupTask(sessionId) ?? false,
     workspace: (chatId: string) => current?.workspace(chatId),
     canDelegate: (exec: any, channel: any) => current?.canDelegate(exec, channel) ?? false,
@@ -160,6 +165,7 @@ async function activateHost(ctx: any): Promise<void> {
             allowAllUsers: true,
             allowFrom: [],
             adminUsers: configuration.authorizedUsers,
+            restrictedMemberPrefix: '普通成员：可交流，不可发起本机任务',
             groupPolicy: 'open',
             groupAllowFrom: [],
             requireMention: true,

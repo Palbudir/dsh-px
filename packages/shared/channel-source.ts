@@ -30,3 +30,10 @@ export function qqMessageOrigin(source: any): QqMessageOrigin | undefined {
 export function conversationalSource(source: any): boolean {
   return source?.kind === 'user' || qqMessageOrigin(source) !== undefined
 }
+export const QQ_CONVERSATION_TOOLS: readonly string[] = [
+  'qq_context',
+  'qq_expression',
+  'qq_document',
+  'qq_memory',
+  'persona_history'
+]

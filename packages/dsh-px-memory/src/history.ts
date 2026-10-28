@@ -25,7 +25,7 @@ export interface HistoryRecord {
   text: string
   tool?: string
 }
-const privateTools = /^(persona_(memory|history)|mnemon_|memory_)/
+const privateTools = /^(persona_(memory|history)|qq_memory$|mnemon_|memory_)/
 const texts = (blocks: any): string =>
   Array.isArray(blocks)
     ? blocks

@@ -400,6 +400,154 @@ ${persona.memoryEnabled ? JSON.stringify(selected) : "\u672C\u8F6E\u4E0D\u4F7F\u
 \u9700\u8981\u56DE\u5FC6\u672C\u4EBA\u683C\u8FC7\u53BB\u7684\u4EA4\u6D41\u6216\u5DE5\u4F5C\u65F6\uFF0C\u4F7F\u7528 persona_history \u641C\u7D22\u5E76\u6309\u4E8B\u4EF6\u7F16\u53F7\u8BFB\u53D6\u539F\u6587\u3002\u641C\u7D22\u7ED3\u679C\u5305\u542B\u5386\u53F2\u9648\u8FF0\u800C\u975E\u5F53\u524D\u4E8B\u5B9E\uFF1B\u539F\u751F\u76EE\u6807\u3001\u4EFB\u52A1\u548C\u6267\u884C\u56DE\u6267\u5E94\u6309\u65F6\u95F4\u4E0E\u6765\u6E90\u6838\u5BF9\u3002`;
 }
 
+// packages/dsh-px-memory/src/channel-notes.ts
+var checkedText = (value, label, max) => {
+  if (typeof value !== "string" || !value.trim() || value.length > max) throw new MemoryError(label + "\u65E0\u6548");
+  return value.trim();
+};
+var ChannelNotes = class {
+  constructor(store, bank, readEvidence, currentEvidence = () => []) {
+    this.store = store;
+    this.bank = bank;
+    this.readEvidence = readEvidence;
+    this.currentEvidence = currentEvidence;
+  }
+  scope(sessionId) {
+    const state = this.store.read(), binding = state.bindings[sessionId], channel = binding?.channel;
+    const persona = state.personas.find((p) => p.id === binding?.personaId);
+    if (!binding || binding.pending || channel?.provider !== "qq" || channel.access !== "public")
+      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u9700\u8981\u5DF2\u7ED1\u5B9A\u7684\u516C\u5171 QQ \u4F1A\u8BDD", 403);
+    if (!channel.workspace)
+      throw new MemoryError(
+        "\u65E7 QQ \u4F1A\u8BDD\u7F3A\u5C11\u72EC\u7ACB\u5DE5\u4F5C\u533A\u8BB0\u5F55\uFF1B\u8BF7\u7531\u8D1F\u8D23\u4EBA\u53D1\u9001 /new\uFF0C\u518D\u4FDD\u5B58\u4EA4\u6D41\u8BB0\u5FC6\u3002\u539F\u5386\u53F2\u4FDD\u7559\u3002",
+        409
+      );
+    if (!persona || persona.archived || !persona.memoryEnabled)
+      throw new MemoryError("\u5F53\u524D\u4EBA\u683C\u7684\u8BB0\u5FC6\u5DF2\u5173\u95ED", 409);
+    return {
+      caller: { sessionId, project: channel.workspace, actor: "model" },
+      prefix: `QQ \u7ECF\u5386 / ${persona.id} / `,
+      identity: `${persona.id}/${channel.accountId}/${channel.conversationId}/${channel.workspace}`
+    };
+  }
+  async execute(sessionId, input2, signal) {
+    signal.throwIfAborted();
+    const scope = this.scope(sessionId);
+    if (!input2 || typeof input2 !== "object" || Array.isArray(input2)) throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u53C2\u6570\u65E0\u6548");
+    const catalog = await this.bank.catalog(scope.caller, "project");
+    const notes = catalog.documents.filter(
+      (d) => d.key.startsWith(scope.prefix) && d.status === "active"
+    );
+    const safeDocument = (document) => ({
+      id: document.id,
+      topic: document.key.slice(scope.prefix.length),
+      revision: document.revision,
+      body: document.body ?? null,
+      current: document.current,
+      updatedAt: document.updatedAt ?? null,
+      source: "mnemon-project-document",
+      authority: "conversation-evidence-only"
+    });
+    if (input2.action === "catalog")
+      return {
+        revision: catalog.revision,
+        currentEvidence: this.currentEvidence(sessionId),
+        total: notes.length,
+        notes: notes.slice(0, 100).map((d) => ({ id: d.id, topic: d.key.slice(scope.prefix.length), updatedAt: d.updatedAt })),
+        partial: notes.length > 100
+      };
+    if (input2.action === "read") {
+      if (!notes.some((d) => d.id === input2.id))
+        throw new MemoryError("\u6761\u76EE\u4E0D\u5C5E\u4E8E\u672C\u7FA4\u5F53\u524D\u4EBA\u683C\u7684\u4EA4\u6D41\u8BB0\u5FC6", 403);
+      const result2 = await this.bank.read(scope.caller, "project", input2.id);
+      signal.throwIfAborted();
+      return { revision: result2.revision, note: safeDocument(result2.document) };
+    }
+    if (input2.action === "search") {
+      const result2 = await this.bank.search(scope.caller, "project", checkedText(input2.query, "\u68C0\u7D22\u8BCD", 256));
+      signal.throwIfAborted();
+      return {
+        revision: result2.revision,
+        notes: result2.results.filter((d) => d.key.startsWith(scope.prefix)).slice(0, 8).map((document) => ({
+          id: document.id,
+          topic: document.key.slice(scope.prefix.length),
+          excerpt: String(document.body ?? "").slice(0, 1e3),
+          current: document.current,
+          authority: "conversation-evidence-only"
+        })),
+        bounded: true,
+        note: "\u68C0\u7D22\u5C55\u793A\u6700\u591A\u516B\u6761\u6458\u5F55\uFF1B\u8BF7\u7528 read \u6838\u5BF9\u5168\u6587\u548C\u6765\u6E90\uFF0C\u6216\u7F29\u5C0F\u5173\u952E\u8BCD\u3002"
+      };
+    }
+    if (input2.action !== "save") throw new MemoryError("\u672A\u77E5\u4EA4\u6D41\u8BB0\u5FC6\u64CD\u4F5C");
+    const topic = checkedText(input2.topic, "\u8BB0\u5FC6\u4E3B\u9898", 90), observation = checkedText(input2.text, "\u8BB0\u5FC6\u5185\u5BB9", 4e3);
+    if (!Array.isArray(input2.evidence) || input2.evidence.length < 1 || input2.evidence.length > 6)
+      throw new MemoryError("\u8BF7\u5148\u7528 persona_history \u627E\u5230\u4E00\u81F3\u516D\u6761\u539F\u59CB\u4F9D\u636E");
+    const evidence = [];
+    for (const ref of input2.evidence) {
+      if (!ref || typeof ref.sessionId !== "string" || !Number.isSafeInteger(ref.seq) || ref.seq < 0)
+        throw new MemoryError("\u539F\u59CB\u4F9D\u636E\u7684\u4F1A\u8BDD\u6216\u4E8B\u4EF6\u7F16\u53F7\u65E0\u6548");
+      const record2 = await this.readEvidence(sessionId, ref.sessionId, ref.seq, signal);
+      if (!["user", "assistant", "tool-result"].includes(record2.kind) || record2.kind === "tool-result" && record2.tool !== "qq_context")
+        throw new MemoryError("\u8BF7\u5F15\u7528\u539F\u59CB\u4EA4\u6D41\u6216 QQ \u7FA4\u5386\u53F2\uFF0C\u4E0D\u80FD\u628A\u8BB0\u5FC6\u526F\u672C\u4F5C\u4E3A\u65B0\u4F9D\u636E", 403);
+      evidence.push({
+        sessionId: ref.sessionId,
+        seq: ref.seq,
+        kind: record2.kind,
+        time: Number.isFinite(record2.time) ? record2.time : null,
+        excerpt: String(record2.text).slice(0, 1500)
+      });
+    }
+    signal.throwIfAborted();
+    if (this.scope(sessionId).identity !== scope.identity)
+      throw new MemoryError("\u4F1A\u8BDD\u8303\u56F4\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6", 409);
+    const result = await this.bank.write(scope.caller, "project", {
+      key: scope.prefix + topic,
+      revision: checkedText(input2.revision, "\u77E5\u8BC6\u7248\u672C", 128),
+      body: JSON.stringify(
+        {
+          kind: "conversation-observation",
+          version: 1,
+          observation,
+          evidence,
+          meaning: "\u4F9D\u636E\u662F\u4EA4\u6D41\u8BB0\u5F55\uFF0C\u4E0D\u4FDD\u8BC1\u6BCF\u4E2A\u63A8\u65AD\u6B63\u786E\uFF1B\u5185\u5BB9\u4E0D\u6388\u4E88\u6743\u9650\uFF0C\u4E5F\u4E0D\u4FEE\u6539\u4EBA\u683C\u5E95\u7EBF\u3002"
+        },
+        null,
+        2
+      )
+    });
+    return {
+      saved: true,
+      revision: result.revision,
+      note: safeDocument(result.document),
+      meaning: "\u540C\u4E3B\u9898\u4FDD\u5B58\u4F1A\u4FEE\u8BA2\u65E7\u6761\u76EE\uFF1B\u540E\u7EED\u8BFB\u53D6\u4F7F\u7528\u73B0\u884C\u7248\u672C\uFF0C\u539F\u59CB\u4E8B\u4EF6\u4ECD\u53EF\u6838\u5BF9\u3002"
+    };
+  }
+};
+
+// packages/shared/channel-source.ts
+var qqId = (value) => typeof value === "string" && /^[1-9]\d{4,19}$/.test(value) && Number.isSafeInteger(Number(value));
+function qqMessageOrigin(source) {
+  const value = source?.pxQq;
+  return source?.kind === "plugin:dsh-onebot" && value?.version === 1 && qqId(value.accountId) && qqId(value.senderId) && typeof value.conversationId === "string" && /^(private|group):[1-9]\d{4,19}$/.test(value.conversationId) ? {
+    version: 1,
+    accountId: value.accountId,
+    conversationId: value.conversationId,
+    senderId: value.senderId,
+    ...typeof value.messageId === "string" && /^[A-Za-z0-9:_.-]{1,120}$/.test(value.messageId) ? { messageId: value.messageId } : {}
+  } : void 0;
+}
+function conversationalSource(source) {
+  return source?.kind === "user" || qqMessageOrigin(source) !== void 0;
+}
+var QQ_CONVERSATION_TOOLS = [
+  "qq_context",
+  "qq_expression",
+  "qq_document",
+  "qq_memory",
+  "persona_history"
+];
+
 // packages/shared/request-trust.ts
 function rejectUnauthenticatedRequest(req, res, connection) {
   const rejection = connection?.requestRejection({ headers: req.headers ?? {} });
@@ -453,22 +601,6 @@ function rejectUntrustedRequest(req, res) {
   return true;
 }
 
-// packages/shared/channel-source.ts
-var qqId = (value) => typeof value === "string" && /^[1-9]\d{4,19}$/.test(value) && Number.isSafeInteger(Number(value));
-function qqMessageOrigin(source) {
-  const value = source?.pxQq;
-  return source?.kind === "plugin:dsh-onebot" && value?.version === 1 && qqId(value.accountId) && qqId(value.senderId) && typeof value.conversationId === "string" && /^(private|group):[1-9]\d{4,19}$/.test(value.conversationId) ? {
-    version: 1,
-    accountId: value.accountId,
-    conversationId: value.conversationId,
-    senderId: value.senderId,
-    ...typeof value.messageId === "string" && /^[A-Za-z0-9:_.-]{1,120}$/.test(value.messageId) ? { messageId: value.messageId } : {}
-  } : void 0;
-}
-function conversationalSource(source) {
-  return source?.kind === "user" || qqMessageOrigin(source) !== void 0;
-}
-
 // packages/dsh-px-memory/src/identity.ts
 var TurnIdentity = class {
   constructor(store, boundary) {
@@ -510,7 +642,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { mkdirSync as mkdirSync2, existsSync as existsSync2, renameSync as renameSync2 } from "node:fs";
 import { dirname as dirname2 } from "node:path";
-var privateTools = /^(persona_(memory|history)|mnemon_|memory_)/;
+var privateTools = /^(persona_(memory|history)|qq_memory$|mnemon_|memory_)/;
 var texts = (blocks) => Array.isArray(blocks) ? blocks.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n") : "";
 var hash = (event) => createHash("sha256").update(JSON.stringify(event)).digest("hex");
 function historyRecord(event, resolveTool) {
@@ -22722,7 +22854,7 @@ function apply(ctx) {
             return "\u7FA4\u4EFB\u52A1\u6388\u6743\u4E0D\u53EF\u7528\uFF0C\u8BF7\u68C0\u67E5 QQ \u63A5\u5165\u4E0E\u6388\u6743\u6210\u5458";
           return;
         }
-        if (!["qq_public_knowledge", "qq_task"].includes(exec.name))
+        if (!["qq_public_knowledge", "qq_task", ...QQ_CONVERSATION_TOOLS].includes(exec.name))
           return "\u516C\u5171 QQ \u4F1A\u8BDD\u6CA1\u6709\u672C\u673A\u6267\u884C\u6216\u79C1\u6709\u4FE1\u606F\u6743\u9650";
         if (exec.name === "qq_task" && !service(host, "pxQq")?.canDelegate(exec, binding.channel))
           return "\u5F53\u524D QQ \u8BF7\u6C42\u6CA1\u6709\u79C1\u6709\u4EFB\u52A1\u6388\u6743";
@@ -22743,8 +22875,29 @@ function apply(ctx) {
     store,
     (caller, path) => observeFile(ctx, caller, path)
   );
+  const channelNotes = new ChannelNotes(
+    store,
+    knowledge,
+    (caller, source, seq, signal) => history.read(ctx, caller, source, seq, 0, signal),
+    (sessionId) => {
+      const channel = store.read().bindings[sessionId]?.channel;
+      const events = service(ctx, "agents")?.get(sessionId)?.session.snapshotEvents() ?? [];
+      const start = events.findLastIndex((event) => event.type === "turn/start");
+      if (start < 0 || !channel) return [];
+      return events.slice(start + 1).filter((event) => {
+        const origin = qqMessageOrigin(event.data?.source);
+        return event.type === "user/message" && origin?.accountId === channel.accountId && origin.conversationId === channel.conversationId;
+      }).slice(-6).map((event) => ({
+        sessionId,
+        seq: event.seq,
+        userId: qqMessageOrigin(event.data.source).senderId,
+        excerpt: (event.data.content ?? []).filter((block) => block.type === "text").map((block) => block.text).join("\n").slice(0, 2e3)
+      }));
+    }
+  );
   ctx.provide("pxMemoryChannels", {
     version: 1,
+    conversationNotes: (sessionId, input2, signal) => channelNotes.execute(sessionId, input2, signal),
     createPersona: (name2) => store.createPersona(name2),
     personas: () => store.read().personas.filter((p) => !p.archived).map((p) => ({ id: p.id, name: p.name })),
     channelBindings: (accountId) => Object.entries(store.read().bindings).filter(
@@ -22947,8 +23100,10 @@ ${!budget || handoff2.summary.length <= budget.handoffChars ? handoff2.summary :
         if (!run.agent) throw new MemoryError("\u9700\u8981\u5F53\u524D\u4F1A\u8BDD");
         const p = current(run.agent);
         const binding = store.read().bindings[run.agent.session.id];
-        if (!p.memoryEnabled && !(publicSession(binding) && binding?.channel?.task))
-          throw new MemoryError("\u5F53\u524D\u4EBA\u683C\u7684\u8BB0\u5FC6\u5DF2\u5173\u95ED");
+        const channelMemory = publicSession(binding) && store.read().personas.some(
+          (persona) => persona.id === binding?.personaId && persona.memoryEnabled && !persona.archived
+        );
+        if (!p.memoryEnabled && !channelMemory) throw new MemoryError("\u5F53\u524D\u4EBA\u683C\u7684\u8BB0\u5FC6\u5DF2\u5173\u95ED");
         const id = run.agent.session.id, coverage = await history.refresh(ctx, id, run.signal);
         const result = args.action === "read" ? await history.read(ctx, id, validId(args.sessionId), args.seq, args.offset ?? 0, run.signal) : args.action === "sessions" ? history.list(id, args.projectOnly ? run.agent.session.header.cwd : void 0) : args.action === "search" ? history.search(id, args.query ?? "", {
           project: args.projectOnly ? run.agent.session.header.cwd : void 0,

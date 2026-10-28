@@ -2,7 +2,10 @@
  * Refresh after assembly: the pinned Mnemon installs a later prepend hook at agent/created.
  * A setup-time filter alone would run inside that hook and miss the appended snapshots.
  */
-export function publicInputBoundary(ctx: any): (agentCtx?: any) => void {
+export function publicInputBoundary(
+  ctx: any,
+  authority?: (agent: any, messages: any[]) => string | undefined
+): (agentCtx?: any, agent?: any) => void {
   const active = new Map<any, () => void>()
   const release = (scope: any) => {
     active.get(scope)?.()
@@ -15,7 +18,7 @@ export function publicInputBoundary(ctx: any): (agentCtx?: any) => void {
     },
     'qq: public input boundary'
   )
-  return (scope = ctx) => {
+  return (scope = ctx, agent?: any) => {
     release(scope)
     active.set(
       scope,
@@ -24,12 +27,23 @@ export function publicInputBoundary(ctx: any): (agentCtx?: any) => void {
         async (_payload: any, next: () => Promise<any>) => {
           const decision = await next()
           if (!Array.isArray(decision.messages)) return decision
+          const messages = decision.messages.filter(
+            (message: any) =>
+              !['dsh-mnemon', 'plugin:dsh-mnemon', 'agent-instructions'].includes(message.source?.kind)
+          )
+          // The native inbox is claimed before prompt assembly, but persisted after pre-step.
+          // Describe that actual pending batch; execution still revalidates committed provenance.
+          const notice = agent && authority?.(agent, messages)
+          if (notice && messages.some((message: any) => message.source?.kind === 'plugin:dsh-onebot'))
+            messages.push({
+              id: randomUUID(),
+              role: 'user',
+              source: { kind: 'px-qq-authority' },
+              content: [{ type: 'text', text: notice }]
+            })
           return {
             ...decision,
-            messages: decision.messages.filter(
-              (message: any) =>
-                !['dsh-mnemon', 'plugin:dsh-mnemon', 'agent-instructions'].includes(message.source?.kind)
-            )
+            messages
           }
         },
         { prepend: true }
@@ -37,3 +51,4 @@ export function publicInputBoundary(ctx: any): (agentCtx?: any) => void {
     )
   }
 }
+import { randomUUID } from 'node:crypto'
