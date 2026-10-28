@@ -435,9 +435,14 @@ var ChannelNotes = class {
     const scope = this.scope(sessionId);
     if (!input2 || typeof input2 !== "object" || Array.isArray(input2)) throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u53C2\u6570\u65E0\u6548");
     const catalog = await this.bank.catalog(scope.caller, "project");
-    const notes = catalog.documents.filter(
-      (d) => d.key.startsWith(scope.prefix) && d.status === "active"
+    const notes = catalog.documents.filter((d) => d.key.startsWith(scope.prefix) && d.status === "active").sort(
+      (a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)) || a.id.localeCompare(b.id)
     );
+    const offset = input2.offset ?? 0;
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > notes.length)
+      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u5206\u9875\u4F4D\u7F6E\u65E0\u6548");
+    if (offset > 0 && input2.revision !== catalog.revision)
+      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u76EE\u5F55\u5DF2\u53D8\u5316\uFF0C\u8BF7\u4ECE\u7B2C\u4E00\u9875\u91CD\u65B0\u67E5\u8BE2", 409);
     const safeDocument = (document) => ({
       id: document.id,
       topic: document.key.slice(scope.prefix.length),
@@ -453,8 +458,9 @@ var ChannelNotes = class {
         revision: catalog.revision,
         currentEvidence: this.currentEvidence(sessionId),
         total: notes.length,
-        notes: notes.slice(0, 100).map((d) => ({ id: d.id, topic: d.key.slice(scope.prefix.length), updatedAt: d.updatedAt })),
-        partial: notes.length > 100
+        notes: notes.slice(offset, offset + 100).map((d) => ({ id: d.id, topic: d.key.slice(scope.prefix.length), updatedAt: d.updatedAt })),
+        partial: offset + 100 < notes.length,
+        nextOffset: offset + 100 < notes.length ? offset + 100 : null
       };
     if (input2.action === "read") {
       if (!notes.some((d) => d.id === input2.id))
@@ -464,11 +470,20 @@ var ChannelNotes = class {
       return { revision: result2.revision, note: safeDocument(result2.document) };
     }
     if (input2.action === "search") {
-      const result2 = await this.bank.search(scope.caller, "project", checkedText(input2.query, "\u68C0\u7D22\u8BCD", 256));
+      const terms = checkedText(input2.query, "\u68C0\u7D22\u8BCD", 256).toLocaleLowerCase().split(/\s+/);
+      const page = [];
+      for (const item of notes.slice(offset, offset + 8)) {
+        signal.throwIfAborted();
+        const result2 = await this.bank.read(scope.caller, "project", item.id);
+        if (result2.revision !== catalog.revision) throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u76EE\u5F55\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u67E5\u8BE2", 409);
+        const document = result2.document;
+        const searchable = (document.key + "\n" + (document.body ?? "")).toLocaleLowerCase();
+        if (document.current && terms.every((term) => searchable.includes(term))) page.push(document);
+      }
       signal.throwIfAborted();
       return {
-        revision: result2.revision,
-        notes: result2.results.filter((d) => d.key.startsWith(scope.prefix)).slice(0, 8).map((document) => ({
+        revision: catalog.revision,
+        notes: page.map((document) => ({
           id: document.id,
           topic: document.key.slice(scope.prefix.length),
           excerpt: String(document.body ?? "").slice(0, 1e3),
@@ -476,7 +491,9 @@ var ChannelNotes = class {
           authority: "conversation-evidence-only"
         })),
         bounded: true,
-        note: "\u68C0\u7D22\u5C55\u793A\u6700\u591A\u516B\u6761\u6458\u5F55\uFF1B\u8BF7\u7528 read \u6838\u5BF9\u5168\u6587\u548C\u6765\u6E90\uFF0C\u6216\u7F29\u5C0F\u5173\u952E\u8BCD\u3002"
+        partial: offset + 8 < notes.length,
+        nextOffset: offset + 8 < notes.length ? offset + 8 : null,
+        note: "\u4EC5\u5728\u5F53\u524D\u4EBA\u683C\u7684\u672C\u7FA4\u7ECF\u5386\u4E2D\u68C0\u7D22\uFF1Bpartial=true \u65F6\u8BF7\u643A\u5E26 revision \u548C nextOffset \u7EE7\u7EED\u3002\u7528 read \u6838\u5BF9\u5168\u6587\u548C\u6765\u6E90\u3002"
       };
     }
     if (input2.action !== "save") throw new MemoryError("\u672A\u77E5\u4EA4\u6D41\u8BB0\u5FC6\u64CD\u4F5C");

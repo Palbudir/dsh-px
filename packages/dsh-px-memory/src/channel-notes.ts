@@ -8,6 +8,7 @@ export interface ChannelNoteInput {
   topic?: string
   text?: string
   revision?: string
+  offset?: number
   evidence?: Array<{ sessionId: string; seq: number }>
 }
 const checkedText = (value: unknown, label: string, max: number) => {
@@ -48,9 +49,16 @@ export class ChannelNotes {
     const scope = this.scope(sessionId)
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new MemoryError('交流记忆参数无效')
     const catalog = await this.bank.catalog(scope.caller, 'project')
-    const notes = catalog.documents.filter(
-      (d: any) => d.key.startsWith(scope.prefix) && d.status === 'active'
-    )
+    const notes = catalog.documents
+      .filter((d: any) => d.key.startsWith(scope.prefix) && d.status === 'active')
+      .sort(
+        (a: any, b: any) => String(b.updatedAt).localeCompare(String(a.updatedAt)) || a.id.localeCompare(b.id)
+      )
+    const offset = input.offset ?? 0
+    if (!Number.isSafeInteger(offset) || offset < 0 || offset > notes.length)
+      throw new MemoryError('交流记忆分页位置无效')
+    if (offset > 0 && input.revision !== catalog.revision)
+      throw new MemoryError('交流记忆目录已变化，请从第一页重新查询', 409)
     const safeDocument = (document: any) => ({
       id: document.id,
       topic: document.key.slice(scope.prefix.length),
@@ -67,9 +75,10 @@ export class ChannelNotes {
         currentEvidence: this.currentEvidence(sessionId),
         total: notes.length,
         notes: notes
-          .slice(0, 100)
+          .slice(offset, offset + 100)
           .map((d: any) => ({ id: d.id, topic: d.key.slice(scope.prefix.length), updatedAt: d.updatedAt })),
-        partial: notes.length > 100
+        partial: offset + 100 < notes.length,
+        nextOffset: offset + 100 < notes.length ? offset + 100 : null
       }
     if (input.action === 'read') {
       if (!notes.some((d: any) => d.id === input.id))
@@ -79,22 +88,32 @@ export class ChannelNotes {
       return { revision: result.revision, note: safeDocument(result.document) }
     }
     if (input.action === 'search') {
-      const result = await this.bank.search(scope.caller, 'project', checkedText(input.query, '检索词', 256))
+      const terms = checkedText(input.query, '检索词', 256).toLocaleLowerCase().split(/\s+/)
+      const page = []
+      // Limit after selecting this persona's notes. General shared documents cannot crowd them out.
+      // Native Documents still owns the contents/revisions; pagination bounds reads without hiding matches.
+      for (const item of notes.slice(offset, offset + 8)) {
+        signal.throwIfAborted()
+        const result = await this.bank.read(scope.caller, 'project', item.id)
+        if (result.revision !== catalog.revision) throw new MemoryError('交流记忆目录已变化，请重新查询', 409)
+        const document = result.document
+        const searchable = (document.key + '\n' + (document.body ?? '')).toLocaleLowerCase()
+        if (document.current && terms.every((term) => searchable.includes(term))) page.push(document)
+      }
       signal.throwIfAborted()
       return {
-        revision: result.revision,
-        notes: result.results
-          .filter((d: any) => d.key.startsWith(scope.prefix))
-          .slice(0, 8)
-          .map((document: any) => ({
-            id: document.id,
-            topic: document.key.slice(scope.prefix.length),
-            excerpt: String(document.body ?? '').slice(0, 1000),
-            current: document.current,
-            authority: 'conversation-evidence-only'
-          })),
+        revision: catalog.revision,
+        notes: page.map((document: any) => ({
+          id: document.id,
+          topic: document.key.slice(scope.prefix.length),
+          excerpt: String(document.body ?? '').slice(0, 1000),
+          current: document.current,
+          authority: 'conversation-evidence-only'
+        })),
         bounded: true,
-        note: '检索展示最多八条摘录；请用 read 核对全文和来源，或缩小关键词。'
+        partial: offset + 8 < notes.length,
+        nextOffset: offset + 8 < notes.length ? offset + 8 : null,
+        note: '仅在当前人格的本群经历中检索；partial=true 时请携带 revision 和 nextOffset 继续。用 read 核对全文和来源。'
       }
     }
     if (input.action !== 'save') throw new MemoryError('未知交流记忆操作')

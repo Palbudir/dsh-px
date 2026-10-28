@@ -168,8 +168,16 @@ test('public expression uses the original outbound queue and canceled queued sen
     await policy.dispose()
   }
 })
-test('QQ image reuse resolves only an observed hash to its matching native cache entry', async () => {
-  const file = 'D7E8FBFD87502CBC7FA10EF5D672E29E.png'
+test('QQ image reuse resolves only an observed hash and sends immutable verified bytes', async (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'px-qq-reuse-'))
+  t.after(() => {
+    assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
+    rmSync(root, { recursive: true, force: true })
+  })
+  const bytes = readFileSync('build/tray-32.png'),
+    file = createHash('md5').update(bytes).digest('hex') + '.png'
+  const path = join(root, file)
+  writeFileSync(path, bytes)
   const seen: string[] = []
   let mismatch = false
   const context = new QqConversation(async (action, params: any) => {
@@ -178,20 +186,22 @@ test('QQ image reuse resolves only an observed hash to its matching native cache
       return { messages: [{ message_id: 3, message: [{ type: 'image', data: { file } }] }] }
     if (action === 'get_image') {
       assert.equal(params.file, file)
-      return { file: resolve('build-test', mismatch ? 'private.txt' : file), file_size: '2612' }
+      return { file: join(root, mismatch ? 'private.txt' : file), file_size: String(bytes.length) }
     }
     assert.equal(action, 'send_group_msg')
-    assert.ok(params.message[0].data.file.startsWith('file:'))
+    writeFileSync(path, readFileSync('build/tray-16.png'))
+    assert.deepEqual(Buffer.from(params.message[0].data.file.slice('base64://'.length), 'base64'), bytes)
     return { message_id: 4 }
   })
   const history = await context.execute('qq_context', { action: 'history' }, 'a', 'group:34007', signal())
   assert.deepEqual(JSON.parse(JSON.stringify(history)), history, 'native tool results must be lossless JSON')
   const args = { action: 'image', reference: history.messages[0].content[0].reference }
   mismatch = true
-  await assert.rejects(context.execute('qq_expression', args, 'a', 'group:34007', signal()), /不可获取/)
+  await assert.rejects(context.execute('qq_expression', args, 'a', 'group:34007', signal()), /身份不匹配/)
   assert.ok(!seen.includes('send_group_msg'))
   mismatch = false
   await context.execute('qq_expression', args, 'a', 'group:34007', signal())
+  await assert.rejects(context.execute('qq_expression', args, 'a', 'group:34007', signal()), /摘要不符/)
   assert.equal(seen.filter((x) => x === 'send_group_msg').length, 1)
 })
 test('QQ history retains identity and rich segments without promoting embedded instructions', async () => {

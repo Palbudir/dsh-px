@@ -95,6 +95,9 @@ function fixture(t: any) {
     get notes() {
       return notes
     },
+    get bank() {
+      return bank
+    },
     async reopen() {
       await bank.dispose()
       const reopened = new MemoryStore(storePath)
@@ -159,6 +162,54 @@ test('native Mnemon conversation notes survive a fresh instance and keep only co
   assert.doesNotMatch(current.note.body, /喜欢长解释/)
   assert.equal(current.note.authority, 'conversation-evidence-only')
   assert.deepEqual(JSON.parse(JSON.stringify(current)), current)
+})
+
+test('unrelated shared documents cannot hide conversation memories and every matching note has a reachable page', async (t) => {
+  const f = fixture(t)
+  for (let i = 0; i < 10; i++) {
+    const catalog = await f.notes.execute('old', { action: 'catalog' }, signal())
+    await f.notes.execute(
+      'old',
+      {
+        action: 'save',
+        topic: '记忆目标' + i,
+        text: '本群记忆目标，偏好简短说明。',
+        revision: catalog.revision,
+        evidence: [{ sessionId: 'old', seq: 1 }]
+      },
+      signal()
+    )
+  }
+  const caller = { sessionId: 'old', project: f.root }
+  for (let i = 0; i < 22; i++) {
+    const catalog = await f.bank.catalog(caller, 'project')
+    await f.bank.write(caller, 'project', {
+      key: '共享文章' + i,
+      body: '记忆目标 '.repeat(100),
+      revision: catalog.revision
+    })
+  }
+  const first = await f.notes.execute('new', { action: 'search', query: '记忆目标' }, signal())
+  assert.equal(first.notes.length, 8)
+  assert.equal(first.partial, true)
+  const second = await f.notes.execute(
+    'new',
+    { action: 'search', query: '记忆目标', offset: first.nextOffset, revision: first.revision },
+    signal()
+  )
+  assert.equal(second.notes.length, 2)
+  assert.equal(second.nextOffset, null)
+  assert.equal(new Set([...first.notes, ...second.notes].map((n) => n.id)).size, 10)
+  const catalog = await f.bank.catalog(caller, 'project')
+  await f.bank.write(caller, 'project', { key: '改变目录', body: 'changed', revision: catalog.revision })
+  await assert.rejects(
+    f.notes.execute(
+      'new',
+      { action: 'search', query: '记忆目标', offset: first.nextOffset, revision: first.revision },
+      signal()
+    ),
+    /目录已变化/
+  )
 })
 
 test('group and persona boundaries survive crafted IDs and private evidence attempts', async (t) => {
