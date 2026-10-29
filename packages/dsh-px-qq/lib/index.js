@@ -900,7 +900,15 @@ var QqGroupTasks = class {
   }
   created(agent) {
     const channel = this.memory().inspect(agent.session.id).binding?.channel;
-    if (channel?.task?.rootSessionId === agent.session.id) this.roots.set(agent.session.id, agent);
+    if (channel?.task?.rootSessionId === agent.session.id) {
+      this.roots.set(agent.session.id, agent);
+      const titles = get2(this.host, "sessionTitle");
+      if (titles && !titles.get(agent.session))
+        titles.rename(
+          agent.session,
+          "QQ \u7FA4\u4EFB\u52A1 " + channel.conversationId.slice(6) + " \xB7 " + channel.task.requesterId
+        );
+    }
   }
   stopAgent(agent) {
     const goals = get2(agent.ctx, "goal");
@@ -930,6 +938,7 @@ var QqGroupTasks = class {
       if (previous && agents.get(previous.sessionId)) {
         const existing = agents.get(previous.sessionId);
         await this.ports().attachWorkspace(existing.session.id, existing.session.header.cwd);
+        this.created(existing);
         return existing;
       }
       const sessionId = previous?.sessionId ?? "px-qq-task-" + randomUUID3();
@@ -961,11 +970,7 @@ var QqGroupTasks = class {
       }
       this.handles.set(sessionId, handle);
       await this.ports().attachWorkspace(sessionId, handle.agent.session.header.cwd);
-      if (!get2(this.host, "sessionTitle")?.get(handle.agent.session))
-        get2(this.host, "sessionTitle")?.rename(
-          handle.agent.session,
-          "QQ \u7FA4\u4EFB\u52A1 " + chatId.slice(6) + " \xB7 " + senderId
-        );
+      this.created(handle.agent);
       return handle.agent;
     })();
     this.creating.set(key, pending);

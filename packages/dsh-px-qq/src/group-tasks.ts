@@ -36,7 +36,15 @@ export class QqGroupTasks {
   }
   created(agent: any): void {
     const channel = this.memory().inspect(agent.session.id).binding?.channel
-    if (channel?.task?.rootSessionId === agent.session.id) this.roots.set(agent.session.id, agent)
+    if (channel?.task?.rootSessionId === agent.session.id) {
+      this.roots.set(agent.session.id, agent)
+      const titles = get(this.host, 'sessionTitle')
+      if (titles && !titles.get(agent.session))
+        titles.rename(
+          agent.session,
+          'QQ 群任务 ' + channel.conversationId.slice(6) + ' · ' + channel.task.requesterId
+        )
+    }
   }
   private stopAgent(agent: any): void {
     const goals = get(agent.ctx, 'goal')
@@ -76,6 +84,7 @@ export class QqGroupTasks {
       if (previous && agents.get(previous.sessionId)) {
         const existing = agents.get(previous.sessionId)
         await this.ports().attachWorkspace(existing.session.id, existing.session.header.cwd)
+        this.created(existing)
         return existing
       }
       const sessionId = previous?.sessionId ?? 'px-qq-task-' + randomUUID()
@@ -109,11 +118,7 @@ export class QqGroupTasks {
       }
       this.handles.set(sessionId, handle)
       await this.ports().attachWorkspace(sessionId, handle.agent.session.header.cwd)
-      if (!get(this.host, 'sessionTitle')?.get(handle.agent.session))
-        get(this.host, 'sessionTitle')?.rename(
-          handle.agent.session,
-          'QQ 群任务 ' + chatId.slice(6) + ' · ' + senderId
-        )
+      this.created(handle.agent)
       return handle.agent
     })()
     this.creating.set(key, pending)

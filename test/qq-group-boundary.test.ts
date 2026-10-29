@@ -296,8 +296,19 @@ test('explicit group continuation becomes a new channel task root and delivers t
       channelBindings: () =>
         Object.entries(store.read().bindings).map(([sessionId, b]) => ({ sessionId, ...b }))
     }
+  const titles = new Map<string, string>()
   const tasks = new QqGroupTasks(
-    { get: (name: string) => (name === 'pxMemoryChannels' ? memory : undefined) },
+    {
+      get: (name: string) =>
+        name === 'pxMemoryChannels'
+          ? memory
+          : name === 'sessionTitle'
+            ? {
+                get: (session: any) => titles.get(session.id),
+                rename: (session: any, value: string) => titles.set(session.id, value)
+              }
+            : undefined
+    },
     settings,
     () => ({
       send: async (...args: any[]) => {
@@ -310,6 +321,10 @@ test('explicit group continuation becomes a new channel task root and delivers t
   const session = { id },
     agent = { session, cancel: () => {} }
   tasks.created(agent)
+  assert.equal(titles.get(id), 'QQ 群任务 34007 · 23007')
+  titles.set(id, '用户手动设置的任务名称')
+  tasks.created(agent)
+  assert.equal(titles.get(id), '用户手动设置的任务名称')
   tasks.event(session, {
     type: 'assistant/message',
     data: { message: { content: [{ type: 'text', text: 'new-root-answer' }] } }
