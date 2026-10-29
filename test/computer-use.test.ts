@@ -1149,7 +1149,10 @@ test(
     const agent = { session: { id: 's1', header: { id: 's1' } } }
     const run = { agent, signal: new AbortController().signal, name: 'computer_confirm', callId: 'c1' }
     // No approval service is mounted in this host: the request fails closed.
-    await assert.rejects(confirm.execute({ action: '发送邮件', category: 'send' }, run), /无法显示确认/)
+    await assert.rejects(
+      confirm.execute({ action: '发送邮件', category: 'send' }, run),
+      /未收到本次操作的有效确认/
+    )
     const log = (await request('GET')).json.session.log
     assert.equal(log[0].outcome, 'rejected')
   }

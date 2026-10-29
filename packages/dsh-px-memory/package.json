@@ -1,6 +1,6 @@
 {
   "name": "dsh-px-memory",
-  "version": "0.8.0-alpha.1",
+  "version": "0.8.1-alpha.1",
   "private": true,
   "type": "module",
   "description": "统一管理人格记忆、经历检索、知识与 Skills",

@@ -1,10 +1,10 @@
-import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { gt } from 'semver'
 import { verifySignedRelease, type ReleaseManifest } from '../shared/signed-release'
 import { versionGeneration } from '../shared/product-contract'
-import { assertRegularOrAbsent, writeAtomic } from './native-atomic'
+import { assertRegularOrAbsent, renameWithRetry, writeAtomic } from './native-atomic'
 import { extractPack, sha256, type PackContract } from './pack-archive'
 import { materializePackRuntime } from './runtime-cache'
 import { provisionNativeComposition } from './native-composition'
@@ -118,8 +118,8 @@ export class PackDeployment {
       const temporary = destination + '.' + randomUUID()
       extractPack(bytes, temporary, receipt, candidate)
       writeAtomic(join(temporary, '.complete'), receipt.sha256)
-      if (existsSync(destination)) renameSync(destination, destination + '.incomplete-' + randomUUID())
-      renameSync(temporary, destination)
+      if (existsSync(destination)) renameWithRetry(destination, destination + '.incomplete-' + randomUUID())
+      renameWithRetry(temporary, destination)
     }
     const archive = this.archive(receipt)
     if (!existsSync(archive) || sha256(readFileSync(archive)) !== receipt.sha256) writeAtomic(archive, bytes)

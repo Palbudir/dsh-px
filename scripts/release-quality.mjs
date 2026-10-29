@@ -1,6 +1,15 @@
 import { spawnSync, execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync } from 'node:fs'
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -119,6 +128,7 @@ export function verifyPackOutput(directory, { products, nativePack, communityPin
     )
       throw Error('Pack distribution does not contain the foundation and declared feature bundles')
     const community = new Map((distribution.community ?? []).map((item) => [item.name, item]))
+    let qqPin
     if (products.protocolGeneration >= 5) {
       const pins =
         communityPins ??
@@ -127,6 +137,22 @@ export function verifyPackOutput(directory, { products, nativePack, communityPin
         community.size !== pins.length ||
         pins.some((pin) => {
           const included = community.get(pin.name)
+          if (pin.compatibility !== undefined) {
+            const source = JSON.parse(
+              readFileSync(new URL('../config/qq-community.json', import.meta.url), 'utf8')
+            )
+            if (
+              pin.compatibility !== 'qq-v1' ||
+              pin.name !== source.name ||
+              pin.version !== source.version ||
+              pin.integrity !== source.integrity
+            )
+              return true
+            qqPin = source
+            return (
+              !included || included.version !== source.derivedVersion || included.defaults !== pin.defaults
+            )
+          }
           return (
             !included ||
             included.version !== pin.version ||
@@ -162,6 +188,32 @@ export function verifyPackOutput(directory, { products, nativePack, communityPin
       )
       if (metadata.name !== entry.name || metadata.version !== entry.version)
         throw Error('Distribution member identity mismatch')
+      if (entry.name === qqPin?.name) {
+        const parent = realpathSync(tmpdir()),
+          check = mkdtempSync(join(parent, 'px-qq-member-'))
+        try {
+          const path = join(check, 'member.tgz')
+          writeFileSync(path, member)
+          execFileSync(
+            process.execPath,
+            [
+              fileURLToPath(new URL('./run.mjs', import.meta.url)),
+              'verify-qq-community',
+              resolve(directory, 'qq-community-source/source.tgz'),
+              path
+            ],
+            {
+              cwd: fileURLToPath(new URL('..', import.meta.url)),
+              windowsHide: true,
+              stdio: 'pipe',
+              maxBuffer: 1024 * 1024
+            }
+          )
+        } finally {
+          if (!resolve(check).startsWith(parent + sep)) throw Error('Invalid QQ verification directory')
+          rmSync(check, { recursive: true, force: true })
+        }
+      }
     }
   }
   if (!candidate && (artifact.sourceDirty !== false || px.sourceDirty !== false))

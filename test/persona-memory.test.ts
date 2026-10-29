@@ -106,12 +106,17 @@ test('native prompt context fixes identity before first request and refreshes pr
     else process.env.DSH_HOME = old
   })
   const contexts: any[] = [],
-    tools: any[] = []
+    tools: any[] = [],
+    guards: any[] = [],
+    hooks = new Map<string, any[]>()
   const host: any = {
     provide: (name: string, value: any) => {
       host[name] = value
     },
-    on: () => {},
+    on: (event: string, callback: any) => {
+      hooks.set(event, [...(hooks.get(event) ?? []), callback])
+      return () => {}
+    },
     effect: (fn: any) => {
       const d = fn()
       if (typeof d === 'function') cleanup.push(d)
@@ -124,7 +129,13 @@ test('native prompt context fixes identity before first request and refreshes pr
         return () => {}
       }
     },
-    tools: { register: (t: any) => tools.push(t) },
+    tools: {
+      register: (t: any) => tools.push(t),
+      guard: (check: any) => {
+        guards.push(check)
+        return () => {}
+      }
+    },
     inject: (names: string[], cb: any) => {
       if (names.every((name) => host[name] !== undefined)) cb(host)
     }
@@ -135,6 +146,11 @@ test('native prompt context fixes identity before first request and refreshes pr
   const events: any[] = [{ type: 'turn/start', seq: 0, data: { turn: 1 } }]
   const agent = { session: { id: 's', header: { id: 's', cwd: dir }, snapshotEvents: () => events } }
   const render = () => contexts[0].text({ agent })
+  assert.equal(
+    guards[0]({ agent, name: 'write' }),
+    undefined,
+    'ordinary local sessions retain native permissions'
+  )
   assert.match(render(), /研究助手/)
   assert.equal(store.read().bindings.s.locked, true)
   const tool = tools.find((t) => t.name === 'persona_memory')
@@ -155,6 +171,24 @@ test('native prompt context fixes identity before first request and refreshes pr
   await assert.rejects(
     () => invoke({ action: 'save', revision: store.read().revision, text: '不能写入', scope: 'persona' }),
     /关闭/
+  )
+  store.bind('public-channel', {
+    personaId: store.read().bindings.s.personaId,
+    channel: {
+      provider: 'qq',
+      accountId: '11001',
+      conversationId: 'group:33003',
+      access: 'public',
+      publicInstructions: ''
+    }
+  })
+  const publicAgent = { session: { id: 'public-channel' } }
+  assert.match(guards[0]({ agent: publicAgent, name: 'write' }), /没有本机执行/)
+  assert.match(guards[0]({ agent: publicAgent, name: 'qq_task' }), /没有私有任务授权/)
+  const assemble = hooks.get('system-prompt/assemble')![0]
+  await assert.rejects(
+    assemble({}, { agent: publicAgent }, async () => ({ sections: [] })),
+    /权限预设未就绪/
   )
   writeFileSync(join(dir, 'storages/dsh-px-memory/memory.json'), '{broken')
   events.push({ type: 'turn/end', seq: 5, data: {} }, { type: 'turn/start', seq: 6, data: { turn: 4 } })

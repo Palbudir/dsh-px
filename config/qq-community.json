@@ -1,0 +1,27 @@
+{
+  "name": "dsh-onebot-qq",
+  "version": "0.9.6",
+  "derivedVersion": "0.9.6-px.3",
+  "url": "https://registry.npmjs.org/dsh-onebot-qq/-/dsh-onebot-qq-0.9.6.tgz",
+  "integrity": "sha512-FxeIJB0TI6BUpRIolLKrXZnbIYn9cdw7WLTlzbjVGZBC/ZPz89mEAmguZ1Gya1EmgcXBqEGuKbu6AHEDFbjSBg==",
+  "sourceCommit": "bc3aa23fcf7a11f9be7440ce2539a0a8889da3f7",
+  "source": "https://github.com/mario841859784/dsh-onebot",
+  "license": "BSD-3-Clause",
+  "dependencies": {
+    "@napi-rs/canvas": "1.0.13",
+    "fontkit": "2.0.4",
+    "schemastery": "3.18.0",
+    "ws": "8.22.0"
+  },
+  "files": {
+    "index.js": "790398915ae356d25c22cd7933ac9ce23498ffe31d18f721e78be8d038fb6424",
+    "bridge.js": "373dd9372be48dda22f95ddd59be78072bdeba5aad28bf320ea087f676ab7e95",
+    "registry.js": "0688d2d536fe0b3adb4675b3854245fac1e5061a799d8a79344c2b2264561d3c",
+    "commands.js": "236a4976737b332eb9980880b6c208db517841d5f201c4e56eed278d1f9b195e",
+    "split.js": "b0abd196fda7252197c1ba8e96638d7bfcfc09ba615431e0ecbcfe99e1be8bec",
+    "prompt.js": "e7fd1d51bdeafed4bf98b3a110d7d87b73973adbc06f177937d4493f385241ad",
+    "ref.js": "a47f8fabede45955e1730dd04c6cca1eb2b1251aa8a60dc9833967aaebb05aac",
+    "tools.js": "6ba93c708119ecd62164ac8634273b64fb8ca8970124054b614da0ebfb221e1e",
+    "connection.js": "680a28f69c2cfc6285908aa94a5c79dbbdb8a142a728d3e63d47f0e94097cd92"
+  }
+}

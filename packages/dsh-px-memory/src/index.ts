@@ -1,4 +1,6 @@
 import { join } from 'node:path'
+import { ChannelNotes, type ChannelNoteInput } from './channel-notes'
+import { QQ_CONVERSATION_TOOLS, qqMessageOrigin } from '../../shared/channel-source'
 import {
   MemoryStore,
   MemoryError,
@@ -7,6 +9,9 @@ import {
   projectKey,
   memoryContext,
   selectedMemories,
+  publicSession,
+  type SessionChannel,
+  type SessionBinding,
   type Persona
 } from './store'
 import { rejectUnauthenticatedRequest } from '../../shared/request-trust'
@@ -34,6 +39,45 @@ export function apply(ctx: any): void {
   const root = process.env.DSH_HOME
   if (!root) throw new Error('DSH_HOME 未设置，无法保存人格与记忆')
   const store = new MemoryStore(join(root, 'storages', name, 'memory.json'))
+  const channelBindings = new WeakMap<object, SessionBinding | null>()
+  const bindingFor = (agent: Agent | undefined): SessionBinding | undefined => {
+    if (!agent) return
+    if (!channelBindings.has(agent) || channelBindings.get(agent) === null)
+      channelBindings.set(agent, store.read().bindings[agent.session.id] ?? null)
+    return channelBindings.get(agent) ?? undefined
+  }
+  ctx.on(
+    'system-prompt/assemble',
+    async (_assembly: any, context: any, next: () => Promise<any>) => {
+      const assembly = await next()
+      if (
+        publicSession(bindingFor(context.agent)) &&
+        !assembly.sections.some((section: any) => section.name === 'px-qq-public-persona')
+      )
+        throw new MemoryError('QQ 公共会话的权限预设未就绪，请启用配套 QQ 能力或新建普通会话', 409)
+      return assembly
+    },
+    { prepend: true }
+  )
+  ctx.inject(['tools'], (host: any) =>
+    host.effect(
+      () =>
+        host.tools.guard((exec: any) => {
+          const binding = bindingFor(exec.agent)
+          if (!publicSession(binding)) return
+          if (binding!.channel?.task) {
+            if (!service(host, 'pxQq')?.canRunGroupTask(exec.agent?.session.id))
+              return '群任务授权不可用，请检查 QQ 接入与授权成员'
+            return
+          }
+          if (!['qq_public_knowledge', 'qq_task', ...QQ_CONVERSATION_TOOLS].includes(exec.name))
+            return '公共 QQ 会话没有本机执行或私有信息权限'
+          if (exec.name === 'qq_task' && !service(host, 'pxQq')?.canDelegate(exec, binding!.channel))
+            return '当前 QQ 请求没有私有任务授权'
+        }),
+      'memory: durable public channel boundary'
+    )
+  )
   const modelContinuation = continuationRequests()
   const identity = new TurnIdentity(store, (agent) =>
     service(ctx, 'sessionProjections')?.stateOf?.(agent.session, 'turnBoundary')
@@ -49,6 +93,84 @@ export function apply(ctx: any): void {
     store,
     (caller, path) => observeFile(ctx, caller, path)
   )
+  // Local plugin contract only: remote callers still go through their authenticated channel owner.
+  const channelNotes = new ChannelNotes(
+    store,
+    knowledge,
+    (caller, source, seq, signal) => history.read(ctx, caller, source, seq, 0, signal),
+    (sessionId) => {
+      const channel = store.read().bindings[sessionId]?.channel
+      const events: any[] = service(ctx, 'agents')?.get(sessionId)?.session.snapshotEvents() ?? []
+      const start = events.findLastIndex((event) => event.type === 'turn/start')
+      if (start < 0 || !channel) return []
+      return events
+        .slice(start + 1)
+        .filter((event) => {
+          const origin = qqMessageOrigin(event.data?.source)
+          return (
+            event.type === 'user/message' &&
+            origin?.accountId === channel.accountId &&
+            origin.conversationId === channel.conversationId
+          )
+        })
+        .slice(-6)
+        .map((event) => ({
+          sessionId,
+          seq: event.seq,
+          userId: qqMessageOrigin(event.data.source)!.senderId,
+          excerpt: (event.data.content ?? [])
+            .filter((block: any) => block.type === 'text')
+            .map((block: any) => block.text)
+            .join('\n')
+            .slice(0, 2000)
+        }))
+    }
+  )
+  ctx.provide('pxMemoryChannels', {
+    version: 1,
+    conversationNotes: (sessionId: string, input: ChannelNoteInput, signal: AbortSignal) =>
+      channelNotes.execute(sessionId, input, signal),
+    createPersona: (name: string) => store.createPersona(name),
+    personas: () =>
+      store
+        .read()
+        .personas.filter((p) => !p.archived)
+        .map((p) => ({ id: p.id, name: p.name })),
+    channelBindings: (accountId: string) =>
+      Object.entries(store.read().bindings)
+        .filter(
+          ([, binding]) => binding.channel?.provider === 'qq' && binding.channel.accountId === accountId
+        )
+        .map(([sessionId, binding]) => ({
+          sessionId,
+          channel: binding.channel,
+          createdAt: binding.createdAt,
+          pending: binding.pending
+        })),
+    bind: (sessionId: string, personaId: string, channel: SessionChannel) =>
+      store.bind(sessionId, { personaId, channel, pending: !service(ctx, 'agents')?.get(sessionId) }),
+    inherit: (sessionId: string, parent?: string) => {
+      if (parent && store.read().bindings[parent]?.channel) store.bind(sessionId, { parent, locked: true })
+    },
+    inspect: (sessionId: string) => {
+      const state = store.read()
+      return { binding: state.bindings[sessionId], persona: store.persona(state, sessionId) }
+    },
+    sharedKnowledge: async (
+      sessionId: string,
+      project: string,
+      input: { scope: 'project' | 'global'; query?: string; id?: string }
+    ) => {
+      if (!['project', 'global'].includes(input.scope) || !store.read().bindings[sessionId])
+        throw new MemoryError('公共知识请求范围无效', 403)
+      const caller = { sessionId, project, actor: 'model' as const }
+      return input.id
+        ? knowledge.read(caller, input.scope, input.id)
+        : knowledge.search(caller, input.scope, input.query ?? '')
+    },
+    continue: (sessionId: string, args: any, signal?: AbortSignal) =>
+      createPersonaSession(ctx, store, sessionId, args, signal)
+  })
   ctx.effect(() => () => knowledge.dispose(), 'memory: knowledge sources')
   ctx.inject(['mnemonMemory', 'tools', 'agents'], (host: any) =>
     host.effect(() => installKnowledgeToolRouting(host), 'memory: native knowledge tool routing')
@@ -204,6 +326,7 @@ export function apply(ctx: any): void {
         host.systemPrompt.context({
           name: 'dsh-px-persona-memory',
           order: 500,
+          interpolate: false,
           text: ({ agent }: { agent?: Agent }) => {
             if (!agent) return ''
             return renderMemory(agent)
@@ -235,7 +358,15 @@ export function apply(ctx: any): void {
         run.signal.throwIfAborted()
         if (!run.agent) throw new MemoryError('需要当前会话')
         const p = current(run.agent)
-        if (!p.memoryEnabled) throw new MemoryError('当前人格的记忆已关闭')
+        const binding = store.read().bindings[run.agent.session.id]
+        const channelMemory =
+          publicSession(binding) &&
+          store
+            .read()
+            .personas.some(
+              (persona) => persona.id === binding?.personaId && persona.memoryEnabled && !persona.archived
+            )
+        if (!p.memoryEnabled && !channelMemory) throw new MemoryError('当前人格的记忆已关闭')
         const id = run.agent.session.id,
           coverage = await history.refresh(ctx, id, run.signal)
         const result =
@@ -282,8 +413,10 @@ export function apply(ctx: any): void {
             revision: state.revision,
             persona: p.name,
             memoryEnabled: p.memoryEnabled,
-            memories: selectedMemories(state.personas.find((v) => v.id === p.id) ?? p, project)
+            memories: selectedMemories(store.persona(state, agent.session.id), project)
           })
+        if (publicSession(state.bindings[agent.session.id]))
+          throw new MemoryError('公共聊天不能修改人格私有记忆', 403)
         if (!p.memoryEnabled) throw new MemoryError('当前人格的记忆已关闭')
         if (store.persona(state, agent.session.id).id !== p.id)
           throw new MemoryError('人格切换将在下一轮生效，请到下一轮再修改记忆', 409)

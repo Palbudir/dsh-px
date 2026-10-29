@@ -17,6 +17,10 @@ async function fixture(t: any) {
     held = false,
     slow = false
   const calls: string[] = []
+  let entered!: () => void, releaseInput: (() => void) | undefined
+  const inputEntered = new Promise<void>((resolve) => {
+    entered = resolve
+  })
   const status = () => ({
     protocol: INSTANCE_PROTOCOL,
     instance,
@@ -51,14 +55,22 @@ async function fixture(t: any) {
       held = true
       result.lease = lease
     }
-    if (req.url === '/release') held = false
+    if (req.url === '/release') {
+      held = false
+      result = status()
+      releaseInput?.()
+    }
     if (req.url === '/input') {
       assert.equal(body.lease, lease)
       assert.equal(body.frame_id, frame)
       assert.match(body.request_id, /^[a-f0-9-]{36}$/)
-      if (slow) await new Promise((r) => setTimeout(r, 300))
+      entered()
+      if (slow)
+        await new Promise<void>((resolve) => {
+          releaseInput = resolve
+        })
       held = false
-      result = { ...result, ok: true, released: true, elapsed_ms: 10 }
+      result = { ...status(), ok: true, released: true, elapsed_ms: 10 }
     }
     res.setHeader('Content-Type', 'application/json')
     res.end(JSON.stringify(result))
@@ -70,6 +82,7 @@ async function fixture(t: any) {
     JSON.stringify({ protocol: INSTANCE_PROTOCOL, instance, pid, port, token })
   )
   t.after(async () => {
+    releaseInput?.()
     server.closeAllConnections()
     await new Promise<void>((r) => server.close(() => r()))
     await rm(directory, { recursive: true, force: true })
@@ -78,6 +91,7 @@ async function fixture(t: any) {
     client: new InputInstances(directory),
     instance,
     calls,
+    inputEntered,
     held: () => held,
     slow: () => {
       slow = true
@@ -99,21 +113,31 @@ test('independent input consumes a session-owned observation and releases its le
   assert.ok(f.calls.includes('/release'))
   await assert.rejects(f.client.input('a', args, signal), /先观察/)
 })
-test('native cancellation sends release independently of the aborted action signal', async (t) => {
-  const f = await fixture(t),
-    controller = new AbortController()
-  const state = await f.client.observe('a', f.instance, controller.signal)
-  f.slow()
-  const action = f.client.input(
-    'a',
-    { instance: f.instance, frame_id: state.text.match(/frame_id=([a-f0-9-]+)/)![1], duration_ms: 1000 },
-    controller.signal
-  )
-  setTimeout(() => controller.abort(Error('native stop')), 70)
-  await assert.rejects(action, /native stop/)
-  assert.ok(f.calls.includes('/release'))
-  assert.equal(f.held(), false)
-})
+test(
+  'native cancellation sends release independently of the aborted action signal',
+  { timeout: 5000 },
+  async (t) => {
+    const f = await fixture(t),
+      controller = new AbortController()
+    const state = await f.client.observe('a', f.instance, controller.signal)
+    f.slow()
+    const action = f.client.input(
+      'a',
+      { instance: f.instance, frame_id: state.text.match(/frame_id=([a-f0-9-]+)/)![1], duration_ms: 1000 },
+      controller.signal
+    )
+    await Promise.race([
+      f.inputEntered,
+      action.then(() => {
+        throw Error('Input completed before cancellation test')
+      })
+    ])
+    controller.abort(Error('native stop'))
+    await assert.rejects(action, /native stop/)
+    assert.ok(f.calls.includes('/release'))
+    assert.equal(f.held(), false)
+  }
+)
 test('connection discovery never accepts a URL or a descriptor for a different instance', async (t) => {
   const f = await fixture(t),
     signal = new AbortController().signal

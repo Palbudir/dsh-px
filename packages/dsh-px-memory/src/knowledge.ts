@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { MemorySourceRuntime } from 'dsh-mnemon/contracts'
-import { MemoryError, projectKey, type MemoryStore } from './store'
+import { MemoryError, projectKey, publicSession, type MemoryStore } from './store'
 
 export const KNOWLEDGE_SCOPES = ['persona', 'persona-project', 'project', 'global'] as const
 export type KnowledgeScope = (typeof KNOWLEDGE_SCOPES)[number]
@@ -104,9 +104,13 @@ export class KnowledgeBank {
     if (!KNOWLEDGE_SCOPES.includes(scope)) throw new MemoryError('知识范围无效')
     const state = this.identities.read(),
       binding = state.bindings[caller.sessionId]
+    if (publicSession(binding) && (scope === 'persona' || scope === 'persona-project'))
+      throw new MemoryError('公共聊天不能读取人格私有知识', 403)
     if ((scope === 'persona' || scope === 'persona-project') && (!binding || binding.pending))
       throw new MemoryError('请先建立当前会话人格', 409)
-    const project = projectKey(caller.project)
+    const project = projectKey(
+      publicSession(binding) && binding.channel?.workspace ? binding.channel.workspace : caller.project
+    )
     if ((scope === 'project' || scope === 'persona-project') && !project)
       throw new MemoryError('此范围需要当前项目目录')
     return {

@@ -2,6 +2,15 @@
   "schemaVersion": 1,
   "bundles": [
     {
+      "name": "dsh-onebot-qq",
+      "version": "0.9.6",
+      "url": "https://registry.npmjs.org/dsh-onebot-qq/-/dsh-onebot-qq-0.9.6.tgz",
+      "integrity": "sha512-FxeIJB0TI6BUpRIolLKrXZnbIYn9cdw7WLTlzbjVGZBC/ZPz89mEAmguZ1Gya1EmgcXBqEGuKbu6AHEDFbjSBg==",
+      "license": "BSD-3-Clause",
+      "source": "https://github.com/mario841859784/dsh-onebot",
+      "compatibility": "qq-v1"
+    },
+    {
       "name": "dsh-context",
       "version": "0.75.1",
       "url": "https://registry.npmjs.org/dsh-context/-/dsh-context-0.75.1.tgz",

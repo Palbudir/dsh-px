@@ -9,7 +9,8 @@
     "dsh-px-annotations",
     "dsh-px-schedules",
     "dsh-px-memory",
-    "dsh-px-computer"
+    "dsh-px-computer",
+    "dsh-px-qq"
   ],
   "deferredCommunity": ["dshmarket", "dsh-mermaid-render", "dsh-find-plugin"]
 }

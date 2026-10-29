@@ -244,7 +244,7 @@ export async function askUser(
 export function refusalText(outcome: Outcome, subject: string): string {
   if (outcome === 'cancelled') return `${subject}的确认已取消，未执行。`
   if (outcome === 'unavailable')
-    return `${subject}需要用户确认，但当前无法显示确认（会话可能处于无人值守模式）。未执行；请在回复中说明并等待用户。`
+    return `${subject}需要用户确认，但未收到本次操作的有效确认。未执行；请检查客户端或 QQ 中的待处理请求，已过期的请求需要重新发起。`
   return `用户没有允许${subject}，未执行。应用或网站的普通访问可由用户在「电脑操作 → 应用与网站授权」中允许；具体动作被拒绝时须停止。不要把口头回复当作工具授权，也不要换一种方式绕过。`
 }
 
