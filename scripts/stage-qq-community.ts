@@ -42,6 +42,7 @@ export function stageQqCommunity(
   const marked = JSON.parse(readFileSync(join(repository, 'node_modules/marked/package.json'), 'utf8'))
   if (marked.version !== '16.4.2') throw Error('QQ Markdown renderer requires the verified marked version')
   const renderer = buildSync({
+    absWorkingDir: repository,
     entryPoints: [join(repository, 'src/shared/qq-markdown.ts')],
     bundle: true,
     platform: 'node',
@@ -52,6 +53,7 @@ export function stageQqCommunity(
   }).outputFiles[0].text
   writeFileSync(join(pkgDir, 'lib/px-markdown.js'), renderer)
   const persistence = buildSync({
+    absWorkingDir: repository,
     entryPoints: [join(repository, 'src/shared/qq-atomic.ts')],
     bundle: true,
     platform: 'node',
