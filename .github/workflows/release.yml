@@ -66,6 +66,9 @@ jobs:
       - name: Install locked candidate dependencies
         working-directory: candidate
         run: npm ci
+      - name: Install locked controller dependencies
+        working-directory: controller
+        run: npm ci
       - name: Quality gates and clean release Pack
         working-directory: candidate
         env:
@@ -169,6 +172,9 @@ jobs:
         run: node scripts/check-secrets.mjs
       - name: Install locked candidate dependencies
         working-directory: candidate
+        run: npm ci
+      - name: Install locked controller dependencies
+        working-directory: controller
         run: npm ci
       - name: Quality gates and clean release Pack
         working-directory: candidate
