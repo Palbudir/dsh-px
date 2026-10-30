@@ -87,6 +87,24 @@ test('capacity failure does not overwrite unread messages and finished context c
   assert.throws(() => db.receive({ ...frame(4), self_id: 99999 }), /账号/)
 })
 
+test('notification attempts retain pending messages without repeatedly presenting unchanged previews', (t) => {
+  const { db } = fixture(t)
+  db.receive(frame(1))
+  const notices = db.notifications()
+  assert.equal(notices.length, 1)
+  db.noticeAttempt(notices)
+  assert.equal(db.pending('group:34007').length, 1)
+  assert.deepEqual(db.notifications(), [])
+  db.receive(frame(2))
+  assert.equal(db.notifications()[0].count, 2)
+  db.noticeAttempt(notices) // A late old cursor must not roll forward past new messages.
+  assert.equal(db.notifications().length, 1)
+  db.noticeAttempt(db.notifications())
+  assert.deepEqual(db.notifications(), [])
+  db.retryNotifications()
+  assert.equal(db.notifications()[0].count, 2)
+})
+
 test('stop cancels old queued inputs durably, excludes its own command, and accepts later distinct inputs', (t) => {
   const { db, file } = fixture(t)
   const queued = db.receive(frame(1))!.message

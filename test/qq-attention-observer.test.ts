@@ -19,7 +19,7 @@ async function until(check: () => boolean) {
   }
   throw Error('notification did not converge')
 }
-test('observer coalesces a batch and never reprocesses an unchanged notification', async () => {
+test('observer coalesces a batch and uses the candidate provider attempt cursor', async () => {
   let rows = [notice],
     calls = 0,
     applied = 0

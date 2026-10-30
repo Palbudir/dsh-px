@@ -192,11 +192,12 @@ function AttentionPanel({
   const configured = pendingSettings ?? value.configured;
   const [more, setMore] = (0, import_react2.useState)([]);
   const [nextOffset, setNextOffset] = (0, import_react2.useState)(void 0);
+  const [pageLoaded, setPageLoaded] = (0, import_react2.useState)(false);
   const rows = [
     ...value.inbox.items,
     ...more.filter((row) => !value.inbox.items.some((current) => current.chatId === row.chatId))
   ];
-  const nextPage = more.length ? nextOffset : value.inbox.nextOffset;
+  const nextPage = pageLoaded ? nextOffset : value.inbox.nextOffset;
   async function save(settings) {
     if (busy) return;
     setBusy(true);
@@ -261,6 +262,7 @@ function AttentionPanel({
         ...page.items.filter((row) => !current.some((old) => old.chatId === row.chatId))
       ]);
       setNextOffset(page.nextOffset);
+      setPageLoaded(true);
     } catch (error2) {
       setError(error2 instanceof Error ? error2.message : "\u804A\u5929\u5217\u8868\u6682\u4E0D\u53EF\u7528");
     } finally {
@@ -372,6 +374,7 @@ function AttentionPanel({
           row.queued ? " \xB7 " + row.queued + " \u6761\u5DF2\u6295\u9012" : "",
           row.uncertain ? " \xB7 " + row.uncertain + " \u6761\u9700\u6838\u5BF9" : "",
           row.cancelled ? " \xB7 " + row.cancelled + " \u6761\u5DF2\u505C\u6B62" : "",
+          value.effective.focusedChats.includes(row.chatId) && !configured.focusedChats.includes(row.chatId) ? " \xB7 \u4E34\u65F6\u6253\u5F00" : "",
           value.effective.mutedChats.includes(row.chatId) && !configured.mutedChats.includes(row.chatId) ? " \xB7 \u4E34\u65F6\u514D\u6253\u6270" : "",
           !value.effective.mutedChats.includes(row.chatId) && configured.mutedChats.includes(row.chatId) ? " \xB7 \u4E34\u65F6\u5F00\u542F\u63D0\u9192" : ""
         ] }),

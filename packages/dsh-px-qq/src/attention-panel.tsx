@@ -42,11 +42,12 @@ export function AttentionPanel({
   const configured = pendingSettings ?? value.configured
   const [more, setMore] = useState<AttentionSnapshot['inbox']['items']>([])
   const [nextOffset, setNextOffset] = useState<number | undefined>(undefined)
+  const [pageLoaded, setPageLoaded] = useState(false)
   const rows = [
     ...value.inbox.items,
     ...more.filter((row) => !value.inbox.items.some((current) => current.chatId === row.chatId))
   ]
-  const nextPage = more.length ? nextOffset : value.inbox.nextOffset
+  const nextPage = pageLoaded ? nextOffset : value.inbox.nextOffset
   async function save(settings: QqAttentionSettings) {
     if (busy) return
     setBusy(true)
@@ -111,6 +112,7 @@ export function AttentionPanel({
         ...page.items.filter((row) => !current.some((old) => old.chatId === row.chatId))
       ])
       setNextOffset(page.nextOffset)
+      setPageLoaded(true)
     } catch (error) {
       setError(error instanceof Error ? error.message : '聊天列表暂不可用')
     } finally {
@@ -229,6 +231,10 @@ export function AttentionPanel({
               · {row.unread} 条未处理{row.queued ? ' · ' + row.queued + ' 条已投递' : ''}
               {row.uncertain ? ' · ' + row.uncertain + ' 条需核对' : ''}
               {row.cancelled ? ' · ' + row.cancelled + ' 条已停止' : ''}
+              {value.effective.focusedChats.includes(row.chatId) &&
+              !configured.focusedChats.includes(row.chatId)
+                ? ' · 临时打开'
+                : ''}
               {value.effective.mutedChats.includes(row.chatId) && !configured.mutedChats.includes(row.chatId)
                 ? ' · 临时免打扰'
                 : ''}
