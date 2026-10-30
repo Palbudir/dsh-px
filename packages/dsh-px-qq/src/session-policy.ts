@@ -279,13 +279,15 @@ export class QqSessionPolicy {
     }
   }
   attentionSnapshot() {
+    const observer = this.observer?.snapshot()
+    const problem = this.attentionProblem ?? observer?.error
     return {
       accountId: this.settings.accountId,
       ...this.attention.snapshot(),
       revision: this.inbox?.preferences(parseAttention(this.settings.attention)).revision ?? 0,
       inbox: this.inbox?.summaries() ?? { items: [] },
-      problem: this.attentionProblem ?? this.observer?.snapshot().error,
-      observer: this.observer?.snapshot()
+      ...(problem ? { problem } : {}),
+      ...(observer ? { observer } : {})
     }
   }
   attentionPage(offset: number) {

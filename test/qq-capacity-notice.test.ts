@@ -24,6 +24,8 @@ test('rejected direct inputs receive bounded feedback without executing or flood
   }
   const sent: Array<{ chatId: string; text: string }> = []
   const policy = new QqSessionPolicy({}, settings, {} as any, inbox)
+  // DSH rejects undefined anywhere in a structured tool result, even optional fields.
+  assert.deepEqual(JSON.parse(JSON.stringify(policy.attentionSnapshot())), policy.attentionSnapshot())
   policy.attach({
     receive: async () => assert.fail('must not deliver'),
     send: async (chatId, text) => {

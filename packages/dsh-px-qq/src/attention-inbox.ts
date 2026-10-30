@@ -380,6 +380,6 @@ export class QqAttentionInbox {
         senderId: row.sender as string
       }
     })
-    return { items, nextOffset: groups.length > count ? offset + count : undefined }
+    return { items, ...(groups.length > count ? { nextOffset: offset + count } : {}) }
   }
 }
