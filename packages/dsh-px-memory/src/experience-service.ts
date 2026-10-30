@@ -3,7 +3,7 @@ import { ExperienceBank, type ExperienceCaller } from './experience'
 import { ExperienceJobs } from './experience-jobs'
 import { experienceWindow, experienceSessionModel } from './experience-context'
 import { runExperienceTask } from './experience-task'
-import { MemoryError, projectKey, isExperienceSession, type MemoryStore } from './store'
+import { MemoryError, projectKey, isInternalSession, type MemoryStore } from './store'
 import type { HistoryEvent } from './history'
 import { awaitSkillDiscovery } from './native-resources'
 import { skillDraftContent } from './experience-format'
@@ -134,7 +134,7 @@ export class ExperienceService {
     throw new MemoryError('不支持的经验操作')
   }
   private async source(caller: ExperienceCaller, id = caller.sessionId) {
-    if (isExperienceSession(id) || this.store.read().bindings[id]?.purpose === 'experience')
+    if (isInternalSession(id) || this.store.read().bindings[id]?.purpose)
       throw new MemoryError('内部整理记录不作为新的工作经历提炼', 409)
     const inspected = await this.host.sessionController.inspect(id)
     const identity = this.bank.identity(caller),
@@ -155,7 +155,7 @@ export class ExperienceService {
     }
   }
   private async sourceModel(caller: ExperienceCaller, id = caller.sessionId) {
-    if (isExperienceSession(id) || this.store.read().bindings[id]?.purpose === 'experience')
+    if (isInternalSession(id) || this.store.read().bindings[id]?.purpose)
       throw new MemoryError('内部整理记录不作为新的工作经历提炼', 409)
     const { meta } = await inspectMemorySession(this.host, this.store, id)
     const current = this.bank.identity(caller),

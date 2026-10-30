@@ -213,6 +213,26 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
     )
   } else if (file === 'bridge.js') {
     replace(
+      'chat.pendingTurnRoles.push(role);',
+      'if (!this.deps.px.isAmbientInput()) chat.pendingTurnRoles.push(role);'
+    )
+    replace(
+      'if (!this.queueNoticeChats.has(chatId)) {',
+      'if (!this.deps.px.isAmbientInput() && !this.queueNoticeChats.has(chatId)) {'
+    )
+    replace(
+      "if (event.type === 'assistant/message') {",
+      "if (event.type === 'assistant/message') {\n            if (this.deps.px.explicitReplies(session.id)) return;"
+    )
+    replace(
+      'this.deferred.onTurnStart(chatId, session.id);',
+      'if (!this.deps.px.explicitReplies(session.id)) this.deferred.onTurnStart(chatId, session.id);'
+    )
+    replace(
+      'this.interim.onTurnEnd(chatId, chat);',
+      'if (!this.deps.px.explicitReplies(session.id)) this.interim.onTurnEnd(chatId, chat);'
+    )
+    replace(
       "this.deps.log('error', 'inbound handling failed: ' + describeError(error) + errorStack(error));",
       "this.deps.log('error', 'inbound handling failed: ' + describeError(error) + errorStack(error));\n            throw error;"
     )
@@ -260,7 +280,7 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
     )
     replace(
       "chat.agent.followup(createUserMessage({\n            content: [{ type: 'text', text: final }],\n            source: { kind: 'plugin:dsh-onebot' },\n        }));",
-      "const pxMessage = createUserMessage({\n            content: [{ type: 'text', text: final }],\n            source: this.deps.px.source(chatId),\n        });\n        chat.agent.followup(pxMessage);\n        this.deps.px.admitted(chatId, chat.sessionId, pxMessage.id);"
+      "const pxMessage = createUserMessage({\n            content: [{ type: 'text', text: final }],\n            source: this.deps.px.source(chatId),\n        });\n        this.deps.px.dispatchMessage(chat.agent, pxMessage);\n        this.deps.px.admitted(chatId, chat.sessionId, pxMessage.id);"
     )
     replace(
       "chat.agent.steer(createUserMessage({\n            content: [{ type: 'text', text }],\n            source: { kind: 'plugin:dsh-onebot' },\n        }));",
@@ -268,7 +288,7 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
     )
     replace(
       'tryHandleCommand(chatId, text, userId, nickname) {\n        return routeCommand(this.commandCtx, chatId, text, userId, nickname);\n    }',
-      'async tryHandleCommand(chatId, text, userId, nickname) {\n        try {\n            if (await this.deps.px.command(chatId, text, userId)) return true;\n            return await routeCommand(this.commandCtx, chatId, text, userId, nickname);\n        } catch (error) {\n            await this.sendToChat(chatId, error.message || "命令未完成，请重试");\n            return true;\n        }\n    }'
+      'async tryHandleCommand(chatId, text, userId, nickname) {\n        if (this.deps.px.isAmbientInput()) return false;\n        try {\n            if (await this.deps.px.command(chatId, text, userId)) return true;\n            return await routeCommand(this.commandCtx, chatId, text, userId, nickname);\n        } catch (error) {\n            await this.sendToChat(chatId, error.message || "命令未完成，请重试");\n            return true;\n        }\n    }'
     )
     replace(
       "isAdmin: userId => classifyUserRole(userId, bridge.deps.policy.adminUsers) === 'admin',",

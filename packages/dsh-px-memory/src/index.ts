@@ -5,7 +5,8 @@ import {
   MemoryStore,
   MemoryError,
   validId,
-  isExperienceSession,
+  isInternalSession,
+  isAttentionSession,
   projectKey,
   memoryContext,
   selectedMemories,
@@ -16,6 +17,7 @@ import {
 } from './store'
 import { rejectUnauthenticatedRequest } from '../../shared/request-trust'
 import { TurnIdentity, hasStarted } from './identity'
+import { renderPersonaExpression } from '../../shared/persona-expression'
 import { HistoryIndex, service } from './history'
 import { createPersonaSession, continuationRequests } from './continuation'
 import { KnowledgeBank, type KnowledgeCaller } from './knowledge'
@@ -24,6 +26,7 @@ import { observeFile, skillAction } from './native-resources'
 import { installKnowledgeToolRouting } from './knowledge-tools'
 import { delegatedContract, delegatedKnowledgeCaller } from './knowledge-delegation'
 import { ExperienceService } from './experience-service'
+import { runAnalysisTask } from './experience-task'
 import { inspectMemorySession } from './session-context'
 
 export const name = 'dsh-px-memory'
@@ -131,11 +134,36 @@ export function apply(ctx: any): void {
     conversationNotes: (sessionId: string, input: ChannelNoteInput, signal: AbortSignal) =>
       channelNotes.execute(sessionId, input, signal),
     createPersona: (name: string) => store.createPersona(name),
+    beginAttention: (sessionId: string, personaId: string) => {
+      if (!isAttentionSession(sessionId)) throw new MemoryError('通知会话标识无效')
+      // The legacy marker means internal analysis. Keep it readable by earlier Packs on rollback;
+      // reserved IDs and native Job kinds distinguish attention from experience work.
+      store.bind(sessionId, { personaId, purpose: 'experience', locked: true, pending: true })
+    },
+    releaseAttention: (ids: string[]) => store.releaseInternalBindings(ids.filter(isAttentionSession)),
+    runAttentionAnalysis: (
+      parent: any,
+      prompt: string,
+      schema: object,
+      signal: AbortSignal,
+      options: any
+    ) => {
+      if (!isAttentionSession(parent?.id) || service(ctx, 'agents')?.get(parent.id) !== parent)
+        throw new MemoryError('通知分析缺少原生所有者', 403)
+      return runAnalysisTask(
+        { on: ctx.on.bind(ctx), get: (key: string) => service(parent.ctx, key) ?? service(ctx, key) },
+        parent,
+        prompt,
+        schema,
+        signal,
+        { ...options, kind: 'attention' }
+      )
+    },
     personas: () =>
       store
         .read()
         .personas.filter((p) => !p.archived)
-        .map((p) => ({ id: p.id, name: p.name })),
+        .map((p) => ({ id: p.id, name: p.name, revision: p.revision, expression: p.expression })),
     channelBindings: (accountId: string) =>
       Object.entries(store.read().bindings)
         .filter(
@@ -147,8 +175,13 @@ export function apply(ctx: any): void {
           createdAt: binding.createdAt,
           pending: binding.pending
         })),
-    bind: (sessionId: string, personaId: string, channel: SessionChannel) =>
-      store.bind(sessionId, { personaId, channel, pending: !service(ctx, 'agents')?.get(sessionId) }),
+    bind: (sessionId: string, personaId: string, channel: SessionChannel, sourceSessionId?: string) =>
+      store.bind(sessionId, {
+        ...(sourceSessionId ? { parent: sourceSessionId } : { personaId }),
+        channel,
+        pending: !service(ctx, 'agents')?.get(sessionId)
+      }),
+    currentPersona: (agent: Agent) => identity.current(agent),
     inherit: (sessionId: string, parent?: string) => {
       if (parent && store.read().bindings[parent]?.channel) store.bind(sessionId, { parent, locked: true })
     },
@@ -280,14 +313,14 @@ export function apply(ctx: any): void {
   ctx.inject(['agents'], (host: any) => {
     try {
       const live = new Set(host.agents.list().map((agent: any) => agent.id))
-      store.releaseExperienceBindings(Object.keys(store.read().bindings).filter((id) => !live.has(id)))
+      store.releaseInternalBindings(Object.keys(store.read().bindings).filter((id) => !live.has(id)))
     } catch (error) {
       ctx.logger?.warn('内部经验身份暂未回收：%s', String(error))
     }
   })
   ctx.on('agent/disposed', ({ agent }: { agent: Agent }) => {
     try {
-      store.releaseExperienceBindings([agent.session.id])
+      store.releaseInternalBindings([agent.session.id])
     } catch (error) {
       ctx.logger?.warn('内部经验身份暂未回收：%s', String(error))
     }
@@ -320,6 +353,23 @@ export function apply(ctx: any): void {
     )
   }
   ctx.provide('pxMemoryContext', { render: renderMemory })
+  ctx.inject(['systemPrompt'], (host: any) =>
+    host.effect(
+      () =>
+        host.systemPrompt.section({
+          name: 'dsh-px-persona-expression',
+          order: (host.systemPrompt.getSectionOrder?.('DEPLOYMENT_PERSONA_SUFFIX') ?? 900) + 1,
+          interpolate: false,
+          text: ({ agent }: { agent?: Agent }) => {
+            if (!agent) return ''
+            const p = current(agent)
+            if (!p.expression) return ''
+            return `本会话配置的身份与表达：${p.name}（版本 ${p.revision}）。通用语气默认值按这份具体配置调整；工具与执行权限仍由宿主控制。\n${renderPersonaExpression(p.expression)}`
+          }
+        }),
+      'memory: configured persona expression'
+    )
+  )
   ctx.inject(['systemPrompt'], (host: any) =>
     host.effect(
       () =>
@@ -450,7 +500,7 @@ export function apply(ctx: any): void {
               if (req.method !== 'GET' && req.method !== 'POST')
                 return send(405, { error: '请使用 GET 或 POST' })
               const id = validId(new URL(req.url, 'http://127.0.0.1').searchParams.get('sessionId'))
-              if (isExperienceSession(id)) throw new MemoryError('内部经验任务请从来源会话查看', 409)
+              if (isInternalSession(id)) throw new MemoryError('内部后台记录请从对应功能页查看', 409)
               const { meta, events = [] } = await inspectMemorySession(host, store, id)
               const project = projectKey(meta.cwd)
               store.bind(id, {

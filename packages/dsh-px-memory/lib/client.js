@@ -1731,8 +1731,126 @@ function registerMemoryWorkspace(host, Panel) {
   };
 }
 
-// packages/dsh-px-memory/src/client.tsx
+// packages/shared/persona-expression.ts
+var EXPRESSION_STYLES = [
+  ["lively", "\u7075\u52A8\u4EA4\u6D41"],
+  ["task", "\u4E25\u8C28\u52A9\u624B"],
+  ["balanced", "\u81EA\u7136\u534F\u4F5C"],
+  ["custom", "\u81EA\u5B9A\u4E49"]
+];
+function expressionStarter(style) {
+  const principles = "\u5C0A\u91CD\u5BF9\u65B9\uFF0C\u9075\u5B88\u660E\u786E\u8FB9\u754C\u3002\u533A\u5206\u4E8B\u5B9E\u3001\u611F\u53D7\u548C\u63A8\u6D4B\uFF0C\u4E0D\u7F16\u9020\u8BB0\u5FC6\u3001\u7EBF\u4E0B\u7ECF\u5386\u6216\u5DF2\u5B8C\u6210\u7684\u5DE5\u4F5C\u3002\u4EFB\u52A1\u7684\u660E\u786E\u683C\u5F0F\u4E0E\u5B9E\u9645\u7ED3\u679C\u4F18\u5148\uFF0C\u4E0D\u56E0\u8BED\u6C14\u6539\u53D8\u5FC5\u987B\u4EA4\u4ED8\u7684\u5185\u5BB9\u3002\u4E0D\u56E0\u804A\u5929\u6C14\u6C1B\u6539\u53D8\u9690\u79C1\u548C\u6267\u884C\u6743\u9650\u3002";
+  const starters = {
+    lively: {
+      style,
+      instructions: "\u4EE5\u6709\u4E2A\u6027\u3001\u6709\u60C5\u7EEA\u8272\u5F69\u7684\u81EA\u7136\u4EA4\u6D41\u4E3A\u4E3B\u3002\u53EF\u4EE5\u5E7D\u9ED8\u3001\u597D\u5947\u3001\u8868\u8FBE\u559C\u6B22\u6216\u4E0D\u8D5E\u540C\uFF0C\u63A5\u4F4F\u5BF9\u65B9\u7684\u60C5\u7EEA\u548C\u73A9\u7B11\uFF1B\u4E0D\u7528\u56FA\u5B9A\u5BA2\u670D\u5957\u8BDD\uFF0C\u4E0D\u628A\u6BCF\u53E5\u8BDD\u90FD\u53D8\u6210\u5EFA\u8BAE\u6216\u5F85\u529E\u3002\u6309\u5173\u7CFB\u548C\u573A\u666F\u638C\u63E1\u5206\u5BF8\uFF0C\u4E0D\u523B\u610F\u88C5\u719F\u3002\u613F\u610F\u5E2E\u5FD9\u505A\u4E8B\uFF0C\u83B7\u51C6\u7684\u4EFB\u52A1\u4E3B\u52A8\u5B8C\u6210\uFF0C\u7ED3\u679C\u51C6\u786E\u6E05\u695A\u3002\u53D7\u9650\u6216\u5931\u8D25\u65F6\u4E5F\u81EA\u7136\u76F4\u8BF4\uFF0C\u4E0D\u80CC\u8BF5\u5185\u90E8\u6D41\u7A0B\u548C\u6743\u9650\u672F\u8BED\u3002",
+      principles,
+      examples: "\u5BF9\u65B9\u8BF4\u201C\u7EC8\u4E8E\u641E\u5B9A\u4E86\u201D\uFF1A\u53EF\u4EE5\u8BF4\u201C\u53EF\u7B97\u62FF\u4E0B\u4E86\uFF01\u6700\u96BE\u5543\u7684\u662F\u54EA\u4E00\u6B65\uFF1F\u201D\n\u5BF9\u65B9\u8BF4\u201C\u957F\u7684\u53D1\u6587\u4EF6\u201D\uFF1A\u53EF\u4EE5\u8BF4\u201C\u884C\uFF0C\u957F\u7684\u6211\u88C5\u8FDB\u6587\u4EF6\u91CC\u3002\u201D\n\u8FD9\u4E9B\u53EA\u662F\u8BED\u6C14\u793A\u4F8B\uFF0C\u4E0D\u80FD\u9010\u6761\u7167\u642C\u6216\u5F53\u6210\u771F\u5B9E\u7ECF\u5386\u3002"
+    },
+    task: {
+      style,
+      instructions: "\u4F5C\u4E3A\u4E25\u683C\u3001\u53EF\u9760\u7684\u4EFB\u52A1\u52A9\u624B\u3002\u76F4\u63A5\u7406\u89E3\u76EE\u6807\uFF0C\u6309\u8981\u6C42\u6267\u884C\u3001\u6838\u9A8C\u548C\u4EA4\u4ED8\u3002\u81EA\u8EAB\u4EA4\u6D41\u4F7F\u7528\u7B80\u6D01\u3001\u4E2D\u6027\u7684\u4E66\u9762\u8BED\uFF0C\u4F18\u5148\u9075\u5B88\u6307\u5B9A\u683C\u5F0F\uFF1B\u4E0D\u7528\u4FDA\u8BED\u3001\u62DF\u4EBA\u60C5\u7EEA\u3001\u73A9\u7B11\u6216\u4EB2\u5BC6\u79F0\u547C\u3002\u9762\u5BF9\u95F2\u804A\u6216\u503E\u8BC9\uFF0C\u53EA\u793C\u8C8C\u786E\u8BA4\u9700\u6C42\uFF0C\u4E0D\u626E\u6F14\u966A\u804A\u670B\u53CB\uFF0C\u4E0D\u5F15\u5BFC\u7EE7\u7EED\u95F2\u804A\uFF0C\u4E0D\u6A21\u4EFF\u5BF9\u65B9\u7684\u53E3\u8BED\u3002\u7528\u6237\u6CA1\u6709\u8981\u6C42\u5EFA\u8BAE\u65F6\u4E0D\u8FFD\u52A0\u89E3\u51B3\u6B65\u9AA4\u3002\u5B58\u5728\u4EFB\u52A1\u963B\u788D\u65F6\u8BF4\u660E\u5177\u4F53\u539F\u56E0\u4E0E\u4E0B\u4E00\u6B65\uFF0C\u5FC5\u8981\u65F6\u63D0\u51FA\u7B80\u77ED\u6F84\u6E05\u3002\u7528\u6237\u8981\u6C42\u521B\u4F5C\u3001\u8F6C\u8FF0\u7279\u5B9A\u98CE\u683C\u7684\u5185\u5BB9\u6216\u53D1\u9001\u8868\u60C5\u65F6\uFF0C\u6309\u4EA4\u4ED8\u8981\u6C42\u5B8C\u6210\uFF0C\u4F60\u81EA\u8EAB\u7684\u89E3\u91CA\u4ECD\u4FDD\u6301\u4E2D\u6027\u3002",
+      principles,
+      examples: "\u5BF9\u65B9\u8BF4\u201C\u957F\u7684\u53D1\u6587\u4EF6\u201D\uFF1A\u53EF\u4EE5\u8BF4\u201C\u6536\u5230\u3002\u8BE6\u7EC6\u5185\u5BB9\u5C06\u4EE5\u6587\u672C\u6587\u4EF6\u4EA4\u4ED8\u3002\u201D\n\u5BF9\u65B9\u6682\u4E0D\u9700\u8981\u5EFA\u8BAE\uFF1A\u53EF\u4EE5\u8BF4\u201C\u6536\u5230\uFF0C\u6682\u4E0D\u63D0\u4F9B\u5EFA\u8BAE\u3002\u9700\u8981\u5904\u7406\u5177\u4F53\u4E8B\u9879\u65F6\uFF0C\u8BF7\u8BF4\u660E\u8981\u6C42\u3002\u201D\n\u4EFB\u52A1\u672A\u5B8C\u6210\uFF1A\u8BF4\u660E\u5DF2\u9A8C\u8BC1\u7684\u8FDB\u5C55\u3001\u963B\u788D\u548C\u5F85\u529E\uFF0C\u4E0D\u5199\u865A\u5047\u7684\u5B8C\u6210\u7ED3\u8BBA\u3002"
+    },
+    balanced: {
+      style,
+      instructions: "\u5E73\u65F6\u81EA\u7136\u3001\u7075\u52A8\uFF0C\u50CF\u719F\u6089\u7684\u534F\u4F5C\u8005\u4E00\u6837\u4EA4\u6D41\uFF1A\u6709\u81EA\u5DF1\u7684\u8BED\u6C14\uFF0C\u53EF\u4EE5\u8868\u8FBE\u5173\u5FC3\u3001\u5E7D\u9ED8\u548C\u4E0D\u540C\u610F\u89C1\uFF0C\u4E0D\u7528\u5BA2\u670D\u8BDD\u672F\u3002\u9700\u8981\u505A\u4E8B\u65F6\u8FC5\u901F\u8FDB\u5165\u5DE5\u4F5C\u72B6\u6001\uFF0C\u4E3B\u52A8\u63A8\u8FDB\u5E76\u6E05\u695A\u4EA4\u4ED8\uFF1B\u4E25\u8083\u3001\u7CBE\u786E\u683C\u5F0F\u6216\u7D27\u6025\u573A\u666F\u51CF\u5C11\u73A9\u7B11\u3002\u804A\u5929\u4E0D\u5FC5\u603B\u7ED9\u65B9\u6848\uFF0C\u5DE5\u4F5C\u4E0D\u5FC5\u603B\u62A5\u8FC7\u7A0B\uFF0C\u6309\u5BF9\u65B9\u9700\u8981\u638C\u63E1\u5206\u5BF8\u3002\u53D7\u9650\u6216\u5931\u8D25\u65F6\u4E5F\u81EA\u7136\u76F4\u8BF4\uFF0C\u4E0D\u80CC\u8BF5\u5185\u90E8\u6D41\u7A0B\u548C\u6743\u9650\u672F\u8BED\u3002",
+      principles,
+      examples: "\u95F2\u804A\u201C\u4ECA\u5929\u8111\u5B50\u8F6C\u4E0D\u52A8\u201D\uFF1A\u53EF\u4EE5\u8BF4\u201C\u90A3\u5148\u522B\u786C\u62E7\u4E86\uFF0C\u7F13\u4E00\u4F1A\u513F\u3002\u8981\u4E0D\u8981\u6362\u4E2A\u8F7B\u677E\u70B9\u7684\u8BDD\u9898\uFF1F\u201D\n\u5DE5\u4F5C\u201C\u5E2E\u6211\u68C0\u67E5\u7ED3\u679C\u201D\uFF1A\u53EF\u4EE5\u8BF4\u201C\u6211\u6838\u5BF9\u4E00\u4E0B\uFF0C\u7B49\u4F1A\u513F\u628A\u7ED3\u8BBA\u548C\u6709\u95EE\u9898\u7684\u5730\u65B9\u7ED9\u4F60\u3002\u201D\n\u53EA\u5728\u5B9E\u9645\u5B8C\u6210\u540E\u8BF4\u660E\u5B8C\u6210\uFF0C\u4E0D\u628A\u793A\u4F8B\u5F53\u4F5C\u5DF2\u7ECF\u91C7\u53D6\u7684\u884C\u52A8\u3002"
+    },
+    custom: { style, instructions: "", principles: "", examples: "" }
+  };
+  return starters[style];
+}
+function parsePersonaExpression(value) {
+  if (value === void 0 || value === null) return void 0;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("\u516C\u5F00\u4EBA\u683C\u8868\u8FBE\u683C\u5F0F\u65E0\u6548");
+  const v = value;
+  if (Object.keys(v).some((key) => !["style", "instructions", "principles", "examples"].includes(key)) || !EXPRESSION_STYLES.some(([key]) => key === v.style))
+    throw new Error("\u516C\u5F00\u4EBA\u683C\u8868\u8FBE\u7C7B\u578B\u65E0\u6548");
+  for (const [key, limit] of [
+    ["instructions", 4e3],
+    ["principles", 2e3],
+    ["examples", 4e3]
+  ])
+    if (typeof v[key] !== "string" || v[key].length > limit || v[key].includes("\0"))
+      throw new Error("\u516C\u5F00\u4EBA\u683C\u8868\u8FBE\u4E3A\u7A7A\u6216\u8D85\u8FC7\u957F\u5EA6\u9650\u5236");
+  return {
+    style: v.style,
+    instructions: v.instructions.trim(),
+    principles: v.principles.trim(),
+    examples: v.examples.trim()
+  };
+}
+function renderPersonaExpression(expression) {
+  if (!expression) return "";
+  return [
+    expression.instructions && "\u6027\u683C\u4E0E\u8868\u8FBE\uFF1A\n" + expression.instructions,
+    expression.principles && "\u7A33\u5B9A\u539F\u5219\uFF1A\n" + expression.principles,
+    expression.examples && "\u8BF4\u8BDD\u793A\u4F8B\uFF08\u7528\u4E8E\u628A\u63E1\u8BED\u6C14\uFF0C\u4E0D\u662F\u4E8B\u5B9E\u6216\u56FA\u5B9A\u56DE\u590D\uFF09\uFF1A\n" + expression.examples
+  ].filter(Boolean).join("\n");
+}
+
+// packages/shared/persona-expression-editor.tsx
 var import_jsx_runtime8 = require("react/jsx-runtime");
+function PersonaExpressionEditor({
+  value,
+  disabled,
+  onChange
+}) {
+  return /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("fieldset", { disabled, style: { border: 0, padding: 0, margin: "16px 0" }, children: [
+    /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("legend", { children: "\u516C\u5F00\u7684\u6027\u683C\u4E0E\u8868\u8FBE" }),
+    /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { style: { opacity: 0.7 }, children: "QQ \u7FA4\u804A\u3001\u79C1\u804A\u548C\u5DE5\u4F5C\u4F1A\u8BDD\u5171\u7528\u8FD9\u4EFD\u8868\u8FBE\u914D\u7F6E\u3002\u53EA\u586B\u5199\u53EF\u4EE5\u516C\u5F00\u7684\u6027\u683C\u4E0E\u539F\u5219\uFF0C\u79C1\u4EBA\u8D44\u6599\u653E\u5728\u79C1\u4EBA\u534F\u4F5C\u8981\u6C42\u6216\u8BB0\u5FC6\u4E2D\u3002" }),
+    /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("label", { children: [
+      "\u8868\u8FBE\u8D77\u70B9",
+      /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(
+        "select",
+        {
+          "aria-label": "\u4EBA\u683C\u8868\u8FBE\u8D77\u70B9",
+          style: { ...controlStyle, marginLeft: 8 },
+          value: value?.style ?? "",
+          onChange: (e) => {
+            const style = e.target.value;
+            if (!style) return onChange(null);
+            if (style === "custom") return onChange({ ...value ?? expressionStarter("custom"), style });
+            if (value && !window.confirm("\u7528\u6240\u9009\u8D77\u70B9\u66FF\u6362\u5F53\u524D\u5C1A\u672A\u4FDD\u5B58\u7684\u516C\u5F00\u8868\u8FBE\u5185\u5BB9\uFF1F\u79C1\u4EBA\u534F\u4F5C\u8981\u6C42\u548C\u8BB0\u5FC6\u4E0D\u53D8\u3002"))
+              return;
+            onChange(expressionStarter(style));
+          },
+          children: [
+            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("option", { value: "", children: "\u6CBF\u7528\u539F\u6709\u914D\u7F6E" }),
+            EXPRESSION_STYLES.map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("option", { value: id, children: label }, id))
+          ]
+        }
+      )
+    ] }),
+    value && /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(import_jsx_runtime8.Fragment, { children: [
+      /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { style: { opacity: 0.7 }, children: "\u8D77\u70B9\u53EA\u586B\u5165\u4E0B\u9762\u7684\u6587\u5B57\uFF1B\u53EF\u4EE5\u76F4\u63A5\u4FEE\u6539\uFF0C\u4FDD\u5B58\u540E\u7684\u5B9E\u9645\u6587\u5B57\u51B3\u5B9A\u8868\u8FBE\u3002" }),
+      [
+        ["instructions", "\u6027\u683C\u4E0E\u8BED\u6C14", 4e3, 5],
+        ["principles", "\u7A33\u5B9A\u539F\u5219", 2e3, 3],
+        ["examples", "\u8BF4\u8BDD\u793A\u4F8B", 4e3, 4]
+      ].map(([key, label, max, rows]) => /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("label", { style: { display: "block", marginTop: 12 }, children: [
+        label,
+        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+          "textarea",
+          {
+            "aria-label": label,
+            rows,
+            maxLength: max,
+            value: value[key],
+            style: { ...controlStyle, width: "100%", resize: "vertical" },
+            onChange: (e) => onChange({ ...value, [key]: e.target.value })
+          }
+        )
+      ] }, key))
+    ] })
+  ] });
+}
+
+// packages/dsh-px-memory/src/client.tsx
+var import_jsx_runtime9 = require("react/jsx-runtime");
 var personaDrafts = createDraftRegistry(64);
 var inject = [];
 function MemoryPanel({
@@ -1757,6 +1875,7 @@ function MemoryPanel({
         configDirty: false,
         name: "",
         instructions: "",
+        expression: null,
         enabled: true,
         newName: "",
         note: "",
@@ -1764,7 +1883,14 @@ function MemoryPanel({
         scope: "project"
       },
       storage,
-      (v) => v.note.length <= 2e3 && v.instructions.length <= 2e3 && v.name.length <= 60 && v.newName.length <= 60 && Number.isSafeInteger(v.revision) && v.revision >= -1 && ["project", "persona"].includes(v.scope)
+      (v) => {
+        try {
+          parsePersonaExpression(v.expression);
+        } catch {
+          return false;
+        }
+        return v.note.length <= 2e3 && v.instructions.length <= 2e3 && v.name.length <= 60 && v.newName.length <= 60 && Number.isSafeInteger(v.revision) && v.revision >= -1 && ["project", "persona"].includes(v.scope);
+      }
     );
   }, [sessionId]);
   const saved = draft?.getSnapshot();
@@ -1773,7 +1899,7 @@ function MemoryPanel({
     saved && saved.revision >= 0 ? saved.revision : void 0
   ), [draftPersona, setDraftPersona] = (0, import_react7.useState)(saved?.personaId ?? ""), [conflict, setConflict] = (0, import_react7.useState)(false);
   const [view, setView] = (0, import_react7.useState)(null), [error, setError] = (0, import_react7.useState)(""), [busy, setBusy] = (0, import_react7.useState)(false);
-  const [name, setName] = (0, import_react7.useState)(saved?.name ?? ""), [instructions, setInstructions] = (0, import_react7.useState)(saved?.instructions ?? ""), [enabled, setEnabled] = (0, import_react7.useState)(saved?.enabled ?? true);
+  const [name, setName] = (0, import_react7.useState)(saved?.name ?? ""), [instructions, setInstructions] = (0, import_react7.useState)(saved?.instructions ?? ""), [expression, setExpression] = (0, import_react7.useState)(saved?.expression ?? null), [enabled, setEnabled] = (0, import_react7.useState)(saved?.enabled ?? true);
   const [newName, setNewName] = (0, import_react7.useState)(saved?.newName ?? ""), [note, setNote] = (0, import_react7.useState)(saved?.note ?? ""), [editing, setEditing] = (0, import_react7.useState)(saved?.editing || void 0);
   const [scope, setScope] = (0, import_react7.useState)(saved?.scope ?? "project");
   const [targetPersona, setTargetPersona] = (0, import_react7.useState)("");
@@ -1789,7 +1915,7 @@ function MemoryPanel({
       alive.current = false;
     };
   }, []);
-  const configDirty = !!(view && (name !== view.template.name || instructions !== view.template.instructions || enabled !== view.persona.memoryEnabled));
+  const configDirty = !!(view && (name !== view.template.name || instructions !== view.template.instructions || JSON.stringify(expression) !== JSON.stringify(view.template.expression ?? null) || enabled !== view.persona.memoryEnabled));
   const dirty = !!note || !!newName || configDirty || restoring.current && !!saved?.configDirty;
   const identityChanged = !!(view && draftPersona && draftPersona !== view.persona.id);
   const beginEdit = () => {
@@ -1809,6 +1935,7 @@ function MemoryPanel({
     setEditing(void 0);
     setName("");
     setInstructions("");
+    setExpression(null);
     setView(null);
     setError("");
   };
@@ -1821,6 +1948,7 @@ function MemoryPanel({
         configDirty,
         name,
         instructions,
+        expression,
         enabled,
         newName,
         note,
@@ -1838,6 +1966,7 @@ function MemoryPanel({
     view,
     name,
     instructions,
+    expression,
     enabled,
     newName,
     note,
@@ -1852,6 +1981,7 @@ function MemoryPanel({
     setView(data);
     setName(data.template.name);
     setInstructions(data.template.instructions);
+    setExpression(data.template.expression ?? null);
     setEnabled(data.persona.memoryEnabled);
     if (!data.project) setScope("persona");
   };
@@ -1869,6 +1999,7 @@ function MemoryPanel({
             if (!saved?.configDirty) {
               setName(data.template.name);
               setInstructions(data.template.instructions);
+              setExpression(data.template.expression ?? null);
               setEnabled(data.persona.memoryEnabled);
             }
             if (saved?.personaId !== data.persona.id) {
@@ -1962,28 +2093,28 @@ function MemoryPanel({
       setBusy(false);
     }
   };
-  return /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+  return /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
     "div",
     {
       className: "px-ui px-memory-panel",
       style: { padding: 20, flex: 1, minHeight: 0, overflow: "auto", overflowWrap: "anywhere", fontSize: 14 },
-      children: /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { style: { maxWidth: 960, margin: "0 auto" }, children: [
-        /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "px-actions", style: { justifyContent: "space-between" }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("h2", { style: { margin: "0 0 8px" }, children: "\u8BB0\u5FC6\u4E0E\u77E5\u8BC6" }),
-          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("button", { onClick: () => setTab("advanced"), "aria-pressed": tab === "advanced", children: "\u9AD8\u7EA7\u8BBE\u7F6E" })
+      children: /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("div", { style: { maxWidth: 960, margin: "0 auto" }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("div", { className: "px-actions", style: { justifyContent: "space-between" }, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("h2", { style: { margin: "0 0 8px" }, children: "\u8BB0\u5FC6\u4E0E\u77E5\u8BC6" }),
+          /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("button", { onClick: () => setTab("advanced"), "aria-pressed": tab === "advanced", children: "\u9AD8\u7EA7\u8BBE\u7F6E" })
         ] }),
-        view && /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("p", { className: "px-muted", children: [
+        view && /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("p", { className: "px-muted", children: [
           "\u5F53\u524D\u4EBA\u683C\uFF1A",
-          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("strong", { children: view.persona.name }),
+          /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("strong", { children: view.persona.name }),
           " \xB7 \u9879\u76EE\uFF1A",
           view.project ? view.project.split(/[\\/]/).filter(Boolean).pop() : "\u672A\u5173\u8054\u9879\u76EE",
           view.binding.locked ? " \xB7 \u4F1A\u8BDD\u4EBA\u683C\u5DF2\u56FA\u5B9A" : ""
         ] }),
-        /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("div", { className: "px-actions", role: "group", "aria-label": "\u8BB0\u5FC6\u9875\u9762", children: [
+        /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("div", { className: "px-actions", role: "group", "aria-label": "\u8BB0\u5FC6\u9875\u9762", children: [
           ["persona", "\u4EBA\u683C\u8BB0\u5FC6"],
           ["history", "\u7ECF\u5386\u4E0E\u5386\u53F2"],
           ["knowledge", "\u77E5\u8BC6\u4E0E Skills"]
-        ].map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+        ].map(([id, label]) => /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
           "button",
           {
             "aria-pressed": tab === id,
@@ -1993,17 +2124,17 @@ function MemoryPanel({
           },
           id
         )) }),
-        dirty && /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { role: "status", style: { opacity: 0.7 }, children: "\u8349\u7A3F\u5C1A\u672A\u4FDD\u5B58\uFF0C\u5DF2\u6682\u505C\u81EA\u52A8\u5237\u65B0\u3002\u5207\u6362\u9875\u9762\u4F1A\u4FDD\u7559\u8349\u7A3F\uFF1B\u4FDD\u5B58\u65F6\u4ECD\u4F1A\u6838\u5BF9\u539F\u7248\u672C\u3002" }),
-        !draft && /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { role: "alert", children: "\u5F53\u524D\u7A97\u53E3\u8349\u7A3F\u5DF2\u6EE1\u3002\u672C\u9875\u65B0\u7F16\u8F91\u6682\u4E0D\u80FD\u8DE8\u9875\u4FDD\u7559\uFF0C\u8BF7\u5148\u4FDD\u5B58\u5176\u4ED6\u8349\u7A3F\u3002" }),
-        tab === "persona" && /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("button", { style: controlStyle, disabled: busy || dirty, onClick: () => void act(), children: "\u5237\u65B0\u8BB0\u5F55" }),
-        error && /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("p", { role: "alert", children: [
+        dirty && /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { role: "status", style: { opacity: 0.7 }, children: "\u8349\u7A3F\u5C1A\u672A\u4FDD\u5B58\uFF0C\u5DF2\u6682\u505C\u81EA\u52A8\u5237\u65B0\u3002\u5207\u6362\u9875\u9762\u4F1A\u4FDD\u7559\u8349\u7A3F\uFF1B\u4FDD\u5B58\u65F6\u4ECD\u4F1A\u6838\u5BF9\u539F\u7248\u672C\u3002" }),
+        !draft && /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { role: "alert", children: "\u5F53\u524D\u7A97\u53E3\u8349\u7A3F\u5DF2\u6EE1\u3002\u672C\u9875\u65B0\u7F16\u8F91\u6682\u4E0D\u80FD\u8DE8\u9875\u4FDD\u7559\uFF0C\u8BF7\u5148\u4FDD\u5B58\u5176\u4ED6\u8349\u7A3F\u3002" }),
+        tab === "persona" && /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("button", { style: controlStyle, disabled: busy || dirty, onClick: () => void act(), children: "\u5237\u65B0\u8BB0\u5F55" }),
+        error && /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("p", { role: "alert", children: [
           error,
           " "
         ] }),
-        conflict && /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("button", { disabled: busy, onClick: discardDraft, children: "\u653E\u5F03\u8349\u7A3F\u5E76\u8BFB\u53D6\u6700\u65B0" }),
-        !view && !error && /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u2026" }),
-        view && !identityChanged && /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(import_jsx_runtime8.Fragment, { children: [
-          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("div", { hidden: tab !== "history", children: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+        conflict && /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("button", { disabled: busy, onClick: discardDraft, children: "\u653E\u5F03\u8349\u7A3F\u5E76\u8BFB\u53D6\u6700\u65B0" }),
+        !view && !error && /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u2026" }),
+        view && !identityChanged && /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)(import_jsx_runtime9.Fragment, { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("div", { hidden: tab !== "history", children: /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
             HistoryPanel,
             {
               url,
@@ -2012,7 +2143,7 @@ function MemoryPanel({
             },
             view.persona.id
           ) }),
-          tab === "knowledge" && /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+          tab === "knowledge" && /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
             KnowledgePanel,
             {
               sessionId,
@@ -2021,11 +2152,11 @@ function MemoryPanel({
             },
             sessionId + view.persona.id
           ),
-          /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("section", { hidden: tab !== "advanced", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("h3", { children: "\u5F15\u64CE\u914D\u7F6E\u4E0E\u8BCA\u65AD" }),
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "px-muted", children: "\u65E5\u5E38\u8D44\u6599\u5728\u524D\u4E09\u4E2A\u9875\u9762\u7BA1\u7406\u3002\u4E0B\u9762\u4FDD\u7559 Mnemon \u539F\u751F\u8BBE\u7F6E\u3001\u9879\u76EE\u6863\u6848\u53CA\u5176\u4ED6\u8BB0\u5FC6\u6765\u6E90\uFF1B\u4E0D\u4F1A\u81EA\u52A8\u5F00\u542F\u540E\u53F0\u63D0\u70BC\u6216\u8FC1\u79FB\u8D44\u6599\u3002" }),
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "px-actions", children: [
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+          /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("section", { hidden: tab !== "advanced", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("h3", { children: "\u5F15\u64CE\u914D\u7F6E\u4E0E\u8BCA\u65AD" }),
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { className: "px-muted", children: "\u65E5\u5E38\u8D44\u6599\u5728\u524D\u4E09\u4E2A\u9875\u9762\u7BA1\u7406\u3002\u4E0B\u9762\u4FDD\u7559 Mnemon \u539F\u751F\u8BBE\u7F6E\u3001\u9879\u76EE\u6863\u6848\u53CA\u5176\u4ED6\u8BB0\u5FC6\u6765\u6E90\uFF1B\u4E0D\u4F1A\u81EA\u52A8\u5F00\u542F\u540E\u53F0\u63D0\u70BC\u6216\u8FC1\u79FB\u8D44\u6599\u3002" }),
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("div", { className: "px-actions", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                 "button",
                 {
                   disabled: dirty || busy,
@@ -2039,7 +2170,7 @@ function MemoryPanel({
                   children: "\u6253\u5F00\u539F\u751F\u8BB0\u5FC6\u7BA1\u7406"
                 }
               ),
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+              /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                 "button",
                 {
                   disabled: dirty || busy,
@@ -2054,16 +2185,16 @@ function MemoryPanel({
                 }
               )
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("h3", { children: "\u5F53\u524D\u5DE5\u4F5C\u653E\u5728\u54EA\u91CC\uFF1F" }),
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { children: "\u4EFB\u52A1\u8FDB\u5EA6\u548C\u4E0B\u4E00\u6B65\u4FDD\u5B58\u5728\u5DE5\u4F5C\u8D26\u672C\uFF0CGoal \u4E0E Team \u4ECD\u4EE5\u539F\u751F\u6267\u884C\u72B6\u6001\u4E3A\u51C6\u3002\u957F\u671F\u7EA6\u5B9A\u653E\u5728\u4EBA\u683C\u8BB0\u5FC6\uFF0C\u53EF\u590D\u7528\u7ED3\u8BBA\u653E\u5728\u77E5\u8BC6\u5E93\u3002" }),
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("button", { disabled: dirty || busy, onClick: openTasks, children: "\u67E5\u770B\u5F53\u524D\u4EFB\u52A1\u4E0E\u5DE5\u4F5C\u8D26\u672C" })
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("h3", { children: "\u5F53\u524D\u5DE5\u4F5C\u653E\u5728\u54EA\u91CC\uFF1F" }),
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { children: "\u4EFB\u52A1\u8FDB\u5EA6\u548C\u4E0B\u4E00\u6B65\u4FDD\u5B58\u5728\u5DE5\u4F5C\u8D26\u672C\uFF0CGoal \u4E0E Team \u4ECD\u4EE5\u539F\u751F\u6267\u884C\u72B6\u6001\u4E3A\u51C6\u3002\u957F\u671F\u7EA6\u5B9A\u653E\u5728\u4EBA\u683C\u8BB0\u5FC6\uFF0C\u53EF\u590D\u7528\u7ED3\u8BBA\u653E\u5728\u77E5\u8BC6\u5E93\u3002" }),
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("button", { disabled: dirty || busy, onClick: openTasks, children: "\u67E5\u770B\u5F53\u524D\u4EFB\u52A1\u4E0E\u5DE5\u4F5C\u8D26\u672C" })
           ] }),
-          /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("section", { hidden: tab !== "persona", children: [
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("details", { className: "px-card", children: [
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("summary", { children: "\u4EBA\u683C\u4E0E\u534F\u4F5C\u504F\u597D" }),
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("label", { children: [
+          /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("section", { hidden: tab !== "persona", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("details", { className: "px-card", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("summary", { children: "\u4EBA\u683C\u4E0E\u534F\u4F5C\u504F\u597D" }),
+              /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("label", { children: [
                 "\u5F53\u524D\u4F1A\u8BDD\u7684\u4EBA\u683C",
-                /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                   "select",
                   {
                     "aria-label": "\u5F53\u524D\u4EBA\u683C",
@@ -2077,21 +2208,21 @@ function MemoryPanel({
                       }
                       void act({ type: "select", personaId: e.target.value });
                     },
-                    children: view.personas.map((p) => /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("option", { value: p.id, disabled: p.archived, children: [
+                    children: view.personas.map((p) => /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("option", { value: p.id, disabled: p.archived, children: [
                       p.name,
                       p.archived ? "\uFF08\u5DF2\u5F52\u6863\uFF09" : ""
                     ] }, p.id))
                   }
                 )
               ] }),
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("p", { className: "px-muted", children: [
+              /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("p", { className: "px-muted", children: [
                 "\u672C\u4F1A\u8BDD\u4F7F\u7528\u914D\u7F6E\u7248\u672C ",
                 view.binding.personaRevision,
                 "\u3002",
                 view.binding.locked ? "\u4EBA\u683C\u5DF2\u56FA\u5B9A\u3002" : "\u5C1A\u672A\u5F00\u59CB\uFF0C\u53EF\u4EE5\u9009\u62E9\u4EBA\u683C\u3002"
               ] }),
-              view.persona.archived && /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { role: "status", children: "\u6B64\u4EBA\u683C\u5DF2\u5F52\u6863\u3002\u5386\u53F2\u4ECD\u53EF\u67E5\u770B\uFF0C\u8BF7\u65B0\u5EFA\u5176\u4ED6\u4EBA\u683C\u7684\u4F1A\u8BDD\u7EE7\u7EED\u3002" }),
-              view.template.revision !== view.binding.personaRevision && /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(
+              view.persona.archived && /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { role: "status", children: "\u6B64\u4EBA\u683C\u5DF2\u5F52\u6863\u3002\u5386\u53F2\u4ECD\u53EF\u67E5\u770B\uFF0C\u8BF7\u65B0\u5EFA\u5176\u4ED6\u4EBA\u683C\u7684\u4F1A\u8BDD\u7EE7\u7EED\u3002" }),
+              view.template.revision !== view.binding.personaRevision && /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)(
                 "button",
                 {
                   disabled: busy || view.persona.archived,
@@ -2103,16 +2234,16 @@ function MemoryPanel({
                   ]
                 }
               ),
-              view.binding.handoff && /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("p", { className: "px-muted", children: [
+              view.binding.handoff && /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("p", { className: "px-muted", children: [
                 "\u5DF2\u63A5\u7EED\u6765\u6E90\u4F1A\u8BDD\u622A\u81F3\u4E8B\u4EF6 ",
                 view.binding.handoff.throughSeq,
                 " ",
                 "\u7684\u5BF9\u8BDD\u4E0E\u6267\u884C\u8BB0\u5F55\uFF1B\u539F\u4F1A\u8BDD\u4EFB\u52A1\u4E0D\u4F1A\u81EA\u52A8\u6062\u590D\u3002"
               ] }),
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("details", { className: "px-card", children: [
-                /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("summary", { children: "\u7528\u53E6\u4E00\u4E2A\u4EBA\u683C\u7EE7\u7EED" }),
-                /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { children: "\u63A5\u7EED\u4F1A\u8BDD\u53EF\u6309\u9700\u8BFB\u53D6\u539F\u4F1A\u8BDD\u622A\u81F3\u521B\u5EFA\u65F6\u7684\u53EF\u89C1\u5BF9\u8BDD\u4E0E\u6267\u884C\u8BB0\u5F55\uFF0C\u4E0D\u590D\u5236\u65E7\u4EBA\u683C\u7684\u79C1\u6709\u8BB0\u5FC6\u6CE8\u5165\u3002\u539F\u4F1A\u8BDD\u5DF2\u8BF4\u51FA\u7684\u5185\u5BB9\u4E5F\u5728\u4EA4\u63A5\u8303\u56F4\u5185\u3002" }),
-                /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(
+              /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("details", { className: "px-card", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("summary", { children: "\u7528\u53E6\u4E00\u4E2A\u4EBA\u683C\u7EE7\u7EED" }),
+                /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { children: "\u63A5\u7EED\u4F1A\u8BDD\u53EF\u6309\u9700\u8BFB\u53D6\u539F\u4F1A\u8BDD\u622A\u81F3\u521B\u5EFA\u65F6\u7684\u53EF\u89C1\u5BF9\u8BDD\u4E0E\u6267\u884C\u8BB0\u5F55\uFF0C\u4E0D\u590D\u5236\u65E7\u4EBA\u683C\u7684\u79C1\u6709\u8BB0\u5FC6\u6CE8\u5165\u3002\u539F\u4F1A\u8BDD\u5DF2\u8BF4\u51FA\u7684\u5185\u5BB9\u4E5F\u5728\u4EA4\u63A5\u8303\u56F4\u5185\u3002" }),
+                /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)(
                   "select",
                   {
                     "aria-label": "\u65B0\u4F1A\u8BDD\u4EBA\u683C",
@@ -2120,13 +2251,13 @@ function MemoryPanel({
                     disabled: busy,
                     onChange: (e) => setTargetPersona(e.target.value),
                     children: [
-                      /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("option", { value: "", children: "\u9009\u62E9\u4EBA\u683C" }),
-                      view.personas.filter((p) => !p.archived).map((p) => /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("option", { value: p.id, children: p.name }, p.id))
+                      /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("option", { value: "", children: "\u9009\u62E9\u4EBA\u683C" }),
+                      view.personas.filter((p) => !p.archived).map((p) => /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("option", { value: p.id, children: p.name }, p.id))
                     ]
                   }
                 ),
-                /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "px-actions", children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("div", { className: "px-actions", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                     "button",
                     {
                       disabled: busy || dirty || !targetPersona,
@@ -2134,7 +2265,7 @@ function MemoryPanel({
                       children: "\u65B0\u5EFA\u63A5\u7EED\u4F1A\u8BDD"
                     }
                   ),
-                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                  /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                     "button",
                     {
                       disabled: busy || dirty || !targetPersona,
@@ -2144,12 +2275,19 @@ function MemoryPanel({
                   )
                 ] })
               ] }),
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("section", { children: [
-                /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("details", { style: { ...cardStyle, marginBottom: 16 }, children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("summary", { children: "\u7F16\u8F91\u4EBA\u683C\u6A21\u677F\uFF08\u4FDD\u5B58\u4E3A\u65B0\u7248\u672C\uFF09" }),
-                  /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("label", { children: [
+              /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("section", { children: [
+                /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("details", { style: { ...cardStyle, marginBottom: 16 }, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("summary", { children: [
+                    "\u672C\u4F1A\u8BDD\u7684\u4EBA\u683C\u914D\u7F6E \xB7 \u7248\u672C ",
+                    view.binding.personaRevision
+                  ] }),
+                  /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { style: { whiteSpace: "pre-wrap" }, children: renderPersonaExpression(view.persona.expression) || "\u672A\u8BBE\u7F6E\u72EC\u7ACB\u7684\u516C\u5F00\u8868\u8FBE\uFF0C\u6CBF\u7528\u539F\u6709\u534F\u4F5C\u548C\u6E20\u9053\u914D\u7F6E\u3002" })
+                ] }),
+                /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("details", { style: { ...cardStyle, marginBottom: 16 }, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("summary", { children: "\u7F16\u8F91\u4EBA\u683C\u6A21\u677F\uFF08\u4FDD\u5B58\u4E3A\u65B0\u7248\u672C\uFF09" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("label", { children: [
                     "\u540D\u79F0",
-                    /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                    /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                       "input",
                       {
                         disabled: busy || view.persona.archived,
@@ -2164,17 +2302,17 @@ function MemoryPanel({
                       }
                     )
                   ] }),
-                  /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("label", { children: [
-                    "\u804C\u8D23\u4E0E\u534F\u4F5C\u65B9\u5F0F",
-                    /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                  /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("label", { children: [
+                    "\u79C1\u4EBA\u534F\u4F5C\u8981\u6C42",
+                    /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                       "textarea",
                       {
                         disabled: busy || view.persona.archived,
-                        "aria-label": "\u804C\u8D23\u4E0E\u534F\u4F5C\u65B9\u5F0F",
+                        "aria-label": "\u79C1\u4EBA\u534F\u4F5C\u8981\u6C42",
                         rows: 4,
                         maxLength: 2e3,
                         style: { ...controlStyle, width: "100%", resize: "vertical" },
-                        placeholder: "\u4F8B\u5982\uFF1A\u5148\u89E3\u91CA\u7ED3\u8BBA\uFF1B\u534F\u52A9\u7814\u7A76\u65F6\u6807\u660E\u6765\u6E90\u548C\u4E0D\u786E\u5B9A\u6027\u3002",
+                        placeholder: "\u53EA\u7528\u4E8E\u79C1\u4EBA\u548C\u672C\u673A\u5DE5\u4F5C\u4F1A\u8BDD\uFF0C\u4E0D\u81EA\u52A8\u516C\u5F00\u5230\u7FA4\u804A\u3002\u4F8B\u5982\uFF1A\u7814\u7A76\u65F6\u6807\u660E\u6765\u6E90\u3002",
                         value: instructions,
                         onChange: (e) => {
                           beginEdit();
@@ -2183,8 +2321,19 @@ function MemoryPanel({
                       }
                     )
                   ] }),
-                  /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("label", { children: [
-                    /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                  /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
+                    PersonaExpressionEditor,
+                    {
+                      value: expression,
+                      disabled: busy || !!view.persona.archived,
+                      onChange: (value) => {
+                        beginEdit();
+                        setExpression(value);
+                      }
+                    }
+                  ),
+                  /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("label", { children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                       "input",
                       {
                         disabled: busy || view.persona.archived,
@@ -2199,17 +2348,23 @@ function MemoryPanel({
                     " ",
                     "\u4F7F\u7528\u5E76\u5141\u8BB8\u4FDD\u5B58\u6B64\u4EBA\u683C\u7684\u8BB0\u5FC6"
                   ] }),
-                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                  /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { children: /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                     "button",
                     {
                       style: controlStyle,
                       disabled: busy || !name.trim() || view.persona.archived,
-                      onClick: () => void act({ type: "configure", name, instructions, memoryEnabled: enabled }),
+                      onClick: () => void act({
+                        type: "configure",
+                        name,
+                        instructions,
+                        expression,
+                        memoryEnabled: enabled
+                      }),
                       children: "\u4FDD\u5B58\u4EBA\u683C"
                     }
                   ) })
                 ] }),
-                dirty && /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                dirty && /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                   "button",
                   {
                     style: controlStyle,
@@ -2223,7 +2378,7 @@ function MemoryPanel({
                     children: "\u53D6\u6D88\u672A\u4FDD\u5B58\u7684\u7F16\u8F91"
                   }
                 ),
-                view.persona.id !== "default" && !view.persona.archived && /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                view.persona.id !== "default" && !view.persona.archived && /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                   "button",
                   {
                     style: { ...controlStyle, marginBottom: 16 },
@@ -2237,10 +2392,10 @@ function MemoryPanel({
                     children: "\u5F52\u6863\u6B64\u4EBA\u683C"
                   }
                 ),
-                /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("details", { style: { ...cardStyle, marginBottom: 16 }, children: [
-                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("summary", { children: "\u65B0\u589E\u4EBA\u683C" }),
-                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { children: "\u65B0\u5EFA\u540E\u4F7F\u7528\u72EC\u7ACB\u7684\u7A7A\u8BB0\u5FC6\uFF0C\u4E0D\u590D\u5236\u5176\u4ED6\u4EBA\u683C\u7684\u8BB0\u5FC6\u3002" }),
-                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("details", { style: { ...cardStyle, marginBottom: 16 }, children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("summary", { children: "\u65B0\u589E\u4EBA\u683C" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { children: "\u65B0\u5EFA\u540E\u4F7F\u7528\u72EC\u7ACB\u7684\u7A7A\u8BB0\u5FC6\uFF0C\u4E0D\u590D\u5236\u5176\u4ED6\u4EBA\u683C\u7684\u8BB0\u5FC6\u3002" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                     "input",
                     {
                       disabled: busy,
@@ -2256,11 +2411,11 @@ function MemoryPanel({
                     }
                   ),
                   " ",
-                  /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+                  /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                     "button",
                     {
                       style: controlStyle,
-                      disabled: busy || !newName.trim() || !!note || name !== view.template.name || instructions !== view.template.instructions || enabled !== view.persona.memoryEnabled,
+                      disabled: busy || !newName.trim() || !!note || name !== view.template.name || instructions !== view.template.instructions || JSON.stringify(expression) !== JSON.stringify(view.template.expression ?? null) || enabled !== view.persona.memoryEnabled,
                       onClick: () => void act({ type: "create", name: newName }).then((ok) => {
                         if (ok) setNewName("");
                       }),
@@ -2270,14 +2425,14 @@ function MemoryPanel({
                 ] })
               ] })
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("h3", { children: "\u4FDD\u5B58\u7684\u7EA6\u5B9A" }),
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { style: { opacity: 0.7 }, children: "\u53EA\u663E\u793A\u672C\u76EE\u5F55\u53CA\u6B64\u4EBA\u683C\u901A\u7528\u7684\u8BB0\u5FC6\u3002\u53EF\u76F4\u63A5\u7F16\u8F91\uFF0C\u4E5F\u53EF\u5728\u5BF9\u8BDD\u4E2D\u660E\u786E\u8981\u6C42 Agent \u8BB0\u4F4F\u6216\u5FD8\u8BB0\u3002" }),
-            !view.persona.memoryEnabled && /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { role: "status", children: "\u6B64\u4EBA\u683C\u7684\u8BB0\u5FC6\u5DF2\u5173\u95ED\uFF0C\u6761\u76EE\u4ECD\u4FDD\u7559\u3002\u53EF\u5728\u201C\u4EBA\u683C\u4E0E\u534F\u4F5C\u504F\u597D\u201D\u4E2D\u5F00\u542F\u3002" }),
-            !view.persona.memories.some((m) => !m.project || m.project === view.project) && /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { className: "px-empty", children: "\u8FD8\u6CA1\u6709\u4FDD\u5B58\u7EA6\u5B9A\u3002\u53EF\u4EE5\u8BB0\u4E0B\u4F60\u7684\u534F\u4F5C\u504F\u597D\uFF0C\u4E5F\u53EF\u4EE5\u5728\u5BF9\u8BDD\u4E2D\u660E\u786E\u8981\u6C42\u52A9\u624B\u8BB0\u4F4F\u3002" }),
-            view.persona.memories.filter((m) => !m.project || m.project === view.project).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((m) => /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("section", { style: { ...cardStyle, marginBottom: 8 }, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("small", { children: m.project ? "\u672C\u76EE\u5F55" : "\u6B64\u4EBA\u683C\u901A\u7528" }),
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { style: { whiteSpace: "pre-wrap" }, children: m.text }),
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("h3", { children: "\u4FDD\u5B58\u7684\u7EA6\u5B9A" }),
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { style: { opacity: 0.7 }, children: "\u53EA\u663E\u793A\u672C\u76EE\u5F55\u53CA\u6B64\u4EBA\u683C\u901A\u7528\u7684\u8BB0\u5FC6\u3002\u53EF\u76F4\u63A5\u7F16\u8F91\uFF0C\u4E5F\u53EF\u5728\u5BF9\u8BDD\u4E2D\u660E\u786E\u8981\u6C42 Agent \u8BB0\u4F4F\u6216\u5FD8\u8BB0\u3002" }),
+            !view.persona.memoryEnabled && /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { role: "status", children: "\u6B64\u4EBA\u683C\u7684\u8BB0\u5FC6\u5DF2\u5173\u95ED\uFF0C\u6761\u76EE\u4ECD\u4FDD\u7559\u3002\u53EF\u5728\u201C\u4EBA\u683C\u4E0E\u534F\u4F5C\u504F\u597D\u201D\u4E2D\u5F00\u542F\u3002" }),
+            !view.persona.memories.some((m) => !m.project || m.project === view.project) && /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { className: "px-empty", children: "\u8FD8\u6CA1\u6709\u4FDD\u5B58\u7EA6\u5B9A\u3002\u53EF\u4EE5\u8BB0\u4E0B\u4F60\u7684\u534F\u4F5C\u504F\u597D\uFF0C\u4E5F\u53EF\u4EE5\u5728\u5BF9\u8BDD\u4E2D\u660E\u786E\u8981\u6C42\u52A9\u624B\u8BB0\u4F4F\u3002" }),
+            view.persona.memories.filter((m) => !m.project || m.project === view.project).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((m) => /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("section", { style: { ...cardStyle, marginBottom: 8 }, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("small", { children: m.project ? "\u672C\u76EE\u5F55" : "\u6B64\u4EBA\u683C\u901A\u7528" }),
+              /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { style: { whiteSpace: "pre-wrap" }, children: m.text }),
+              /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                 "button",
                 {
                   style: controlStyle,
@@ -2287,7 +2442,7 @@ function MemoryPanel({
                 }
               ),
               " ",
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+              /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                 "button",
                 {
                   style: controlStyle,
@@ -2302,7 +2457,7 @@ function MemoryPanel({
                 }
               )
             ] }, m.id)),
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
               "textarea",
               {
                 disabled: busy || view.persona.archived,
@@ -2318,8 +2473,8 @@ function MemoryPanel({
                 }
               }
             ),
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }, children: [
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)(
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("div", { style: { display: "flex", flexWrap: "wrap", gap: 8, marginTop: 8 }, children: [
+              /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)(
                 "select",
                 {
                   disabled: busy || view.persona.archived,
@@ -2328,12 +2483,12 @@ function MemoryPanel({
                   value: scope,
                   onChange: (e) => setScope(e.target.value),
                   children: [
-                    /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("option", { value: "project", disabled: !view.project, children: "\u672C\u76EE\u5F55" }),
-                    /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("option", { value: "persona", children: "\u6B64\u4EBA\u683C\u901A\u7528" })
+                    /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("option", { value: "project", disabled: !view.project, children: "\u672C\u76EE\u5F55" }),
+                    /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("option", { value: "persona", children: "\u6B64\u4EBA\u683C\u901A\u7528" })
                   ]
                 }
               ),
-              /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+              /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                 "button",
                 {
                   style: controlStyle,
@@ -2347,7 +2502,7 @@ function MemoryPanel({
                   children: editing ? "\u4FDD\u5B58\u4FEE\u6539" : "\u8BB0\u4F4F"
                 }
               ),
-              note && /* @__PURE__ */ (0, import_jsx_runtime8.jsx)(
+              note && /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
                 "button",
                 {
                   style: controlStyle,
@@ -2359,7 +2514,7 @@ function MemoryPanel({
                 }
               )
             ] }),
-            /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { style: { opacity: 0.65 }, children: "\u6BCF\u6761\u6700\u591A 2000 \u5B57\uFF0C\u6BCF\u4E2A\u4EBA\u683C\u5408\u8BA1\u6700\u591A 8000 \u5B57\u3002\u4E34\u65F6\u4EFB\u52A1\u8FDB\u5EA6\u8BF7\u653E\u5728\u4F1A\u8BDD\u8D26\u672C\u4E2D\u3002" })
+            /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { style: { opacity: 0.65 }, children: "\u6BCF\u6761\u6700\u591A 2000 \u5B57\uFF0C\u6BCF\u4E2A\u4EBA\u683C\u5408\u8BA1\u6700\u591A 8000 \u5B57\u3002\u4E34\u65F6\u4EFB\u52A1\u8FDB\u5EA6\u8BF7\u653E\u5728\u4F1A\u8BDD\u8D26\u672C\u4E2D\u3002" })
           ] })
         ] })
       ] })
@@ -2377,10 +2532,10 @@ function apply(ctx) {
         id: "dsh-px-memory",
         title: "\u8BB0\u5FC6\u4E0E\u77E5\u8BC6",
         order: 17,
-        component: ({ scope }) => /* @__PURE__ */ (0, import_jsx_runtime8.jsxs)("div", { className: "px-ui", style: { padding: 16 }, children: [
-          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("h3", { children: "\u8BB0\u5FC6\u4E0E\u77E5\u8BC6" }),
-          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("p", { children: "\u4EBA\u683C\u7EA6\u5B9A\u3001\u5386\u53F2\u68C0\u7D22\u3001\u77E5\u8BC6\u4E0E Skills \u5728\u540C\u4E00\u4E2A\u9875\u9762\u7BA1\u7406\u3002" }),
-          /* @__PURE__ */ (0, import_jsx_runtime8.jsx)("button", { onClick: () => workspace.open(scope.sessionId), children: "\u6253\u5F00\u8BB0\u5FC6\u4E0E\u77E5\u8BC6" })
+        component: ({ scope }) => /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("div", { className: "px-ui", style: { padding: 16 }, children: [
+          /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("h3", { children: "\u8BB0\u5FC6\u4E0E\u77E5\u8BC6" }),
+          /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { children: "\u4EBA\u683C\u7EA6\u5B9A\u3001\u5386\u53F2\u68C0\u7D22\u3001\u77E5\u8BC6\u4E0E Skills \u5728\u540C\u4E00\u4E2A\u9875\u9762\u7BA1\u7406\u3002" }),
+          /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("button", { onClick: () => workspace.open(scope.sessionId), children: "\u6253\u5F00\u8BB0\u5FC6\u4E0E\u77E5\u8BC6" })
         ] })
       });
       return () => {

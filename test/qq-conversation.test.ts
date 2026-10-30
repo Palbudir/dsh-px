@@ -10,6 +10,47 @@ import { QqSessionPolicy } from '../packages/dsh-px-qq/src/session-policy'
 import { DEFAULT_QQ_SETTINGS, channelFor, messageSource } from '../packages/dsh-px-qq/src/policy'
 
 const signal = () => new AbortController().signal
+test('explicit reply can stay silent or send only the intended text without an acknowledgement', async () => {
+  const calls: any[] = []
+  const channel = new QqConversation(async (action, params) => {
+    calls.push({ action, params })
+    return { message_id: 123 }
+  })
+  assert.deepEqual(await channel.execute('qq_reply', { action: 'silent' }, 's', 'group:34007', signal()), {
+    decision: 'silent',
+    sent: false
+  })
+  assert.deepEqual(calls, [])
+  const result = await channel.execute(
+    'qq_reply',
+    { action: 'text', text: '好呀！' },
+    's',
+    'group:34007',
+    signal()
+  )
+  assert.equal(result.messageId, 123)
+  assert.deepEqual(calls, [
+    {
+      action: 'send_group_msg',
+      params: { group_id: 34007, message: [{ type: 'text', data: { text: '好呀！' } }] }
+    }
+  ])
+  await assert.rejects(
+    channel.execute('qq_reply', { action: 'silent', text: '不回复' }, 's', 'group:34007', signal()),
+    /省略/
+  )
+  await assert.rejects(
+    channel.execute(
+      'qq_reply',
+      { action: 'text', text: 'hi', chatId: 'group:99009' },
+      's',
+      'group:34007',
+      signal()
+    ),
+    /其他聊天/
+  )
+  assert.equal(calls.length, 1)
+})
 test('first-step authority describes the native claimed batch without borrowing a previous sender', async () => {
   const settings = { ...DEFAULT_QQ_SETTINGS, accountId: '12001', authorizedUsers: ['23007'], personaId: 'p' }
   const channel = channelFor(settings, 'group:34007')

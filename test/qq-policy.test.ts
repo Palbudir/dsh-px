@@ -73,6 +73,47 @@ test('revoked members and messages from another account or conversation cannot s
   assert.equal(taskRequester(settings, group, [start, elsewhere]), undefined)
 })
 
+test('observed messages are context, not task authority, and do not replace a real owner request', () => {
+  const observed = (sender: string) => {
+    const row = message(sender)
+    return {
+      ...row,
+      data: {
+        ...row.data,
+        source: { ...row.data.source, pxQq: { ...row.data.source.pxQq, delivery: 'context' } }
+      }
+    }
+  }
+  assert.equal(taskRequester(settings, group, [start, observed('22002')]), undefined)
+  assert.equal(taskRequester(settings, group, [start, observed('44004'), message('22002')]), '22002')
+  assert.equal(taskRequester(settings, group, [start, observed('22002'), message('44004')]), undefined)
+})
+
+test('an explicit task selection can use only a current authentic owner message from this chat', () => {
+  const owned = message('22002'),
+    other = message('44004')
+  const ambient = (row: typeof owned, id: string) => ({
+    ...row,
+    data: {
+      ...row.data,
+      source: {
+        ...row.data.source,
+        pxQq: { ...row.data.source.pxQq, messageId: id, delivery: 'context' }
+      }
+    }
+  })
+  const owner = ambient(owned, '123'),
+    visitor = ambient(other, '124')
+  assert.equal(taskRequester(settings, group, [start, owner, visitor], '123'), '22002')
+  assert.equal(taskRequester(settings, group, [start, owner, visitor], '124'), undefined)
+  assert.equal(taskRequester(settings, group, [start, owner, visitor], 'missing'), undefined)
+  assert.equal(taskRequester(settings, group, [start, owner, end, start, visitor], '123'), undefined)
+  assert.equal(taskRequester({ ...settings, authorizedUsers: [] }, group, [start, owner], '123'), undefined)
+  const wrong = structuredClone(owner)
+  wrong.data.source.pxQq.conversationId = 'group:99009'
+  assert.equal(taskRequester(settings, group, [start, wrong], '123'), undefined)
+})
+
 test('validated channel messages are discoverable and hand off through native history; malformed metadata is excluded', () => {
   const event = { ...message('22002'), seq: 1, time: 1 }
   assert.equal(historyRecord(event)?.kind, 'user')

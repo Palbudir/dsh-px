@@ -1,5 +1,6 @@
 import { qqMessageOrigin, type QqMessageOrigin } from '../../shared/channel-source'
 import type { SessionChannel } from '../../dsh-px-memory/src/store'
+import type { QqAttentionSettings } from './attention'
 
 export interface QqSettings {
   enabled: boolean
@@ -10,6 +11,7 @@ export interface QqSettings {
   publicIntroduction: string
   endpoint: string
   secretRef: string
+  attention?: QqAttentionSettings
   model?: { provider: string; model: string; reasoningEffort?: string }
 }
 export const DEFAULT_QQ_SETTINGS: QqSettings = {
@@ -98,8 +100,14 @@ export function messageSource(settings: QqSettings, chatId: string, senderId: st
 export function taskRequester(
   settings: QqSettings,
   channel: SessionChannel,
-  events: readonly { type: string; data?: any }[]
+  events: readonly { type: string; data?: any }[],
+  requestMessageId?: unknown
 ): string | undefined {
+  if (
+    requestMessageId !== undefined &&
+    (typeof requestMessageId !== 'string' || !/^[A-Za-z0-9:_.-]{1,120}$/.test(requestMessageId))
+  )
+    return undefined
   let start = -1
   for (let i = events.length - 1; i >= 0; i--) {
     if (events[i].type === 'turn/end') return undefined
@@ -114,10 +122,12 @@ export function taskRequester(
     if (event.type !== 'user/message') continue
     const source = event.data?.source,
       origin = qqMessageOrigin(source)
+    if (requestMessageId !== undefined && origin?.messageId !== requestMessageId) continue
     if (!origin) {
       if (source?.kind === 'user' || String(source?.kind).startsWith('plugin:')) return undefined
       continue
     }
+    if (origin.delivery === 'context' && requestMessageId === undefined) continue
     if (
       origin.accountId !== settings.accountId ||
       origin.accountId !== channel.accountId ||

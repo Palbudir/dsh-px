@@ -6,7 +6,7 @@ import { conversationalSource } from '../../shared/channel-source'
 import {
   MemoryError,
   projectKey,
-  isExperienceSession,
+  isInternalSession,
   publicSession,
   samePublicConversation,
   type MemoryStore
@@ -143,7 +143,7 @@ export class HistoryIndex {
     const s = this.store.read(),
       b = s.bindings[sessionId]
     if (!b) throw new MemoryError('会话尚未绑定人格', 409)
-    if (b.purpose === 'experience' || isExperienceSession(sessionId)) return Object.create(null)
+    if (b.purpose || isInternalSession(sessionId)) return Object.create(null)
     const allowed = Object.fromEntries(
       Object.entries(s.bindings)
         .filter(
@@ -151,8 +151,8 @@ export class HistoryIndex {
             v.personaId === b.personaId &&
             (!publicSession(b) || samePublicConversation(b, v)) &&
             !v.pending &&
-            v.purpose !== 'experience' &&
-            !isExperienceSession(id)
+            !v.purpose &&
+            !isInternalSession(id)
         )
         .map(([id]) => [id, Number.MAX_SAFE_INTEGER])
     )
@@ -160,8 +160,8 @@ export class HistoryIndex {
     if (
       b.handoff &&
       (!publicSession(b) || samePublicConversation(b, s.bindings[b.handoff.sessionId])) &&
-      !isExperienceSession(b.handoff.sessionId) &&
-      s.bindings[b.handoff.sessionId]?.purpose !== 'experience' &&
+      !isInternalSession(b.handoff.sessionId) &&
+      !s.bindings[b.handoff.sessionId]?.purpose &&
       !Object.hasOwn(allowed, b.handoff.sessionId)
     )
       allowed[b.handoff.sessionId] = b.handoff.throughSeq

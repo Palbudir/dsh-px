@@ -95,6 +95,28 @@ test('experience task descendants retain source identity but do not pollute huma
   assert.equal((index.search('human', 'REAL_WORK_EVIDENCE') as any[]).length, 1)
   assert.equal((index.search('analysis', 'REAL_WORK_EVIDENCE') as any[]).length, 0)
 })
+
+test('attention analysis is excluded from conversational recall and keeps a rollback-readable internal marker', async (t) => {
+  const f = fixture(t),
+    root = 'px-qq-attention-root-' + randomUUID(),
+    child = 'px-qq-attention-' + randomUUID()
+  f.store.bind('human', { locked: true })
+  f.store.bind(root, { parent: 'human', locked: true })
+  f.store.bind(child, { parent: root, locked: true })
+  assert.equal(f.store.read().bindings[root].purpose, 'experience')
+  assert.equal(f.store.read().bindings[child].purpose, 'experience')
+  f.histories.set('human', [user(0, 'REAL_PERSONA_HISTORY')])
+  f.histories.set(root, [reply(0, 'PRIVATE_NOTIFICATION_PREVIEW')])
+  f.histories.set(child, [reply(0, 'PRIVATE_NOTIFICATION_PREVIEW')])
+  const index = f.index()
+  await index.refresh(f.host, 'human')
+  assert.equal((index.search('human', 'PRIVATE_NOTIFICATION_PREVIEW') as any[]).length, 0)
+  f.store.releaseInternalBindings([root, child, 'human'])
+  assert.ok(f.store.read().bindings.human)
+  assert.equal(f.store.read().bindings[root], undefined)
+  await index.refresh(f.host, 'human')
+  assert.equal((index.search('human', 'PRIVATE_NOTIFICATION_PREVIEW') as any[]).length, 0)
+})
 function other(store: MemoryStore, id = 'other-session'): string {
   const s = store.action(store.read().revision, { type: 'create', name: 'Other' }, id, null)
   return store.persona(s, id).id
