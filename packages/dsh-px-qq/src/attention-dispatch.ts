@@ -12,6 +12,7 @@ export class QqAttentionDispatch {
     private readonly settings: () => QqAttentionRouting,
     private readonly ports: {
       busy(chatId: string): boolean
+      budget?(chatId: string): Promise<number>
       deliver(message: InboxMessage, ambient: boolean): Promise<void>
       wake(chatId: string): void
       failed(error: unknown): void
@@ -43,13 +44,9 @@ export class QqAttentionDispatch {
         config.mode === 'normal' && chatId.startsWith('group:') && !config.focusedChats.includes(chatId)
       const messages = this.inbox.pending(chatId, 20, mentionsOnly)
       const selected: InboxMessage[] = []
-      let bytes = 0
       for (const message of messages) {
         if (attentionDelivery(this.settings(), message).content !== 'full') continue
-        const size = JSON.stringify(message.event).length
-        if (selected.length && bytes + size > 32000) break
         selected.push(message)
-        bytes += size
         // A directly addressed request keeps its native turn; preceding observations are context.
         if (message.chatId.startsWith('private:') || message.mentioned) break
       }
@@ -67,11 +64,16 @@ export class QqAttentionDispatch {
   }
   private async deliver(chatId: string, batch: InboxMessage[]): Promise<void> {
     let ambient = false
+    const budget = (await this.ports.budget?.(chatId)) ?? 32000
+    let used = 0
     for (const message of batch) {
       if (this.stopped || attentionDelivery(this.settings(), message).content !== 'full') return
       if (!this.inbox.canDispatch(message.id)) continue
+      const chars = JSON.stringify(message.event).length
+      if (used && used + chars > budget) break
       const observing = !message.mentioned && message.chatId.startsWith('group:')
       await this.ports.deliver(message, observing)
+      used += chars
       ambient ||= observing
     }
     if (ambient && !this.stopped) this.ports.wake(chatId)

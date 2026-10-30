@@ -88,7 +88,14 @@ export function attentionDelivery(
 
 /** Temporary attention is local to one account, bounded, and superseded by every explicit user setting. */
 export class QqAttentionControl {
-  private temporary?: { mode?: QqAttentionMode; chats: string[]; until: number; reason: string }
+  private temporary?: {
+    mode?: QqAttentionMode
+    chats: string[]
+    muted: string[]
+    unmuted: string[]
+    until: number
+    reason: string
+  }
   constructor(
     private settings: QqAttentionSettings,
     private readonly now: () => number = Date.now
@@ -107,7 +114,13 @@ export class QqAttentionControl {
       ...settings,
       mode: this.temporary.mode ?? settings.mode,
       focusedChats: [...new Set([...settings.focusedChats, ...this.temporary.chats])],
-      openedChats: [...this.temporary.chats]
+      openedChats: [...this.temporary.chats],
+      mutedChats: [
+        ...new Set([
+          ...settings.mutedChats.filter((id) => !this.temporary!.unmuted.includes(id)),
+          ...this.temporary.muted
+        ])
+      ]
     }
   }
   snapshot() {
@@ -134,20 +147,52 @@ export class QqAttentionControl {
     )
       throw new Error('只能打开本账号已收到消息的聊天')
     if (!input.mode && !input.chatId) throw new Error('请选择需要打开的聊天或消息模式')
-    if (
-      !Number.isSafeInteger(input.minutes) ||
-      input.minutes < 1 ||
-      input.minutes > 30 ||
-      typeof input.reason !== 'string' ||
-      !input.reason.trim() ||
-      input.reason.length > 200
-    )
-      throw new Error('临时调整需要简短原因和一到三十分钟有效期')
+    this.validateLease(input.minutes, input.reason)
     this.temporary = {
-      ...(input.mode ? { mode: input.mode } : {}),
+      ...((input.mode ?? this.temporary?.mode) ? { mode: input.mode ?? this.temporary?.mode } : {}),
       chats: input.chatId ? [...new Set([...(this.temporary?.chats ?? []), input.chatId])].slice(-200) : [],
+      muted: this.temporary?.muted ?? [],
+      unmuted: this.temporary?.unmuted ?? [],
       until: this.now() + input.minutes * 60000,
       reason: input.reason.trim()
+    }
+  }
+  private validateLease(minutes: number, reason: string): void {
+    if (
+      !Number.isSafeInteger(minutes) ||
+      minutes < 1 ||
+      minutes > 30 ||
+      typeof reason !== 'string' ||
+      !reason.trim() ||
+      reason.length > 200
+    )
+      throw new Error('临时调整需要简短原因和一到三十分钟有效期')
+  }
+  groupNotifications(
+    chatId: string,
+    enabled: boolean,
+    minutes: number,
+    reason: string,
+    knownChats: readonly string[]
+  ): void {
+    this.effective()
+    if (!this.settings.allowAgentChanges) throw new Error('用户已固定 QQ 消息模式')
+    if (!validAttentionChat(chatId) || !chatId.startsWith('group:') || !knownChats.includes(chatId))
+      throw new Error('只能临时调整本账号已收到消息的群提醒')
+    if (typeof enabled !== 'boolean') throw new Error('群提醒开关无效')
+    this.validateLease(minutes, reason)
+    const prior = this.temporary
+    this.temporary = {
+      ...(prior?.mode ? { mode: prior.mode } : {}),
+      chats: prior?.chats ?? [],
+      muted: enabled
+        ? (prior?.muted ?? []).filter((id) => id !== chatId)
+        : [...new Set([...(prior?.muted ?? []), chatId])].slice(-200),
+      unmuted: enabled
+        ? [...new Set([...(prior?.unmuted ?? []), chatId])].slice(-200)
+        : (prior?.unmuted ?? []).filter((id) => id !== chatId),
+      until: this.now() + minutes * 60000,
+      reason: reason.trim()
     }
   }
   reset(): void {

@@ -84,3 +84,31 @@ test('opening one notification does not wake unrelated private chats or mentions
   )
   assert.equal(attentionDelivery(active, { ...group, chatId: 'private:44004' }).content, 'preview')
 })
+
+test('temporary group reminders are scoped, expire, and preserve the owner notification settings', () => {
+  let time = 1000
+  const control = new QqAttentionControl(
+    parseAttention({ mode: 'notifications', notifyGroups: true }),
+    () => time
+  )
+  control.groupNotifications('group:22002', false, 5, '稍后再看', ['group:22002', 'group:33003'])
+  assert.equal(attentionDelivery(control.effective(), group).notify, false)
+  assert.equal(attentionDelivery(control.effective(), { ...group, mentioned: true }).notify, true)
+  assert.equal(attentionDelivery(control.effective(), { ...group, chatId: 'group:33003' }).notify, true)
+  assert.equal(attentionDelivery(control.effective(), { ...group, chatId: 'private:44004' }).notify, true)
+  assert.throws(
+    () => control.groupNotifications('private:44004', false, 5, '屏蔽私聊', ['private:44004']),
+    /群提醒/
+  )
+  control.groupNotifications('group:22002', true, 2, '恢复提醒', ['group:22002'])
+  assert.equal(attentionDelivery(control.effective(), group).notify, true)
+  control.groupNotifications('group:22002', false, 1, '稍后看', ['group:22002'])
+  time += 60000
+  assert.equal(attentionDelivery(control.effective(), group).notify, true)
+  control.groupNotifications('group:22002', false, 5, '临时', ['group:22002'])
+  control.userSettings(
+    parseAttention({ mode: 'notifications', notifyGroups: true, allowAgentChanges: false })
+  )
+  assert.equal(control.snapshot().temporary, null)
+  assert.throws(() => control.groupNotifications('group:22002', false, 5, '再改', ['group:22002']), /固定/)
+})

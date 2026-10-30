@@ -1,6 +1,6 @@
 {
   "name": "dsh-px-qq",
-  "version": "0.8.1-alpha.1",
+  "version": "0.8.2-alpha.1",
   "private": true,
   "type": "module",
   "description": "普通 QQ 账号的配置、固定人格、公共交流和授权任务入口",

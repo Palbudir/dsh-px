@@ -161,7 +161,7 @@ export function AttentionPanel({
             disabled={busy}
             onChange={(e: any) => void save({ ...configured, allowAgentChanges: e.target.checked })}
           />{' '}
-          允许它临时调整关注范围和模式（最多 30 分钟）
+          允许它临时管理关注、群提醒和模式（最多 30 分钟）
         </label>
       </p>
       {value.temporary && (
@@ -229,6 +229,12 @@ export function AttentionPanel({
               · {row.unread} 条未处理{row.queued ? ' · ' + row.queued + ' 条已投递' : ''}
               {row.uncertain ? ' · ' + row.uncertain + ' 条需核对' : ''}
               {row.cancelled ? ' · ' + row.cancelled + ' 条已停止' : ''}
+              {value.effective.mutedChats.includes(row.chatId) && !configured.mutedChats.includes(row.chatId)
+                ? ' · 临时免打扰'
+                : ''}
+              {!value.effective.mutedChats.includes(row.chatId) && configured.mutedChats.includes(row.chatId)
+                ? ' · 临时开启提醒'
+                : ''}
             </span>
             <p style={{ whiteSpace: 'pre-wrap', margin: '6px 0' }}>{row.preview}</p>
             <label>

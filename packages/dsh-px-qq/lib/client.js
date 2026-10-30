@@ -308,7 +308,7 @@ function AttentionPanel({
         }
       ),
       " ",
-      "\u5141\u8BB8\u5B83\u4E34\u65F6\u8C03\u6574\u5173\u6CE8\u8303\u56F4\u548C\u6A21\u5F0F\uFF08\u6700\u591A 30 \u5206\u949F\uFF09"
+      "\u5141\u8BB8\u5B83\u4E34\u65F6\u7BA1\u7406\u5173\u6CE8\u3001\u7FA4\u63D0\u9192\u548C\u6A21\u5F0F\uFF08\u6700\u591A 30 \u5206\u949F\uFF09"
     ] }) }),
     value.temporary && /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("p", { role: "status", children: [
       "\u4E34\u65F6\u8C03\u6574\u81F3 ",
@@ -371,7 +371,9 @@ function AttentionPanel({
           " \u6761\u672A\u5904\u7406",
           row.queued ? " \xB7 " + row.queued + " \u6761\u5DF2\u6295\u9012" : "",
           row.uncertain ? " \xB7 " + row.uncertain + " \u6761\u9700\u6838\u5BF9" : "",
-          row.cancelled ? " \xB7 " + row.cancelled + " \u6761\u5DF2\u505C\u6B62" : ""
+          row.cancelled ? " \xB7 " + row.cancelled + " \u6761\u5DF2\u505C\u6B62" : "",
+          value.effective.mutedChats.includes(row.chatId) && !configured.mutedChats.includes(row.chatId) ? " \xB7 \u4E34\u65F6\u514D\u6253\u6270" : "",
+          !value.effective.mutedChats.includes(row.chatId) && configured.mutedChats.includes(row.chatId) ? " \xB7 \u4E34\u65F6\u5F00\u542F\u63D0\u9192" : ""
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsx)("p", { style: { whiteSpace: "pre-wrap", margin: "6px 0" }, children: row.preview }),
         /* @__PURE__ */ (0, import_jsx_runtime2.jsxs)("label", { children: [

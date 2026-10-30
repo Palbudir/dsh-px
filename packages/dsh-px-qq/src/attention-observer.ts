@@ -2,6 +2,7 @@ import type { QqNotice } from './attention-inbox'
 
 export interface AttentionDecision {
   open: string[]
+  quiet?: string[]
   minutes: number
   reason: string
 }
@@ -82,17 +83,26 @@ export class QqAttentionObserver {
         controller.signal.throwIfAborted()
         if (this.disposed) return
         const known = new Set(rows.map((row) => row.chatId))
+        const quiet = value?.quiet ?? []
         if (
           !value ||
           !Array.isArray(value.open) ||
           value.open.length > 2 ||
           new Set(value.open).size !== value.open.length ||
           value.open.some((id) => !known.has(id)) ||
+          !Array.isArray(quiet) ||
+          quiet.length + value.open.length > 2 ||
+          new Set(quiet).size !== quiet.length ||
+          quiet.some(
+            (id) =>
+              typeof id !== 'string' || !id.startsWith('group:') || !known.has(id) || value.open.includes(id)
+          ) ||
           !Number.isSafeInteger(value.minutes) ||
           value.minutes < 1 ||
           value.minutes > 15 ||
           typeof value.reason !== 'string' ||
-          value.reason.length > 200
+          value.reason.length > 200 ||
+          ((value.open.length || quiet.length) && !value.reason.trim())
         )
           throw new Error('通知判断未返回有效的当前聊天选择')
         this.ports.apply(value, rows)

@@ -211,16 +211,21 @@ async function activateHost(ctx: any): Promise<void> {
         scope.tools.register({
           name: 'qq_attention',
           description:
-            '查看当前人格的 QQ 收件概览，或在用户允许的范围内临时打开聊天、调整消息模式。只管理注意力，不改变任务权限；打开后由原聊天处理原文，不把跨群内容转发过去。',
+            '查看 QQ 收件概览，临时打开聊天、切换模式，或用 mute/unmute 关闭/恢复某个群的提醒。省略时有效期十分钟；不改变任务权限。专注或已关注聊天仍会阅读，@ 是否穿透免打扰遵循用户设置。',
           parameters: {
             type: 'object',
             additionalProperties: false,
             required: ['action'],
             properties: {
-              action: { type: 'string', enum: ['status', 'open', 'mode', 'restore'] },
+              action: { type: 'string', enum: ['status', 'open', 'mode', 'mute', 'unmute', 'restore'] },
               chatId: { type: 'string' },
               mode: { type: 'string', enum: ['normal', 'focus', 'notifications'] },
-              minutes: { type: 'integer', minimum: 1, maximum: 30 },
+              minutes: {
+                type: 'integer',
+                minimum: 1,
+                maximum: 30,
+                description: '临时调整时长，省略为十分钟'
+              },
               reason: { type: 'string', maxLength: 200 }
             }
           },

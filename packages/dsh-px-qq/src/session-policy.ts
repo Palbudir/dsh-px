@@ -84,6 +84,7 @@ export class QqSessionPolicy {
   private chatAdmissionEpoch = new Map<string, number>()
   private healthTimer?: ReturnType<typeof setTimeout>
   private labelsRefreshedAt = 0
+  private readonly capacityNotices = new Map<string, number>()
   private ready: Promise<boolean> = Promise.resolve(false)
   private connectionState: {
     state: 'connecting' | 'online' | 'offline' | 'error'
@@ -117,6 +118,21 @@ export class QqSessionPolicy {
         deliver: async (message, ambient) => {
           if (!this.bridge) throw new QqError('QQ 接入未就绪', 409)
           await this.admitEvent(message.event, () => this.bridge!.receive(message.event), message, ambient)
+        },
+        budget: async (chatId) => {
+          const agent = this.bridge?.chat?.(chatId)?.agent
+          const fallback = this.defaultModel(get(this.host, 'agentDefaultModel')?.currentSelection())
+          const route = agent ? this.modelSelection(agent.session.id, fallback).current : fallback
+          try {
+            const info = await get(this.host, 'pxContextPolicy')?.describe(
+              agent,
+              route,
+              AbortSignal.timeout(3000)
+            )
+            return Math.max(256, Math.min(32000, Math.floor((info?.capacity ?? 32768) / 8)))
+          } catch {
+            return 4096
+          }
         },
         wake: (chatId) => this.wakeAttention(chatId),
         failed: (error) => {
@@ -160,6 +176,8 @@ export class QqSessionPolicy {
             if (!inbox.pending(chatId, 1).length) continue
             this.attention.adjust({ chatId, minutes: decision.minutes, reason: decision.reason }, known)
           }
+          for (const chatId of decision.quiet ?? [])
+            this.attention.groupNotifications(chatId, false, decision.minutes, decision.reason, known)
           this.dispatch?.schedule()
         }
       })
@@ -347,19 +365,34 @@ export class QqSessionPolicy {
       this.attention.adjust(
         {
           ...(args.action === 'open' ? { chatId: args.chatId } : { mode: args.mode }),
-          minutes: args.minutes,
-          reason: args.reason
+          minutes: args.minutes === undefined ? 10 : args.minutes,
+          reason: args.reason === undefined ? '临时调整消息关注' : args.reason
         },
         this.inbox.knownChats()
       )
       this.observer?.cancel('changed')
       this.dispatch?.schedule()
+      this.observer?.schedule()
+      return this.attentionSnapshot()
+    }
+    if (args.action === 'mute' || args.action === 'unmute') {
+      this.attention.groupNotifications(
+        args.chatId,
+        args.action === 'unmute',
+        args.minutes === undefined ? 10 : args.minutes,
+        args.reason === undefined ? '临时调整群提醒' : args.reason,
+        this.inbox.knownChats()
+      )
+      this.observer?.cancel('changed')
+      this.dispatch?.schedule()
+      this.observer?.schedule()
       return this.attentionSnapshot()
     }
     if (args.action === 'restore') {
       this.observer?.cancel('changed')
       this.attention.reset()
       this.dispatch?.schedule()
+      this.observer?.schedule()
       return this.attentionSnapshot()
     }
     throw new QqError('QQ 注意力操作无效')
@@ -507,9 +540,15 @@ export class QqSessionPolicy {
     if (String(event?.self_id) !== this.settings.accountId)
       throw new QqError('OneBot 登录账号与设置不一致，未处理消息', 403)
     if (event.post_type !== 'message' || !['private', 'group'].includes(event.message_type)) return
-    if (JSON.stringify(event).length > 256000) throw new QqError('QQ 消息过大，请拆分文字或使用文件', 413)
     if (String(event.user_id) === this.settings.accountId) return
+    if (Buffer.byteLength(JSON.stringify(event)) > 256000) {
+      const error = new QqError('QQ 消息过大，请拆分文字或使用文件', 413)
+      this.attentionProblem = error.message
+      await this.capacityNotice(event, error)
+      throw error
+    }
     if (this.inbox) {
+      let admitting = false
       try {
         const stored = this.inbox.receive(event)
         if (stored) {
@@ -527,15 +566,20 @@ export class QqSessionPolicy {
             addressed &&
             (/^\s*\/(stop|approve|reject|answer)(?:\s|$)/.test(text) ||
               this.interactions.list().some((p) => p.chatId === row.chatId))
-          if (row.phase === 'received' && urgent)
+          if (row.phase === 'received' && urgent) {
+            admitting = true
             await this.admitEvent(event, next, row, false, receivedEpoch)
-          else {
+          } else {
             this.dispatch?.schedule()
             this.observer?.schedule()
           }
         }
       } catch (error) {
         this.attentionProblem = error instanceof Error ? error.message : 'QQ 收件失败'
+        if (!admitting) {
+          if (error instanceof QqError) await this.capacityNotice(event, error)
+          else this.persistenceError(error)
+        }
         throw error
       }
       return
@@ -550,6 +594,40 @@ export class QqSessionPolicy {
       if (!mentioned) return
     }
     return this.admitEvent(event, next, undefined, false, receivedEpoch)
+  }
+  private async capacityNotice(event: any, error: QqError): Promise<void> {
+    if (!this.bridge || this.disposed || ![413, 429].includes(error.status)) return
+    const chatId =
+      event.message_type === 'group' ? 'group:' + String(event.group_id) : 'private:' + String(event.user_id)
+    try {
+      messageSource(this.settings, chatId, String(event.user_id))
+    } catch {
+      return
+    }
+    const mentioned = Array.isArray(event.message)
+      ? event.message.some(
+          (part: any) => part?.type === 'at' && String(part.data?.qq) === this.settings.accountId
+        )
+      : typeof event.message === 'string' &&
+        event.message.includes('[CQ:at,qq=' + this.settings.accountId + ']')
+    if (
+      !chatId.startsWith('private:') &&
+      !mentioned &&
+      !this.settings.authorizedUsers.includes(String(event.user_id))
+    )
+      return
+    if (Date.now() - (this.capacityNotices.get(chatId) ?? 0) < 60000) return
+    if (this.capacityNotices.size >= 200)
+      this.capacityNotices.delete(this.capacityNotices.keys().next().value!)
+    this.capacityNotices.set(chatId, Date.now())
+    await this.bridge
+      .send(
+        chatId,
+        error.status === 413
+          ? '这条消息太大，尚未受理。请拆分文字或改用文件发送。'
+          : '待处理消息较多，这条尚未受理。请稍后再发；已在处理的任务不要重复提交。'
+      )
+      .catch(() => {})
   }
   private async admitEvent(
     event: any,
