@@ -25,7 +25,9 @@ export interface HistoryRecord {
   text: string
   tool?: string
 }
-const privateTools = /^(persona_(memory|history)|qq_memory$|mnemon_|memory_)/
+// Loaded skills can contain persona-private instructions. Keep the original native event,
+// but do not re-export its body or invocation metadata through history and handoff tools.
+const privateTools = /^(persona_(memory|history)|qq_memory$|mnemon_|memory_|skill$)/
 const texts = (blocks: any): string =>
   Array.isArray(blocks)
     ? blocks
@@ -134,6 +136,18 @@ export class HistoryIndex {
       CREATE TABLE IF NOT EXISTS records(sid TEXT,seq INTEGER,time INTEGER,kind TEXT,part INTEGER,body TEXT,PRIMARY KEY(sid,seq,part));
       CREATE INDEX IF NOT EXISTS records_session_time ON records(sid,time);
       CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(sid UNINDEXED,seq UNINDEXED,part UNINDEXED,body,tokenize='trigram');`)
+    const version = (this.db.prepare('PRAGMA user_version').get() as any)?.user_version
+    if (version > 1) {
+      this.db.close()
+      throw new MemoryError('历史索引由更新版本创建，请使用配套版本或重建此缓存', 409)
+    }
+    if (version !== 1) {
+      // Earlier caches could contain loaded Skill bodies. Rebuild only derived data under
+      // the new export policy; native event logs and persona bindings are never modified.
+      this.db.exec(
+        'BEGIN; DELETE FROM search; DELETE FROM records; DELETE FROM calls; DELETE FROM sessions; PRAGMA user_version=1; COMMIT;'
+      )
+    }
   }
   async close(): Promise<void> {
     this.disposed = true

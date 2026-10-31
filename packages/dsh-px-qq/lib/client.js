@@ -165,13 +165,34 @@ var DEFAULT_QQ_SETTINGS = {
   secretRef: ""
 };
 
+// packages/shared/persona-scenes.ts
+var SCENE_LABELS = {
+  any: "\u4EFB\u4F55\u573A\u5408",
+  chat: "\u65E5\u5E38\u4EA4\u6D41",
+  work: "\u534F\u4F5C\u5DE5\u4F5C",
+  delivery: "\u6B63\u5F0F\u4EA4\u4ED8"
+};
+function renderSceneRules(rules, context) {
+  if (!rules?.length || !context) return "";
+  const matching = rules.filter(
+    (rule) => rule.instructions.trim() && (!rule.provider || rule.provider === context.provider) && (!rule.accountId || rule.accountId === context.accountId) && (!rule.conversationId || rule.conversationId === context.conversationId) && (!rule.participantId || context.participants.includes(rule.participantId))
+  ).sort(
+    (a, b) => [a.provider, a.accountId, a.conversationId, a.participantId].filter(Boolean).length - [b.provider, b.accountId, b.conversationId, b.participantId].filter(Boolean).length
+  );
+  if (!matching.length) return "";
+  return "\u5BF9\u8C61\u4E0E\u573A\u666F\u8868\u8FBE\uFF08\u53EA\u8C03\u6574\u6C9F\u901A\u65B9\u5F0F\uFF0C\u4E0D\u6539\u53D8\u8D44\u6599\u53D7\u4F17\u3001\u7A33\u5B9A\u539F\u5219\u6216\u6267\u884C\u6743\u9650\uFF1B\u6309\u5F53\u524D\u5B9E\u9645\u573A\u666F\u5E94\u7528\uFF0C\u5BF9\u8C61\u89C4\u5219\u4EC5\u7528\u4E8E\u4E0E\u8BE5\u5BF9\u8C61\u4EA4\u6D41\uFF09\uFF1A\n" + matching.map(
+    (rule) => `${SCENE_LABELS[rule.scene]}${rule.participantId ? "\uFF0C\u5BF9\u8C61 " + rule.participantId : ""}\uFF1A${rule.instructions}`
+  ).join("\n");
+}
+
 // packages/shared/persona-expression.ts
-function renderPersonaExpression(expression) {
+function renderPersonaExpression(expression, context) {
   if (!expression) return "";
   return [
     expression.instructions && "\u6027\u683C\u4E0E\u8868\u8FBE\uFF1A\n" + expression.instructions,
     expression.principles && "\u7A33\u5B9A\u539F\u5219\uFF1A\n" + expression.principles,
-    expression.examples && "\u8BF4\u8BDD\u793A\u4F8B\uFF08\u7528\u4E8E\u628A\u63E1\u8BED\u6C14\uFF0C\u4E0D\u662F\u4E8B\u5B9E\u6216\u56FA\u5B9A\u56DE\u590D\uFF09\uFF1A\n" + expression.examples
+    expression.examples && "\u8BF4\u8BDD\u793A\u4F8B\uFF08\u7528\u4E8E\u628A\u63E1\u8BED\u6C14\uFF0C\u4E0D\u662F\u4E8B\u5B9E\u6216\u56FA\u5B9A\u56DE\u590D\uFF09\uFF1A\n" + expression.examples,
+    renderSceneRules(expression.scenes, context)
   ].filter(Boolean).join("\n");
 }
 

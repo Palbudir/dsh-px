@@ -13,6 +13,13 @@ import {
 import { dirname, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { parsePersonaExpression, type PersonaExpression } from '../../shared/persona-expression'
+import {
+  audienceOf,
+  sameConversationAudience,
+  validateSessionChannel,
+  type SessionChannel
+} from '../../shared/subject-context'
+export type { SessionChannel } from '../../shared/subject-context'
 
 export interface MemoryEntry {
   id: string
@@ -48,36 +55,19 @@ export interface SessionBinding {
   handoff?: Handoff
   pending?: boolean
   createdFrom?: string
+  /** Native workspace chosen by a new persona-hub session; retained for idempotent retries. */
+  creationWorkspaceId?: string
   /** Internal analysis remains auditable in native storage, outside conversational recall. */
   purpose?: 'experience'
   channel?: SessionChannel
 }
-/** An IM conversation keeps its audience boundary across restarts and child Agents. */
-export interface SessionChannel {
-  provider: 'qq'
-  accountId: string
-  conversationId: string
-  access: 'owner' | 'public'
-  publicInstructions: string
-  /** A native task root with a group audience. Execution authority never changes its memory audience. */
-  task?: { requesterId: string; rootSessionId: string }
-  workspace?: string
-}
 export const publicSession = (binding?: Pick<SessionBinding, 'channel'>): boolean =>
-  binding?.channel?.access === 'public'
+  audienceOf(binding).kind === 'conversation'
 export function samePublicConversation(
   a?: Pick<SessionBinding, 'channel'>,
   b?: Pick<SessionBinding, 'channel'>
 ): boolean {
-  return (
-    !!a?.channel &&
-    !!b?.channel &&
-    publicSession(a) &&
-    publicSession(b) &&
-    a.channel.provider === b.channel.provider &&
-    a.channel.accountId === b.channel.accountId &&
-    a.channel.conversationId === b.channel.conversationId
-  )
+  return sameConversationAudience(a, b)
 }
 /** Reserved PX task ids remain excluded from recall even after their temporary binding is released. */
 export const isExperienceSession = (id: string): boolean =>
@@ -206,18 +196,12 @@ function validate(s: MemoryState): void {
     throw new MemoryError('人格或会话绑定无效', 503)
   for (const [id, b] of Object.entries(s.bindings)) {
     validId(id)
+    if (b.creationWorkspaceId !== undefined) validId(b.creationWorkspaceId)
     if (b.channel) {
-      if (b.channel.provider !== 'qq' || !['owner', 'public'].includes(b.channel.access))
-        throw new MemoryError('会话渠道边界无效', 503)
-      validId(b.channel.accountId)
-      validId(b.channel.conversationId)
-      text(b.channel.publicInstructions, 2000)
-      if (b.channel.workspace !== undefined) text(b.channel.workspace, 4000)
-      if (b.channel.task) {
-        if (b.channel.access !== 'public' || !/^group:\d+$/.test(b.channel.conversationId))
-          throw new MemoryError('群任务受众无效', 503)
-        validId(b.channel.task.requesterId)
-        validId(b.channel.task.rootSessionId)
+      try {
+        validateSessionChannel(b.channel)
+      } catch (error) {
+        throw new MemoryError(error instanceof Error ? error.message : '会话渠道边界无效', 503)
       }
     }
     if (b.purpose !== undefined && b.purpose !== 'experience') throw new MemoryError('会话用途无效', 503)
@@ -248,7 +232,14 @@ function validate(s: MemoryState): void {
 }
 /** Native logs own conversation history; this store owns identity and explicit private memory. */
 export class MemoryStore {
+  private readonly listeners = new Set<() => void>()
   constructor(private path: string) {}
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener)
+    return () => {
+      this.listeners.delete(listener)
+    }
+  }
   createPersona(name: unknown): { id: string; name: string } {
     const label = text(name, 60, true),
       state = this.read()
@@ -317,6 +308,12 @@ export class MemoryStore {
     } finally {
       if (existsSync(tmp)) unlinkSync(tmp)
     }
+    // Cache observers cannot veto an already committed identity update.
+    for (const listener of this.listeners) {
+      try {
+        listener()
+      } catch {}
+    }
     return s
   }
   persona(s: MemoryState, sessionId: string): Persona {
@@ -346,6 +343,7 @@ export class MemoryStore {
       handoff?: Handoff
       pending?: boolean
       createdFrom?: string
+      creationWorkspaceId?: string
       purpose?: 'experience'
       channel?: SessionChannel
     } = {}
@@ -386,6 +384,7 @@ export class MemoryStore {
         createdAt: new Date().toISOString(),
         ...(options.pending ? { pending: true } : {}),
         ...(options.createdFrom ? { createdFrom: options.createdFrom } : {}),
+        ...(options.creationWorkspaceId ? { creationWorkspaceId: options.creationWorkspaceId } : {}),
         ...(channel ? { channel: structuredClone(channel) } : {}),
         ...(purpose ? { purpose } : {}),
         ...(options.handoff ? { handoff: options.handoff } : {})

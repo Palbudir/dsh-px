@@ -23,7 +23,7 @@ var __export = (target, all) => {
 };
 
 // packages/dsh-px-memory/src/index.ts
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 
 // packages/dsh-px-memory/src/store.ts
 import {
@@ -41,6 +41,56 @@ import {
 import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
+// packages/shared/persona-scenes.ts
+var SCENE_LABELS = {
+  any: "\u4EFB\u4F55\u573A\u5408",
+  chat: "\u65E5\u5E38\u4EA4\u6D41",
+  work: "\u534F\u4F5C\u5DE5\u4F5C",
+  delivery: "\u6B63\u5F0F\u4EA4\u4ED8"
+};
+function parseSceneRules(value) {
+  if (value === void 0) return;
+  if (!Array.isArray(value) || value.length > 12) throw Error("\u573A\u666F\u8868\u8FBE\u6700\u591A 12 \u6761");
+  const ids = /* @__PURE__ */ new Set();
+  const rules = value.map((rule) => {
+    if (!rule || typeof rule !== "object" || Array.isArray(rule) || Object.keys(rule).some(
+      (key) => ![
+        "id",
+        "scene",
+        "provider",
+        "accountId",
+        "conversationId",
+        "participantId",
+        "instructions"
+      ].includes(key)
+    ) || typeof rule.id !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(rule.id) || ids.has(rule.id) || !Object.hasOwn(SCENE_LABELS, rule.scene) || typeof rule.instructions !== "string" || rule.instructions.length > 1e3 || rule.instructions.includes("\0"))
+      throw Error("\u573A\u666F\u8868\u8FBE\u683C\u5F0F\u65E0\u6548");
+    ids.add(rule.id);
+    for (const key of ["provider", "accountId", "conversationId", "participantId"])
+      if (rule[key] !== void 0 && (typeof rule[key] !== "string" || !rule[key].trim() || rule[key].length > 200 || /[\r\n\0]/.test(rule[key])))
+        throw Error("\u573A\u666F\u5BF9\u8C61\u6807\u8BC6\u65E0\u6548");
+    if (rule.provider && !/^[a-z][a-z0-9.-]{0,79}$/.test(rule.provider)) throw Error("\u573A\u666F\u6E20\u9053\u65E0\u6548");
+    if ((rule.accountId || rule.conversationId || rule.participantId) && !rule.provider)
+      throw Error("\u6307\u5B9A\u8D26\u53F7\u3001\u5BF9\u8C61\u6216\u804A\u5929\u65F6\u5FC5\u987B\u540C\u65F6\u9009\u62E9\u6E20\u9053");
+    return { ...rule, instructions: rule.instructions.trim() };
+  });
+  if (rules.reduce((size, rule) => size + rule.instructions.length, 0) > 4e3)
+    throw Error("\u573A\u666F\u8868\u8FBE\u5408\u8BA1\u6700\u591A 4000 \u5B57");
+  return rules;
+}
+function renderSceneRules(rules, context) {
+  if (!rules?.length || !context) return "";
+  const matching = rules.filter(
+    (rule) => rule.instructions.trim() && (!rule.provider || rule.provider === context.provider) && (!rule.accountId || rule.accountId === context.accountId) && (!rule.conversationId || rule.conversationId === context.conversationId) && (!rule.participantId || context.participants.includes(rule.participantId))
+  ).sort(
+    (a, b) => [a.provider, a.accountId, a.conversationId, a.participantId].filter(Boolean).length - [b.provider, b.accountId, b.conversationId, b.participantId].filter(Boolean).length
+  );
+  if (!matching.length) return "";
+  return "\u5BF9\u8C61\u4E0E\u573A\u666F\u8868\u8FBE\uFF08\u53EA\u8C03\u6574\u6C9F\u901A\u65B9\u5F0F\uFF0C\u4E0D\u6539\u53D8\u8D44\u6599\u53D7\u4F17\u3001\u7A33\u5B9A\u539F\u5219\u6216\u6267\u884C\u6743\u9650\uFF1B\u6309\u5F53\u524D\u5B9E\u9645\u573A\u666F\u5E94\u7528\uFF0C\u5BF9\u8C61\u89C4\u5219\u4EC5\u7528\u4E8E\u4E0E\u8BE5\u5BF9\u8C61\u4EA4\u6D41\uFF09\uFF1A\n" + matching.map(
+    (rule) => `${SCENE_LABELS[rule.scene]}${rule.participantId ? "\uFF0C\u5BF9\u8C61 " + rule.participantId : ""}\uFF1A${rule.instructions}`
+  ).join("\n");
+}
+
 // packages/shared/persona-expression.ts
 var EXPRESSION_STYLES = [
   ["lively", "\u7075\u52A8\u4EA4\u6D41"],
@@ -52,7 +102,9 @@ function parsePersonaExpression(value) {
   if (value === void 0 || value === null) return void 0;
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("\u516C\u5F00\u4EBA\u683C\u8868\u8FBE\u683C\u5F0F\u65E0\u6548");
   const v = value;
-  if (Object.keys(v).some((key) => !["style", "instructions", "principles", "examples"].includes(key)) || !EXPRESSION_STYLES.some(([key]) => key === v.style))
+  if (Object.keys(v).some(
+    (key) => !["style", "instructions", "principles", "examples", "scenes"].includes(key)
+  ) || !EXPRESSION_STYLES.some(([key]) => key === v.style))
     throw new Error("\u516C\u5F00\u4EBA\u683C\u8868\u8FBE\u7C7B\u578B\u65E0\u6548");
   for (const [key, limit] of [
     ["instructions", 4e3],
@@ -65,22 +117,57 @@ function parsePersonaExpression(value) {
     style: v.style,
     instructions: v.instructions.trim(),
     principles: v.principles.trim(),
-    examples: v.examples.trim()
+    examples: v.examples.trim(),
+    ...v.scenes !== void 0 ? { scenes: parseSceneRules(v.scenes) } : {}
   };
 }
-function renderPersonaExpression(expression) {
+function renderPersonaExpression(expression, context) {
   if (!expression) return "";
   return [
     expression.instructions && "\u6027\u683C\u4E0E\u8868\u8FBE\uFF1A\n" + expression.instructions,
     expression.principles && "\u7A33\u5B9A\u539F\u5219\uFF1A\n" + expression.principles,
-    expression.examples && "\u8BF4\u8BDD\u793A\u4F8B\uFF08\u7528\u4E8E\u628A\u63E1\u8BED\u6C14\uFF0C\u4E0D\u662F\u4E8B\u5B9E\u6216\u56FA\u5B9A\u56DE\u590D\uFF09\uFF1A\n" + expression.examples
+    expression.examples && "\u8BF4\u8BDD\u793A\u4F8B\uFF08\u7528\u4E8E\u628A\u63E1\u8BED\u6C14\uFF0C\u4E0D\u662F\u4E8B\u5B9E\u6216\u56FA\u5B9A\u56DE\u590D\uFF09\uFF1A\n" + expression.examples,
+    renderSceneRules(expression.scenes, context)
   ].filter(Boolean).join("\n");
 }
 
+// packages/shared/subject-context.ts
+var SubjectContextError = class extends Error {
+};
+var identifier = (value) => typeof value === "string" && !!value.trim() && value.length <= 200 && !/[\r\n\0]/.test(value);
+function validateSessionChannel(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    throw new SubjectContextError("\u4F1A\u8BDD\u6E20\u9053\u8FB9\u754C\u65E0\u6548");
+  const channel = value;
+  if (!identifier(channel.provider) || !/^[a-z][a-z0-9.-]{0,79}$/.test(channel.provider) || !identifier(channel.accountId) || !identifier(channel.conversationId) || !["owner", "public"].includes(channel.access) || typeof channel.publicInstructions !== "string" || channel.publicInstructions.length > 2e3 || channel.workspace !== void 0 && (typeof channel.workspace !== "string" || channel.workspace.length > 4e3 || channel.workspace.includes("\0")))
+    throw new SubjectContextError("\u4F1A\u8BDD\u6E20\u9053\u8FB9\u754C\u65E0\u6548");
+  if (channel.task !== void 0 && (!channel.task || typeof channel.task !== "object" || Array.isArray(channel.task) || channel.access !== "public" || !identifier(channel.task.requesterId) || !identifier(channel.task.rootSessionId)))
+    throw new SubjectContextError("\u4EFB\u52A1\u53D7\u4F17\u65E0\u6548");
+  if (channel.provider === "qq" && channel.task && !/^group:\d+$/.test(channel.conversationId))
+    throw new SubjectContextError("\u7FA4\u4EFB\u52A1\u53D7\u4F17\u65E0\u6548");
+}
+function audienceOf(binding) {
+  const channel = binding?.channel;
+  if (!channel) return { kind: "personal" };
+  validateSessionChannel(channel);
+  return {
+    kind: channel.access === "public" ? "conversation" : "personal",
+    channel: {
+      provider: channel.provider,
+      accountId: channel.accountId,
+      conversationId: channel.conversationId
+    }
+  };
+}
+function sameConversationAudience(a, b) {
+  const first = audienceOf(a), second = audienceOf(b);
+  return first.kind === "conversation" && second.kind === "conversation" && first.channel?.provider === second.channel?.provider && first.channel?.accountId === second.channel?.accountId && first.channel?.conversationId === second.channel?.conversationId;
+}
+
 // packages/dsh-px-memory/src/store.ts
-var publicSession = (binding) => binding?.channel?.access === "public";
+var publicSession = (binding) => audienceOf(binding).kind === "conversation";
 function samePublicConversation(a, b) {
-  return !!a?.channel && !!b?.channel && publicSession(a) && publicSession(b) && a.channel.provider === b.channel.provider && a.channel.accountId === b.channel.accountId && a.channel.conversationId === b.channel.conversationId;
+  return sameConversationAudience(a, b);
 }
 var isExperienceSession = (id) => /^px-experience-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id);
 var isAttentionSession = (id) => /^px-qq-attention-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id);
@@ -167,18 +254,12 @@ function validate(s) {
     throw new MemoryError("\u4EBA\u683C\u6216\u4F1A\u8BDD\u7ED1\u5B9A\u65E0\u6548", 503);
   for (const [id, b] of Object.entries(s.bindings)) {
     validId(id);
+    if (b.creationWorkspaceId !== void 0) validId(b.creationWorkspaceId);
     if (b.channel) {
-      if (b.channel.provider !== "qq" || !["owner", "public"].includes(b.channel.access))
-        throw new MemoryError("\u4F1A\u8BDD\u6E20\u9053\u8FB9\u754C\u65E0\u6548", 503);
-      validId(b.channel.accountId);
-      validId(b.channel.conversationId);
-      text(b.channel.publicInstructions, 2e3);
-      if (b.channel.workspace !== void 0) text(b.channel.workspace, 4e3);
-      if (b.channel.task) {
-        if (b.channel.access !== "public" || !/^group:\d+$/.test(b.channel.conversationId))
-          throw new MemoryError("\u7FA4\u4EFB\u52A1\u53D7\u4F17\u65E0\u6548", 503);
-        validId(b.channel.task.requesterId);
-        validId(b.channel.task.rootSessionId);
+      try {
+        validateSessionChannel(b.channel);
+      } catch (error62) {
+        throw new MemoryError(error62 instanceof Error ? error62.message : "\u4F1A\u8BDD\u6E20\u9053\u8FB9\u754C\u65E0\u6548", 503);
       }
     }
     if (b.purpose !== void 0 && b.purpose !== "experience") throw new MemoryError("\u4F1A\u8BDD\u7528\u9014\u65E0\u6548", 503);
@@ -200,6 +281,13 @@ function validate(s) {
 var MemoryStore = class {
   constructor(path) {
     this.path = path;
+  }
+  listeners = /* @__PURE__ */ new Set();
+  subscribe(listener) {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
   createPersona(name2) {
     const label = text(name2, 60, true), state = this.read();
@@ -269,6 +357,12 @@ var MemoryStore = class {
     } finally {
       if (existsSync(tmp)) unlinkSync(tmp);
     }
+    for (const listener of this.listeners) {
+      try {
+        listener();
+      } catch {
+      }
+    }
     return s;
   }
   persona(s, sessionId) {
@@ -317,6 +411,7 @@ var MemoryStore = class {
         createdAt: (/* @__PURE__ */ new Date()).toISOString(),
         ...options.pending ? { pending: true } : {},
         ...options.createdFrom ? { createdFrom: options.createdFrom } : {},
+        ...options.creationWorkspaceId ? { creationWorkspaceId: options.creationWorkspaceId } : {},
         ...channel ? { channel: structuredClone(channel) } : {},
         ...purpose ? { purpose } : {},
         ...options.handoff ? { handoff: options.handoff } : {}
@@ -709,8 +804,32 @@ var TurnIdentity = class {
     });
     const persona = this.store.persona(state, agent.session.id);
     if (persona.archived) throw new MemoryError("\u672C\u4F1A\u8BDD\u4EBA\u683C\u5DF2\u5F52\u6863\uFF1B\u8BF7\u65B0\u5EFA\u5176\u4ED6\u4EBA\u683C\u7684\u63A5\u7EED\u4F1A\u8BDD", 409);
-    this.active.set(agent, { turnSeq, persona });
+    const channel = state.bindings[agent.session.id]?.channel;
+    const participants = /* @__PURE__ */ new Set();
+    if (channel?.task) participants.add(channel.task.requesterId);
+    if (channel?.provider === "qq" && persona.expression?.scenes?.some((rule) => rule.participantId)) {
+      const events = agent.session.snapshotEvents?.() ?? [];
+      for (let i = events.length - 1; i >= 0; i--) {
+        if (events[i].type === "turn/start") break;
+        if (events[i].type !== "user/message") continue;
+        const origin = qqMessageOrigin(events[i].data?.source);
+        if (origin?.accountId === channel.accountId && origin.conversationId === channel.conversationId)
+          participants.add(origin.senderId);
+      }
+    }
+    const interaction = {
+      provider: channel?.provider ?? "local",
+      accountId: channel?.accountId,
+      conversationId: channel?.conversationId,
+      participants: [...participants],
+      activity: channel?.task ? "work" : channel ? "conversation" : "auto"
+    };
+    this.active.set(agent, { turnSeq, persona, interaction });
     return persona;
+  }
+  interaction(agent) {
+    this.current(agent);
+    return structuredClone(this.active.get(agent).interaction);
   }
 };
 function hasStarted(events) {
@@ -724,7 +843,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash } from "node:crypto";
 import { mkdirSync as mkdirSync2, existsSync as existsSync2, renameSync as renameSync2 } from "node:fs";
 import { dirname as dirname2 } from "node:path";
-var privateTools = /^(persona_(memory|history)|qq_memory$|mnemon_|memory_)/;
+var privateTools = /^(persona_(memory|history)|qq_memory$|mnemon_|memory_|skill$)/;
 var texts = (blocks) => Array.isArray(blocks) ? blocks.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n") : "";
 var hash = (event) => createHash("sha256").update(JSON.stringify(event)).digest("hex");
 function historyRecord(event, resolveTool) {
@@ -803,6 +922,16 @@ var HistoryIndex = class {
       CREATE TABLE IF NOT EXISTS records(sid TEXT,seq INTEGER,time INTEGER,kind TEXT,part INTEGER,body TEXT,PRIMARY KEY(sid,seq,part));
       CREATE INDEX IF NOT EXISTS records_session_time ON records(sid,time);
       CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(sid UNINDEXED,seq UNINDEXED,part UNINDEXED,body,tokenize='trigram');`);
+    const version2 = this.db.prepare("PRAGMA user_version").get()?.user_version;
+    if (version2 > 1) {
+      this.db.close();
+      throw new MemoryError("\u5386\u53F2\u7D22\u5F15\u7531\u66F4\u65B0\u7248\u672C\u521B\u5EFA\uFF0C\u8BF7\u4F7F\u7528\u914D\u5957\u7248\u672C\u6216\u91CD\u5EFA\u6B64\u7F13\u5B58", 409);
+    }
+    if (version2 !== 1) {
+      this.db.exec(
+        "BEGIN; DELETE FROM search; DELETE FROM records; DELETE FROM calls; DELETE FROM sessions; PRAGMA user_version=1; COMMIT;"
+      );
+    }
   }
   db;
   refreshQueue = Promise.resolve();
@@ -1812,7 +1941,189 @@ function pxKnowledgeSource(bank, canParticipate, authorize, onContract, resolveC
 }
 
 // packages/dsh-px-memory/src/native-resources.ts
-import { join as join2, dirname as dirname3, resolve as resolve2 } from "node:path";
+import { join as join3, dirname as dirname3, resolve as resolve3 } from "node:path";
+
+// packages/dsh-px-memory/src/persona-skills.ts
+import { createHash as createHash4 } from "node:crypto";
+import { lstatSync, readFileSync as readFileSync2, readdirSync, realpathSync as realpathSync2, mkdirSync as mkdirSync4, watch } from "node:fs";
+import { join as join2, resolve as resolve2, relative, sep } from "node:path";
+var PERSONA_SKILL_PROVIDER = "dsh-px-persona";
+var NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+function personaSkillDirectory(home, personaId) {
+  validId(personaId);
+  return resolve2(
+    home,
+    "storages",
+    "dsh-px-persona-skills",
+    createHash4("sha256").update(personaId).digest("hex")
+  );
+}
+var PersonaSkillFiles = class {
+  constructor(home) {
+    this.home = home;
+  }
+  directory(personaId) {
+    return personaSkillDirectory(this.home, personaId);
+  }
+  async read(personaId, name2) {
+    const { parse: parseYaml } = await import("yaml");
+    if (!NAME.test(name2) || name2.length > 80) throw new MemoryError("\u6280\u80FD\u540D\u65E0\u6548");
+    const root = this.directory(personaId), dir = join2(root, name2), path = join2(dir, "SKILL.md");
+    let info;
+    try {
+      for (const target of [root, dir, path])
+        if (lstatSync(target).isSymbolicLink()) throw new MemoryError("\u4EBA\u683C\u6280\u80FD\u4E0D\u80FD\u901A\u8FC7\u94FE\u63A5\u8BFB\u53D6\u5176\u4ED6\u4F4D\u7F6E", 409);
+      const actual = realpathSync2.native(path), base = realpathSync2.native(root), rel = relative(base, actual);
+      if (rel === ".." || rel.startsWith(".." + sep) || resolve2(base, rel) !== actual)
+        throw new MemoryError("\u4EBA\u683C\u6280\u80FD\u8D85\u51FA\u6240\u5C5E\u76EE\u5F55", 409);
+      info = lstatSync(path);
+    } catch (error62) {
+      if (error62?.code === "ENOENT") return;
+      throw error62;
+    }
+    if (!info.isFile() || info.size > 96e3) throw new MemoryError("\u4EBA\u683C\u6280\u80FD\u6587\u4EF6\u683C\u5F0F\u6216\u5927\u5C0F\u65E0\u6548", 409);
+    const raw = readFileSync2(path, "utf8"), match = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/.exec(raw);
+    if (!match) throw new MemoryError("\u4EBA\u683C\u6280\u80FD\u7F3A\u5C11 frontmatter", 409);
+    const meta3 = parseYaml(match[1]), content = raw.slice(match[0].length).trim();
+    if (!meta3 || typeof meta3 !== "object" || Array.isArray(meta3) || meta3.name !== name2 || typeof meta3.description !== "string" || !meta3.description.trim() || meta3.description.length > 1e3 || !content || content.length > 64e3 || meta3["dsh-px-persona"] !== personaId || meta3["dsh-px-managed"] !== true || meta3["disable-model-invocation"] !== void 0 && typeof meta3["disable-model-invocation"] !== "boolean" || meta3["user-invocable"] !== void 0 && typeof meta3["user-invocable"] !== "boolean")
+      throw new MemoryError("\u4EBA\u683C\u6280\u80FD\u8EAB\u4EFD\u6216\u5185\u5BB9\u65E0\u6548", 409);
+    return {
+      name: name2,
+      path,
+      description: meta3.description.trim(),
+      content,
+      source: "persona-private",
+      provider: PERSONA_SKILL_PROVIDER,
+      resourceBase: { kind: "directory", path: dir },
+      invocation: {
+        modelInvocable: meta3["disable-model-invocation"] !== true,
+        userInvocable: meta3["user-invocable"] !== false
+      },
+      metadata: { "dsh-px-managed": true, "dsh-px-persona": personaId },
+      version: createHash4("sha256").update(raw).digest("hex")
+    };
+  }
+  async list(personaId) {
+    const root = this.directory(personaId);
+    let names;
+    try {
+      if (lstatSync(root).isSymbolicLink()) throw new MemoryError("\u4EBA\u683C\u6280\u80FD\u76EE\u5F55\u4E0D\u80FD\u4E3A\u94FE\u63A5", 409);
+      names = readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && NAME.test(entry.name)).map((entry) => entry.name).sort();
+    } catch (error62) {
+      if (error62?.code === "ENOENT") return [];
+      throw error62;
+    }
+    if (names.length > 100) throw new MemoryError("\u6BCF\u4E2A\u4EBA\u683C\u6700\u591A\u7BA1\u7406 100 \u4E2A\u79C1\u6709\u6280\u80FD", 409);
+    return (await Promise.all(names.map((name2) => this.read(personaId, name2)))).filter(
+      (skill) => !!skill
+    );
+  }
+};
+function personaSkillProvider(files, owner, control) {
+  return {
+    name: PERSONA_SKILL_PROVIDER,
+    list: async ({ signal }) => {
+      control.signal.throwIfAborted();
+      signal?.throwIfAborted();
+      const id = owner();
+      const candidates = id ? (await files.list(id)).map(({ content: _content, version: version2, ...skill }) => ({
+        ...skill,
+        rank: 300,
+        locator: { personaId: id, name: skill.name, version: version2 }
+      })) : [];
+      control.signal.throwIfAborted();
+      signal?.throwIfAborted();
+      return { candidates: owner() === id ? candidates : [], complete: true };
+    },
+    get: async (candidate, { signal }) => {
+      control.signal.throwIfAborted();
+      signal?.throwIfAborted();
+      const id = owner(), locator = candidate.locator;
+      if (!id || locator?.personaId !== id || locator?.name !== candidate.name) return;
+      const skill = await files.read(id, candidate.name);
+      control.signal.throwIfAborted();
+      signal?.throwIfAborted();
+      if (owner() !== id) return;
+      if (!skill || skill.version !== locator.version) return;
+      const { version: _version, ...definition } = skill;
+      return definition;
+    }
+  };
+}
+function installPersonaSkillProviders(ctx, store, home) {
+  const files = new PersonaSkillFiles(home), mounted = /* @__PURE__ */ new Map();
+  const controls = /* @__PURE__ */ new Map();
+  const invalidate = () => {
+    for (const control of controls.values()) control.invalidate();
+  };
+  const root = join2(home, "storages", "dsh-px-persona-skills");
+  mkdirSync4(root, { recursive: true });
+  const watcher = watch(root, { recursive: true }, invalidate);
+  watcher.unref();
+  watcher.on("error", (error62) => {
+    invalidate();
+    ctx.logger?.warn("\u4EBA\u683C\u6280\u80FD\u76EE\u5F55\u76D1\u542C\u5931\u8D25\uFF0C\u6A21\u578B\u8BF7\u6C42\u4E0E\u754C\u9762\u8BFB\u53D6\u4ECD\u4F1A\u91CD\u65B0\u6838\u5BF9\uFF1A%s", String(error62));
+  });
+  const unsubscribe = store.subscribe(invalidate);
+  const provided = ctx.provide("pxPersonaSkills", { invalidate });
+  const injection = ctx.inject(["skills", "agents"], (host) => {
+    const mount = (agent) => {
+      if (!agent?.ctx?.inject || mounted.has(agent)) return;
+      const registration = agent.ctx.inject(
+        ["skills"],
+        (scoped) => scoped.skills.registerProvider((control) => {
+          controls.set(agent, control);
+          return personaSkillProvider(
+            files,
+            () => {
+              const state = store.read(), binding = state.bindings[agent.session.id];
+              const persona = state.personas.find((p) => p.id === binding?.personaId);
+              if (!binding || binding.pending || binding.purpose || publicSession(binding) || persona?.archived)
+                return;
+              return persona?.id;
+            },
+            control
+          );
+        })
+      );
+      mounted.set(agent, registration);
+    };
+    return host.effect(function* () {
+      yield host.on("agent/created", ({ agent }) => mount(agent));
+      yield host.on(
+        "system-prompt/assemble",
+        async (_assembly, context, next) => {
+          if (context.agent) {
+            mount(context.agent);
+            await mounted.get(context.agent)?.await();
+            controls.get(context.agent)?.invalidate();
+          }
+          return next();
+        },
+        { prepend: true }
+      );
+      yield host.on("agent/disposed", ({ agent }) => {
+        mounted.delete(agent);
+        controls.delete(agent);
+      });
+      for (const agent of host.agents.list()) mount(agent);
+      yield async () => {
+        const pending = [...mounted.values()].map((fiber) => fiber.dispose());
+        mounted.clear();
+        controls.clear();
+        await Promise.all(pending);
+      };
+    }, "memory: native persona skill providers");
+  });
+  return () => {
+    watcher.close();
+    unsubscribe();
+    if (typeof provided === "function") provided();
+    return injection.dispose();
+  };
+}
+
+// packages/dsh-px-memory/src/native-resources.ts
 function scopedService(host, caller, name2) {
   const agent = service(host, "agents")?.get(caller.sessionId);
   return (agent?.ctx ? service(host, "agentPresets")?.serviceFor?.(agent, name2) ?? agent.ctx.get?.(name2) : void 0) ?? service(host, name2);
@@ -1832,14 +2143,14 @@ function skillName(value) {
   return value;
 }
 async function nativeSkillProjectRoot(fs, cwd) {
-  let current = resolve2(cwd);
+  let current = resolve3(cwd);
   for (; ; ) {
     try {
-      if (await fs.stat(await fs.resolve(join2(current, ".git")))) return current;
+      if (await fs.stat(await fs.resolve(join3(current, ".git")))) return current;
     } catch {
     }
     const parent = dirname3(current);
-    if (parent === current) return resolve2(cwd);
+    if (parent === current) return resolve3(cwd);
     current = parent;
   }
 }
@@ -1875,18 +2186,23 @@ async function awaitSkillDiscovery(host, caller, expected) {
     } catch {
       return "pending";
     }
-    await new Promise((resolve3) => setTimeout(resolve3, 100));
+    await new Promise((resolve4) => setTimeout(resolve4, 100));
   }
   return "pending";
 }
 async function skillAction(host, caller, home, args) {
+  service(host, "pxPersonaSkills")?.invalidate();
   const skills = scopedService(host, caller, "skills"), fs = scopedService(host, caller, "fs"), agent = service(host, "agents")?.get(caller.sessionId);
   if (!skills?.list || !skills?.get) throw new MemoryError("\u539F\u751F Skills \u670D\u52A1\u4E0D\u53EF\u7528", 503);
   const options = { cwd: caller.project, ...agent ? { scope: agent } : {} };
+  const identities = service(host, "pxMemoryChannels");
+  const identity = identities?.inspect?.(caller.sessionId);
+  const privatePersona = identity?.binding && !identity.binding.pending && !identity.binding.purpose && !publicSession(identity.binding) && !identity.persona?.archived ? identity.persona?.id : void 0;
   const projectRoot = caller.project && fs ? await nativeSkillProjectRoot(fs, caller.project) : void 0;
   const directories = {
-    project: projectRoot ? join2(projectRoot, ".dsh", "skills") : null,
-    global: join2(home, "skills")
+    project: projectRoot ? join3(projectRoot, ".dsh", "skills") : null,
+    global: join3(home, "skills"),
+    persona: privatePersona ? personaSkillDirectory(home, privatePersona) : null
   };
   if (args.action === "list") return { skills: await skills.list(options), directories };
   const name2 = skillName(args.name);
@@ -1905,21 +2221,22 @@ async function skillAction(host, caller, home, args) {
     return {
       skill: item,
       version: version2,
-      managed: managed && ["project-dsh", "user-dsh"].includes(item.source),
+      managed: managed && ["project-dsh", "user-dsh", "persona-private"].includes(item.source),
       directories
     };
   }
-  if (args.action !== "save" || !["project", "global"].includes(args.scope))
+  if (args.action !== "save" || !["project", "global", "persona"].includes(args.scope))
     throw new MemoryError("\u6280\u80FD\u64CD\u4F5C\u6216\u8303\u56F4\u65E0\u6548");
   if (!fs?.writeText) throw new MemoryError("\u539F\u751F\u6587\u4EF6\u5199\u5165\u670D\u52A1\u4E0D\u53EF\u7528", 503);
   const sandbox = scopedService(host, caller, "sandboxPolicy");
   if (!agent || !sandbox?.resolve)
     throw new MemoryError("\u5F53\u524D\u4F1A\u8BDD\u7684\u539F\u751F\u6587\u4EF6\u6743\u9650\u6682\u4E0D\u53EF\u7528\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u4F1A\u8BDD", 503);
   const policy = sandbox.resolve({ session: agent.session });
+  if (args.scope === "persona" && !privatePersona) throw new MemoryError("\u5F53\u524D\u4F1A\u8BDD\u4E0D\u80FD\u7F16\u8F91\u4EBA\u683C\u79C1\u6709\u6280\u80FD", 403);
   if (args.scope === "project" && !caller.project) throw new MemoryError("\u9879\u76EE\u6280\u80FD\u9700\u8981\u5F53\u524D\u9879\u76EE");
   if (typeof args.description !== "string" || !args.description.trim() || args.description.length > 1e3 || typeof args.body !== "string" || !args.body.trim() || args.body.length > 64e3 || typeof args.enabled !== "boolean")
     throw new MemoryError("\u8BF7\u586B\u5199\u6709\u6548\u7684\u6280\u80FD\u8BF4\u660E\u3001\u6B63\u6587\u548C\u542F\u7528\u72B6\u6001");
-  const base = args.scope === "project" ? directories.project : directories.global, path = join2(base, name2, "SKILL.md");
+  const base = args.scope === "project" ? directories.project : args.scope === "persona" ? directories.persona : directories.global, path = join3(base, name2, "SKILL.md");
   if (args.expectedRoot !== base) throw new MemoryError("\u6280\u80FD\u76EE\u5F55\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u5217\u8868\u5E76\u786E\u8BA4\u4FDD\u5B58\u4F4D\u7F6E", 409);
   const parent = await fs.resolve(base, { cwd: caller.project }), target = await fs.resolve(path, { cwd: caller.project });
   if (!fs.contains(parent, target)) throw new MemoryError("\u6280\u80FD\u8DEF\u5F84\u8D85\u51FA\u53D7\u7BA1\u76EE\u5F55");
@@ -1929,8 +2246,11 @@ async function skillAction(host, caller, home, args) {
   if (info) {
     if (info.type !== "file" || !args.version || info.version !== args.version)
       throw new MemoryError("\u6280\u80FD\u6587\u4EF6\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6", 409);
-    if ((await frontmatter(await fs.readText(target))).metadata["dsh-px-managed"] !== true)
+    const existing = (await frontmatter(await fs.readText(target))).metadata;
+    if (existing["dsh-px-managed"] !== true)
       throw new MemoryError("\u6B64\u6280\u80FD\u7531\u5176\u4ED6\u6765\u6E90\u7BA1\u7406\uFF0C\u8BF7\u4F7F\u7528\u539F\u6587\u4EF6\u7F16\u8F91\u5165\u53E3", 409);
+    if (args.scope === "persona" && existing["dsh-px-persona"] !== privatePersona)
+      throw new MemoryError("\u6280\u80FD\u4E0D\u5C5E\u4E8E\u672C\u4F1A\u8BDD\u4EBA\u683C", 403);
   } else if (args.version) throw new MemoryError("\u539F\u6280\u80FD\u6587\u4EF6\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u5237\u65B0", 409);
   const metadata = {
     name: name2,
@@ -1938,11 +2258,17 @@ async function skillAction(host, caller, home, args) {
     "disable-model-invocation": !args.enabled,
     "user-invocable": args.enabled,
     "dsh-px-managed": true,
+    ...args.scope === "persona" ? { "dsh-px-persona": privatePersona } : {},
     ...args.knowledge ? { "dsh-px-knowledge": args.knowledge } : {}
   };
   const { stringify: stringifyYaml } = await import("yaml");
   let result;
   try {
+    if (args.scope === "persona") {
+      const fresh = identities.inspect(caller.sessionId);
+      if (fresh.persona?.id !== privatePersona || fresh.persona?.archived || publicSession(fresh.binding))
+        throw new MemoryError("\u4EBA\u683C\u6216\u8D44\u6599\u8303\u56F4\u5DF2\u7ECF\u6539\u53D8\uFF0C\u8349\u7A3F\u672A\u5199\u5165", 409);
+    }
     result = await fs.writeText(
       target,
       "---\n" + stringifyYaml(metadata) + "---\n\n" + args.body.trim() + "\n",
@@ -1959,6 +2285,7 @@ async function skillAction(host, caller, home, args) {
     throw error62;
   }
   let discovery = "pending";
+  service(host, "pxPersonaSkills")?.invalidate();
   for (let attempt = 0; attempt < 12; attempt++) {
     try {
       const listed = (await skills.list(options)).find(
@@ -1971,7 +2298,7 @@ async function skillAction(host, caller, home, args) {
     } catch {
       break;
     }
-    await new Promise((resolve3) => setTimeout(resolve3, 80));
+    await new Promise((resolve4) => setTimeout(resolve4, 80));
   }
   return {
     saved: true,
@@ -2080,11 +2407,11 @@ function delegatedContract(agent, get, lookup, store) {
 }
 
 // packages/dsh-px-memory/src/experience-service.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 
 // packages/dsh-px-memory/src/experience.ts
-import { createHash as createHash4 } from "node:crypto";
-import { join as join3 } from "node:path";
+import { createHash as createHash5 } from "node:crypto";
+import { join as join4 } from "node:path";
 var reads = /* @__PURE__ */ new Set([
   "overview",
   "catalog",
@@ -2136,7 +2463,7 @@ var ExperienceBank = class {
   async withRuntime(caller, run) {
     if (this.disposed) throw new MemoryError("\u7ECF\u9A8C\u670D\u52A1\u5DF2\u505C\u6B62", 503);
     caller.signal?.throwIfAborted();
-    const identity = this.identity(caller), key = createHash4("sha256").update(JSON.stringify([identity.personaId, identity.project])).digest("hex");
+    const identity = this.identity(caller), key = createHash5("sha256").update(JSON.stringify([identity.personaId, identity.project])).digest("hex");
     const previous = this.tails.get(key) ?? Promise.resolve();
     const next = previous.catch(() => {
     }).then(async () => {
@@ -2156,7 +2483,7 @@ var ExperienceBank = class {
         }
         entry = {
           runtime: module.createSkillsMemorySource({
-            dataDir: join3(this.root, key),
+            dataDir: join4(this.root, key),
             dshHome: this.home,
             ...this.agentsHome ? { agentsHome: this.agentsHome } : {}
           }).create({
@@ -7686,7 +8013,7 @@ var recursive = /* @__PURE__ */ new WeakMap();
 var NONE = 0;
 var ASSUMED = 1;
 var PROVEN = 2;
-function isRecursive(inst, stack, resolve3) {
+function isRecursive(inst, stack, resolve4) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -7696,7 +8023,7 @@ function isRecursive(inst, stack, resolve3) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer = isRecursive(child, stack, resolve3);
+      const answer = isRecursive(child, stack, resolve4);
       if (answer > result)
         result = answer;
     }
@@ -7707,7 +8034,7 @@ function isRecursive(inst, stack, resolve3) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve3) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve4) : NONE;
       if (child > answer)
         answer = child;
     }
@@ -7771,7 +8098,7 @@ function isRecursive(inst, stack, resolve3) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve3 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve4 ? inst._zod.innerType : void 0);
       merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -22520,7 +22847,7 @@ var signals = [
   "skill-misleading",
   "success"
 ];
-var hash4 = (value) => createHash5("sha256").update(JSON.stringify(value)).digest("hex");
+var hash4 = (value) => createHash6("sha256").update(JSON.stringify(value)).digest("hex");
 var skillName2 = { type: "string", pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", maxLength: 64 };
 var newest = (rows) => [...rows].sort(
   (a, b) => String(b.updatedAt ?? b.startedAt ?? b.createdAt ?? "").localeCompare(
@@ -22566,7 +22893,7 @@ var ExperienceService = class {
       const result = await this.bank.read(caller, input2.kind, { id: input2.id });
       if (input2.kind !== "draft") return result;
       const value = result.value;
-      const digest2 = (content) => createHash5("sha256").update(content).digest("hex");
+      const digest2 = (content) => createHash6("sha256").update(content).digest("hex");
       return {
         ...result,
         value: {
@@ -22906,13 +23233,150 @@ var ExperienceService = class {
   }
 };
 
+// packages/dsh-px-memory/src/persona-hub.ts
+async function personaHubView(host, store, personaId, offset = 0) {
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset > 2e4) throw new MemoryError("\u5206\u9875\u4F4D\u7F6E\u65E0\u6548");
+  const state = store.read(), selected = personaId ?? "default";
+  if (!state.personas.some((p) => p.id === selected)) throw new MemoryError("\u4EBA\u683C\u4E0D\u5B58\u5728", 404);
+  const controller = service(host, "sessionController");
+  if (!controller?.list) throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u76EE\u5F55\u4E0D\u53EF\u7528", 503);
+  const native = await controller.list({});
+  if (!Array.isArray(native?.items)) throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u76EE\u5F55\u672A\u8FD4\u56DE\u6709\u6548\u7ED3\u679C", 503);
+  const rows = native.items.filter((row) => {
+    const binding = state.bindings[row.sessionId];
+    return !isInternalSession(row.sessionId) && !binding?.purpose && !binding?.pending && row.origin !== "subagent";
+  });
+  const selectedRows = rows.filter(
+    (row) => (state.bindings[row.sessionId]?.personaId ?? "default") === selected
+  );
+  const workspaceRegistry = service(host, "workspaceRegistry");
+  return {
+    revision: state.revision,
+    selectedPersonaId: selected,
+    personas: state.personas.map((p) => ({
+      id: p.id,
+      name: p.name,
+      revision: p.revision,
+      archived: p.archived === true,
+      sessionCount: rows.filter(
+        (row) => (state.bindings[row.sessionId]?.personaId ?? "default") === p.id
+      ).length
+    })),
+    sessions: selectedRows.slice(offset, offset + 50).map((row) => ({
+      id: row.sessionId,
+      cwd: row.cwd ?? null,
+      updatedAt: row.updatedAt,
+      running: row.running === true,
+      live: row.agentAvailable === true,
+      personaRevision: state.bindings[row.sessionId]?.personaRevision ?? null,
+      channel: state.bindings[row.sessionId]?.channel?.provider ?? null
+    })),
+    total: selectedRows.length,
+    nextOffset: offset + 50 < selectedRows.length ? offset + 50 : null,
+    workspaces: (workspaceRegistry?.list?.() ?? []).map((w) => ({
+      id: w.id,
+      title: w.title ?? w.path,
+      path: w.path
+    }))
+  };
+}
+async function createHubSession(host, store, args) {
+  if (typeof args.requestId !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(args.requestId))
+    throw new MemoryError("\u65B0\u4F1A\u8BDD\u8BF7\u6C42\u6807\u8BC6\u65E0\u6548");
+  const personaId = validId(args.personaId), workspaceId = validId(args.workspaceId);
+  const state = store.read(), persona = state.personas.find((p) => p.id === personaId && !p.archived);
+  if (!persona) throw new MemoryError("\u4EBA\u683C\u4E0D\u5B58\u5728\u6216\u5DF2\u5F52\u6863");
+  const workspace = service(host, "workspaceRegistry")?.list?.().find((w) => w.id === workspaceId);
+  if (!workspace) throw new MemoryError("\u8BF7\u5148\u6DFB\u52A0\u6216\u9009\u62E9\u6709\u6548\u5DE5\u4F5C\u533A");
+  const id = "session-" + args.requestId, existing = state.bindings[id];
+  if (existing && (existing.personaId !== personaId || existing.creationWorkspaceId !== workspaceId || existing.createdFrom || existing.handoff || existing.channel))
+    throw new MemoryError("\u6B64\u8BF7\u6C42\u5DF2\u7ECF\u7528\u4E8E\u53E6\u4E00\u9879\u4F1A\u8BDD\u521B\u5EFA", 409);
+  const controller = service(host, "sessionController");
+  if (!controller?.create) throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u521B\u5EFA\u670D\u52A1\u4E0D\u53EF\u7528", 503);
+  if (existing && !existing.pending) {
+    const current = await controller.inspect(id);
+    if (projectKey(current.meta.cwd) !== projectKey(workspace.path))
+      throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u7684\u5DE5\u4F5C\u533A\u5DF2\u7ECF\u6539\u53D8\uFF0C\u8BF7\u91CD\u65B0\u521B\u5EFA", 409);
+    return id;
+  }
+  store.bind(id, { personaId, pending: true, creationWorkspaceId: workspaceId });
+  await controller.create({ sessionId: id, workspaceId });
+  store.bind(id, { personaId });
+  return id;
+}
+function registerPersonaHub(ctx, store) {
+  const once = continuationRequests();
+  const injection = ctx.inject(
+    ["connection", "webServer", "sessionController"],
+    (host) => host.webServer.register({
+      kind: "exact",
+      path: "/dsh-px-personas",
+      handler: async (req, res) => {
+        if (rejectUnauthenticatedRequest(req, res, host.connection)) return;
+        const send = (status, value) => {
+          res.writeHead(status, {
+            "Content-Type": "application/json; charset=utf-8",
+            "Cache-Control": "no-store"
+          });
+          res.end(JSON.stringify(value));
+        };
+        try {
+          if (req.method === "GET") {
+            const query = new URL(req.url, "http://127.0.0.1").searchParams;
+            return send(
+              200,
+              await personaHubView(
+                host,
+                store,
+                query.get("personaId") ?? void 0,
+                Number(query.get("offset") ?? 0)
+              )
+            );
+          }
+          if (req.method !== "POST") return send(405, { error: "\u8BF7\u4F7F\u7528 GET \u6216 POST" });
+          if (!String(req.headers["content-type"]).startsWith("application/json"))
+            throw new MemoryError("\u8BF7\u4F7F\u7528 JSON", 415);
+          const chunks = [];
+          let length = 0;
+          for await (const chunk of req) {
+            length += Buffer.byteLength(chunk);
+            if (length > 8192) throw new MemoryError("\u8BF7\u6C42\u8FC7\u5927", 413);
+            chunks.push(Buffer.from(chunk));
+          }
+          let args;
+          try {
+            args = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+          } catch {
+            throw new MemoryError("JSON \u65E0\u6548");
+          }
+          if (!args || typeof args !== "object" || Array.isArray(args)) throw new MemoryError("\u64CD\u4F5C\u65E0\u6548");
+          if (args.type === "create-persona") return send(200, store.createPersona(args.name));
+          if (args.type !== "create-session") throw new MemoryError("\u64CD\u4F5C\u65E0\u6548");
+          const createdSessionId = await once(
+            args.requestId,
+            JSON.stringify([args.personaId, args.workspaceId]),
+            () => createHubSession(host, store, args)
+          );
+          return send(200, { createdSessionId });
+        } catch (error62) {
+          send(error62 instanceof MemoryError ? error62.status : 503, {
+            error: error62 instanceof Error ? error62.message : "\u4EBA\u683C\u76EE\u5F55\u4E0D\u53EF\u7528"
+          });
+        }
+      }
+    })
+  );
+  return () => injection.dispose();
+}
+
 // packages/dsh-px-memory/src/index.ts
 var name = "dsh-px-memory";
 var inject = [];
 function apply(ctx) {
   const root = process.env.DSH_HOME;
   if (!root) throw new Error("DSH_HOME \u672A\u8BBE\u7F6E\uFF0C\u65E0\u6CD5\u4FDD\u5B58\u4EBA\u683C\u4E0E\u8BB0\u5FC6");
-  const store = new MemoryStore(join4(root, "storages", name, "memory.json"));
+  const store = new MemoryStore(join5(root, "storages", name, "memory.json"));
+  ctx.effect(() => registerPersonaHub(ctx, store), "memory: persona workspace API");
   const channelBindings = /* @__PURE__ */ new WeakMap();
   const bindingFor = (agent) => {
     if (!agent) return;
@@ -22958,7 +23422,7 @@ function apply(ctx) {
   const currentTurn = (agent) => service(ctx, "sessionProjections")?.stateOf?.(agent.session, "turnBoundary")?.lastTurn ?? agent.session.snapshotEvents?.().findLast((e) => e.type === "turn/start")?.data?.turn ?? 0;
   ctx.effect(() => () => contracts.clear(), "memory: current knowledge contracts");
   const knowledge = new KnowledgeBank(
-    join4(root, "storages", "dsh-px-knowledge-scopes"),
+    join5(root, "storages", "dsh-px-knowledge-scopes"),
     store,
     (caller, path) => observeFile(ctx, caller, path)
   );
@@ -23018,6 +23482,7 @@ function apply(ctx) {
       pending: !service(ctx, "agents")?.get(sessionId)
     }),
     currentPersona: (agent) => identity.current(agent),
+    expressionContext: (agent) => identity.interaction(agent),
     inherit: (sessionId, parent) => {
       if (parent && store.read().bindings[parent]?.channel) store.bind(sessionId, { parent, locked: true });
     },
@@ -23133,7 +23598,7 @@ function apply(ctx) {
       "memory: compression-stable native operation contract"
     )
   );
-  const history = new HistoryIndex(join4(root, "storages", name, "history.sqlite"), store);
+  const history = new HistoryIndex(join5(root, "storages", name, "history.sqlite"), store);
   ctx.effect(() => () => history.close(), "memory: history index");
   ctx.inject(["agents"], (host) => {
     try {
@@ -23160,6 +23625,7 @@ function apply(ctx) {
       ctx.logger?.warn("\u4EBA\u683C\u7ED1\u5B9A\u6682\u4E0D\u53EF\u7528\uFF1B\u8BF7\u6C42\u7EC4\u88C5\u524D\u4ECD\u4F1A\u62D2\u7EDD\u672A\u77E5\u8EAB\u4EFD\uFF1A%s", String(error62));
     }
   });
+  ctx.effect(() => installPersonaSkillProviders(ctx, store, root), "memory: private Skills lifecycle");
   ctx.on("agent/turn-stopping", ({ agent, signal }) => {
     void history.refresh(ctx, agent.session.id, signal).catch((e) => ctx.logger?.warn("\u5386\u53F2\u7D22\u5F15\u6682\u672A\u66F4\u65B0\uFF1A%s", String(e)));
   });
@@ -23183,7 +23649,7 @@ ${!budget || handoff2.summary.length <= budget.handoffChars ? handoff2.summary :
           const p = current(agent);
           if (!p.expression) return "";
           return `\u672C\u4F1A\u8BDD\u914D\u7F6E\u7684\u8EAB\u4EFD\u4E0E\u8868\u8FBE\uFF1A${p.name}\uFF08\u7248\u672C ${p.revision}\uFF09\u3002\u901A\u7528\u8BED\u6C14\u9ED8\u8BA4\u503C\u6309\u8FD9\u4EFD\u5177\u4F53\u914D\u7F6E\u8C03\u6574\uFF1B\u5DE5\u5177\u4E0E\u6267\u884C\u6743\u9650\u4ECD\u7531\u5BBF\u4E3B\u63A7\u5236\u3002
-${renderPersonaExpression(p.expression)}`;
+${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
         }
       }),
       "memory: configured persona expression"
@@ -23282,7 +23748,7 @@ ${renderPersonaExpression(p.expression)}`;
     });
   });
   ctx.inject(["connection", "webServer", "sessionController"], (host) => {
-    const experience = new ExperienceService(host, store, join4(root, "storages", "dsh-px-experience"), root);
+    const experience = new ExperienceService(host, store, join5(root, "storages", "dsh-px-experience"), root);
     host.effect(() => () => experience.dispose(), "memory: experience lifecycle");
     return host.effect(
       () => host.webServer.register({

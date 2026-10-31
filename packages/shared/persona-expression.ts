@@ -1,9 +1,16 @@
-/** Public expression is safe to share with an audience; private instructions never enter this renderer. */
+import {
+  parseSceneRules,
+  renderSceneRules,
+  type PersonaSceneRule,
+  type PersonaInteraction
+} from './persona-scenes'
+/** Expression is provided only to its matching context; private instructions never enter this renderer. */
 export interface PersonaExpression {
   style: 'lively' | 'task' | 'balanced' | 'custom'
   instructions: string
   principles: string
   examples: string
+  scenes?: PersonaSceneRule[]
 }
 
 export const EXPRESSION_STYLES = [
@@ -51,7 +58,9 @@ export function parsePersonaExpression(value: unknown): PersonaExpression | unde
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('公开人格表达格式无效')
   const v = value as Record<string, unknown>
   if (
-    Object.keys(v).some((key) => !['style', 'instructions', 'principles', 'examples'].includes(key)) ||
+    Object.keys(v).some(
+      (key) => !['style', 'instructions', 'principles', 'examples', 'scenes'].includes(key)
+    ) ||
     !EXPRESSION_STYLES.some(([key]) => key === v.style)
   )
     throw new Error('公开人格表达类型无效')
@@ -66,17 +75,22 @@ export function parsePersonaExpression(value: unknown): PersonaExpression | unde
     style: v.style as PersonaExpression['style'],
     instructions: (v.instructions as string).trim(),
     principles: (v.principles as string).trim(),
-    examples: (v.examples as string).trim()
+    examples: (v.examples as string).trim(),
+    ...(v.scenes !== undefined ? { scenes: parseSceneRules(v.scenes) } : {})
   }
 }
 
 /** Presets populate editable values once; the prompt renders saved text, not a hidden hard-coded personality. */
-export function renderPersonaExpression(expression?: PersonaExpression): string {
+export function renderPersonaExpression(
+  expression?: PersonaExpression,
+  context?: PersonaInteraction
+): string {
   if (!expression) return ''
   return [
     expression.instructions && '性格与表达：\n' + expression.instructions,
     expression.principles && '稳定原则：\n' + expression.principles,
-    expression.examples && '说话示例（用于把握语气，不是事实或固定回复）：\n' + expression.examples
+    expression.examples && '说话示例（用于把握语气，不是事实或固定回复）：\n' + expression.examples,
+    renderSceneRules(expression.scenes, context)
   ]
     .filter(Boolean)
     .join('\n')

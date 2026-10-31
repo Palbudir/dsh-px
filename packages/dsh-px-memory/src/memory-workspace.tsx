@@ -1,6 +1,7 @@
-import { useSyncExternalStore } from 'react'
+import { useState, useSyncExternalStore } from 'react'
 import { selectedSession } from '../../shared/native-navigation'
 import { memoryNavigation } from './workspace-navigation'
+import { PersonaHubPanel } from './persona-hub-panel'
 
 export function registerMemoryWorkspace(host: any, Panel: any) {
   const openSettings = () => {
@@ -11,6 +12,7 @@ export function registerMemoryWorkspace(host: any, Panel: any) {
   const Main = () => {
     const sessions: any = useSyncExternalStore(host.sessions.list.subscribe, host.sessions.list.getSnapshot)
     const id = selectedSession(sessions, null)
+    const [hub, setHub] = useState(false)
     return (
       <div
         className="px-ui"
@@ -18,9 +20,25 @@ export function registerMemoryWorkspace(host: any, Panel: any) {
       >
         <div className="px-actions" style={{ margin: '16px 20px 0', flexShrink: 0 }}>
           <button onClick={() => host.layout.selectPanel(null)}>返回会话</button>
+          <button aria-pressed={hub || !id} onClick={() => setHub(true)}>
+            人格与会话
+          </button>
+          {id && (
+            <button aria-pressed={!hub} onClick={() => setHub(false)}>
+              当前人格资料
+            </button>
+          )}
           {id && <span className="px-muted">{sessions.byId[id]?.displayTitle ?? '当前会话'}</span>}
         </div>
-        {id ? (
+        {hub || !id ? (
+          <PersonaHubPanel
+            titles={sessions.byId}
+            openSession={(target: string) => {
+              host.uiWorkspace.openSession(target)
+              setHub(false)
+            }}
+          />
+        ) : id ? (
           <Panel
             key={id}
             sessionId={id}

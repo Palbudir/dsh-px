@@ -187,7 +187,9 @@ export function KnowledgePanel({
     setSkillDescription(v.skill.description)
     setBody(v.skill.content)
     setSkillEnabled(v.skill.invocation?.modelInvocable === true)
-    setSkillScope(v.skill.source === 'user-dsh' ? 'global' : 'project')
+    setSkillScope(
+      v.skill.source === 'persona-private' ? 'persona' : v.skill.source === 'user-dsh' ? 'global' : 'project'
+    )
     setEditing(false)
   }
   return (
@@ -498,7 +500,8 @@ export function KnowledgePanel({
             }}
           />
           <p className="px-muted">
-            列表与加载使用 DSH 原生 Skills。项目技能优先于全局技能；只有本页创建的技能可在此编辑。
+            列表与加载使用 DSH 原生
+            Skills。人格私有技能只在本人的会话中发现，同名时优先；项目技能优先于本机公共技能。只有本页创建的技能可在此编辑。
           </p>
           <button
             disabled={busy || editing || !draft}
@@ -526,10 +529,14 @@ export function KnowledgePanel({
             刷新技能列表
           </button>
           {skillDirectories && (
-            <p className="px-muted">
-              项目技能目录：{skillDirectories.project ?? '未选择项目'}；全局技能目录：
-              {skillDirectories.global}
-            </p>
+            <details className="px-muted">
+              <summary>技能存储位置</summary>
+              <p>
+                项目技能目录：{skillDirectories.project ?? '未选择项目'}；全局技能目录：
+                {skillDirectories.global}
+                {skillDirectories.persona && <>；人格私有目录：{skillDirectories.persona}</>}
+              </p>
+            </details>
           )}
           {!editing &&
             skills.map((item) => (
@@ -539,7 +546,15 @@ export function KnowledgePanel({
                 disabled={busy}
                 onClick={() => void run(() => readSkill(item.name))}
               >
-                {item.name} · {item.source}
+                {item.name} ·{' '}
+                {(
+                  {
+                    'persona-private': '仅此人格',
+                    'project-dsh': '本项目',
+                    'user-dsh': '本机公共',
+                    bundled: '随包提供'
+                  } as Record<string, string>
+                )[item.source] ?? item.source}
                 {!item.invocation?.modelInvocable ? ' · 不自动调用' : ''}
               </button>
             ))}
@@ -569,7 +584,10 @@ export function KnowledgePanel({
                 <option value="project" disabled={!project}>
                   本项目
                 </option>
-                <option value="global">全局</option>
+                <option value="global">本机公共</option>
+                <option value="persona" disabled={!skillDirectories?.persona}>
+                  仅此人格
+                </option>
               </select>
               <input
                 aria-label="技能名称"

@@ -501,6 +501,11 @@ export function MemoryPanel({
                       {renderPersonaExpression(view.persona.expression) ||
                         '未设置独立的公开表达，沿用原有协作和渠道配置。'}
                     </p>
+                    {!!view.persona.expression?.scenes?.length && (
+                      <p className="px-muted">
+                        本版本另有 {view.persona.expression.scenes.length} 条按对象与场合使用的表达规则。
+                      </p>
+                    )}
                   </details>
                   <details style={{ ...cardStyle, marginBottom: 16 }}>
                     <summary>编辑人格模板（保存为新版本）</summary>

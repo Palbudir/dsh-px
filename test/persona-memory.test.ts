@@ -138,6 +138,7 @@ test('native prompt context fixes identity before first request and refreshes pr
     },
     inject: (names: string[], cb: any) => {
       if (names.every((name) => host[name] !== undefined)) cb(host)
+      return { dispose: async () => {} }
     }
   }
   apply(host)
@@ -222,6 +223,7 @@ test('HTTP memory saves preserve UTF-8 split across network chunks and reject st
     sessionController: { inspect: async () => ({ meta: { cwd: dir } }) },
     inject: (names: string[], cb: any) => {
       if (names.includes('webServer')) cb(host)
+      return { dispose: async () => {} }
     }
   }
   apply(host)

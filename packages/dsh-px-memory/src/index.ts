@@ -28,6 +28,8 @@ import { delegatedContract, delegatedKnowledgeCaller } from './knowledge-delegat
 import { ExperienceService } from './experience-service'
 import { runAnalysisTask } from './experience-task'
 import { inspectMemorySession } from './session-context'
+import { installPersonaSkillProviders } from './persona-skills'
+import { registerPersonaHub } from './persona-hub'
 
 export const name = 'dsh-px-memory'
 export const inject: string[] = []
@@ -42,6 +44,7 @@ export function apply(ctx: any): void {
   const root = process.env.DSH_HOME
   if (!root) throw new Error('DSH_HOME 未设置，无法保存人格与记忆')
   const store = new MemoryStore(join(root, 'storages', name, 'memory.json'))
+  ctx.effect(() => registerPersonaHub(ctx, store), 'memory: persona workspace API')
   const channelBindings = new WeakMap<object, SessionBinding | null>()
   const bindingFor = (agent: Agent | undefined): SessionBinding | undefined => {
     if (!agent) return
@@ -182,6 +185,7 @@ export function apply(ctx: any): void {
         pending: !service(ctx, 'agents')?.get(sessionId)
       }),
     currentPersona: (agent: Agent) => identity.current(agent),
+    expressionContext: (agent: Agent) => identity.interaction(agent),
     inherit: (sessionId: string, parent?: string) => {
       if (parent && store.read().bindings[parent]?.channel) store.bind(sessionId, { parent, locked: true })
     },
@@ -335,6 +339,7 @@ export function apply(ctx: any): void {
       ctx.logger?.warn('人格绑定暂不可用；请求组装前仍会拒绝未知身份：%s', String(error))
     }
   })
+  ctx.effect(() => installPersonaSkillProviders(ctx, store, root), 'memory: private Skills lifecycle')
   ctx.on('agent/turn-stopping', ({ agent, signal }: { agent: Agent; signal: AbortSignal }) => {
     // Incremental indexing is local work. It neither calls a model nor changes a native task.
     void history
@@ -364,7 +369,7 @@ export function apply(ctx: any): void {
             if (!agent) return ''
             const p = current(agent)
             if (!p.expression) return ''
-            return `本会话配置的身份与表达：${p.name}（版本 ${p.revision}）。通用语气默认值按这份具体配置调整；工具与执行权限仍由宿主控制。\n${renderPersonaExpression(p.expression)}`
+            return `本会话配置的身份与表达：${p.name}（版本 ${p.revision}）。通用语气默认值按这份具体配置调整；工具与执行权限仍由宿主控制。\n${renderPersonaExpression(p.expression, identity.interaction(agent))}`
           }
         }),
       'memory: configured persona expression'
