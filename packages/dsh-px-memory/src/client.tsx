@@ -14,6 +14,7 @@ import {
   type PersonaExpression
 } from '../../shared/persona-expression'
 import { PersonaExpressionEditor } from '../../shared/persona-expression-editor'
+import { ChannelNotesPanel } from './channel-notes-panel'
 
 const personaDrafts = createDraftRegistry(64)
 
@@ -117,7 +118,7 @@ export function MemoryPanel({
     (name !== view.template.name ||
       instructions !== view.template.instructions ||
       JSON.stringify(expression) !== JSON.stringify(view.template.expression ?? null) ||
-      enabled !== view.persona.memoryEnabled)
+      enabled !== view.template.memoryEnabled)
   )
   const dirty = !!note || !!newName || configDirty || (restoring.current && !!saved?.configDirty)
   const identityChanged = !!(view && draftPersona && draftPersona !== view.persona.id)
@@ -185,7 +186,7 @@ export function MemoryPanel({
     setName(data.template.name)
     setInstructions(data.template.instructions)
     setExpression(data.template.expression ?? null)
-    setEnabled(data.persona.memoryEnabled)
+    setEnabled(data.template.memoryEnabled)
     if (!data.project) setScope('persona')
   }
   useEffect(() => {
@@ -203,7 +204,7 @@ export function MemoryPanel({
               setName(data.template.name)
               setInstructions(data.template.instructions)
               setExpression(data.template.expression ?? null)
-              setEnabled(data.persona.memoryEnabled)
+              setEnabled(data.template.memoryEnabled)
             }
             if (saved?.personaId !== data.persona.id) {
               setConflict(true)
@@ -319,7 +320,8 @@ export function MemoryPanel({
         )}
         <div className="px-actions" role="group" aria-label="记忆页面">
           {[
-            ['persona', '人格记忆'],
+            ['persona', view?.binding.channel?.access === 'public' ? '人格配置' : '人格记忆'],
+            ...(view?.binding.channel?.access === 'public' ? [['conversation-memory', '本聊天记忆']] : []),
             ['history', '经历与历史'],
             ['knowledge', '知识与 Skills']
           ].map(([id, label]) => (
@@ -354,6 +356,9 @@ export function MemoryPanel({
         {!view && !error && <p>正在读取…</p>}
         {view && !identityChanged && (
           <>
+            {tab === 'conversation-memory' && (
+              <ChannelNotesPanel key={sessionId + ':' + view.persona.id} url={url} />
+            )}
             <div hidden={tab !== 'history'}>
               <HistoryPanel
                 key={view.persona.id}
@@ -631,7 +636,7 @@ export function MemoryPanel({
                         name !== view.template.name ||
                         instructions !== view.template.instructions ||
                         JSON.stringify(expression) !== JSON.stringify(view.template.expression ?? null) ||
-                        enabled !== view.persona.memoryEnabled
+                        enabled !== view.template.memoryEnabled
                       }
                       onClick={() =>
                         void act({ type: 'create', name: newName }).then((ok) => {
@@ -644,103 +649,112 @@ export function MemoryPanel({
                   </details>
                 </section>
               </details>
-              <h3>保存的约定</h3>
-              <p style={{ opacity: 0.7 }}>
-                只显示本目录及此人格通用的记忆。可直接编辑，也可在对话中明确要求 Agent 记住或忘记。
-              </p>
-              {!view.persona.memoryEnabled && (
-                <p role="status">此人格的记忆已关闭，条目仍保留。可在“人格与协作偏好”中开启。</p>
-              )}
-              {!view.persona.memories.some((m) => !m.project || m.project === view.project) && (
-                <p className="px-empty">
-                  还没有保存约定。可以记下你的协作偏好，也可以在对话中明确要求助手记住。
+              {view.binding.channel?.access === 'public' ? (
+                <p>
+                  此聊天按自己的资料范围使用记忆。
+                  <button onClick={() => setTab('conversation-memory')}>查看本聊天记忆</button>
                 </p>
-              )}
-              {view.persona.memories
-                .filter((m) => !m.project || m.project === view.project)
-                .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-                .map((m) => (
-                  <section key={m.id} style={{ ...cardStyle, marginBottom: 8 }}>
-                    <small>{m.project ? '本目录' : '此人格通用'}</small>
-                    <p style={{ whiteSpace: 'pre-wrap' }}>{m.text}</p>
-                    <button
-                      style={controlStyle}
+              ) : (
+                <>
+                  <h3>保存的约定</h3>
+                  <p style={{ opacity: 0.7 }}>
+                    只显示本目录及此人格通用的记忆。可直接编辑，也可在对话中明确要求 Agent 记住或忘记。
+                  </p>
+                  {!view.persona.memoryEnabled && (
+                    <p role="status">此人格的记忆已关闭，条目仍保留。可在“人格与协作偏好”中开启。</p>
+                  )}
+                  {!view.persona.memories.some((m) => !m.project || m.project === view.project) && (
+                    <p className="px-empty">
+                      还没有保存约定。可以记下你的协作偏好，也可以在对话中明确要求助手记住。
+                    </p>
+                  )}
+                  {view.persona.memories
+                    .filter((m) => !m.project || m.project === view.project)
+                    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+                    .map((m) => (
+                      <section key={m.id} style={{ ...cardStyle, marginBottom: 8 }}>
+                        <small>{m.project ? '本目录' : '此人格通用'}</small>
+                        <p style={{ whiteSpace: 'pre-wrap' }}>{m.text}</p>
+                        <button
+                          style={controlStyle}
+                          disabled={busy || view.persona.archived}
+                          onClick={() => edit(m)}
+                        >
+                          编辑
+                        </button>{' '}
+                        <button
+                          style={controlStyle}
+                          disabled={busy}
+                          onClick={() =>
+                            void act({ type: 'forget', id: m.id }).then((ok) => {
+                              if (ok && editing === m.id) {
+                                setEditing(undefined)
+                                setNote('')
+                              }
+                            })
+                          }
+                        >
+                          忘记
+                        </button>
+                      </section>
+                    ))}
+                  <textarea
+                    disabled={busy || view.persona.archived}
+                    aria-label="记忆内容"
+                    rows={3}
+                    maxLength={2000}
+                    style={{ ...controlStyle, width: '100%', resize: 'vertical' }}
+                    placeholder="写下需要在以后的会话中记住的约定…"
+                    value={note}
+                    onChange={(e: any) => {
+                      beginEdit()
+                      setNote(e.target.value)
+                    }}
+                  />
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+                    <select
                       disabled={busy || view.persona.archived}
-                      onClick={() => edit(m)}
+                      aria-label="记忆范围"
+                      style={controlStyle}
+                      value={scope}
+                      onChange={(e: any) => setScope(e.target.value)}
                     >
-                      编辑
-                    </button>{' '}
+                      <option value="project" disabled={!view.project}>
+                        本目录
+                      </option>
+                      <option value="persona">此人格通用</option>
+                    </select>
                     <button
                       style={controlStyle}
-                      disabled={busy}
+                      disabled={busy || !note.trim() || !view.persona.memoryEnabled || view.persona.archived}
                       onClick={() =>
-                        void act({ type: 'forget', id: m.id }).then((ok) => {
-                          if (ok && editing === m.id) {
-                            setEditing(undefined)
+                        void act({ type: 'save', id: editing, text: note, scope }).then((ok) => {
+                          if (ok) {
                             setNote('')
+                            setEditing(undefined)
                           }
                         })
                       }
                     >
-                      忘记
+                      {editing ? '保存修改' : '记住'}
                     </button>
-                  </section>
-                ))}
-              <textarea
-                disabled={busy || view.persona.archived}
-                aria-label="记忆内容"
-                rows={3}
-                maxLength={2000}
-                style={{ ...controlStyle, width: '100%', resize: 'vertical' }}
-                placeholder="写下需要在以后的会话中记住的约定…"
-                value={note}
-                onChange={(e: any) => {
-                  beginEdit()
-                  setNote(e.target.value)
-                }}
-              />
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
-                <select
-                  disabled={busy || view.persona.archived}
-                  aria-label="记忆范围"
-                  style={controlStyle}
-                  value={scope}
-                  onChange={(e: any) => setScope(e.target.value)}
-                >
-                  <option value="project" disabled={!view.project}>
-                    本目录
-                  </option>
-                  <option value="persona">此人格通用</option>
-                </select>
-                <button
-                  style={controlStyle}
-                  disabled={busy || !note.trim() || !view.persona.memoryEnabled || view.persona.archived}
-                  onClick={() =>
-                    void act({ type: 'save', id: editing, text: note, scope }).then((ok) => {
-                      if (ok) {
-                        setNote('')
-                        setEditing(undefined)
-                      }
-                    })
-                  }
-                >
-                  {editing ? '保存修改' : '记住'}
-                </button>
-                {note && (
-                  <button
-                    style={controlStyle}
-                    onClick={() => {
-                      setNote('')
-                      setEditing(undefined)
-                    }}
-                  >
-                    取消编辑
-                  </button>
-                )}
-              </div>
-              <p style={{ opacity: 0.65 }}>
-                每条最多 2000 字，每个人格合计最多 8000 字。临时任务进度请放在会话账本中。
-              </p>
+                    {note && (
+                      <button
+                        style={controlStyle}
+                        onClick={() => {
+                          setNote('')
+                          setEditing(undefined)
+                        }}
+                      >
+                        取消编辑
+                      </button>
+                    )}
+                  </div>
+                  <p style={{ opacity: 0.65 }}>
+                    每条最多 2000 字，每个人格合计最多 8000 字。临时任务进度请放在会话账本中。
+                  </p>
+                </>
+              )}
             </section>
           </>
         )}

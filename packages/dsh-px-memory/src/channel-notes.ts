@@ -24,7 +24,7 @@ export class ChannelNotes {
     private readEvidence: (caller: string, source: string, seq: number, signal: AbortSignal) => Promise<any>,
     private currentEvidence: (sessionId: string) => unknown[] = () => []
   ) {}
-  private scope(sessionId: string) {
+  private scope(sessionId: string, actor: 'human' | 'model' = 'model') {
     const state = this.store.read(),
       binding = state.bindings[sessionId],
       channel = binding?.channel
@@ -36,18 +36,29 @@ export class ChannelNotes {
         '旧 QQ 会话缺少独立工作区记录；请由负责人发送 /new，再保存交流记忆。原历史保留。',
         409
       )
-    if (!persona || persona.archived || !persona.memoryEnabled)
+    if (!persona || (actor === 'model' && (persona.archived || !persona.memoryEnabled)))
       throw new MemoryError('当前人格的记忆已关闭', 409)
     return {
-      caller: { sessionId, project: channel.workspace, actor: 'model' as const },
+      caller: this.bank.conversationCaller({
+        sessionId,
+        project: channel.workspace,
+        actor
+      }),
       prefix: `QQ 经历 / ${persona.id} / `,
       identity: `${persona.id}/${channel.accountId}/${channel.conversationId}/${channel.workspace}`
     }
   }
-  async execute(sessionId: string, input: ChannelNoteInput, signal: AbortSignal): Promise<any> {
+  async execute(
+    sessionId: string,
+    input: ChannelNoteInput,
+    signal: AbortSignal,
+    actor: 'human' | 'model' = 'model'
+  ): Promise<any> {
     signal.throwIfAborted()
-    const scope = this.scope(sessionId)
+    const scope = this.scope(sessionId, actor)
     if (!input || typeof input !== 'object' || Array.isArray(input)) throw new MemoryError('交流记忆参数无效')
+    await this.bank.prepareConversation(scope.caller, scope.prefix)
+    signal.throwIfAborted()
     const catalog = await this.bank.catalog(scope.caller, 'project')
     const notes = catalog.documents
       .filter((d: any) => d.key.startsWith(scope.prefix) && d.status === 'active')
@@ -66,7 +77,7 @@ export class ChannelNotes {
       body: document.body ?? null,
       current: document.current,
       updatedAt: document.updatedAt ?? null,
-      source: 'mnemon-project-document',
+      source: 'mnemon-persona-conversation-document',
       authority: 'conversation-evidence-only'
     })
     if (input.action === 'catalog')
@@ -81,9 +92,12 @@ export class ChannelNotes {
         nextOffset: offset + 100 < notes.length ? offset + 100 : null
       }
     if (input.action === 'read') {
-      if (!notes.some((d: any) => d.id === input.id))
+      const id = notes.some((d: any) => d.id === input.id)
+        ? input.id
+        : await this.bank.conversationAlias(scope.caller, input.id!)
+      if (!id || !notes.some((d: any) => d.id === id))
         throw new MemoryError('条目不属于本群当前人格的交流记忆', 403)
-      const result = await this.bank.read(scope.caller, 'project', input.id!)
+      const result = await this.bank.read(scope.caller, 'project', id)
       signal.throwIfAborted()
       return { revision: result.revision, note: safeDocument(result.document) }
     }
@@ -141,7 +155,7 @@ export class ChannelNotes {
       })
     }
     signal.throwIfAborted()
-    if (this.scope(sessionId).identity !== scope.identity)
+    if (this.scope(sessionId, actor).identity !== scope.identity)
       throw new MemoryError('会话范围已变化，请重新读取', 409)
     const result = await this.bank.write(scope.caller, 'project', {
       key: scope.prefix + topic,

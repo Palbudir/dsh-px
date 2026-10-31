@@ -134,6 +134,7 @@ export function apply(ctx: any): void {
   )
   ctx.provide('pxMemoryChannels', {
     version: 1,
+    capabilities: { conversationMemoryIsolation: 1, personaSkills: 1, sceneExpression: 1 },
     conversationNotes: (sessionId: string, input: ChannelNoteInput, signal: AbortSignal) =>
       channelNotes.execute(sessionId, input, signal),
     createPersona: (name: string) => store.createPersona(name),
@@ -174,6 +175,7 @@ export function apply(ctx: any): void {
         )
         .map(([sessionId, binding]) => ({
           sessionId,
+          personaId: binding.personaId,
           channel: binding.channel,
           createdAt: binding.createdAt,
           pending: binding.pending
@@ -590,6 +592,14 @@ export function apply(ctx: any): void {
                     args.input
                   )
                   return send(200, result)
+                }
+                if (args.type === 'conversation-memory') {
+                  if (!['catalog', 'search', 'read'].includes(args.input?.action))
+                    throw new MemoryError('请使用聊天记忆的只读操作')
+                  return send(
+                    200,
+                    await channelNotes.execute(id, args.input, new AbortController().signal, 'human')
+                  )
                 }
                 if (args.type === 'skills')
                   return send(

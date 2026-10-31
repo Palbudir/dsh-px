@@ -198,4 +198,16 @@ export class QqAttentionControl {
   reset(): void {
     this.temporary = undefined
   }
+  releaseChat(chatId: string): void {
+    if (!this.temporary) return
+    for (const key of ['chats', 'muted', 'unmuted'] as const)
+      this.temporary[key] = this.temporary[key].filter((id) => id !== chatId)
+    if (
+      !this.temporary.mode &&
+      !this.temporary.chats.length &&
+      !this.temporary.muted.length &&
+      !this.temporary.unmuted.length
+    )
+      this.temporary = undefined
+  }
 }

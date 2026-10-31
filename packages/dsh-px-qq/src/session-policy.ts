@@ -10,13 +10,17 @@ import { QqInteractions } from './interactions'
 import { QqGroupTasks, installGroupTaskAudience } from './group-tasks'
 import { QqConversation } from './conversation'
 import { installConversationTools, QQ_REPLY_GUIDANCE } from './conversation-tools'
-import { QqAttentionControl, parseAttention, attentionDelivery, type QqAttentionSettings } from './attention'
+import { parseAttention, attentionDelivery, type QqAttentionSettings } from './attention'
+import { QqPersonaAttention } from './persona-attention'
 import { QqAttentionInbox, type InboxMessage } from './attention-inbox'
 import { QqAttentionDispatch } from './attention-dispatch'
 import { QqAttentionObserver } from './attention-observer'
 import { analyzeQqNotices } from './attention-analysis'
+import { QqPersonaRoutes } from './persona-routes'
+import { QqPersonaRouting } from './persona-routing'
 
 interface Caller {
+  routeRevision?: number
   epoch: number
   chatEpoch: number
   chatId: string
@@ -28,7 +32,10 @@ interface Caller {
 }
 interface BridgePort {
   receive(event: unknown): Promise<void>
-  send(chatId: string, text: string): Promise<unknown>
+  send(chatId: string, text: string, sourceSessionId?: string): Promise<unknown>
+  notice?(chatId: string, text: string): Promise<unknown>
+  routeState?(chatId: string): { busy: boolean; sending: boolean }
+  retireDelivery?(chatId: string, sessionId?: string): void
   segments?(chatId: string, segments: unknown[]): Promise<unknown>
   classifySendError?(error: unknown): 'retryable' | 'uncertain'
   chat?(chatId: string): any
@@ -41,7 +48,7 @@ interface BridgePort {
   recordedPreset?(sessionId: string): Promise<string | undefined>
   attachWorkspace?(sessionId: string, cwd: string): Promise<void>
 }
-const get = (ctx: any, name: string): any => ctx.get?.(name) ?? ctx[name]
+const get = (ctx: any, name: string): any => (typeof ctx?.get === 'function' ? ctx.get(name) : ctx?.[name])
 
 /** A scoped adapter around native Agent, tool visibility, permissions and memory contracts. */
 export class QqSessionPolicy {
@@ -78,9 +85,17 @@ export class QqSessionPolicy {
   private readonly replyDecisions = new Set<string>()
   private readonly interactions: QqInteractions
   private readonly groupTasks: QqGroupTasks
-  private readonly attention: QqAttentionControl
+  private readonly attention: QqPersonaAttention
   private readonly dispatch?: QqAttentionDispatch
   private readonly observer?: QqAttentionObserver
+  private readonly routes?: QqPersonaRoutes
+  private readonly routing?: QqPersonaRouting
+  private readonly delivery = new AsyncLocalStorage<{
+    chatId: string
+    sessionId?: string
+    notice?: boolean
+    assert(): void
+  }>()
   private attentionProblem?: string
   private cleanup?: Promise<void>
   private bridge?: BridgePort
@@ -111,8 +126,61 @@ export class QqSessionPolicy {
     private readonly receipts: QqReceipts,
     private readonly inbox?: QqAttentionInbox
   ) {
+    if (inbox) {
+      this.routes = new QqPersonaRoutes({
+        read: () => inbox.personaRoutes(),
+        write: (revision, next) => inbox.savePersonaRoutes(revision, next)
+      })
+      if (
+        Object.keys(this.routes.snapshot().chats).length &&
+        this.memory().capabilities?.conversationMemoryIsolation !== 1
+      )
+        throw new QqError('已有多人格 QQ 路由，但记忆组件缺少交流隔离能力；请启用配套新版 Pack', 409)
+      this.routing = new QqPersonaRouting(this.routes, {
+        known: (chatId) => inbox.knownChats().includes(chatId),
+        available: (personaId) =>
+          this.memory()
+            .personas()
+            .some((p: any) => p.id === personaId),
+        current: (chatId) => {
+          const id = this.bridge?.chat?.(chatId)?.sessionId
+          return {
+            personaId: id
+              ? (this.memory().inspect(id).binding?.personaId ?? this.personaForChat(chatId))
+              : this.personaForChat(chatId),
+            ...(id ? { sessionId: id } : {})
+          }
+        },
+        busy: (chatId) => this.routeBusy(chatId),
+        hasPending: (chatId) => inbox.routePendingCount(chatId) > 0,
+        cancelPending: (chatId) => inbox.stopBeforeRouteChange(chatId),
+        create: (chatId, personaId, sessionId) => this.createRoutedSession(chatId, personaId, sessionId),
+        adopt: async (chatId, sessionId) => {
+          const current = this.bridge?.chat?.(chatId),
+            live = get(this.host, 'agents')?.get(sessionId)
+          if (live && current?.sessionId === sessionId && current.agent === live) return
+          const result = await this.bridge?.adopt?.(chatId, sessionId)
+          if (!result?.ok) throw new QqError('原生 QQ 会话切换未完成，请刷新后恢复或取消', 409)
+        },
+        reset: async (chatId) => {
+          if (!this.bridge?.reset) throw new QqError('QQ 会话重置接口不可用', 503)
+          await this.bridge.reset(chatId)
+        },
+        flush: async () => {
+          if (!this.bridge?.flush) throw new QqError('QQ 接续持久化接口不可用', 503)
+          await this.bridge.flush()
+          if (this.writeProblem || this.recovering)
+            throw new QqError('QQ 接续记录尚未保存，人格切换保持待恢复状态', 503)
+        },
+        retireDelivery: (chatId, sessionId) => this.bridge?.retireDelivery?.(chatId, sessionId),
+        onBegin: () => this.observer?.cancel('changed')
+      })
+    }
     const defaultAttention = parseAttention(settings.attention)
-    this.attention = new QqAttentionControl(inbox?.preferences(defaultAttention).settings ?? defaultAttention)
+    this.attention = new QqPersonaAttention(
+      inbox?.preferences(defaultAttention).settings ?? defaultAttention,
+      settings.personaId
+    )
     // Preview attempts are not read receipts. A new activation can reconsider still-unprocessed notices.
     inbox?.retryNotifications()
     if (inbox)
@@ -123,6 +191,7 @@ export class QqSessionPolicy {
             this.connectionState.state !== 'online' ||
             this.disposed ||
             this.writeProblem ||
+            this.routing?.blocked(chatId) ||
             !!(agent && (agent.status === 'running' || agent.inbox.nextTurn.length))
           )
         },
@@ -152,43 +221,61 @@ export class QqSessionPolicy {
       })
     if (inbox)
       this.observer = new QqAttentionObserver({
-        busy: () =>
-          this.disposed ||
-          this.writeProblem ||
-          this.connectionState.state !== 'online' ||
-          (get(this.host, 'agents')?.list() ?? []).some(
-            (agent: any) => agent.status === 'running' && this.privateAttentionAgent(agent)
-          ),
-        candidates: () => {
-          const config = this.attention.effective()
-          if (!config.allowAgentChanges || config.mode === 'focus') return []
-          return inbox.notifications().filter((row) => {
-            const delivery = attentionDelivery(config, { ...row, self: false })
-            return config.mode === 'normal'
-              ? delivery.content === 'preview' && delivery.reason !== 'muted'
-              : delivery.notify
-          })
+        busy: () => {
+          if (this.disposed || this.writeProblem || this.connectionState.state !== 'online') return true
+          const first = this.notificationCandidates()[0],
+            personaId = first && this.personaForChat(first.chatId)
+          return (get(this.host, 'agents')?.list() ?? []).some(
+            (agent: any) =>
+              agent.status === 'running' &&
+              this.privateAttentionAgent(agent) &&
+              this.memory().inspect(agent.session.id).binding?.personaId === personaId
+          )
         },
+        candidates: () => this.notificationCandidates(),
         attempted: (rows) => inbox.noticeAttempt(rows),
         work: (rows, signal, started) =>
           analyzeQqNotices(
             this.host,
-            { ...this.settings, attention: this.attention.effective() },
+            {
+              ...this.settings,
+              personaId: rows[0] ? this.personaForChat(rows[0].chatId) : this.settings.personaId,
+              attention: this.attention.effective()
+            },
             rows,
             signal,
             started
           ),
-        apply: (decision) => {
+        apply: (decision, rows) => {
           this.assertActive()
           const config = this.attention.effective()
           if (!config.allowAgentChanges) return
           const known = inbox.knownChats()
+          const personaId = rows[0] && this.personaForChat(rows[0].chatId)
+          if (
+            !personaId ||
+            rows.some(
+              (row) => this.routing?.blocked(row.chatId) || this.personaForChat(row.chatId) !== personaId
+            )
+          )
+            return
           for (const chatId of decision.open) {
             if (!inbox.pending(chatId, 1).length) continue
-            this.attention.adjust({ chatId, minutes: decision.minutes, reason: decision.reason }, known)
+            this.attention.adjust(
+              { chatId, minutes: decision.minutes, reason: decision.reason },
+              known,
+              personaId
+            )
           }
           for (const chatId of decision.quiet ?? [])
-            this.attention.groupNotifications(chatId, false, decision.minutes, decision.reason, known)
+            this.attention.groupNotifications(
+              chatId,
+              false,
+              decision.minutes,
+              decision.reason,
+              known,
+              personaId
+            )
           this.dispatch?.schedule()
         }
       })
@@ -199,7 +286,8 @@ export class QqSessionPolicy {
       (id) => this.canRunGroupTask(id),
       () => {
         this.deliveryProblem = true
-      }
+      },
+      (chatId) => this.personaForChat(chatId)
     )
     this.interactions = new QqInteractions(async (chatId, text) => {
       if (!this.bridge || this.disposed) throw new QqError('QQ 连接已关闭', 409)
@@ -208,6 +296,11 @@ export class QqSessionPolicy {
   }
 
   attach(bridge: BridgePort): void {
+    if (
+      Object.keys(this.routes?.snapshot().chats ?? {}).length &&
+      (!bridge.routeState || !bridge.retireDelivery)
+    )
+      throw new QqError('已有多人格路由，需要配套的 QQ 传输与交付接口；未降级为旧发送方式', 409)
     this.bridge = bridge
   }
   bindConnection(connection: any): void {
@@ -261,7 +354,8 @@ export class QqSessionPolicy {
     return this.writeProblem
       ? {
           state: 'error',
-          message: 'QQ 接续记录未能保存，新请求已暂停。请重试保存后重新发送未受理的消息。',
+          message:
+            'QQ 接续记录未能保存，新请求暂不执行。已收到的消息保留在收件箱；修复后按消息模式继续，结果不确定的旧请求不会重跑。',
           persistenceBlocked: true
         }
       : this.deliveryProblem
@@ -302,6 +396,202 @@ export class QqSessionPolicy {
       ...(observer ? { observer } : {})
     }
   }
+  personaForChat(chatId: string): string {
+    const route = this.routes?.route(chatId)
+    if (route) return route.personaId
+    const id = this.bridge?.chat?.(chatId)?.sessionId
+    return (id && this.memory().inspect(id).binding?.personaId) || this.settings.personaId
+  }
+  private routeBusy(chatId: string): string[] {
+    const reasons: string[] = [],
+      transport = this.bridge?.routeState?.(chatId)
+    if (transport?.busy) reasons.push('QQ 回合尚未结算')
+    if (transport?.sending) reasons.push('仍有回复正在发送或等待重连')
+    if (this.interactions.list().some((row) => row.chatId === chatId)) reasons.push('仍有待处理的提问或审批')
+    if (this.groupTasks.pending(chatId)) reasons.push('群任务正在创建或交付')
+    for (const row of this.memory().channelBindings(this.settings.accountId)) {
+      if (row.channel.conversationId !== chatId) continue
+      const agent = get(this.host, 'agents')?.get(row.sessionId)
+      if (!agent) continue
+      if (agent.status === 'running' || agent.inbox.nextTurn.length || agent.inbox.nextStep.length)
+        reasons.push('会话或排队输入尚未结束')
+      const goal = get(agent.ctx, 'goal')?.get?.(agent)
+      if (goal?.phase === 'active') reasons.push('持续目标仍处于活动状态')
+      if (
+        get(agent.ctx, 'jobs')
+          ?.list?.(agent.id)
+          ?.some((job: any) => ['running', 'stopping'].includes(job.status))
+      )
+        reasons.push('后台作业尚未结束')
+    }
+    return [...new Set(reasons)]
+  }
+  routingSnapshot() {
+    const state = this.routes?.snapshot()
+    const bindings = new Map<string, any>(
+      this.memory()
+        .channelBindings(this.settings.accountId)
+        .map((row: any) => [row.sessionId, row])
+    )
+    return {
+      available: !!(
+        this.routes &&
+        this.memory().capabilities?.conversationMemoryIsolation === 1 &&
+        this.bridge?.routeState &&
+        this.bridge?.retireDelivery &&
+        this.bridge?.adopt &&
+        this.bridge?.flush
+      ),
+      state,
+      current: Object.fromEntries(
+        (this.inbox?.summaries(50).items ?? []).map((row) => [
+          row.chatId,
+          {
+            personaId:
+              state?.chats[row.chatId]?.personaId ??
+              bindings.get(this.bridge?.chat?.(row.chatId)?.sessionId)?.personaId ??
+              this.settings.personaId,
+            pendingInputs: this.inbox!.routePendingCount(row.chatId)
+          }
+        ])
+      )
+    }
+  }
+  async changePersonaRoute(input: any): Promise<void> {
+    this.assertActive()
+    if (this.memory().capabilities?.conversationMemoryIsolation !== 1)
+      throw new QqError('记忆组件缺少多人格交流隔离能力，请更新配套 Pack 后再切换', 409)
+    if (
+      !this.routing ||
+      !this.bridge?.routeState ||
+      !this.bridge?.retireDelivery ||
+      !this.bridge?.adopt ||
+      !this.bridge?.flush
+    )
+      throw new QqError('配套 QQ 成员未提供人格路由接口，请更新后重试', 409)
+    if (input.accountId !== this.settings.accountId) throw new QqError('QQ 账号已变化，请刷新', 409)
+    const before = this.routes!.revision(input.chatId)
+    try {
+      if (input.operation === 'change') await this.routing.change(input)
+      else if (['retry', 'abort'].includes(input.operation))
+        await this.routing.recover(input.chatId, input.transitionId, input.operation)
+      else throw new QqError('人格路由操作无效')
+    } finally {
+      if (this.routes!.revision(input.chatId) !== before) this.attention.releaseChat(input.chatId)
+      this.inbox?.retryNotifications()
+      this.dispatch?.schedule()
+      this.observer?.schedule()
+    }
+  }
+  personaRouteStatus(chatId: string) {
+    if (this.disposed) throw new QqError('QQ 接入已停止', 409)
+    if (!this.inbox || !this.routes || !this.inbox.knownChats().includes(chatId))
+      throw new QqError('此聊天尚未被当前账号识别', 404)
+    return {
+      accountId: this.settings.accountId,
+      chatId,
+      revision: this.routes.snapshot().revision,
+      route: this.routes.route(chatId) ?? null,
+      personaId: this.personaForChat(chatId),
+      pendingInputs: this.inbox.routePendingCount(chatId),
+      persistenceBlocked: this.writeProblem || this.recovering,
+      busy: this.routeBusy(chatId)
+    }
+  }
+  private async createRoutedSession(chatId: string, personaId: string, sessionId: string): Promise<void> {
+    const memory = this.memory(),
+      existing = memory.inspect(sessionId).binding
+    const expected = channelFor(this.settings, chatId)
+    if (
+      existing &&
+      (existing.personaId !== personaId ||
+        existing.channel?.accountId !== expected.accountId ||
+        existing.channel?.conversationId !== chatId ||
+        existing.channel?.access !== expected.access ||
+        existing.channel?.task)
+    )
+      throw new QqError('目标会话的人格或资料受众不匹配，未切换', 409)
+    const controller = get(this.host, 'sessionController')
+    if (!controller?.create || !controller?.inspect) throw new QqError('原生会话服务不可用', 503)
+    if (existing) {
+      try {
+        await controller.inspect(sessionId)
+        return
+      } catch (error: any) {
+        if (
+          error?.code !== 'session/not-found' &&
+          error?.name !== 'ApiSessionNotFound' &&
+          error?.name !== 'SessionPersistenceNotFoundError'
+        )
+          throw error
+      }
+    }
+    memory.bind(sessionId, personaId, expected)
+    await controller.create({
+      sessionId,
+      cwd: this.workspace(chatId),
+      ...(this.preset(chatId) ? { agentPreset: this.preset(chatId) } : {})
+    })
+    memory.bind(sessionId, personaId, existing?.channel ?? expected)
+  }
+  private routedSessionAllowed(sessionId: string, chatId: string): boolean {
+    const route = this.routes?.route(chatId)
+    if (!route && !this.bridge?.routeState) return !this.routing?.blocked(chatId)
+    const binding = this.memory().inspect(sessionId).binding
+    return (
+      !this.routing?.blocked(chatId) &&
+      binding?.personaId === (route?.personaId ?? this.personaForChat(chatId)) &&
+      (!!binding.channel?.task || this.bridge?.chat?.(chatId)?.sessionId === sessionId)
+    )
+  }
+  async withDelivery<T>(chatId: string, sessionId: string | undefined, work: () => Promise<T>): Promise<T> {
+    const outer = this.delivery.getStore()
+    if (outer) {
+      if (outer.chatId !== chatId) throw new QqError('嵌套交付不能改变目标聊天', 403)
+      outer.assert()
+      return work()
+    }
+    this.assertActive()
+    const lease = this.routing?.enter(chatId)
+    const source =
+      sessionId ?? this.toolCall.getStore()?.agent?.session.id ?? this.bridge?.chat?.(chatId)?.sessionId
+    try {
+      if (source && !this.routedSessionAllowed(source, chatId))
+        throw new QqError('原会话已不再负责此聊天，未发送旧回复', 409)
+      return await this.delivery.run(
+        {
+          chatId,
+          sessionId: source,
+          assert: () => {
+            this.assertActive()
+            lease?.assert()
+          }
+        },
+        work
+      )
+    } finally {
+      lease?.release()
+    }
+  }
+  async systemNotice<T>(chatId: string, work: () => Promise<T>): Promise<T> {
+    if (
+      this.disposed ||
+      this.connectionState.state !== 'online' ||
+      !chatId.startsWith('private:') ||
+      !this.settings.authorizedUsers.includes(chatId.slice(8))
+    )
+      throw new QqError('系统诊断只交给当前账号的授权负责人', 403)
+    return this.delivery.run(
+      {
+        chatId,
+        notice: true,
+        assert: () => {
+          if (this.disposed) throw new QqError('QQ 连接已停止', 409)
+        }
+      },
+      work
+    )
+  }
   attentionPage(offset: number) {
     this.assertActive()
     if (!this.inbox) throw new QqError('QQ 收件箱未就绪', 409)
@@ -329,20 +619,39 @@ export class QqSessionPolicy {
     const binding = this.memory().inspect(agent?.session?.id).binding
     return (
       !!binding &&
-      binding.personaId === this.settings.personaId &&
+      (binding.personaId === this.settings.personaId ||
+        Object.values(this.routes?.snapshot().chats ?? {}).some(
+          (route) => !route.pending && route.personaId === binding.personaId
+        )) &&
       !binding.purpose &&
       !binding.pending &&
       (!binding.channel || this.isOwnerSession(agent.session.id))
     )
   }
+  private notificationCandidates() {
+    const config = this.attention.effective()
+    if (!this.inbox || !config.allowAgentChanges || config.mode === 'focus') return []
+    const rows = this.inbox.notifications().filter((row) => {
+      if (this.routing?.blocked(row.chatId)) return false
+      const delivery = attentionDelivery(config, { ...row, self: false })
+      return config.mode === 'normal'
+        ? delivery.content === 'preview' && delivery.reason !== 'muted'
+        : delivery.notify
+    })
+    const personaId = rows[0] && this.personaForChat(rows[0].chatId)
+    return rows.filter((row) => this.personaForChat(row.chatId) === personaId)
+  }
   notificationContext(agent: any): string {
     if (this.disposed || !this.inbox || !this.privateAttentionAgent(agent)) return ''
     const settings = this.attention.effective()
+    const personaId = this.memory().inspect(agent.session.id).binding.personaId
     const items = this.inbox
       .summaries(50)
       .items.filter(
         (row) =>
           row.unread &&
+          !this.routing?.blocked(row.chatId) &&
+          this.personaForChat(row.chatId) === personaId &&
           (settings.mode === 'normal'
             ? attentionDelivery(settings, { ...row, self: false }).content === 'preview'
             : attentionDelivery(settings, { ...row, self: false }).notify)
@@ -373,7 +682,36 @@ export class QqSessionPolicy {
       Object.keys(args).some((key) => !['action', 'chatId', 'mode', 'minutes', 'reason'].includes(key))
     )
       throw new QqError('QQ 注意力操作无效')
-    if (args.action === 'status') return this.attentionSnapshot()
+    const personaId = this.memory().inspect(exec.agent.session.id).binding.personaId
+    const ownChat = (chatId: string) =>
+      !this.routing?.blocked(chatId) && this.personaForChat(chatId) === personaId
+    const status = () => {
+      const snapshot = this.attentionSnapshot(),
+        own = this.attention.snapshot(personaId)
+      return {
+        accountId: snapshot.accountId,
+        revision: snapshot.revision,
+        configured: {
+          ...own.configured,
+          focusedChats: own.configured.focusedChats.filter(ownChat),
+          mutedChats: own.configured.mutedChats.filter(ownChat)
+        },
+        effective: {
+          ...own.effective,
+          focusedChats: own.effective.focusedChats.filter(ownChat),
+          mutedChats: own.effective.mutedChats.filter(ownChat),
+          openedChats: own.effective.openedChats?.filter(ownChat) ?? []
+        },
+        temporary: own.temporary,
+        inbox: { items: snapshot.inbox.items.filter((row) => ownChat(row.chatId)) }
+      }
+    }
+    if (
+      ['open', 'mute', 'unmute'].includes(args.action) &&
+      (typeof args.chatId !== 'string' || !ownChat(args.chatId))
+    )
+      throw new QqError('这个聊天不属于当前人格的注意力范围', 403)
+    if (args.action === 'status') return status()
     if (args.action === 'open' || args.action === 'mode') {
       if (args.action === 'open' && typeof args.chatId !== 'string') throw new QqError('请选择要打开的聊天')
       this.attention.adjust(
@@ -382,12 +720,13 @@ export class QqSessionPolicy {
           minutes: args.minutes === undefined ? 10 : args.minutes,
           reason: args.reason === undefined ? '临时调整消息关注' : args.reason
         },
-        this.inbox.knownChats()
+        this.inbox.knownChats(),
+        personaId
       )
       this.observer?.cancel('changed')
       this.dispatch?.schedule()
       this.observer?.schedule()
-      return this.attentionSnapshot()
+      return status()
     }
     if (args.action === 'mute' || args.action === 'unmute') {
       this.attention.groupNotifications(
@@ -395,19 +734,20 @@ export class QqSessionPolicy {
         args.action === 'unmute',
         args.minutes === undefined ? 10 : args.minutes,
         args.reason === undefined ? '临时调整群提醒' : args.reason,
-        this.inbox.knownChats()
+        this.inbox.knownChats(),
+        personaId
       )
       this.observer?.cancel('changed')
       this.dispatch?.schedule()
       this.observer?.schedule()
-      return this.attentionSnapshot()
+      return status()
     }
     if (args.action === 'restore') {
       this.observer?.cancel('changed')
-      this.attention.reset()
+      this.attention.reset(personaId)
       this.dispatch?.schedule()
       this.observer?.schedule()
-      return this.attentionSnapshot()
+      return status()
     }
     throw new QqError('QQ 注意力操作无效')
   }
@@ -416,12 +756,10 @@ export class QqSessionPolicy {
     this.writeProblem = true
     if (this.recovering) this.recoveryFailed = true
     if (first && !this.disposed && this.bridge)
-      void this.bridge
-        .send(
-          'private:' + this.settings.authorizedUsers[0],
-          'QQ 接续记录保存失败，新的请求已暂停。请在 DSH-PX 的“QQ 账号”设置中重试保存；不要重复执行结果不明确的任务。'
-        )
-        .catch(() => {})
+      void (this.bridge.notice?.bind(this.bridge) ?? this.bridge.send.bind(this.bridge))(
+        'private:' + this.settings.authorizedUsers[0],
+        'QQ 接续记录保存失败，新的请求暂不执行。请在“QQ 账号”设置中重试保存；新消息会保留，结果不明确的旧请求不会自动重跑。'
+      ).catch(() => {})
   }
   async retryPersistence(): Promise<void> {
     if (this.disposed || !this.bridge?.flush) throw new QqError('QQ 接入未就绪', 409)
@@ -435,6 +773,10 @@ export class QqSessionPolicy {
       this.writeProblem = false
     } finally {
       this.recovering = false
+      if (!this.writeProblem) {
+        this.dispatch?.schedule()
+        this.observer?.schedule()
+      }
     }
   }
   async sendTest(): Promise<void> {
@@ -452,12 +794,13 @@ export class QqSessionPolicy {
     this.replyDecisions.clear()
     const dispatchDone = this.dispatch?.dispose()
     const observerDone = this.observer?.dispose()
+    const routingDone = this.routing?.dispose()
     this.generation++
     clearTimeout(this.healthTimer)
     this.interactions.dispose()
     const done = this.groupTasks.dispose()
     this.bridge = undefined
-    return (this.cleanup = Promise.allSettled([done, dispatchDone, observerDone]).then(() =>
+    return (this.cleanup = Promise.allSettled([done, dispatchDone, observerDone, routingDone]).then(() =>
       this.inbox?.close()
     ))
   }
@@ -495,6 +838,22 @@ export class QqSessionPolicy {
     return this.toolCall.run(exec, next)
   }
   beforeConnectionCall(action?: string, params?: any, chatId?: string): void {
+    const delivery = this.delivery.getStore()
+    if (delivery) {
+      delivery.assert()
+      if (chatId && chatId !== delivery.chatId) throw new QqError('交付目标与当前聊天不一致', 403)
+      if (delivery.sessionId && !this.routedSessionAllowed(delivery.sessionId, delivery.chatId))
+        throw new QqError('此回复的会话已不再负责当前聊天，未发送旧内容', 409)
+      if (delivery.notice) {
+        if (
+          !['send_msg', 'send_private_msg'].includes(action ?? '') ||
+          params?.group_id !== undefined ||
+          String(params?.user_id) !== delivery.chatId.slice(8)
+        )
+          throw new QqError('系统诊断不能调用其他 QQ 接口或改变收件人', 403)
+        return
+      }
+    }
     const exec = this.toolCall.getStore()
     if (!exec) return
     exec.signal.throwIfAborted()
@@ -548,7 +907,7 @@ export class QqSessionPolicy {
     return service
   }
   async receive(event: any, next: () => Promise<void>): Promise<void> {
-    this.assertActive()
+    if (this.disposed) throw new QqError('QQ 连接已停止，未受理消息', 409)
     const receivedEpoch = this.admissionEpoch
     if (!(await this.ready)) throw new QqError('QQ 登录账号尚未核对，未处理此消息', 503)
     if (String(event?.self_id) !== this.settings.accountId)
@@ -580,7 +939,13 @@ export class QqSessionPolicy {
             addressed &&
             (/^\s*\/(stop|approve|reject|answer)(?:\s|$)/.test(text) ||
               this.interactions.list().some((p) => p.chatId === row.chatId))
-          if (row.phase === 'received' && urgent) {
+          if (
+            row.phase === 'received' &&
+            urgent &&
+            !this.writeProblem &&
+            !this.recovering &&
+            !this.routing?.blocked(row.chatId)
+          ) {
             admitting = true
             await this.admitEvent(event, next, row, false, receivedEpoch)
           } else {
@@ -598,6 +963,7 @@ export class QqSessionPolicy {
       }
       return
     }
+    this.assertActive()
     if (event.message_type === 'group') {
       const mentioned = Array.isArray(event.message)
         ? event.message.some(
@@ -661,6 +1027,7 @@ export class QqSessionPolicy {
     if (!/^[A-Za-z0-9:_.-]{1,120}$/.test(messageId)) throw new QqError('QQ 消息缺少稳定标识，未受理请求', 400)
     messageSource(this.settings, chatId, senderId, messageId)
     const epoch = { ...this.inputEpoch(chatId), epoch: receivedEpoch }
+    const lease = this.routing?.enter(chatId)
     try {
       const receipt = await this.receipts.once(
         receiptKey('inbound', [this.settings.accountId, chatId, messageId]),
@@ -668,6 +1035,7 @@ export class QqSessionPolicy {
           this.caller.run(
             {
               ...epoch,
+              ...(lease ? { routeRevision: lease.revision } : {}),
               chatId,
               senderId,
               messageId,
@@ -677,6 +1045,7 @@ export class QqSessionPolicy {
                 : typeof event.message === 'string' && !event.message.includes('[CQ:')
             },
             async () => {
+              lease?.assert()
               if (item) this.inbox!.claim(item.id)
               await next()
               const admitted = this.caller.getStore()?.admission
@@ -716,6 +1085,8 @@ export class QqSessionPolicy {
           )
           .catch(() => {})
       throw error
+    } finally {
+      lease?.release()
     }
   }
   source(chatId: string): unknown {
@@ -724,7 +1095,14 @@ export class QqSessionPolicy {
     if (!caller || caller.chatId !== chatId) throw new QqError('缺少可信 QQ 发送者，未投递消息', 403)
     this.assertInputCurrent(caller)
     const source = messageSource(this.settings, chatId, caller.senderId, caller.messageId)
-    return caller.ambient ? { ...source, pxQq: { ...source.pxQq, delivery: 'context' } } : source
+    return {
+      ...source,
+      pxQq: {
+        ...source.pxQq,
+        ...(caller.routeRevision !== undefined ? { routeRevision: caller.routeRevision } : {}),
+        ...(caller.ambient ? { delivery: 'context' } : {})
+      }
+    }
   }
   dispatchMessage(agent: any, message: any): void {
     if (this.caller.getStore()?.ambient) agent.inject(message)
@@ -735,7 +1113,14 @@ export class QqSessionPolicy {
   }
   private wakeAttention(chatId: string): void {
     const agent = this.bridge?.chat?.(chatId)?.agent
-    if (!agent || agent.status !== 'idle' || !this.bridge?.message || this.disposed) return
+    if (
+      !agent ||
+      agent.status !== 'idle' ||
+      !this.bridge?.message ||
+      this.disposed ||
+      this.routing?.blocked(chatId)
+    )
+      return
     if (!agent.inbox.nextStep.some((m: any) => qqMessageOrigin(m.source)?.delivery === 'context')) return
     agent.steer(
       this.bridge.message({
@@ -758,6 +1143,9 @@ export class QqSessionPolicy {
     const expected = channelFor(this.settings, chatId),
       memory = this.memory()
     const existing = memory.inspect(sessionId).binding
+    const route = this.routes?.route(chatId)
+    const targetPersona =
+      route?.pending?.targetSessionId === sessionId ? route.pending.targetPersonaId : route?.personaId
     if (existing) {
       const channel: SessionChannel | undefined = existing.channel
       if (
@@ -768,9 +1156,11 @@ export class QqSessionPolicy {
         channel.access !== expected.access
       )
         throw new QqError('会话的 QQ 身份或授权已变化，需要新建会话', 409)
+      if (targetPersona && existing.personaId !== targetPersona)
+        throw new QqError('这个 QQ 会话属于另一人格，请从 QQ 设置切换负责人格', 409)
       // A changed default persona or public introduction applies only to future conversations.
       memory.bind(sessionId, existing.personaId, channel)
-    } else memory.bind(sessionId, this.settings.personaId, expected)
+    } else memory.bind(sessionId, targetPersona ?? this.settings.personaId, expected)
   }
   labelSession(agent: any, chatId: string, nickname: string): void {
     const titles = get(this.host, 'sessionTitle')
@@ -800,6 +1190,7 @@ export class QqSessionPolicy {
       channel?.provider === 'qq' &&
       channel.accountId === this.settings.accountId &&
       channel.access === 'owner' &&
+      this.routedSessionAllowed(sessionId, channel.conversationId) &&
       channelFor(this.settings, channel.conversationId).access === 'owner'
     )
   }
@@ -815,6 +1206,9 @@ export class QqSessionPolicy {
       !this.settings.authorizedUsers.includes(channel.task.requesterId)
     )
       return false
+    const route = this.routes?.route(channel.conversationId)
+    if (route && (route.pending || route.personaId !== binding.personaId)) return false
+    if (!this.routedSessionAllowed(sessionId, channel.conversationId)) return false
     const root = this.memory().inspect(channel.task.rootSessionId).binding?.channel
     return (
       root?.task?.rootSessionId === channel.task.rootSessionId &&
@@ -855,6 +1249,8 @@ export class QqSessionPolicy {
       binding.pending
     )
       throw new QqError('QQ 操作缺少当前账号的有效会话', 403)
+    if (!this.routedSessionAllowed(id, channel.conversationId))
+      throw new QqError('此会话不是当前聊天的负责人格，请从 QQ 设置恢复对应会话', 409)
     if (
       channel.task
         ? !this.canRunGroupTask(id)
@@ -1212,6 +1608,7 @@ export class QqSessionPolicy {
       !this.writeProblem &&
       !this.recovering &&
       this.connectionState.state === 'online' &&
+      this.routedSessionAllowed(exec.agent?.session.id, channel.conversationId) &&
       !!taskRequester(this.settings, channel, exec.agent?.session.snapshotEvents() ?? [], requestMessageId)
     )
   }

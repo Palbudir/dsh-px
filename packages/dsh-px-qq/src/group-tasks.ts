@@ -30,8 +30,17 @@ export class QqGroupTasks {
     private settings: QqSettings,
     private ports: () => any,
     private allowed: (sessionId: string) => boolean,
-    private deliveryFailure: (error: unknown) => void
+    private deliveryFailure: (error: unknown) => void,
+    private personaForChat: (chatId: string) => string = () => settings.personaId
   ) {}
+  pending(chatId: string): boolean {
+    return (
+      [...this.creating.keys()].some((key) => key.startsWith(chatId + ':')) ||
+      [...this.sends.keys()].some(
+        (id) => this.memory().inspect(id).binding?.channel?.conversationId === chatId
+      )
+    )
+  }
   private memory() {
     return get(this.host, 'pxMemoryChannels')
   }
@@ -81,7 +90,11 @@ export class QqGroupTasks {
         presets = get(this.host, 'agentPresets')
       const previous = fresh
         ? undefined
-        : this.entries(chatId).find((row: any) => row.channel.task.requesterId === senderId)
+        : this.entries(chatId).find(
+            (row: any) =>
+              row.channel.task.requesterId === senderId &&
+              this.memory().inspect(row.sessionId).binding?.personaId === this.personaForChat(chatId)
+          )
       if (previous && agents.get(previous.sessionId)) {
         const existing = agents.get(previous.sessionId)
         await this.ports().attachWorkspace(existing.session.id, existing.session.header.cwd)
@@ -96,7 +109,7 @@ export class QqGroupTasks {
       if (!previous)
         this.memory().bind(
           sessionId,
-          this.settings.personaId,
+          this.personaForChat(chatId),
           channel,
           fresh ? undefined : this.ports().chat?.(chatId)?.sessionId
         )
@@ -253,9 +266,15 @@ export class QqGroupTasks {
     const pending = previous
       .catch(() => {})
       .then(async () => {
-        if (!this.disposed && this.allowed(session.id)) await this.ports().send(channel.conversationId, text)
+        if (!this.disposed && this.allowed(session.id))
+          await this.ports().send(channel.conversationId, text, session.id)
       })
     this.sends.set(session.id, pending)
+    void pending
+      .finally(() => {
+        if (this.sends.get(session.id) === pending) this.sends.delete(session.id)
+      })
+      .catch(() => {})
     void pending.catch((error) => {
       get(this.host, 'logger')?.warn?.('群任务结果未确认交付；原生记录保留，不自动重发。')
       this.deliveryFailure(error)

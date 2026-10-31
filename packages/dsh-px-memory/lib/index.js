@@ -570,7 +570,7 @@ var ChannelNotes = class {
     this.readEvidence = readEvidence;
     this.currentEvidence = currentEvidence;
   }
-  scope(sessionId) {
+  scope(sessionId, actor = "model") {
     const state = this.store.read(), binding = state.bindings[sessionId], channel = binding?.channel;
     const persona = state.personas.find((p) => p.id === binding?.personaId);
     if (!binding || binding.pending || channel?.provider !== "qq" || channel.access !== "public")
@@ -580,18 +580,24 @@ var ChannelNotes = class {
         "\u65E7 QQ \u4F1A\u8BDD\u7F3A\u5C11\u72EC\u7ACB\u5DE5\u4F5C\u533A\u8BB0\u5F55\uFF1B\u8BF7\u7531\u8D1F\u8D23\u4EBA\u53D1\u9001 /new\uFF0C\u518D\u4FDD\u5B58\u4EA4\u6D41\u8BB0\u5FC6\u3002\u539F\u5386\u53F2\u4FDD\u7559\u3002",
         409
       );
-    if (!persona || persona.archived || !persona.memoryEnabled)
+    if (!persona || actor === "model" && (persona.archived || !persona.memoryEnabled))
       throw new MemoryError("\u5F53\u524D\u4EBA\u683C\u7684\u8BB0\u5FC6\u5DF2\u5173\u95ED", 409);
     return {
-      caller: { sessionId, project: channel.workspace, actor: "model" },
+      caller: this.bank.conversationCaller({
+        sessionId,
+        project: channel.workspace,
+        actor
+      }),
       prefix: `QQ \u7ECF\u5386 / ${persona.id} / `,
       identity: `${persona.id}/${channel.accountId}/${channel.conversationId}/${channel.workspace}`
     };
   }
-  async execute(sessionId, input2, signal) {
+  async execute(sessionId, input2, signal, actor = "model") {
     signal.throwIfAborted();
-    const scope = this.scope(sessionId);
+    const scope = this.scope(sessionId, actor);
     if (!input2 || typeof input2 !== "object" || Array.isArray(input2)) throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u53C2\u6570\u65E0\u6548");
+    await this.bank.prepareConversation(scope.caller, scope.prefix);
+    signal.throwIfAborted();
     const catalog = await this.bank.catalog(scope.caller, "project");
     const notes = catalog.documents.filter((d) => d.key.startsWith(scope.prefix) && d.status === "active").sort(
       (a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)) || a.id.localeCompare(b.id)
@@ -608,7 +614,7 @@ var ChannelNotes = class {
       body: document.body ?? null,
       current: document.current,
       updatedAt: document.updatedAt ?? null,
-      source: "mnemon-project-document",
+      source: "mnemon-persona-conversation-document",
       authority: "conversation-evidence-only"
     });
     if (input2.action === "catalog")
@@ -621,9 +627,10 @@ var ChannelNotes = class {
         nextOffset: offset + 100 < notes.length ? offset + 100 : null
       };
     if (input2.action === "read") {
-      if (!notes.some((d) => d.id === input2.id))
+      const id = notes.some((d) => d.id === input2.id) ? input2.id : await this.bank.conversationAlias(scope.caller, input2.id);
+      if (!id || !notes.some((d) => d.id === id))
         throw new MemoryError("\u6761\u76EE\u4E0D\u5C5E\u4E8E\u672C\u7FA4\u5F53\u524D\u4EBA\u683C\u7684\u4EA4\u6D41\u8BB0\u5FC6", 403);
-      const result2 = await this.bank.read(scope.caller, "project", input2.id);
+      const result2 = await this.bank.read(scope.caller, "project", id);
       signal.throwIfAborted();
       return { revision: result2.revision, note: safeDocument(result2.document) };
     }
@@ -674,7 +681,7 @@ var ChannelNotes = class {
       });
     }
     signal.throwIfAborted();
-    if (this.scope(sessionId).identity !== scope.identity)
+    if (this.scope(sessionId, actor).identity !== scope.identity)
       throw new MemoryError("\u4F1A\u8BDD\u8303\u56F4\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6", 409);
     const result = await this.bank.write(scope.caller, "project", {
       key: scope.prefix + topic,
@@ -710,6 +717,7 @@ function qqMessageOrigin(source) {
     conversationId: value.conversationId,
     senderId: value.senderId,
     ...value.delivery === "context" ? { delivery: "context" } : {},
+    ...Number.isSafeInteger(value.routeRevision) && value.routeRevision >= 0 ? { routeRevision: value.routeRevision } : {},
     ...typeof value.messageId === "string" && /^[A-Za-z0-9:_.-]{1,120}$/.test(value.messageId) ? { messageId: value.messageId } : {}
   } : void 0;
 }
@@ -1320,10 +1328,15 @@ function bounded(value, label, max) {
 }
 function validateNamespace(ns) {
   if (!ns || !KNOWLEDGE_SCOPES.includes(ns.scope)) throw new MemoryError("\u77E5\u8BC6\u6765\u6E90\u8303\u56F4\u65E0\u6548", 409);
-  const privateScope = ns.scope === "persona" || ns.scope === "persona-project", projectScope = ns.scope === "project" || ns.scope === "persona-project";
+  const privateScope = ns.scope === "persona" || ns.scope === "persona-project" || !!ns.conversation, projectScope = ns.scope === "project" || ns.scope === "persona-project";
   if (privateScope !== (typeof ns.personaId === "string" && ns.personaId.length > 0 && ns.personaId.length <= 200) || projectScope !== (typeof ns.project === "string" && ns.project.length > 0))
     throw new MemoryError("\u77E5\u8BC6\u6765\u6E90\u8EAB\u4EFD\u65E0\u6548", 409);
+  if (ns.conversation && (ns.scope !== "project" || [ns.conversation.provider, ns.conversation.accountId, ns.conversation.id].some(
+    (value) => typeof value !== "string" || !value || value.length > 200
+  )))
+    throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u6765\u6E90\u8EAB\u4EFD\u65E0\u6548", 409);
 }
+var legacyConversationTitle = (title) => typeof title === "string" && /^QQ 经历 \/ [^/]{1,200} \/ /.test(title);
 var KnowledgeBank = class {
   constructor(root, identities, observeFile2) {
     this.root = root;
@@ -1333,9 +1346,17 @@ var KnowledgeBank = class {
   }
   runtimes = /* @__PURE__ */ new Map();
   factory;
+  conversationCallers = /* @__PURE__ */ new WeakMap();
+  migrations = /* @__PURE__ */ new Map();
   namespace(caller, scope) {
     if (!KNOWLEDGE_SCOPES.includes(scope)) throw new MemoryError("\u77E5\u8BC6\u8303\u56F4\u65E0\u6548");
     const state = this.identities.read(), binding = state.bindings[caller.sessionId];
+    const granted = this.conversationCallers.get(caller);
+    if (granted) {
+      if (scope !== "project" || digest(granted) !== digest(this.conversationNamespace(caller)))
+        throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u8C03\u7528\u8303\u56F4\u5DF2\u53D8\u5316", 403);
+      return structuredClone(granted);
+    }
     if (publicSession(binding) && (scope === "persona" || scope === "persona-project"))
       throw new MemoryError("\u516C\u5171\u804A\u5929\u4E0D\u80FD\u8BFB\u53D6\u4EBA\u683C\u79C1\u6709\u77E5\u8BC6", 403);
     if ((scope === "persona" || scope === "persona-project") && (!binding || binding.pending))
@@ -1350,6 +1371,134 @@ var KnowledgeBank = class {
       ...scope === "persona" || scope === "persona-project" ? { personaId: binding.personaId } : {},
       ...scope === "project" || scope === "persona-project" ? { project } : {}
     };
+  }
+  /** An in-process capability, not a caller-controlled JSON flag. Ordinary knowledge routes cannot mint it. */
+  conversationCaller(caller) {
+    const value = { ...caller };
+    this.conversationCallers.set(value, this.conversationNamespace(value));
+    return value;
+  }
+  conversationNamespace(caller) {
+    const state = this.identities.read(), binding = state.bindings[caller.sessionId], channel = binding?.channel;
+    const persona = state.personas.find((row) => row.id === binding?.personaId);
+    if (!binding || binding.pending || !publicSession(binding) || !channel?.workspace || projectKey(caller.project) !== projectKey(channel.workspace) || !persona || caller.actor !== "human" && (persona.archived || !persona.memoryEnabled))
+      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u8C03\u7528\u8303\u56F4\u5DF2\u53D8\u5316\u6216\u5DF2\u5173\u95ED", 403);
+    return {
+      scope: "project",
+      personaId: binding.personaId,
+      project: projectKey(channel.workspace),
+      conversation: { provider: channel.provider, accountId: channel.accountId, id: channel.conversationId }
+    };
+  }
+  exportable(ns, document) {
+    if (ns.conversation || !legacyConversationTitle(document.title)) return true;
+    try {
+      const meta3 = unwrap(document).metadata;
+      return !!meta3.sharedBy;
+    } catch {
+      return false;
+    }
+  }
+  assertReadableDocument(ns, document) {
+    if (!this.exportable(ns, document))
+      throw new MemoryError("\u6B64\u6761\u76EE\u5C5E\u4E8E\u4EBA\u683C\u4EA4\u6D41\u8BB0\u5FC6\uFF0C\u8BF7\u4ECE\u5BF9\u5E94\u804A\u5929\u7684\u8BB0\u5FC6\u5165\u53E3\u8BFB\u53D6", 403);
+  }
+  /** Imports generated notes into an owner+account+conversation namespace; original provenance remains readable internally. */
+  async prepareConversation(caller, topicPrefix) {
+    const target = this.namespace(caller, "project");
+    if (!target.conversation || topicPrefix !== `QQ \u7ECF\u5386 / ${target.personaId} / `)
+      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u8FC1\u79FB\u8303\u56F4\u65E0\u6548", 403);
+    const key = digest(target), active = this.migrations.get(key);
+    if (active) return active;
+    const work = this.migrateConversation(caller, target, topicPrefix).finally(() => {
+      if (this.migrations.get(key) === work) this.migrations.delete(key);
+    });
+    this.migrations.set(key, work);
+    return work;
+  }
+  async migrateConversation(caller, target, topicPrefix) {
+    const originNs = this.namespace({ ...caller }, "project");
+    const initial2 = await this.call(originNs, "snapshot");
+    const pending = initial2.value.documents.filter(
+      (row) => row.status === "active" && row.title.startsWith(topicPrefix)
+    );
+    let copied = 0, remaining = 0;
+    for (const row of pending) {
+      const source = (await this.call(originNs, "document", { id: row.id })).value;
+      const { metadata, body } = unwrap(source);
+      if (metadata.sharedBy) continue;
+      let observation;
+      try {
+        observation = JSON.parse(body);
+      } catch {
+        throw new MemoryError("\u65E7\u4EA4\u6D41\u8BB0\u5FC6\u683C\u5F0F\u9700\u8981\u68C0\u67E5\uFF1B\u539F\u8BB0\u5F55\u5DF2\u4FDD\u7559", 409);
+      }
+      if (observation.kind !== "conversation-observation" || observation.version !== 1)
+        throw new MemoryError("\u65E7\u4EA4\u6D41\u8BB0\u5FC6\u7C7B\u578B\u9700\u8981\u68C0\u67E5\uFF1B\u539F\u8BB0\u5F55\u5DF2\u4FDD\u7559", 409);
+      const destination = await this.call(target, "snapshot");
+      const existing = destination.value.documents.find(
+        (doc) => doc.title === source.title && doc.status === "active"
+      );
+      const migration = {
+        ...originNs,
+        id: source.id,
+        revision: source.revision,
+        contentHash: source.contentHash
+      };
+      if (existing) {
+        const migrated = unwrap((await this.call(target, "document", { id: existing.id })).value).metadata.migration;
+        if (!migrated || migrated.id !== source.id || migrated.revision !== source.revision || migrated.contentHash !== source.contentHash)
+          throw new MemoryError("\u65B0\u65E7\u4EA4\u6D41\u8BB0\u5FC6\u5747\u6709\u53D8\u5316\uFF0C\u8BF7\u6838\u5BF9\u540E\u5408\u5E76\uFF1B\u672A\u8986\u76D6\u4EFB\u4E00\u539F\u6587", 409);
+      } else {
+        if (copied >= 32) {
+          remaining++;
+          continue;
+        }
+        await this.write(
+          caller,
+          "project",
+          {
+            key: source.title,
+            body,
+            sources: metadata.sources,
+            revision: contentRevision(destination.value)
+          },
+          void 0,
+          metadata.author ?? { kind: "unknown", at: source.updatedAt },
+          migration
+        );
+        copied++;
+      }
+      const current = await this.call(originNs, "snapshot");
+      const latest = current.value.documents.find((doc) => doc.id === source.id);
+      if (latest?.status !== "active" || latest.revision !== source.revision || latest.contentHash !== source.contentHash)
+        throw new MemoryError("\u65E7\u4EA4\u6D41\u8BB0\u5FC6\u5728\u8FC1\u79FB\u671F\u95F4\u53D8\u5316\uFF0C\u5DF2\u4FDD\u7559\u526F\u672C\uFF0C\u8BF7\u91CD\u65B0\u6838\u5BF9", 409);
+    }
+    if (remaining) throw new MemoryError("\u5DF2\u8FC1\u79FB\u4E00\u6279\u4EA4\u6D41\u8BB0\u5FC6\uFF0C\u8BF7\u518D\u6B21\u8BFB\u53D6\u4EE5\u7EE7\u7EED\uFF1B\u539F\u8BB0\u5F55\u4FDD\u7559", 409);
+  }
+  async invalidateMigratedSource(origin) {
+    if (!origin) return;
+    const { id, revision, contentHash, ...ns } = origin;
+    const source = await this.call(ns, "snapshot"), row = source.value.documents.find((item) => item.id === id);
+    if (!row || row.status !== "active") return;
+    if (row.revision !== revision || row.contentHash !== contentHash)
+      throw new MemoryError("\u8FC1\u79FB\u6765\u6E90\u5DF2\u6709\u5176\u4ED6\u4FEE\u6539\uFF0C\u8BF7\u6838\u5BF9\u540E\u518D\u7EA0\u6B63\uFF1B\u539F\u4EF6\u4FDD\u7559", 409);
+    await this.call(
+      ns,
+      "archive",
+      { id, documentRevision: revision, summary: "\u4EBA\u683C\u4EA4\u6D41\u8BB0\u5FC6\u5DF2\u6709\u66F4\u65B0\uFF0C\u65E7\u5171\u4EAB\u4F9D\u636E\u4E0D\u518D\u4F5C\u4E3A\u5F53\u524D\u7ED3\u8BBA\u3002" },
+      source.revision
+    );
+  }
+  async conversationAlias(caller, id) {
+    bounded(id, "\u4EA4\u6D41\u8BB0\u5FC6\u7F16\u53F7", 300);
+    const ns = this.namespace(caller, "project");
+    if (!ns.conversation) throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u8303\u56F4\u65E0\u6548", 403);
+    const snapshot = await this.call(ns, "snapshot");
+    for (const row of snapshot.value.documents) {
+      const migrated = unwrap((await this.call(ns, "document", { id: row.id })).value).metadata.migration;
+      if (migrated?.id === id) return row.id;
+    }
   }
   async runtime(ns) {
     validateNamespace(ns);
@@ -1387,12 +1536,17 @@ var KnowledgeBank = class {
     });
   }
   async catalog(caller, scope) {
-    const result = await this.call(this.namespace(caller, scope), "snapshot");
+    const ns = this.namespace(caller, scope), result = await this.call(ns, "snapshot");
+    const documents = [];
+    for (const row of result.value.documents) {
+      const document = !ns.conversation && legacyConversationTitle(row.title) ? (await this.call(ns, "document", { id: row.id })).value : row;
+      if (this.exportable(ns, document)) documents.push(row);
+    }
     return {
       scope,
       label: SCOPE_LABELS[scope],
       revision: contentRevision(result.value),
-      documents: result.value.documents.map((d) => ({
+      documents: documents.map((d) => ({
         id: d.id,
         key: d.title,
         revision: d.revision,
@@ -1404,6 +1558,7 @@ var KnowledgeBank = class {
     };
   }
   async present(ns, document, caller) {
+    this.assertReadableDocument(ns, document);
     const { metadata, body } = unwrap(document);
     let stale = false, sourceState = "original";
     if (metadata.origin) {
@@ -1476,7 +1631,7 @@ var KnowledgeBank = class {
       includeArchived: includeHistorical
     });
     const matches = await Promise.all(
-      result.value.results.map((d) => this.present(ns, d, caller))
+      result.value.results.filter((d) => this.exportable(ns, d)).map((d) => this.present(ns, d, caller))
     );
     const snapshot = (await this.call(ns, "snapshot")).value;
     if (matches.some(
@@ -1492,7 +1647,7 @@ var KnowledgeBank = class {
       excludedHistorical: includeHistorical ? 0 : matches.filter((d) => !d.current).length
     };
   }
-  async write(caller, scope, args, origin, sourceAuthor) {
+  async write(caller, scope, args, origin, sourceAuthor, migration) {
     const ns = this.namespace(caller, scope), key = bounded(args.key, "\u77E5\u8BC6\u4E3B\u9898", 160), body = bounded(args.body, "\u77E5\u8BC6\u6B63\u6587", 64e3);
     const snapshot = await this.call(ns, "snapshot");
     if (contentRevision(snapshot.value) !== args.revision)
@@ -1500,6 +1655,9 @@ var KnowledgeBank = class {
     const matches = snapshot.value.documents.filter((d) => d.status === "active" && d.title === key);
     if (matches.length > 1) throw new MemoryError("\u4E3B\u9898\u5B58\u5728\u91CD\u590D\u8BB0\u5F55\uFF0C\u8BF7\u5148\u6574\u7406\u4E3A\u5355\u4E00\u73B0\u884C\u6761\u76EE", 409);
     const old = matches[0];
+    const oldMetadata = old ? unwrap((await this.call(ns, "document", { id: old.id })).value).metadata : void 0;
+    if (!ns.conversation && legacyConversationTitle(key) && !origin && !oldMetadata?.sharedBy)
+      throw new MemoryError("\u6B64\u4E3B\u9898\u5C5E\u4E8E\u4EBA\u683C\u4EA4\u6D41\u8BB0\u5FC6\uFF0C\u8BF7\u901A\u8FC7\u5BF9\u5E94\u804A\u5929\u7684\u8BB0\u5FC6\u5165\u53E3\u4FEE\u6539", 403);
     let sources = args.sources ?? (old ? unwrap((await this.call(ns, "document", { id: old.id })).value).metadata.sources : []);
     if (args.sourcePaths !== void 0) {
       if (!Array.isArray(args.sourcePaths) || args.sourcePaths.length > 12 || !this.observeFile)
@@ -1519,8 +1677,10 @@ var KnowledgeBank = class {
     const metadata = {
       schema: 1,
       sources,
-      author: origin ? sourceAuthor ?? { kind: "unknown", at: (/* @__PURE__ */ new Date()).toISOString() } : { kind: caller.actor ?? "model", at: (/* @__PURE__ */ new Date()).toISOString() },
+      author: sourceAuthor ?? (origin ? { kind: "unknown", at: (/* @__PURE__ */ new Date()).toISOString() } : { kind: caller.actor ?? "model", at: (/* @__PURE__ */ new Date()).toISOString() }),
+      ...migration ?? oldMetadata?.migration ? { migration: migration ?? oldMetadata?.migration } : {},
       ...origin ? { sharedBy: { kind: caller.actor ?? "model", at: (/* @__PURE__ */ new Date()).toISOString() } } : {},
+      ...!origin && legacyConversationTitle(key) && oldMetadata?.sharedBy ? { sharedBy: oldMetadata.sharedBy } : {},
       ...origin ? { origin } : {},
       ...old ? { previous: { revision: old.revision, contentHash: old.contentHash } } : {}
     };
@@ -1534,6 +1694,7 @@ var KnowledgeBank = class {
       sessionIds: caller.sessionId ? [caller.sessionId] : []
     };
     let result;
+    if (ns.conversation) await this.invalidateMigratedSource(oldMetadata?.migration);
     try {
       result = await this.call(ns, "mutate", mutation, snapshot.revision);
     } catch (error62) {
@@ -1551,6 +1712,7 @@ var KnowledgeBank = class {
   async share(caller, from, id, to, revision, expectedSourceRevision) {
     if (from === to) throw new MemoryError("\u6765\u6E90\u4E0E\u76EE\u6807\u8303\u56F4\u76F8\u540C");
     const ns = this.namespace(caller, from), document = (await this.call(ns, "document", { id })).value;
+    this.assertReadableDocument(ns, document);
     if (document.revision !== expectedSourceRevision || document.status !== "active")
       throw new MemoryError("\u6765\u6E90\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u9884\u89C8\u540E\u5206\u4EAB", 409);
     const { metadata, body } = unwrap(document);
@@ -1568,6 +1730,12 @@ var KnowledgeBank = class {
     const ns = this.namespace(caller, scope), current = await this.call(ns, "snapshot");
     if (contentRevision(current.value) !== revision)
       throw new MemoryError("\u77E5\u8BC6\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u518D\u5F52\u6863", 409);
+    const target = current.value.documents.find((row) => row.id === id);
+    if (target) {
+      const document = (await this.call(ns, "document", { id })).value;
+      this.assertReadableDocument(ns, document);
+      if (ns.conversation) await this.invalidateMigratedSource(unwrap(document).metadata.migration);
+    }
     const result = await this.call(
       ns,
       "archive",
@@ -23448,6 +23616,7 @@ function apply(ctx) {
   );
   ctx.provide("pxMemoryChannels", {
     version: 1,
+    capabilities: { conversationMemoryIsolation: 1, personaSkills: 1, sceneExpression: 1 },
     conversationNotes: (sessionId, input2, signal) => channelNotes.execute(sessionId, input2, signal),
     createPersona: (name2) => store.createPersona(name2),
     beginAttention: (sessionId, personaId) => {
@@ -23472,6 +23641,7 @@ function apply(ctx) {
       ([, binding]) => binding.channel?.provider === "qq" && binding.channel.accountId === accountId
     ).map(([sessionId, binding]) => ({
       sessionId,
+      personaId: binding.personaId,
       channel: binding.channel,
       createdAt: binding.createdAt,
       pending: binding.pending
@@ -23843,6 +24013,14 @@ ${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
                   args.input
                 );
                 return send(200, result);
+              }
+              if (args.type === "conversation-memory") {
+                if (!["catalog", "search", "read"].includes(args.input?.action))
+                  throw new MemoryError("\u8BF7\u4F7F\u7528\u804A\u5929\u8BB0\u5FC6\u7684\u53EA\u8BFB\u64CD\u4F5C");
+                return send(
+                  200,
+                  await channelNotes.execute(id, args.input, new AbortController().signal, "human")
+                );
               }
               if (args.type === "skills")
                 return send(

@@ -150,7 +150,13 @@ async function activateHost(ctx: any): Promise<void> {
           join(home, 'storages', name, 'inbox-' + configuration.accountId + '.sqlite'),
           configuration.accountId
         )
-        const policy = new QqSessionPolicy(ctx, configuration, receipts, inbox)
+        let policy: QqSessionPolicy
+        try {
+          policy = new QqSessionPolicy(ctx, configuration, receipts, inbox)
+        } catch (error) {
+          inbox.close()
+          throw error
+        }
         created = policy
         current = policy
         owner.effect(
@@ -293,6 +299,7 @@ async function activateHost(ctx: any): Promise<void> {
       active: busyAgents(config.settings.accountId).length,
       pendingInteractions: current?.pendingInteractions() ?? [],
       attention: current?.attentionSnapshot(),
+      routing: current?.routingSnapshot(),
       connection: !componentEnabled
         ? { state: 'offline', message: 'QQ 社区组件已停用。请在“插件”页面重新启用配套的 dsh-onebot-qq。' }
         : compatible
@@ -352,6 +359,14 @@ async function activateHost(ctx: any): Promise<void> {
               if (input.accountId !== state.settings.accountId)
                 throw new QqError('QQ 账号已变化，请刷新后重试', 409)
               current.saveAttention(input.revision, input.settings)
+              return send(200, await snapshot())
+            }
+            if (input.action === 'persona-route' || input.action === 'persona-route-status') {
+              if (!current || input.accountId !== state.settings.accountId)
+                throw new QqError('QQ 账号已变化或未开启，请刷新', 409)
+              if (input.action === 'persona-route-status')
+                return send(200, current.personaRouteStatus(input.chatId))
+              await current.changePersonaRoute(input)
               return send(200, await snapshot())
             }
             if (input.action === 'attention-observer') {
@@ -420,7 +435,8 @@ async function activateHost(ctx: any): Promise<void> {
               if (!current) throw new QqError('QQ 接入未开启', 409)
               await current.retryPersistence()
               return send(200, {
-                message: '接续记录已保存。未受理的消息请重新发送；已执行的任务不会自动重跑。'
+                message:
+                  '接续记录已保存。保留的新消息将按当前模式处理；结果不确定的旧请求不会重跑，未完成的人格切换仍需恢复。'
               })
             }
             if (input.action === 'stop') {

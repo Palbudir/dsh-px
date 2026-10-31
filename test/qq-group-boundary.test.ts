@@ -210,7 +210,10 @@ test('stopping a group during cold resume cancels admission even when the factor
       follows++
     }
   }
-  const memory = { channelBindings: () => [{ sessionId: 'old', channel, createdAt: '2026-10-26' }] }
+  const memory = {
+    channelBindings: () => [{ sessionId: 'old', channel, createdAt: '2026-10-26' }],
+    inspect: () => ({ binding: { personaId: settings.personaId, channel } })
+  }
   const services: any = {
     pxMemoryChannels: memory,
     agents: {
@@ -331,7 +334,7 @@ test('explicit group continuation becomes a new channel task root and delivers t
   })
   await new Promise((resolve) => setImmediate(resolve))
   assert.ok(tasks.entries('group:34007').some((row: any) => row.sessionId === id))
-  assert.deepEqual(sent, [['group:34007', 'new-root-answer']])
+  assert.deepEqual(sent, [['group:34007', 'new-root-answer', id]])
   await tasks.dispose()
 })
 
