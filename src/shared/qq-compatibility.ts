@@ -211,7 +211,29 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
       'async switchSession(chatId, targetSessionId) {',
       'async pxAdopt(chatId, targetSessionId) {\n        this.deps.px.prepareSession(targetSessionId, chatId);\n        this.recordSwitchable(chatId, targetSessionId);\n        return this.switchSession(chatId, targetSessionId);\n    }\n    async switchSession(chatId, targetSessionId) {'
     )
+  } else if (file === 'deferred.js') {
+    replace('cancelChat(chatId) {', 'cancelChat(chatId, onlySessionId) {')
+    replace(
+      'if (timer.chatId === chatId)',
+      'if (timer.chatId === chatId && (onlySessionId === undefined || onlySessionId === sessionId))'
+    )
+    replace(
+      "if (entry.chatId !== chatId || entry.state !== 'pending')",
+      "if (entry.chatId !== chatId || entry.state !== 'pending' || (onlySessionId !== undefined && entry.sessionId !== onlySessionId))"
+    )
+    replace(
+      "entry.reason = '用户已停止该聊天的生成（/stop），补发跟踪终止';",
+      "entry.reason = onlySessionId === undefined ? '用户已停止该聊天的生成（/stop），补发跟踪终止' : '本轮已采用显式回应，自动补发已取消';"
+    )
   } else if (file === 'bridge.js') {
+    replace(
+      "isTurnRunning: chatId => this.chats.get(chatId)?.agent.status === 'running',",
+      "isTurnRunning: chatId => { const chat = this.chats.get(chatId); return chat?.agent.status === 'running' && !this.deps.px.explicitReplies(chat.sessionId); },"
+    )
+    replace(
+      'if (chat === undefined || chat.sessionId !== session.id)\n            return;\n        const trace = this.traceForChat(chatId);',
+      'if (chat === undefined || chat.sessionId !== session.id)\n            return;\n        if (this.deps.px.explicitReplies(session.id)) this.deferred.cancelChat(chatId, session.id);\n        const trace = this.traceForChat(chatId);'
+    )
     replace(
       'chat.pendingTurnRoles.push(role);',
       'if (!this.deps.px.isAmbientInput()) chat.pendingTurnRoles.push(role);'

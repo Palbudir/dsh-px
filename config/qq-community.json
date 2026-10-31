@@ -22,6 +22,7 @@
     "prompt.js": "e7fd1d51bdeafed4bf98b3a110d7d87b73973adbc06f177937d4493f385241ad",
     "ref.js": "a47f8fabede45955e1730dd04c6cca1eb2b1251aa8a60dc9833967aaebb05aac",
     "tools.js": "6ba93c708119ecd62164ac8634273b64fb8ca8970124054b614da0ebfb221e1e",
-    "connection.js": "680a28f69c2cfc6285908aa94a5c79dbbdb8a142a728d3e63d47f0e94097cd92"
+    "connection.js": "680a28f69c2cfc6285908aa94a5c79dbbdb8a142a728d3e63d47f0e94097cd92",
+    "deferred.js": "2df5f95db669ee4438892804b42790b78a1c1d199848bcf2b34fa98cc9d0f510"
   }
 }
