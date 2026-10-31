@@ -213,6 +213,10 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
       'async pxAdopt(chatId, targetSessionId) {\n        this.deps.px.prepareSession(targetSessionId, chatId);\n        this.recordSwitchable(chatId, targetSessionId);\n        return this.switchSession(chatId, targetSessionId);\n    }\n    async switchSession(chatId, targetSessionId) {'
     )
   } else if (file === 'deferred.js') {
+    replace(
+      "if (error instanceof OneBotNotConnectedError)\n        return 'retryable';\n    if (error instanceof OneBotActionError) {\n        return /timed out/i.test(error.message) ? 'uncertain' : 'retryable';\n    }",
+      "if (error instanceof OneBotNotConnectedError || error instanceof OneBotActionError) {\n        return error.pxDelivery === 'not-sent' ? 'retryable' : 'uncertain';\n    }"
+    )
     replace('cancelChat(chatId) {', 'cancelChat(chatId, onlySessionId) {')
     replace(
       'if (timer.chatId === chatId)',
@@ -322,7 +326,22 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
       'chat.selectionRef.current = next;',
       'await ctx.validateModel(chat, next);\n        chat.selectionRef.current = next;'
     )
+  } else if (file === 'outbound.js') {
+    replace(
+      'throw new OneBotNotConnectedError();',
+      "throw Object.assign(new OneBotNotConnectedError(), { pxDelivery: 'not-sent' });"
+    )
+    const reject = 'throw new OneBotActionError(reject);'
+    if (code.split(reject).length !== 3) throw Error('QQ outbound rejection anchor mismatch')
+    code = code.replaceAll(
+      reject,
+      "throw Object.assign(new OneBotActionError(reject), { pxDelivery: 'not-sent' });"
+    )
   } else if (file === 'connection.js') {
+    replace(
+      "pending.reject(new OneBotActionError('OneBot action failed (retcode ' + retcode + ')' + (wording !== '' ? ': ' + wording : '')));",
+      "pending.reject(Object.assign(new OneBotActionError('OneBot action failed (retcode ' + retcode + ')' + (wording !== '' ? ': ' + wording : '')), { pxDelivery: 'not-sent' }));"
+    )
     const start = code.indexOf('    call(action, params) {')
     const end = code.indexOf(
       '\n    // ------------------------------------------------------------------ reverse',
@@ -332,10 +351,10 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
     code =
       code.slice(0, start) +
       `    call(action, params, signal) {
-        if (signal?.aborted) return Promise.reject(new OneBotActionError('OneBot action cancelled before sending'));
+        if (signal?.aborted) return Promise.reject(Object.assign(new OneBotActionError('OneBot action cancelled before sending'), { pxDelivery: 'not-sent' }));
         const socket = this.socket;
         if (socket === undefined || socket.readyState !== WebSocket.OPEN || this.stopping)
-            return Promise.reject(new OneBotNotConnectedError());
+            return Promise.reject(Object.assign(new OneBotNotConnectedError(), { pxDelivery: 'not-sent' }));
         const echo = randomUUID();
         return new Promise((resolve, reject) => {
             let timer;
