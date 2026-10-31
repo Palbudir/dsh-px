@@ -3,6 +3,8 @@ import { installUiStyles, controlStyle } from '../../shared/ui'
 import { requestJson } from '../../shared/client-http'
 import { DEFAULT_QQ_SETTINGS, type QqSettings } from './policy'
 import type { PendingInteraction } from './interactions'
+import { renderPersonaExpression, type PersonaExpression } from '../../shared/persona-expression'
+import { AttentionPanel, type AttentionSnapshot } from './attention-panel'
 
 export const inject = ['slots']
 interface Snapshot {
@@ -13,10 +15,11 @@ interface Snapshot {
   credentialConfigured: boolean
   sessionModelSelection?: boolean
   suggestedWorkspace?: string
-  personas: Array<{ id: string; name: string }>
+  personas: Array<{ id: string; name: string; revision?: number; expression?: PersonaExpression }>
   workspaces: Array<{ id: string; path: string }>
   active: number
   pendingInteractions?: PendingInteraction[]
+  attention?: AttentionSnapshot
   connection: { state: string; message: string; nickname?: string; persistenceBlocked?: boolean }
 }
 interface Catalog {
@@ -212,7 +215,7 @@ export function QqSettingsPanel(): unknown {
     <div className="px-ui" style={{ minWidth: 0, overflowWrap: 'anywhere', paddingBottom: 24 }}>
       <h2 style={{ marginTop: 0 }}>QQ 账号</h2>
       <p style={{ lineHeight: 1.7, opacity: 0.75 }}>
-        使用普通 QQ 账号接入。私聊和群内 @ 可以交流；只有授权成员能执行本机任务和访问私有资料。
+        使用普通 QQ 账号，按固定人格交流。消息模式决定关注哪些聊天；只有授权成员能安排本机任务或访问私有资料。
       </p>
       <section className="px-card" aria-label="QQ 连接状态">
         <strong>
@@ -270,6 +273,9 @@ export function QqSettingsPanel(): unknown {
         {feedback('connection')}
         {!view?.pendingInteractions?.length && feedback('interaction')}
       </section>
+      {view?.attention && !loadError && (
+        <AttentionPanel key={view.settings.accountId} value={view.attention} refresh={setView} />
+      )}
       {!!view?.pendingInteractions?.length && (
         <section className="px-card" aria-label="QQ 待处理请求">
           <h3>待处理请求</h3>
@@ -437,6 +443,16 @@ export function QqSettingsPanel(): unknown {
               </select>
             </label>
             <details>
+              <summary>公开人格预览</summary>
+              <p className="px-muted">
+                新会话采用所选人格的最新版本；在“记忆与知识 → 人格记忆”编辑性格、原则和说话示例。
+              </p>
+              <p style={{ whiteSpace: 'pre-wrap' }}>
+                {renderPersonaExpression(view?.personas.find((p) => p.id === draft.personaId)?.expression) ||
+                  '尚未设置统一的公开表达，当前沿用原有渠道配置。'}
+              </p>
+            </details>
+            <details>
               <summary>创建新人格</summary>
               <div className="px-actions">
                 <input
@@ -458,19 +474,19 @@ export function QqSettingsPanel(): unknown {
               {feedback('persona')}
             </details>
             <label>
-              公开介绍
+              QQ 补充说明
               <textarea
-                aria-label="QQ 公开介绍"
+                aria-label="QQ 补充说明"
                 maxLength={2000}
                 rows={3}
                 style={{ display: 'block', width: '100%', marginTop: 5, resize: 'vertical' }}
                 value={draft.publicIntroduction}
                 onChange={(e: any) => change('publicIntroduction', e.target.value)}
-                placeholder="群聊和普通私聊可见的身份、语气与交流偏好；请勿填写私有资料。"
+                placeholder="仅补充这个 QQ 渠道的交流背景；统一性格请在人格页编辑。请勿填写私有资料。"
               />
             </label>
             <p className="px-muted">
-              已开始的会话固定人格和公开介绍。修改默认值后，新会话使用新设置；现有会话保持原有身份。
+              已开始的会话固定人格版本和渠道说明。修改默认值后，新会话使用新设置；现有会话保持原有身份。
             </p>
             <label>
               QQ 新会话默认模型

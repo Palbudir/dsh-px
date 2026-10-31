@@ -12,6 +12,7 @@ import {
 } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { parsePersonaExpression, type PersonaExpression } from '../../shared/persona-expression'
 
 export interface MemoryEntry {
   id: string
@@ -23,6 +24,8 @@ export interface PersonaVersion {
   revision: number
   name: string
   instructions: string
+  /** Explicitly public style; unlike instructions, this can be reused by group-audience sessions. */
+  expression?: PersonaExpression
 }
 export interface Persona extends PersonaVersion {
   id: string
@@ -79,6 +82,9 @@ export function samePublicConversation(
 /** Reserved PX task ids remain excluded from recall even after their temporary binding is released. */
 export const isExperienceSession = (id: string): boolean =>
   /^px-experience-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)
+export const isAttentionSession = (id: string): boolean =>
+  /^px-qq-attention-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)
+export const isInternalSession = (id: string): boolean => isExperienceSession(id) || isAttentionSession(id)
 export interface MemoryState {
   schemaVersion: 2
   revision: number
@@ -114,7 +120,12 @@ export function validId(value: unknown): string {
   return value
 }
 function config(p: Persona): PersonaVersion {
-  return { revision: p.revision, name: p.name, instructions: p.instructions }
+  return {
+    revision: p.revision,
+    name: p.name,
+    instructions: p.instructions,
+    ...(p.expression ? { expression: structuredClone(p.expression) } : {})
+  }
 }
 function initial(): MemoryState {
   const p: Persona = {
@@ -147,6 +158,7 @@ function validate(s: MemoryState): void {
     validId(p.id)
     text(p.name, 60, true)
     text(p.instructions, 2000)
+    parsePersonaExpression(p.expression)
     if (
       ids.has(p.id) ||
       typeof p.memoryEnabled !== 'boolean' ||
@@ -172,6 +184,7 @@ function validate(s: MemoryState): void {
         throw new MemoryError('人格版本无效', 503)
       text(v.name, 60, true)
       text(v.instructions, 2000)
+      parsePersonaExpression(v.expression)
       revisions.add(v.revision)
     }
     if (!revisions.has(p.revision)) throw new MemoryError('缺少当前人格版本', 503)
@@ -316,12 +329,13 @@ export class MemoryStore {
       ? {
           ...p,
           ...v,
+          expression: v.expression,
           instructions: b.channel!.publicInstructions,
           memories: [],
           versions: [],
           memoryEnabled: false
         }
-      : { ...p, ...v }
+      : { ...p, ...v, expression: v.expression }
   }
   bind(
     sessionId: string,
@@ -362,6 +376,8 @@ export class MemoryStore {
       throw new MemoryError('公共会话不能接续其他私有或群聊上下文', 409)
     const p = s.personas.find((p) => p.id === (options.personaId ?? parent?.personaId ?? 'default'))
     if (!p || p.archived) throw new MemoryError('人格不存在或已归档')
+    const purpose =
+      options.purpose ?? parent?.purpose ?? (isInternalSession(sessionId) ? 'experience' : undefined)
     return this.change(s.revision, (n) => {
       n.bindings[sessionId] = {
         personaId: p.id,
@@ -371,19 +387,18 @@ export class MemoryStore {
         ...(options.pending ? { pending: true } : {}),
         ...(options.createdFrom ? { createdFrom: options.createdFrom } : {}),
         ...(channel ? { channel: structuredClone(channel) } : {}),
-        ...((options.purpose ??
-        parent?.purpose ??
-        (isExperienceSession(sessionId) ? 'experience' : undefined))
-          ? { purpose: options.purpose ?? parent?.purpose ?? ('experience' as const) }
-          : {}),
+        ...(purpose ? { purpose } : {}),
         ...(options.handoff ? { handoff: options.handoff } : {})
       }
     })
   }
   /** Drop internal identities only; native logs and ordinary conversation bindings are untouched. */
   releaseExperienceBindings(ids: readonly string[]): void {
+    this.releaseInternalBindings(ids.filter(isExperienceSession))
+  }
+  releaseInternalBindings(ids: readonly string[]): void {
     const state = this.read(),
-      removable = ids.filter((id) => isExperienceSession(id) && state.bindings[id]?.purpose === 'experience')
+      removable = ids.filter((id) => isInternalSession(id) && !!state.bindings[id]?.purpose)
     if (!removable.length) return
     this.change(state.revision, (next) => {
       for (const id of removable) delete next.bindings[id]
@@ -429,11 +444,26 @@ export class MemoryStore {
           if (p.archived) throw new MemoryError('人格已归档')
           const name = text(action.name, 60, true),
             instructions = text(action.instructions, 2000)
+          let expression = p.expression
+          if (Object.hasOwn(action, 'expression')) {
+            try {
+              expression = parsePersonaExpression(action.expression)
+            } catch (error) {
+              throw new MemoryError(error instanceof Error ? error.message : '公开人格表达无效')
+            }
+          }
           if (typeof action.memoryEnabled !== 'boolean') throw new MemoryError('记忆开关无效')
           p.memoryEnabled = action.memoryEnabled
-          if (name === p.name && instructions === p.instructions) break
+          if (
+            name === p.name &&
+            instructions === p.instructions &&
+            JSON.stringify(expression) === JSON.stringify(p.expression)
+          )
+            break
           p.name = name
           p.instructions = instructions
+          if (expression) p.expression = expression
+          else delete p.expression
           const keep = new Set(
             Object.values(s.bindings)
               .filter((b) => b.personaId === p.id)

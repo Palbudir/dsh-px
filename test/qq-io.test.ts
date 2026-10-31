@@ -20,6 +20,7 @@ function fixture() {
   policy.installScope(
     {
       effect: (run: any) => run(),
+      systemPrompt: { section: () => () => {} },
       tools: {
         register: () => () => {},
         guard: (g: any) => {

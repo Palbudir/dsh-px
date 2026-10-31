@@ -5,6 +5,7 @@ export interface QqMessageOrigin {
   conversationId: string
   senderId: string
   messageId?: string
+  delivery?: 'context'
 }
 const qqId = (value: unknown): value is string =>
   typeof value === 'string' && /^[1-9]\d{4,19}$/.test(value) && Number.isSafeInteger(Number(value))
@@ -21,6 +22,7 @@ export function qqMessageOrigin(source: any): QqMessageOrigin | undefined {
         accountId: value.accountId,
         conversationId: value.conversationId,
         senderId: value.senderId,
+        ...(value.delivery === 'context' ? { delivery: 'context' as const } : {}),
         ...(typeof value.messageId === 'string' && /^[A-Za-z0-9:_.-]{1,120}$/.test(value.messageId)
           ? { messageId: value.messageId }
           : {})
@@ -35,5 +37,6 @@ export const QQ_CONVERSATION_TOOLS: readonly string[] = [
   'qq_expression',
   'qq_document',
   'qq_memory',
+  'qq_reply',
   'persona_history'
 ]

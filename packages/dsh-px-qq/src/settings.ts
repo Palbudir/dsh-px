@@ -1,15 +1,18 @@
 import { createHash } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import { DEFAULT_QQ_SETTINGS, QqError, localEndpoint, qqId, type QqSettings } from './policy'
+import { parseAttention } from './attention'
 
-const keys = [...Object.keys(DEFAULT_QQ_SETTINGS), 'model']
+const keys = [...Object.keys(DEFAULT_QQ_SETTINGS), 'model', 'attention']
 export function parseQqSettings(value: unknown): QqSettings {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new QqError('QQ 设置格式无效')
   const input = value as Record<string, unknown>
   if (Object.keys(input).some((key) => !keys.includes(key))) throw new QqError('QQ 设置包含未知字段')
   const result = { ...DEFAULT_QQ_SETTINGS, ...input } as QqSettings
   if (typeof result.enabled !== 'boolean') throw new QqError('QQ 开关必须为布尔值')
-  for (const key of keys.filter((key) => !['enabled', 'authorizedUsers', 'model'].includes(key))) {
+  for (const key of keys.filter(
+    (key) => !['enabled', 'authorizedUsers', 'model', 'attention'].includes(key)
+  )) {
     const text = result[key as keyof QqSettings]
     if (
       typeof text !== 'string' ||
@@ -21,6 +24,13 @@ export function parseQqSettings(value: unknown): QqSettings {
   if (!Array.isArray(result.authorizedUsers) || result.authorizedUsers.length > 30)
     throw new QqError('授权成员列表无效')
   result.authorizedUsers = [...new Set(result.authorizedUsers.map(qqId))]
+  if (result.attention !== undefined) {
+    try {
+      result.attention = parseAttention(result.attention)
+    } catch (error) {
+      throw new QqError(error instanceof Error ? error.message : 'QQ 消息模式无效')
+    }
+  }
   if (result.model !== undefined) {
     const route = result.model
     if (

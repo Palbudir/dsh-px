@@ -8,6 +8,12 @@ import { KnowledgePanel } from './knowledge-panel'
 import { registerMnemonKnowledgePage } from './mnemon-page'
 import { registerMemoryWorkspace } from './memory-workspace'
 import { createDraftRegistry } from '../../shared/draft-store'
+import {
+  parsePersonaExpression,
+  renderPersonaExpression,
+  type PersonaExpression
+} from '../../shared/persona-expression'
+import { PersonaExpressionEditor } from '../../shared/persona-expression-editor'
 
 const personaDrafts = createDraftRegistry(64)
 
@@ -48,6 +54,7 @@ export function MemoryPanel({
         configDirty: false,
         name: '',
         instructions: '',
+        expression: null as PersonaExpression | null,
         enabled: true,
         newName: '',
         note: '',
@@ -55,14 +62,22 @@ export function MemoryPanel({
         scope: 'project'
       },
       storage,
-      (v) =>
-        v.note.length <= 2000 &&
-        v.instructions.length <= 2000 &&
-        v.name.length <= 60 &&
-        v.newName.length <= 60 &&
-        Number.isSafeInteger(v.revision) &&
-        v.revision >= -1 &&
-        ['project', 'persona'].includes(v.scope)
+      (v) => {
+        try {
+          parsePersonaExpression(v.expression)
+        } catch {
+          return false
+        }
+        return (
+          v.note.length <= 2000 &&
+          v.instructions.length <= 2000 &&
+          v.name.length <= 60 &&
+          v.newName.length <= 60 &&
+          Number.isSafeInteger(v.revision) &&
+          v.revision >= -1 &&
+          ['project', 'persona'].includes(v.scope)
+        )
+      }
     )
   }, [sessionId])
   const saved = draft?.getSnapshot()
@@ -77,6 +92,7 @@ export function MemoryPanel({
     [busy, setBusy] = useState(false)
   const [name, setName] = useState(saved?.name ?? ''),
     [instructions, setInstructions] = useState(saved?.instructions ?? ''),
+    [expression, setExpression] = useState<PersonaExpression | null>(saved?.expression ?? null),
     [enabled, setEnabled] = useState(saved?.enabled ?? true)
   const [newName, setNewName] = useState(saved?.newName ?? ''),
     [note, setNote] = useState(saved?.note ?? ''),
@@ -100,6 +116,7 @@ export function MemoryPanel({
     view &&
     (name !== view.template.name ||
       instructions !== view.template.instructions ||
+      JSON.stringify(expression) !== JSON.stringify(view.template.expression ?? null) ||
       enabled !== view.persona.memoryEnabled)
   )
   const dirty = !!note || !!newName || configDirty || (restoring.current && !!saved?.configDirty)
@@ -121,6 +138,7 @@ export function MemoryPanel({
     setEditing(undefined)
     setName('')
     setInstructions('')
+    setExpression(null)
     setView(null)
     setError('')
   }
@@ -133,6 +151,7 @@ export function MemoryPanel({
         configDirty,
         name,
         instructions,
+        expression,
         enabled,
         newName,
         note,
@@ -150,6 +169,7 @@ export function MemoryPanel({
     view,
     name,
     instructions,
+    expression,
     enabled,
     newName,
     note,
@@ -164,6 +184,7 @@ export function MemoryPanel({
     setView(data)
     setName(data.template.name)
     setInstructions(data.template.instructions)
+    setExpression(data.template.expression ?? null)
     setEnabled(data.persona.memoryEnabled)
     if (!data.project) setScope('persona')
   }
@@ -181,6 +202,7 @@ export function MemoryPanel({
             if (!saved?.configDirty) {
               setName(data.template.name)
               setInstructions(data.template.instructions)
+              setExpression(data.template.expression ?? null)
               setEnabled(data.persona.memoryEnabled)
             }
             if (saved?.personaId !== data.persona.id) {
@@ -474,6 +496,13 @@ export function MemoryPanel({
                 </details>
                 <section>
                   <details style={{ ...cardStyle, marginBottom: 16 }}>
+                    <summary>本会话的人格配置 · 版本 {view.binding.personaRevision}</summary>
+                    <p style={{ whiteSpace: 'pre-wrap' }}>
+                      {renderPersonaExpression(view.persona.expression) ||
+                        '未设置独立的公开表达，沿用原有协作和渠道配置。'}
+                    </p>
+                  </details>
+                  <details style={{ ...cardStyle, marginBottom: 16 }}>
                     <summary>编辑人格模板（保存为新版本）</summary>
                     <label>
                       名称
@@ -490,14 +519,14 @@ export function MemoryPanel({
                       />
                     </label>
                     <label>
-                      职责与协作方式
+                      私人协作要求
                       <textarea
                         disabled={busy || view.persona.archived}
-                        aria-label="职责与协作方式"
+                        aria-label="私人协作要求"
                         rows={4}
                         maxLength={2000}
                         style={{ ...controlStyle, width: '100%', resize: 'vertical' }}
-                        placeholder="例如：先解释结论；协助研究时标明来源和不确定性。"
+                        placeholder="只用于私人和本机工作会话，不自动公开到群聊。例如：研究时标明来源。"
                         value={instructions}
                         onChange={(e: any) => {
                           beginEdit()
@@ -505,6 +534,14 @@ export function MemoryPanel({
                         }}
                       />
                     </label>
+                    <PersonaExpressionEditor
+                      value={expression}
+                      disabled={busy || !!view.persona.archived}
+                      onChange={(value) => {
+                        beginEdit()
+                        setExpression(value)
+                      }}
+                    />
                     <label>
                       <input
                         disabled={busy || view.persona.archived}
@@ -522,7 +559,13 @@ export function MemoryPanel({
                         style={controlStyle}
                         disabled={busy || !name.trim() || view.persona.archived}
                         onClick={() =>
-                          void act({ type: 'configure', name, instructions, memoryEnabled: enabled })
+                          void act({
+                            type: 'configure',
+                            name,
+                            instructions,
+                            expression,
+                            memoryEnabled: enabled
+                          })
                         }
                       >
                         保存人格
@@ -582,6 +625,7 @@ export function MemoryPanel({
                         !!note ||
                         name !== view.template.name ||
                         instructions !== view.template.instructions ||
+                        JSON.stringify(expression) !== JSON.stringify(view.template.expression ?? null) ||
                         enabled !== view.persona.memoryEnabled
                       }
                       onClick={() =>

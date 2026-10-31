@@ -120,13 +120,37 @@ export class QqConversation {
     const chat = conversation(chatId)
     if (!args || typeof args !== 'object' || Array.isArray(args)) throw new QqError('QQ 参数无效')
     const keys =
-      tool === 'qq_document'
-        ? ['title', 'text']
-        : tool === 'qq_context'
-          ? ['action', 'count', 'before', 'offset', 'textOffset', 'reference']
-          : ['action', 'face', 'reference']
+      tool === 'qq_reply'
+        ? ['action', 'text']
+        : tool === 'qq_document'
+          ? ['title', 'text']
+          : tool === 'qq_context'
+            ? ['action', 'count', 'before', 'offset', 'textOffset', 'reference']
+            : ['action', 'face', 'reference']
     if (Object.keys(args).some((key) => !keys.includes(key)))
       throw new QqError('QQ 操作不能指定其他聊天或原始接口', 403)
+    if (tool === 'qq_reply') {
+      if (args.action === 'silent') {
+        if (args.text !== undefined) throw new QqError('旁听不会发送文字，请省略 text')
+        return { decision: 'silent', sent: false }
+      }
+      if (
+        args.action !== 'text' ||
+        typeof args.text !== 'string' ||
+        !args.text.trim() ||
+        args.text.length > 2000
+      )
+        throw new QqError('QQ 回复需要简短正文；长内容请使用 qq_document')
+      const result = await this.call(
+        chat.kind === 'group' ? 'send_group_msg' : 'send_private_msg',
+        {
+          [chat.kind === 'group' ? 'group_id' : 'user_id']: Number(chat.peer),
+          message: [{ type: 'text', data: { text: args.text.trim() } }]
+        },
+        signal
+      )
+      return { decision: 'text', submitted: true, messageId: result?.message_id ?? null }
+    }
     if (tool === 'qq_document') {
       if (typeof args.text !== 'string' || !args.text.trim() || args.text.length > 64000)
         throw new QqError('文本交付内容为空或超过六万四千字符，请拆分为有明确标题的文档', 413)

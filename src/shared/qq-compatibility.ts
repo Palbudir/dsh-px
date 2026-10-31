@@ -12,6 +12,7 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
     code = code.replace(from, to)
   }
   if (file === 'index.js') {
+    code = "import { classifySendError as classifyPxSendError } from './deferred.js';\n" + code
     replace("export const inject = ['tools',", "export const inject = ['pxQq', 'tools',")
     replace(
       'export const Config = z.object({',
@@ -37,7 +38,7 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
     replace('await connection.stop();', 'await connection.stop();\n            px.dispose();')
     replace(
       'adopt: (chatId, sessionId) => bridge.registry.pxAdopt(chatId, sessionId),',
-      'adopt: (chatId, sessionId) => bridge.registry.pxAdopt(chatId, sessionId),\n        segments: (chatId, segments) => bridge.sendSegments(chatId, segments),\n        flush: () => bridge.registry.pxFlush(),\n        message: input => bridge.pxMessage(input),\n        scope: (ctx, sessionId, chatId) => bridge.installChannelScope(ctx, sessionId, chatId),\n        model: (ctx, sessionId) => bridge.registry.pxModel(ctx, sessionId),\n        recordedPreset: sessionId => bridge.registry.recordedPresetFor(sessionId),\n        attachWorkspace: (sessionId, cwd) => bridge.registry.attachToWorkspace(sessionId, cwd),'
+      'adopt: (chatId, sessionId) => bridge.registry.pxAdopt(chatId, sessionId),\n        segments: (chatId, segments) => bridge.sendSegments(chatId, segments),\n        classifySendError: error => classifyPxSendError(error),\n        flush: () => bridge.registry.pxFlush(),\n        message: input => bridge.pxMessage(input),\n        scope: (ctx, sessionId, chatId) => bridge.installChannelScope(ctx, sessionId, chatId),\n        model: (ctx, sessionId) => bridge.registry.pxModel(ctx, sessionId),\n        recordedPreset: sessionId => bridge.registry.recordedPresetFor(sessionId),\n        attachWorkspace: (sessionId, cwd) => bridge.registry.attachToWorkspace(sessionId, cwd),'
     )
   } else if (file === 'registry.js') {
     replace(
@@ -211,7 +212,53 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
       'async switchSession(chatId, targetSessionId) {',
       'async pxAdopt(chatId, targetSessionId) {\n        this.deps.px.prepareSession(targetSessionId, chatId);\n        this.recordSwitchable(chatId, targetSessionId);\n        return this.switchSession(chatId, targetSessionId);\n    }\n    async switchSession(chatId, targetSessionId) {'
     )
+  } else if (file === 'deferred.js') {
+    replace(
+      "if (error instanceof OneBotNotConnectedError)\n        return 'retryable';\n    if (error instanceof OneBotActionError) {\n        return /timed out/i.test(error.message) ? 'uncertain' : 'retryable';\n    }",
+      "if (error instanceof OneBotNotConnectedError || error instanceof OneBotActionError) {\n        return error.pxDelivery === 'not-sent' ? 'retryable' : 'uncertain';\n    }"
+    )
+    replace('cancelChat(chatId) {', 'cancelChat(chatId, onlySessionId) {')
+    replace(
+      'if (timer.chatId === chatId)',
+      'if (timer.chatId === chatId && (onlySessionId === undefined || onlySessionId === sessionId))'
+    )
+    replace(
+      "if (entry.chatId !== chatId || entry.state !== 'pending')",
+      "if (entry.chatId !== chatId || entry.state !== 'pending' || (onlySessionId !== undefined && entry.sessionId !== onlySessionId))"
+    )
+    replace(
+      "entry.reason = '用户已停止该聊天的生成（/stop），补发跟踪终止';",
+      "entry.reason = onlySessionId === undefined ? '用户已停止该聊天的生成（/stop），补发跟踪终止' : '本轮已采用显式回应，自动补发已取消';"
+    )
   } else if (file === 'bridge.js') {
+    replace(
+      "isTurnRunning: chatId => this.chats.get(chatId)?.agent.status === 'running',",
+      "isTurnRunning: chatId => { const chat = this.chats.get(chatId); return chat?.agent.status === 'running' && !this.deps.px.explicitReplies(chat.sessionId); },"
+    )
+    replace(
+      'if (chat === undefined || chat.sessionId !== session.id)\n            return;\n        const trace = this.traceForChat(chatId);',
+      'if (chat === undefined || chat.sessionId !== session.id)\n            return;\n        if (this.deps.px.explicitReplies(session.id)) this.deferred.cancelChat(chatId, session.id);\n        const trace = this.traceForChat(chatId);'
+    )
+    replace(
+      'chat.pendingTurnRoles.push(role);',
+      'if (!this.deps.px.isAmbientInput()) chat.pendingTurnRoles.push(role);'
+    )
+    replace(
+      'if (!this.queueNoticeChats.has(chatId)) {',
+      'if (!this.deps.px.isAmbientInput() && !this.queueNoticeChats.has(chatId)) {'
+    )
+    replace(
+      "if (event.type === 'assistant/message') {",
+      "if (event.type === 'assistant/message') {\n            if (this.deps.px.explicitReplies(session.id)) return;"
+    )
+    replace(
+      'this.deferred.onTurnStart(chatId, session.id);',
+      'if (!this.deps.px.explicitReplies(session.id)) this.deferred.onTurnStart(chatId, session.id);'
+    )
+    replace(
+      'this.interim.onTurnEnd(chatId, chat);',
+      'if (!this.deps.px.explicitReplies(session.id)) this.interim.onTurnEnd(chatId, chat);'
+    )
     replace(
       "this.deps.log('error', 'inbound handling failed: ' + describeError(error) + errorStack(error));",
       "this.deps.log('error', 'inbound handling failed: ' + describeError(error) + errorStack(error));\n            throw error;"
@@ -260,7 +307,7 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
     )
     replace(
       "chat.agent.followup(createUserMessage({\n            content: [{ type: 'text', text: final }],\n            source: { kind: 'plugin:dsh-onebot' },\n        }));",
-      "const pxMessage = createUserMessage({\n            content: [{ type: 'text', text: final }],\n            source: this.deps.px.source(chatId),\n        });\n        chat.agent.followup(pxMessage);\n        this.deps.px.admitted(chatId, chat.sessionId, pxMessage.id);"
+      "const pxMessage = createUserMessage({\n            content: [{ type: 'text', text: final }],\n            source: this.deps.px.source(chatId),\n        });\n        this.deps.px.dispatchMessage(chat.agent, pxMessage);\n        this.deps.px.admitted(chatId, chat.sessionId, pxMessage.id);"
     )
     replace(
       "chat.agent.steer(createUserMessage({\n            content: [{ type: 'text', text }],\n            source: { kind: 'plugin:dsh-onebot' },\n        }));",
@@ -268,7 +315,7 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
     )
     replace(
       'tryHandleCommand(chatId, text, userId, nickname) {\n        return routeCommand(this.commandCtx, chatId, text, userId, nickname);\n    }',
-      'async tryHandleCommand(chatId, text, userId, nickname) {\n        try {\n            if (await this.deps.px.command(chatId, text, userId)) return true;\n            return await routeCommand(this.commandCtx, chatId, text, userId, nickname);\n        } catch (error) {\n            await this.sendToChat(chatId, error.message || "命令未完成，请重试");\n            return true;\n        }\n    }'
+      'async tryHandleCommand(chatId, text, userId, nickname) {\n        if (this.deps.px.isAmbientInput()) return false;\n        try {\n            if (await this.deps.px.command(chatId, text, userId)) return true;\n            return await routeCommand(this.commandCtx, chatId, text, userId, nickname);\n        } catch (error) {\n            await this.sendToChat(chatId, error.message || "命令未完成，请重试");\n            return true;\n        }\n    }'
     )
     replace(
       "isAdmin: userId => classifyUserRole(userId, bridge.deps.policy.adminUsers) === 'admin',",
@@ -279,7 +326,22 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
       'chat.selectionRef.current = next;',
       'await ctx.validateModel(chat, next);\n        chat.selectionRef.current = next;'
     )
+  } else if (file === 'outbound.js') {
+    replace(
+      'throw new OneBotNotConnectedError();',
+      "throw Object.assign(new OneBotNotConnectedError(), { pxDelivery: 'not-sent' });"
+    )
+    const reject = 'throw new OneBotActionError(reject);'
+    if (code.split(reject).length !== 3) throw Error('QQ outbound rejection anchor mismatch')
+    code = code.replaceAll(
+      reject,
+      "throw Object.assign(new OneBotActionError(reject), { pxDelivery: 'not-sent' });"
+    )
   } else if (file === 'connection.js') {
+    replace(
+      "pending.reject(new OneBotActionError('OneBot action failed (retcode ' + retcode + ')' + (wording !== '' ? ': ' + wording : '')));",
+      "pending.reject(Object.assign(new OneBotActionError('OneBot action failed (retcode ' + retcode + ')' + (wording !== '' ? ': ' + wording : '')), { pxDelivery: 'not-sent' }));"
+    )
     const start = code.indexOf('    call(action, params) {')
     const end = code.indexOf(
       '\n    // ------------------------------------------------------------------ reverse',
@@ -289,10 +351,10 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
     code =
       code.slice(0, start) +
       `    call(action, params, signal) {
-        if (signal?.aborted) return Promise.reject(new OneBotActionError('OneBot action cancelled before sending'));
+        if (signal?.aborted) return Promise.reject(Object.assign(new OneBotActionError('OneBot action cancelled before sending'), { pxDelivery: 'not-sent' }));
         const socket = this.socket;
         if (socket === undefined || socket.readyState !== WebSocket.OPEN || this.stopping)
-            return Promise.reject(new OneBotNotConnectedError());
+            return Promise.reject(Object.assign(new OneBotNotConnectedError(), { pxDelivery: 'not-sent' }));
         const echo = randomUUID();
         return new Promise((resolve, reject) => {
             let timer;

@@ -10,6 +10,7 @@ import { inspectOneBot } from './connection'
 import { installPublicQqAgent } from './public-agent'
 import { QqReceipts } from './receipts'
 import qqCommunity from '../../../config/qq-community.json'
+import { QqAttentionInbox } from './attention-inbox'
 
 export const name = 'dsh-px-qq'
 export const inject: string[] = []
@@ -89,7 +90,7 @@ async function activateHost(ctx: any): Promise<void> {
           {
             id: 'persona',
             name: '@deepseek-ai/dsh-persona',
-            config: { prefix: 'You are a helpful conversational assistant.' }
+            config: { prefix: 'Follow the configured persona and the current conversation context.' }
           },
           { id: 'time-context', name: '@deepseek-ai/dsh-time-context' },
           {
@@ -110,6 +111,10 @@ async function activateHost(ctx: any): Promise<void> {
       throw error
     }))
   ctx.provide('pxQq', {
+    attention: (args: unknown, exec: any) => {
+      if (!current) throw new QqError('QQ 接入未开启', 409)
+      return current.attentionAction(args, exec)
+    },
     conversation: (tool: string, args: unknown, exec: any) => {
       if (!current) throw new QqError('QQ 接入未开启', 409)
       return current.conversationAction(tool, args, exec)
@@ -118,10 +123,11 @@ async function activateHost(ctx: any): Promise<void> {
     authority: (agent: any, messages: any[]) => current?.authority(agent, messages),
     canRunGroupTask: (sessionId: string) => current?.canRunGroupTask(sessionId) ?? false,
     workspace: (chatId: string) => current?.workspace(chatId),
-    canDelegate: (exec: any, channel: any) => current?.canDelegate(exec, channel) ?? false,
-    delegate: (exec: any, channel: any) => {
+    canDelegate: (exec: any, channel: any, requestMessageId?: unknown) =>
+      current?.canDelegate(exec, channel, requestMessageId) ?? false,
+    delegate: (exec: any, channel: any, requestMessageId?: unknown) => {
       if (!current) throw new QqError('QQ 接入已关闭，未投递任务', 409)
-      return current.delegate(exec, channel)
+      return current.delegate(exec, channel, requestMessageId)
     },
     activate: async (owner: any, raw: unknown) => {
       activationProblem = undefined
@@ -140,7 +146,11 @@ async function activateHost(ctx: any): Promise<void> {
         if (typeof token !== 'string' || !token || /[\r\n]/.test(token))
           throw new QqError('QQ 连接令牌不可用，请重新配置')
         mkdirSync(configuration.workspace, { recursive: true })
-        const policy = new QqSessionPolicy(ctx, configuration, receipts)
+        const inbox = new QqAttentionInbox(
+          join(home, 'storages', name, 'inbox-' + configuration.accountId + '.sqlite'),
+          configuration.accountId
+        )
+        const policy = new QqSessionPolicy(ctx, configuration, receipts, inbox)
         created = policy
         current = policy
         owner.effect(
@@ -168,9 +178,11 @@ async function activateHost(ctx: any): Promise<void> {
             restrictedMemberPrefix: '普通成员：可交流，不可发起本机任务',
             groupPolicy: 'open',
             groupAllowFrom: [],
-            requireMention: true,
+            requireMention: false,
+            // The durable PX queue bounds admission; the upstream limiter silently drops whole inputs.
+            rateLimitPerMinute: 0,
             ignoreSelf: true,
-            interimMessages: true,
+            interimMessages: false,
             interimRecall: false,
             textImageThreshold: 0,
             sttEnabled: false,
@@ -193,6 +205,51 @@ async function activateHost(ctx: any): Promise<void> {
     }
   })
   let lastConfiguration: { revision: string; settings: QqSettings } | undefined
+  ctx.inject(['tools', 'systemPrompt'], (scope: any) => {
+    scope.effect(
+      () =>
+        scope.tools.register({
+          name: 'qq_attention',
+          description:
+            '查看 QQ 收件概览，临时打开聊天、切换模式，或用 mute/unmute 关闭/恢复某个群的提醒。省略时有效期十分钟；不改变任务权限。专注或已关注聊天仍会阅读，@ 是否穿透免打扰遵循用户设置。',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['action'],
+            properties: {
+              action: { type: 'string', enum: ['status', 'open', 'mode', 'mute', 'unmute', 'restore'] },
+              chatId: { type: 'string' },
+              mode: { type: 'string', enum: ['normal', 'focus', 'notifications'] },
+              minutes: {
+                type: 'integer',
+                minimum: 1,
+                maximum: 30,
+                description: '临时调整时长，省略为十分钟'
+              },
+              reason: { type: 'string', maxLength: 200 }
+            }
+          },
+          output: {
+            schema: { type: 'object', additionalProperties: true },
+            render: (_: unknown, value: unknown) => [{ type: 'text', text: JSON.stringify(value) }]
+          },
+          execute: (args: unknown, exec: any) => {
+            if (!current) throw new QqError('QQ 接入未开启', 409)
+            return current.attentionAction(args, exec)
+          }
+        }),
+      'qq: private attention controls'
+    )
+    scope.effect(
+      () =>
+        scope.systemPrompt.context({
+          name: 'px-qq-notifications',
+          order: 900,
+          text: ({ agent }: any) => (agent ? (current?.notificationContext(agent) ?? '') : '')
+        }),
+      'qq: private notification context'
+    )
+  })
   const snapshot = async () => {
     let config: { revision: string; settings: QqSettings }
     try {
@@ -235,6 +292,7 @@ async function activateHost(ctx: any): Promise<void> {
       workspaces: (ctx.get('workspaceRegistry')?.list() ?? []).map((w: any) => ({ id: w.id, path: w.path })),
       active: busyAgents(config.settings.accountId).length,
       pendingInteractions: current?.pendingInteractions() ?? [],
+      attention: current?.attentionSnapshot(),
       connection: !componentEnabled
         ? { state: 'offline', message: 'QQ 社区组件已停用。请在“插件”页面重新启用配套的 dsh-onebot-qq。' }
         : compatible
@@ -289,6 +347,26 @@ async function activateHost(ctx: any): Promise<void> {
               return send(200, await ctx.get('sessionController').modelCatalog())
             if (input.action === 'create-persona')
               return send(200, ctx.pxMemoryChannels.createPersona(input.name))
+            if (input.action === 'attention') {
+              if (!current) throw new QqError('请先开启 QQ 接入', 409)
+              if (input.accountId !== state.settings.accountId)
+                throw new QqError('QQ 账号已变化，请刷新后重试', 409)
+              current.saveAttention(input.revision, input.settings)
+              return send(200, await snapshot())
+            }
+            if (input.action === 'attention-observer') {
+              if (!current || !['stop', 'retry'].includes(input.operation))
+                throw new QqError('通知操作不可用', 409)
+              if (input.accountId !== state.settings.accountId)
+                throw new QqError('QQ 账号已变化，请刷新后重试', 409)
+              current.attentionObserverAction(input.operation)
+              return send(200, await snapshot())
+            }
+            if (input.action === 'attention-page') {
+              if (!current || input.accountId !== state.settings.accountId)
+                throw new QqError('QQ 账号已变化，请刷新后重试', 409)
+              return send(200, current.attentionPage(input.offset))
+            }
             if (input.action === 'save') {
               if (!settings.componentEnabled())
                 throw new QqError('请先在插件页面重新启用 QQ 社区组件，再修改其连接配置', 409)
