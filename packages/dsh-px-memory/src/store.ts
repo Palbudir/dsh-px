@@ -13,6 +13,7 @@ import {
 import { dirname, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { parsePersonaExpression, type PersonaExpression } from '../../shared/persona-expression'
+import { parsePersonaResources, type PersonaResources } from '../../shared/persona-resources'
 import {
   audienceOf,
   sameConversationAudience,
@@ -36,6 +37,8 @@ export interface PersonaVersion {
 }
 export interface Persona extends PersonaVersion {
   id: string
+  /** Resource revocation is live and independent of the adopted expression revision. */
+  resources?: PersonaResources
   memoryEnabled: boolean
   memories: MemoryEntry[]
   versions: PersonaVersion[]
@@ -149,6 +152,7 @@ function validate(s: MemoryState): void {
     text(p.name, 60, true)
     text(p.instructions, 2000)
     parsePersonaExpression(p.expression)
+    parsePersonaResources(p.resources)
     if (
       ids.has(p.id) ||
       typeof p.memoryEnabled !== 'boolean' ||

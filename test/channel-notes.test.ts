@@ -164,6 +164,52 @@ test('native Mnemon conversation notes survive a fresh instance and keep only co
   assert.deepEqual(JSON.parse(JSON.stringify(current)), current)
 })
 
+test('human conversation feedback, correction and archive preserve evidence and reject stale or model-forged edits', async (t) => {
+  const f = fixture(t),
+    before = await f.notes.execute('old', { action: 'catalog' }, signal())
+  const original = await f.notes.execute(
+    'old',
+    {
+      action: 'save',
+      topic: '偏好',
+      text: 'OLD_INFERENCE',
+      revision: before.revision,
+      evidence: [{ sessionId: 'old', seq: 0 }]
+    },
+    signal()
+  )
+  const ref = { id: original.note.id, documentRevision: original.note.revision }
+  const disputed = await f.notes.execute(
+    'new',
+    { action: 'feedback', ...ref, kind: 'disputed', reason: '推断不准确' },
+    signal(),
+    'human'
+  )
+  assert.equal(disputed.note.current, false)
+  assert.equal((await f.notes.execute('new', { action: 'read', id: ref.id }, signal())).note.body, null)
+  const draft = { action: 'correct' as const, ...ref, revision: disputed.revision, text: 'HUMAN_CORRECTED' }
+  await assert.rejects(f.notes.execute('new', draft, signal()), /用户/)
+  const corrected = await f.notes.execute('new', draft, signal(), 'human')
+  assert.match(corrected.note.body, /HUMAN_CORRECTED/)
+  assert.equal(JSON.parse(corrected.note.body).evidence[0].sessionId, 'old')
+  assert.equal(corrected.note.current, true)
+  assert.equal(corrected.note.feedback.count, 0)
+  await assert.rejects(f.notes.execute('new', draft, signal(), 'human'), /已经变化/)
+  await f.notes.execute(
+    'new',
+    {
+      action: 'archive',
+      id: ref.id,
+      revision: corrected.revision,
+      documentRevision: corrected.note.revision
+    },
+    signal(),
+    'human'
+  )
+  assert.equal((await f.notes.execute('new', { action: 'catalog' }, signal())).total, 0)
+  await assert.rejects(f.notes.execute('new', draft, signal(), 'human'), /不属于/)
+})
+
 test('unrelated shared documents cannot hide conversation memories and every matching note has a reachable page', async (t) => {
   const f = fixture(t)
   for (let i = 0; i < 10; i++) {

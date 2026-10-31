@@ -4,7 +4,15 @@ import { KnowledgeBank, KNOWLEDGE_SCOPES, type KnowledgeCaller, type KnowledgeSc
 import { MemoryError } from './store'
 
 const properties = {
-  action: { type: 'string', enum: ['catalog', 'search', 'read', 'write', 'share', 'archive'] },
+  action: { type: 'string', enum: ['catalog', 'search', 'read', 'write', 'share', 'archive', 'feedback'] },
+  kind: { type: 'string', enum: ['confirmed', 'useful', 'not-applicable', 'disputed'] },
+  reason: { type: 'string', maxLength: 1000 },
+  evidence: {
+    type: 'object',
+    additionalProperties: false,
+    required: ['sessionId', 'seq'],
+    properties: { sessionId: { type: 'string', maxLength: 200 }, seq: { type: 'integer', minimum: 0 } }
+  },
   scope: { type: 'string', enum: ['visible', ...KNOWLEDGE_SCOPES] },
   query: { type: 'string', maxLength: 256 },
   id: { type: 'string' },
@@ -15,7 +23,17 @@ const properties = {
   targetScope: { type: 'string', enum: [...KNOWLEDGE_SCOPES] },
   historical: { type: 'boolean' },
   offset: { type: 'integer', minimum: 0 },
-  sourcePaths: { type: 'array', maxItems: 12, items: { type: 'string', maxLength: 4096 } }
+  sourcePaths: { type: 'array', maxItems: 12, items: { type: 'string', maxLength: 4096 } },
+  sourceEvents: {
+    type: 'array',
+    maxItems: 12,
+    items: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['sessionId', 'seq'],
+      properties: { sessionId: { type: 'string', maxLength: 200 }, seq: { type: 'integer', minimum: 0 } }
+    }
+  }
 }
 export const KNOWLEDGE_INPUT = {
   type: 'object',
@@ -29,7 +47,8 @@ export function knowledgeCaller(scope: MemoryOperationScope): KnowledgeCaller {
 export async function knowledgeAction(
   bank: KnowledgeBank,
   caller: KnowledgeCaller,
-  input: any
+  input: any,
+  signal?: AbortSignal
 ): Promise<any> {
   if (
     !input ||
@@ -74,7 +93,8 @@ export async function knowledgeAction(
         key: input.key,
         body: input.body,
         revision: input.revision,
-        sourcePaths: input.sourcePaths
+        sourcePaths: input.sourcePaths,
+        sourceEvents: input.sourceEvents
       })
     case 'share':
       return bank.share(
@@ -87,6 +107,8 @@ export async function knowledgeAction(
       )
     case 'archive':
       return bank.archive(caller, input.scope, input.id, input.revision, input.documentRevision)
+    case 'feedback':
+      return bank.feedback(caller, input.scope, input, signal)
     default:
       throw new MemoryError('知识操作无效')
   }
@@ -100,7 +122,7 @@ const schema = (keys: string[], required: string[]) => ({
 })
 export function knowledgeContractText(instance: string): string {
   return `PX knowledge operations available in the current native Mnemon View (keep these exact IDs after compaction):
-Read tool mnemon_view_route: routeId="${instance}/catalog", input={scope:"project"} returns a CONTROL item containing the current string revision, even when empty. Search: routeId="${instance}/search", input={scope:"visible",query:"1-3 key words"}. visible already combines all accessible scopes; use CONTROL.revisions[targetScope] directly and do not recheck every scope. Read: routeId="${instance}/read", input={scope:"project",id:"copy a returned document id",offset:0}.
+Read tool mnemon_view_route: routeId="${instance}/catalog", input={scope:"project"} returns a CONTROL item containing the current string revision, even when empty. Search: routeId="${instance}/search", input={scope:"visible",query:"1-3 key words"}. visible already combines all accessible scopes; use CONTROL.revisions[targetScope] directly and do not recheck every scope. Read: routeId="${instance}/read", input={scope:"project",id:"copy a returned document id",offset:0}. Native action ${instance}/feedback records revision-specific useful/not-applicable observations with original event evidence; it does not confirm facts, alter permissions or turn repeated retrieval into independent evidence.
 Write tool mnemon_view_action: offerId="${instance}/write", input={scope:"project",key:"one stable topic",body:"the corrected CURRENT statement",revision:"copy CONTROL.revision exactly"}. For an explicit save to a named scope/key: catalog that scope ONCE, write, then read the returned id if verification was requested. Do not repeatedly search other scopes or old archives before this write; uniqueness is per scope and write updates the existing exact key. Never put a version number in a new topic key. The string store revision is NOT the numeric document revision. Do not guess IDs or revisions; after a real conflict call catalog again. Other native offers are ${instance}/share and ${instance}/archive. Private scopes are persona/persona-project; shared scopes project/global. Historical or stale records are not current facts. Task progress stays in the work ledger, not knowledge. Read-only permissions remain enforced by native Mnemon.`
 }
 /** Public Mnemon Source: one routed authority, no second context copy of document bodies. */
@@ -153,12 +175,22 @@ export function pxKnowledgeSource(
       ],
       actions: [
         {
+          id: 'feedback',
+          description:
+            '记录具体修订的应用反馈：模型只可使用 useful / not-applicable，并引用 persona_history 中的原始事件。成功工具回执只能说明应用有用，不能确认事实；重复检索或模型复述不增加权重。反馈只属于本人格及当前受众，不随共享资料传播。',
+          capability: 'write',
+          inputSchema: schema(
+            ['scope', 'id', 'documentRevision', 'kind', 'reason', 'evidence'],
+            ['scope', 'id', 'documentRevision', 'kind', 'reason', 'evidence']
+          )
+        },
+        {
           id: 'write',
           description:
             '创建或纠正一个稳定主题；先 catalog 取得 CONTROL.revision 字符串，不用数字文档版本，不猜版本。',
           capability: 'write',
           inputSchema: schema(
-            ['scope', 'key', 'body', 'revision', 'sourcePaths'],
+            ['scope', 'key', 'body', 'revision', 'sourcePaths', 'sourceEvents'],
             ['scope', 'key', 'body', 'revision']
           )
         },
@@ -206,7 +238,7 @@ export function pxKnowledgeSource(
         hash(
           rows.map((r) => [
             r.scope,
-            r.documents.map((d: any) => [d.id, d.revision, d.contentHash, d.status, d.healthy])
+            r.documents.map((d: any) => [d.id, d.revision, d.contentHash, d.status, d.healthy, d.feedback])
           ])
         )
       return {
@@ -223,7 +255,7 @@ export function pxKnowledgeSource(
             revision: revision(rows),
             capabilities: enabled ? ['status', 'project', 'search', 'read', 'write', 'archive'] : ['status'],
             routeIds: enabled ? ['catalog', 'search', 'read'] : [],
-            actionIds: enabled ? ['write', 'share', 'archive'] : [],
+            actionIds: enabled ? ['write', 'share', 'archive', 'feedback'] : [],
             hints: {
               scopes: rows.map((r) => r.scope),
               activeCount: rows.reduce(
@@ -335,7 +367,16 @@ export function pxKnowledgeSource(
                 sourceMeaning: row.sourceMeaning ?? null,
                 nextOffset,
                 totalCharacters: body.length,
-                sources: row.sources ?? []
+                sources: row.sources ?? [],
+                events: row.events ?? [],
+                feedback: row.feedback
+                  ? {
+                      confirmed: row.feedback.confirmed,
+                      disputed: row.feedback.disputed,
+                      strength: row.feedback.strength,
+                      count: row.feedback.count
+                    }
+                  : null
               }
             })
           }
@@ -359,11 +400,11 @@ export function pxKnowledgeSource(
           const input = { ...(request.input as any), action: request.offer.sourceActionId },
             caller = resolveCaller(knowledgeCaller(request.view.scope))
           if (!canParticipate(caller)) throw new MemoryError('当前人格的记忆已关闭')
-          if (!['write', 'share', 'archive'].includes(input?.action))
+          if (!['write', 'share', 'archive', 'feedback'].includes(input?.action))
             throw new MemoryError('知识修改操作无效')
           await authorize(caller, input, request.signal)
           request.signal?.throwIfAborted()
-          const result = await knowledgeAction(bank, caller, input)
+          const result = await knowledgeAction(bank, caller, input, request.signal)
           return {
             id: randomUUID(),
             viewId: request.view.id,
@@ -393,7 +434,7 @@ export function pxKnowledgeSource(
             const rows = await catalogs(request.scope)
             return { revision: revision(rows), value: { scopes: rows } }
           }
-          const mutate = ['write', 'share', 'archive'].includes(input?.action)
+          const mutate = ['write', 'share', 'archive', 'feedback'].includes(input?.action)
           if (mutate && (request.mode !== 'mutate' || !request.confirmed))
             throw new MemoryError('修改知识需要明确确认')
           if (!mutate && request.mode !== 'read') throw new MemoryError('知识读取模式无效')

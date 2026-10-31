@@ -10,6 +10,7 @@ interface Status {
   pendingInputs: number
   busy: string[]
   persistenceBlocked?: boolean
+  accountAllowed?: boolean
 }
 const post = <T,>(input: unknown) =>
   requestJson<T>('/dsh-px-qq', {
@@ -164,6 +165,12 @@ export function PersonaRoutingPanel({
               )}
               {status.persistenceBlocked && (
                 <p role="status">接续记录尚未保存。请先在账号设置中重试保存，再恢复人格切换。</p>
+              )}
+              {status.accountAllowed === false && (
+                <p role="status">
+                  此人格未获准使用当前 QQ 账号。可以在“人格与会话 →
+                  可用资源”中调整，或将聊天交给其他已授权人格；现有收件记录保留。
+                </p>
               )}
               {status.route?.pending ? (
                 <div>

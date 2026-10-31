@@ -799,7 +799,10 @@ function installConversationTools(ctx, publicMemory = false, explicitReplies = t
         additionalProperties: false,
         required: ["action"],
         properties: {
-          action: { type: "string", enum: ["catalog", "search", "read", "save"] },
+          action: { type: "string", enum: ["catalog", "search", "read", "save", "feedback"] },
+          kind: { type: "string", enum: ["useful", "not-applicable"] },
+          reason: { type: "string", maxLength: 1e3 },
+          documentRevision: { type: "integer", minimum: 1 },
           query: { type: "string", maxLength: 256 },
           id: { type: "string", maxLength: 300 },
           topic: { type: "string", maxLength: 90 },
@@ -2588,7 +2591,7 @@ var QqSessionPolicy = class {
         throw new QqError("\u5DF2\u6709\u591A\u4EBA\u683C QQ \u8DEF\u7531\uFF0C\u4F46\u8BB0\u5FC6\u7EC4\u4EF6\u7F3A\u5C11\u4EA4\u6D41\u9694\u79BB\u80FD\u529B\uFF1B\u8BF7\u542F\u7528\u914D\u5957\u65B0\u7248 Pack", 409);
       this.routing = new QqPersonaRouting(this.routes, {
         known: (chatId) => inbox.knownChats().includes(chatId),
-        available: (personaId) => this.memory().personas().some((p) => p.id === personaId),
+        available: (personaId) => this.personaAccountAllowed(personaId) && this.memory().personas().some((p) => p.id === personaId),
         current: (chatId) => {
           const id = this.bridge?.chat?.(chatId)?.sessionId;
           return {
@@ -2684,7 +2687,7 @@ var QqSessionPolicy = class {
           if (!config.allowAgentChanges) return;
           const known = inbox.knownChats();
           const personaId = rows[0] && this.personaForChat(rows[0].chatId);
-          if (!personaId || rows.some(
+          if (!personaId || !this.personaAccountAllowed(personaId) || rows.some(
             (row) => this.routing?.blocked(row.chatId) || this.personaForChat(row.chatId) !== personaId
           ))
             return;
@@ -2878,6 +2881,10 @@ var QqSessionPolicy = class {
     const id = this.bridge?.chat?.(chatId)?.sessionId;
     return id && this.memory().inspect(id).binding?.personaId || this.settings.personaId;
   }
+  personaAccountAllowed(personaId) {
+    const resources = get4(this.host, "pxPersonaResources");
+    return !resources || resources.allowsChannel(personaId, "qq", this.settings.accountId) === true;
+  }
   routeBusy(chatId) {
     const reasons = [], transport = this.bridge?.routeState?.(chatId);
     if (transport?.busy) reasons.push("QQ \u56DE\u5408\u5C1A\u672A\u7ED3\u7B97");
@@ -2948,10 +2955,12 @@ var QqSessionPolicy = class {
       personaId: this.personaForChat(chatId),
       pendingInputs: this.inbox.routePendingCount(chatId),
       persistenceBlocked: this.writeProblem || this.recovering,
+      accountAllowed: this.personaAccountAllowed(this.personaForChat(chatId)),
       busy: this.routeBusy(chatId)
     };
   }
   async createRoutedSession(chatId, personaId, sessionId) {
+    if (!this.personaAccountAllowed(personaId)) throw new QqError("\u76EE\u6807\u4EBA\u683C\u672A\u83B7\u51C6\u4F7F\u7528\u6B64 QQ \u8D26\u53F7", 403);
     const memory = this.memory(), existing = memory.inspect(sessionId).binding;
     const expected = channelFor(this.settings, chatId);
     if (existing && (existing.personaId !== personaId || existing.channel?.accountId !== expected.accountId || existing.channel?.conversationId !== chatId || existing.channel?.access !== expected.access || existing.channel?.task))
@@ -2977,6 +2986,7 @@ var QqSessionPolicy = class {
   }
   routedSessionAllowed(sessionId, chatId) {
     const route = this.routes?.route(chatId);
+    if (!this.personaAccountAllowed(this.personaForChat(chatId))) return false;
     if (!route && !this.bridge?.routeState) return !this.routing?.blocked(chatId);
     const binding = this.memory().inspect(sessionId).binding;
     return !this.routing?.blocked(chatId) && binding?.personaId === (route?.personaId ?? this.personaForChat(chatId)) && (!!binding.channel?.task || this.bridge?.chat?.(chatId)?.sessionId === sessionId);
@@ -3000,6 +3010,8 @@ var QqSessionPolicy = class {
           sessionId: source,
           assert: () => {
             this.assertActive();
+            if (!this.personaAccountAllowed(this.personaForChat(chatId)))
+              throw new QqError("\u4EBA\u683C\u7684 QQ \u8D26\u53F7\u6388\u6743\u5DF2\u64A4\u9500\uFF0C\u672A\u7EE7\u7EED\u4EA4\u4ED8", 403);
             lease?.assert();
           }
         },
@@ -3056,7 +3068,8 @@ var QqSessionPolicy = class {
     const config = this.attention.effective();
     if (!this.inbox || !config.allowAgentChanges || config.mode === "focus") return [];
     const rows = this.inbox.notifications().filter((row) => {
-      if (this.routing?.blocked(row.chatId)) return false;
+      if (this.routing?.blocked(row.chatId) || !this.personaAccountAllowed(this.personaForChat(row.chatId)))
+        return false;
       const delivery = attentionDelivery(config, { ...row, self: false });
       return config.mode === "normal" ? delivery.content === "preview" && delivery.reason !== "muted" : delivery.notify;
     });
@@ -3067,6 +3080,7 @@ var QqSessionPolicy = class {
     if (this.disposed || !this.inbox || !this.privateAttentionAgent(agent)) return "";
     const settings = this.attention.effective();
     const personaId = this.memory().inspect(agent.session.id).binding.personaId;
+    if (!this.personaAccountAllowed(personaId)) return "";
     const items = this.inbox.summaries(50).items.filter(
       (row) => row.unread && !this.routing?.blocked(row.chatId) && this.personaForChat(row.chatId) === personaId && (settings.mode === "normal" ? attentionDelivery(settings, { ...row, self: false }).content === "preview" : attentionDelivery(settings, { ...row, self: false }).notify)
     );
@@ -3089,6 +3103,7 @@ var QqSessionPolicy = class {
     if (!args || Object.keys(args).some((key) => !["action", "chatId", "mode", "minutes", "reason"].includes(key)))
       throw new QqError("QQ \u6CE8\u610F\u529B\u64CD\u4F5C\u65E0\u6548");
     const personaId = this.memory().inspect(exec.agent.session.id).binding.personaId;
+    if (!this.personaAccountAllowed(personaId)) throw new QqError("\u672C\u4EBA\u683C\u672A\u83B7\u51C6\u4F7F\u7528\u6B64 QQ \u8D26\u53F7", 403);
     const ownChat = (chatId) => !this.routing?.blocked(chatId) && this.personaForChat(chatId) === personaId;
     const status = () => {
       const snapshot = this.attentionSnapshot(), own2 = this.attention.snapshot(personaId);
@@ -3366,6 +3381,8 @@ var QqSessionPolicy = class {
   async admitEvent(event, next, item, ambient = false, receivedEpoch = this.admissionEpoch) {
     this.assertActive();
     const chatId = event.message_type === "group" ? "group:" + String(event.group_id) : "private:" + String(event.user_id);
+    if (!this.personaAccountAllowed(this.personaForChat(chatId)))
+      throw new QqError("\u672C\u804A\u5929\u4EBA\u683C\u672A\u83B7\u51C6\u4F7F\u7528\u6B64 QQ \u8D26\u53F7\uFF1B\u8F93\u5165\u4FDD\u7559\u5728\u6536\u4EF6\u8BB0\u5F55\u4E2D", 403);
     const senderId = String(event.user_id);
     const messageId = typeof event.message_id === "string" || typeof event.message_id === "number" ? String(event.message_id) : "";
     if (!/^[A-Za-z0-9:_.-]{1,120}$/.test(messageId)) throw new QqError("QQ \u6D88\u606F\u7F3A\u5C11\u7A33\u5B9A\u6807\u8BC6\uFF0C\u672A\u53D7\u7406\u8BF7\u6C42", 400);

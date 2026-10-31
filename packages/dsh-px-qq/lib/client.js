@@ -561,6 +561,7 @@ function PersonaRoutingPanel({
           "\u3002\u8BF7\u5148\u7ED3\u675F\u6216\u505C\u6B62\u8FD9\u4E9B\u5DE5\u4F5C\u3002"
         ] }),
         status.persistenceBlocked && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { role: "status", children: "\u63A5\u7EED\u8BB0\u5F55\u5C1A\u672A\u4FDD\u5B58\u3002\u8BF7\u5148\u5728\u8D26\u53F7\u8BBE\u7F6E\u4E2D\u91CD\u8BD5\u4FDD\u5B58\uFF0C\u518D\u6062\u590D\u4EBA\u683C\u5207\u6362\u3002" }),
+        status.accountAllowed === false && /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("p", { role: "status", children: "\u6B64\u4EBA\u683C\u672A\u83B7\u51C6\u4F7F\u7528\u5F53\u524D QQ \u8D26\u53F7\u3002\u53EF\u4EE5\u5728\u201C\u4EBA\u683C\u4E0E\u4F1A\u8BDD \u2192 \u53EF\u7528\u8D44\u6E90\u201D\u4E2D\u8C03\u6574\uFF0C\u6216\u5C06\u804A\u5929\u4EA4\u7ED9\u5176\u4ED6\u5DF2\u6388\u6743\u4EBA\u683C\uFF1B\u73B0\u6709\u6536\u4EF6\u8BB0\u5F55\u4FDD\u7559\u3002" }),
         status.route?.pending ? /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { children: [
           /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { role: "status", children: [
             "\u5207\u6362\u5230\u201C",

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { requestJson } from '../../shared/client-http'
 import type { PersonaHubView as HubView } from './persona-hub'
+import { PersonaResourcesPanel } from './persona-resources-panel'
 
 /** Switching this directory never rebinds native sessions or changes another window's selection. */
 export function PersonaHubPanel({
@@ -160,6 +161,12 @@ export function PersonaHubPanel({
             </button>
           </div>
           <h3>{selected?.name}的会话</h3>
+          {!selected?.archived && (
+            <details style={{ marginBottom: 16 }}>
+              <summary>可用资源</summary>
+              <PersonaResourcesPanel key={personaId} personaId={personaId} />
+            </details>
+          )}
           {!view.sessions.length && <p>这个人格还没有已保存的普通会话。</p>}
           {view.sessions.map((row) => (
             <div key={row.id} className="px-card" style={{ marginTop: 8 }}>

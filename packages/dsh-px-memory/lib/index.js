@@ -131,6 +131,26 @@ function renderPersonaExpression(expression, context) {
   ].filter(Boolean).join("\n");
 }
 
+// packages/shared/persona-resources.ts
+function parsePersonaResources(value) {
+  if (value === void 0) return;
+  const v = value;
+  const id = (s, max) => typeof s === "string" && s.trim() === s && !!s && s.length <= max && !/[\r\n\0]/.test(s);
+  if (!v || typeof v !== "object" || Array.isArray(v) || !Number.isSafeInteger(v.revision) || v.revision < 1 || !v.tools || !["native", "selected"].includes(v.tools.mode) || !Array.isArray(v.tools.names) || v.tools.names.length > 400 || v.tools.names.some((name2) => !id(name2, 160) || !/^[a-zA-Z0-9_.-]+$/.test(name2)) || new Set(v.tools.names).size !== v.tools.names.length || !v.channels || !["native", "selected"].includes(v.channels.mode) || !Array.isArray(v.channels.accounts) || v.channels.accounts.length > 100 || v.channels.accounts.some(
+    (row) => !row || !id(row.provider, 80) || !/^[a-z0-9-]+$/.test(row.provider) || !id(row.accountId, 200)
+  ) || new Set(v.channels.accounts.map((row) => JSON.stringify([row.provider, row.accountId]))).size !== v.channels.accounts.length || v.expiresAt !== void 0 && (typeof v.expiresAt !== "string" || !Number.isFinite(Date.parse(v.expiresAt))))
+    throw new Error("\u4EBA\u683C\u8D44\u6E90\u89C4\u5219\u65E0\u6548");
+  return structuredClone(v);
+}
+function personaToolAllowed(policy, name2, now = Date.now()) {
+  if (policy?.expiresAt && Date.parse(policy.expiresAt) <= now) return false;
+  return !policy || policy.tools.mode === "native" || policy.tools.names.includes(name2);
+}
+function personaChannelAllowed(policy, provider, accountId, now = Date.now()) {
+  if (policy?.expiresAt && Date.parse(policy.expiresAt) <= now) return false;
+  return !policy || policy.channels.mode === "native" || policy.channels.accounts.some((row) => row.provider === provider && row.accountId === accountId);
+}
+
 // packages/shared/subject-context.ts
 var SubjectContextError = class extends Error {
 };
@@ -227,6 +247,7 @@ function validate(s) {
     text(p.name, 60, true);
     text(p.instructions, 2e3);
     parsePersonaExpression(p.expression);
+    parsePersonaResources(p.resources);
     if (ids.has(p.id) || typeof p.memoryEnabled !== "boolean" || p.archived !== void 0 && typeof p.archived !== "boolean" || !Array.isArray(p.memories) || p.memories.length > 40 || !Number.isSafeInteger(p.revision) || p.revision < 1 || !Array.isArray(p.versions) || p.versions.length > 100)
       throw new MemoryError("\u4EBA\u683C\u914D\u7F6E\u65E0\u6548", 503);
     ids.add(p.id);
@@ -613,6 +634,8 @@ var ChannelNotes = class {
       revision: document.revision,
       body: document.body ?? null,
       current: document.current,
+      status: document.status,
+      feedback: document.feedback,
       updatedAt: document.updatedAt ?? null,
       source: "mnemon-persona-conversation-document",
       authority: "conversation-evidence-only"
@@ -626,13 +649,51 @@ var ChannelNotes = class {
         partial: offset + 100 < notes.length,
         nextOffset: offset + 100 < notes.length ? offset + 100 : null
       };
-    if (input2.action === "read") {
+    if (["read", "feedback", "correct", "archive"].includes(input2.action)) {
       const id = notes.some((d) => d.id === input2.id) ? input2.id : await this.bank.conversationAlias(scope.caller, input2.id);
       if (!id || !notes.some((d) => d.id === id))
         throw new MemoryError("\u6761\u76EE\u4E0D\u5C5E\u4E8E\u672C\u7FA4\u5F53\u524D\u4EBA\u683C\u7684\u4EA4\u6D41\u8BB0\u5FC6", 403);
-      const result2 = await this.bank.read(scope.caller, "project", id);
+      if (input2.action === "correct" || input2.action === "archive") {
+        if (actor !== "human")
+          throw new MemoryError("\u8BF7\u7531\u7528\u6237\u5728\u672C\u804A\u5929\u8BB0\u5FC6\u9875\u9762\u7EA0\u6B63\u6216\u5F52\u6863\uFF1B\u6A21\u578B\u4FEE\u8BA2\u4ECD\u987B\u63D0\u4F9B\u539F\u59CB\u4F9D\u636E", 403);
+        const original = await this.bank.read(scope.caller, "project", id, true);
+        if (original.document.revision !== input2.documentRevision || original.revision !== input2.revision)
+          throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6\u540E\u4FEE\u6539", 409);
+        signal.throwIfAborted();
+        const body = JSON.parse(original.document.body);
+        const result3 = input2.action === "archive" ? await this.bank.archive(scope.caller, "project", id, original.revision, input2.documentRevision) : await this.bank.write(scope.caller, "project", {
+          key: original.document.key,
+          revision: original.revision,
+          body: JSON.stringify(
+            {
+              ...body,
+              observation: checkedText(input2.text, "\u7EA0\u6B63\u540E\u7684\u8BB0\u5FC6", 4e3),
+              correction: { kind: "human", at: (/* @__PURE__ */ new Date()).toISOString() }
+            },
+            null,
+            2
+          )
+        });
+        return { revision: result3.revision, note: safeDocument(result3.document) };
+      }
+      const result2 = input2.action === "feedback" ? await this.bank.feedback(
+        scope.caller,
+        "project",
+        {
+          id,
+          documentRevision: input2.documentRevision,
+          kind: input2.kind,
+          reason: input2.reason,
+          evidence: input2.evidence?.[0]
+        },
+        signal
+      ) : await this.bank.read(scope.caller, "project", id, actor === "human");
       signal.throwIfAborted();
-      return { revision: result2.revision, note: safeDocument(result2.document) };
+      return {
+        revision: result2.revision,
+        note: safeDocument(result2.document),
+        ...input2.action === "feedback" ? { duplicate: result2.duplicate } : {}
+      };
     }
     if (input2.action === "search") {
       const terms = checkedText(input2.query, "\u68C0\u7D22\u8BCD", 256).toLocaleLowerCase().split(/\s+/);
@@ -856,7 +917,7 @@ var texts = (blocks) => Array.isArray(blocks) ? blocks.filter((b) => b?.type ===
 var hash = (event) => createHash("sha256").update(JSON.stringify(event)).digest("hex");
 function historyRecord(event, resolveTool) {
   const d = event.data ?? {};
-  let kind, text3, toolName;
+  let kind, text3, toolName, failed;
   if (event.type === "user/message" && conversationalSource(d.source)) {
     kind = "user";
     text3 = texts(d.content);
@@ -873,11 +934,18 @@ ${typeof d.arguments === "string" ? d.arguments : JSON.stringify(d.arguments ?? 
     const blocks = event.type === "tool/ptc-dispatch" ? [d] : d.message?.role === "tool" ? [d.message] : (d.message?.content ?? []).filter((b) => b.type === "tool-result");
     const visible = blocks.flatMap((b) => {
       const name2 = typeof resolveTool === "function" ? resolveTool(b.toolCallId ?? d.subCallId) : blocks.length === 1 ? resolveTool : void 0;
-      return name2 && !privateTools.test(name2) ? [{ name: name2, text: `${name2}
-${b.isError ? "[error] " : ""}${texts(b.content)}` }] : [];
+      return name2 && !privateTools.test(name2) ? [
+        {
+          name: name2,
+          failed: b.isError === true,
+          text: `${name2}
+${b.isError ? "[error] " : ""}${texts(b.content)}`
+        }
+      ] : [];
     });
     if (!visible.length) return;
     toolName = visible.map((b) => b.name).join(", ");
+    failed = visible.some((b) => b.failed);
     kind = visible.every((b) => ["task_checkpoint", "task_review"].includes(b.name)) ? "ledger" : "tool-result";
     text3 = visible.map((b) => b.text).join("\n");
   } else if (/^(goal\/|team\/|job\/|turn\/end$)/.test(event.type)) {
@@ -885,7 +953,7 @@ ${b.isError ? "[error] " : ""}${texts(b.content)}` }] : [];
     text3 = `${event.type}
 ${JSON.stringify(d)}`;
   } else return;
-  return text3.trim() ? { seq: event.seq, time: event.time, kind, text: text3, ...toolName ? { tool: toolName } : {} } : void 0;
+  return text3.trim() ? { seq: event.seq, time: event.time, kind, text: text3, ...toolName ? { tool: toolName, failed } : {} } : void 0;
 }
 function service(host, name2) {
   return typeof host.get === "function" ? host.get(name2) : host[name2];
@@ -1163,10 +1231,12 @@ var HistoryIndex = class {
       if (!row) throw new MemoryError("\u8BE5\u4E8B\u4EF6\u4E0D\u662F\u53EF\u5171\u4EAB\u7684\u5BF9\u8BDD\u3001\u6267\u884C\u7ED3\u679C\u6216\u539F\u751F\u72B6\u6001", 403);
       return {
         sessionId: target,
+        eventHash: hash(event),
         seq,
         time: row.time,
         kind: row.kind,
         tool: row.tool,
+        failed: row.failed,
         text: row.text.slice(offset, offset + 12e3),
         offset,
         nextOffset: offset + 12e3 < row.text.length ? offset + 12e3 : null,
@@ -1291,9 +1361,79 @@ async function createPersonaSession(host, store, sourceId, args, signal) {
 }
 
 // packages/dsh-px-memory/src/knowledge.ts
+import { createHash as createHash3 } from "node:crypto";
+import { mkdirSync as mkdirSync4 } from "node:fs";
+import { join } from "node:path";
+
+// packages/dsh-px-memory/src/memory-feedback.ts
+import { DatabaseSync as DatabaseSync2 } from "node:sqlite";
 import { createHash as createHash2 } from "node:crypto";
 import { mkdirSync as mkdirSync3 } from "node:fs";
-import { join } from "node:path";
+import { dirname as dirname3 } from "node:path";
+function presentFeedback(view, actor) {
+  if (actor === "human") return view;
+  const { entries: _, ...summary } = view;
+  return summary;
+}
+var feedbackHash = (value) => createHash2("sha256").update(JSON.stringify(value)).digest("hex");
+var MemoryFeedback = class {
+  db;
+  closed = false;
+  constructor(path) {
+    mkdirSync3(dirname3(path), { recursive: true });
+    this.db = new DatabaseSync2(path);
+    try {
+      this.db.exec("PRAGMA busy_timeout=3000; PRAGMA journal_mode=WAL;");
+      const version2 = this.db.prepare("PRAGMA user_version").get().user_version;
+      if (version2 > 1 || this.db.prepare("PRAGMA quick_check").get().quick_check !== "ok")
+        throw new MemoryError("\u8BB0\u5FC6\u53CD\u9988\u5B58\u50A8\u7248\u672C\u6216\u5B8C\u6574\u6027\u9700\u8981\u68C0\u67E5\uFF0C\u672A\u6E05\u7A7A\u539F\u8BB0\u5F55", 503);
+      this.db.exec(
+        `CREATE TABLE IF NOT EXISTS feedback(target TEXT NOT NULL, origin TEXT NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(target,origin,kind)); PRAGMA user_version=1;`
+      );
+    } catch (error62) {
+      this.db.close();
+      throw error62;
+    }
+  }
+  view(target) {
+    const entries = this.db.prepare("SELECT body FROM feedback WHERE target=? ORDER BY rowid").all(target).map((row) => JSON.parse(String(row.body)));
+    const human = (kind) => entries.some((entry) => entry.actor === "human" && entry.kind === kind);
+    const useful = entries.filter((entry) => entry.kind === "useful").length;
+    const negative = entries.filter((entry) => entry.kind === "not-applicable").length;
+    return {
+      confirmed: human("confirmed") && !human("disputed"),
+      disputed: human("disputed"),
+      strength: Math.max(
+        -4,
+        Math.min(4, (human("confirmed") ? 2 : 0) + Math.min(2, useful) - Math.min(4, negative * 2))
+      ),
+      count: entries.length,
+      entries
+    };
+  }
+  record(target, origin, entry) {
+    if (!/^[a-f0-9]{64}$/.test(target) || !/^[a-f0-9]{64}$/.test(origin))
+      throw new MemoryError("\u53CD\u9988\u76EE\u6807\u65E0\u6548");
+    if (this.db.prepare("SELECT 1 FROM feedback WHERE target=? AND origin=? AND kind=?").get(target, origin, entry.kind))
+      return { duplicate: true, feedback: this.view(target) };
+    const current = this.view(target);
+    if (current.count >= 128 || Number(this.db.prepare("SELECT count(*) n FROM feedback").get().n) >= 1e5)
+      throw new MemoryError("\u53CD\u9988\u8BB0\u5F55\u5DF2\u8FBE\u5230\u5BB9\u91CF\u9650\u5236\uFF0C\u8BF7\u5148\u6574\u7406\uFF1B\u672A\u5220\u9664\u539F\u8BB0\u5F55", 409);
+    const result = this.db.prepare("INSERT OR IGNORE INTO feedback VALUES(?,?,?,?)").run(target, origin, entry.kind, JSON.stringify(entry));
+    return { duplicate: result.changes === 0, feedback: this.view(target) };
+  }
+  close() {
+    if (!this.closed) {
+      this.closed = true;
+      this.db.close();
+    }
+  }
+};
+function rankMemoryMatch(score, feedback) {
+  return score + feedback.strength * 0.5;
+}
+
+// packages/dsh-px-memory/src/knowledge.ts
 var KNOWLEDGE_SCOPES = ["persona", "persona-project", "project", "global"];
 var SCOPE_LABELS = {
   persona: "\u4EBA\u683C\u79C1\u6709",
@@ -1302,7 +1442,7 @@ var SCOPE_LABELS = {
   global: "\u5168\u5C40\u5171\u4EAB"
 };
 var prefix = "<!-- dsh-px-knowledge:";
-var digest = (value) => createHash2("sha256").update(JSON.stringify(value)).digest("hex");
+var digest = (value) => createHash3("sha256").update(JSON.stringify(value)).digest("hex");
 var contentRevision = (snapshot) => digest(snapshot.documents.map((d) => [d.id, d.revision, d.contentHash, d.title, d.status, d.healthy]));
 function unwrap(document) {
   const end = document.content.indexOf(" -->\n");
@@ -1338,16 +1478,84 @@ function validateNamespace(ns) {
 }
 var legacyConversationTitle = (title) => typeof title === "string" && /^QQ 经历 \/ [^/]{1,200} \/ /.test(title);
 var KnowledgeBank = class {
-  constructor(root, identities, observeFile2) {
+  constructor(root, identities, observeFile2, readEvidence) {
     this.root = root;
     this.identities = identities;
     this.observeFile = observeFile2;
-    mkdirSync3(root, { recursive: true });
+    this.readEvidence = readEvidence;
+    mkdirSync4(root, { recursive: true });
+    this.feedbackStore = new MemoryFeedback(join(root, "feedback.sqlite"));
   }
+  feedbackStore;
   runtimes = /* @__PURE__ */ new Map();
   factory;
   conversationCallers = /* @__PURE__ */ new WeakMap();
   migrations = /* @__PURE__ */ new Map();
+  feedbackTarget(caller, ns, document) {
+    const binding = this.identities.read().bindings[caller.sessionId];
+    if (!binding || binding.pending) return "";
+    const audience = publicSession(binding) ? {
+      provider: binding.channel.provider,
+      accountId: binding.channel.accountId,
+      conversationId: binding.channel.conversationId
+    } : "private";
+    return feedbackHash([
+      ns,
+      document.id,
+      document.revision,
+      document.contentHash,
+      binding.personaId,
+      audience
+    ]);
+  }
+  async feedback(caller, scope, input2, signal) {
+    const ns = this.namespace(caller, scope), id = bounded(input2.id, "\u77E5\u8BC6\u7F16\u53F7", 300), reason = bounded(input2.reason, "\u53CD\u9988\u7406\u7531", 1e3), actor = caller.actor === "human" ? "human" : "model";
+    if (!["confirmed", "useful", "not-applicable", "disputed"].includes(input2.kind))
+      throw new MemoryError("\u53CD\u9988\u7C7B\u578B\u65E0\u6548");
+    if (actor === "model" && !["useful", "not-applicable"].includes(input2.kind))
+      throw new MemoryError("\u786E\u8BA4\u4E0E\u5224\u5B9A\u4E0D\u6B63\u786E\u9700\u7531\u7528\u6237\u64CD\u4F5C\uFF1B\u6A21\u578B\u53EA\u80FD\u8BB0\u5F55\u6709\u4F9D\u636E\u7684\u5E94\u7528\u53CD\u9988", 403);
+    const before = (await this.call(ns, "document", { id })).value;
+    this.assertReadableDocument(ns, before);
+    if (before.status !== "active" || before.revision !== input2.documentRevision)
+      throw new MemoryError("\u77E5\u8BC6\u5DF2\u53D8\u5316\u6216\u5F52\u6863\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6\u540E\u53CD\u9988", 409);
+    const target = this.feedbackTarget(caller, ns, before);
+    if (!target) throw new MemoryError("\u53CD\u9988\u9700\u8981\u5DF2\u56FA\u5B9A\u7684\u4EBA\u683C\u4F1A\u8BDD", 409);
+    let evidence;
+    if (input2.evidence !== void 0) {
+      const ref = input2.evidence;
+      if (!ref || typeof ref.sessionId !== "string" || !Number.isSafeInteger(ref.seq) || ref.seq < 0 || !this.readEvidence)
+        throw new MemoryError("\u53CD\u9988\u9700\u8981\u53EF\u8BFB\u53D6\u7684\u539F\u59CB\u4E8B\u4EF6\u4F9D\u636E");
+      const record2 = await this.readEvidence(caller, ref.sessionId, ref.seq, signal);
+      if (!["user", "tool-result"].includes(record2?.kind) || typeof record2.text !== "string" || !record2.text.trim())
+        throw new MemoryError("\u6A21\u578B\u590D\u8FF0\u6216\u8BB0\u5FC6\u68C0\u7D22\u4E0D\u662F\u72EC\u7ACB\u53CD\u9988\u4F9D\u636E", 403);
+      if (actor === "model" && input2.kind === "useful" && (record2.kind !== "tool-result" || record2.failed !== false))
+        throw new MemoryError("\u6210\u529F\u5E94\u7528\u9700\u8981\u539F\u751F\u5DE5\u5177\u7684\u6210\u529F\u56DE\u6267\uFF1B\u4EA4\u6D41\u9648\u8FF0\u4E0D\u7B49\u4E8E\u4EFB\u52A1\u6210\u529F", 403);
+      evidence = {
+        sessionId: ref.sessionId,
+        seq: ref.seq,
+        kind: record2.kind,
+        hash: feedbackHash([record2.kind, record2.tool ?? null, record2.text.trim()])
+      };
+    } else if (actor === "model")
+      throw new MemoryError("\u6A21\u578B\u5E94\u7528\u53CD\u9988\u5FC5\u987B\u5F15\u7528\u539F\u59CB\u4E8B\u4EF6\uFF0C\u4E0D\u80FD\u901A\u8FC7\u91CD\u590D\u68C0\u7D22\u81EA\u6211\u52A0\u6743", 403);
+    signal?.throwIfAborted();
+    const now = (await this.call(ns, "document", { id })).value;
+    if (now.status !== "active" || now.revision !== before.revision || now.contentHash !== before.contentHash || this.feedbackTarget(caller, this.namespace(caller, scope), now) !== target)
+      throw new MemoryError("\u77E5\u8BC6\u6216\u53CD\u9988\u53D7\u4F17\u5DF2\u53D8\u5316\uFF0C\u672A\u91C7\u7EB3\u8FDF\u5230\u53CD\u9988", 409);
+    const origin = feedbackHash(actor === "human" ? ["human"] : ["native-evidence", evidence.hash]);
+    const result = this.feedbackStore.record(target, origin, {
+      actor,
+      kind: input2.kind,
+      reason,
+      ...evidence ? { evidence } : {},
+      at: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    return {
+      ...result,
+      feedback: presentFeedback(result.feedback, caller.actor),
+      ...await this.read(caller, scope, id, true)
+    };
+  }
   namespace(caller, scope) {
     if (!KNOWLEDGE_SCOPES.includes(scope)) throw new MemoryError("\u77E5\u8BC6\u8303\u56F4\u65E0\u6548");
     const state = this.identities.read(), binding = state.bindings[caller.sessionId];
@@ -1553,13 +1761,18 @@ var KnowledgeBank = class {
         contentHash: d.contentHash,
         status: d.status,
         updatedAt: d.updatedAt,
-        healthy: d.healthy
+        healthy: d.healthy,
+        feedback: (() => {
+          const f = this.feedbackStore.view(this.feedbackTarget(caller, ns, d));
+          return { confirmed: f.confirmed, disputed: f.disputed, strength: f.strength, count: f.count };
+        })()
       }))
     };
   }
   async present(ns, document, caller) {
     this.assertReadableDocument(ns, document);
     const { metadata, body } = unwrap(document);
+    const feedback = this.feedbackStore.view(this.feedbackTarget(caller, ns, document));
     let stale = false, sourceState = "original";
     if (metadata.origin) {
       const { id, revision, contentHash, ...originNs } = metadata.origin;
@@ -1593,10 +1806,12 @@ var KnowledgeBank = class {
       revision: document.revision,
       contentHash: document.contentHash,
       status: document.status,
-      current: document.status === "active" && !stale,
+      current: document.status === "active" && !stale && !feedback.disputed,
+      feedback: presentFeedback(feedback, caller.actor),
       sourceState,
       body,
       sources: sourceFiles,
+      events: metadata.events ?? [],
       author: metadata.author ?? { kind: "unknown" },
       sourceMeaning: "File versions track freshness; they do not prove the content supports every claim.",
       previous: metadata.previous,
@@ -1631,7 +1846,10 @@ var KnowledgeBank = class {
       includeArchived: includeHistorical
     });
     const matches = await Promise.all(
-      result.value.results.filter((d) => this.exportable(ns, d)).map((d) => this.present(ns, d, caller))
+      result.value.results.filter((d) => this.exportable(ns, d)).map(async (d) => {
+        const item = await this.present(ns, d, caller), lexicalScore = Number.isFinite(d.score) ? d.score : 0;
+        return { ...item, relevance: lexicalScore, rank: rankMemoryMatch(lexicalScore, item.feedback) };
+      })
     );
     const snapshot = (await this.call(ns, "snapshot")).value;
     if (matches.some(
@@ -1643,7 +1861,7 @@ var KnowledgeBank = class {
     return {
       scope,
       revision: contentRevision(snapshot),
-      results: matches.filter((d) => includeHistorical || d.current),
+      results: matches.filter((d) => includeHistorical || d.current).sort((a, b) => b.rank - a.rank || b.relevance - a.relevance),
       excludedHistorical: includeHistorical ? 0 : matches.filter((d) => !d.current).length
     };
   }
@@ -1674,9 +1892,33 @@ var KnowledgeBank = class {
       (s) => typeof s.path !== "string" || typeof s.version !== "string" || !Number.isFinite(Date.parse(s.observedAt))
     ))
       throw new MemoryError("\u6587\u4EF6\u7248\u672C\u5F15\u7528\u65E0\u6548");
+    let events = oldMetadata?.events;
+    if (args.sourceEvents !== void 0) {
+      if (!Array.isArray(args.sourceEvents) || args.sourceEvents.length > 12 || !this.readEvidence)
+        throw new MemoryError("\u539F\u59CB\u4E8B\u4EF6\u5F15\u7528\u6216\u8BFB\u53D6\u670D\u52A1\u4E0D\u53EF\u7528");
+      events = [];
+      for (const ref of args.sourceEvents) {
+        if (!ref || typeof ref.sessionId !== "string" || !Number.isSafeInteger(ref.seq) || ref.seq < 0)
+          throw new MemoryError("\u539F\u59CB\u4E8B\u4EF6\u5F15\u7528\u65E0\u6548");
+        const record2 = await this.readEvidence(caller, ref.sessionId, ref.seq);
+        if (record2?.source !== "native-session-event" || !/^[a-f0-9]{64}$/.test(record2.eventHash))
+          throw new MemoryError("\u539F\u59CB\u4E8B\u4EF6\u6765\u6E90\u65E0\u6CD5\u9A8C\u8BC1", 409);
+        if (!events.some((row) => row.sessionId === ref.sessionId && row.seq === ref.seq))
+          events.push({
+            sessionId: ref.sessionId,
+            seq: ref.seq,
+            kind: record2.kind,
+            eventHash: record2.eventHash,
+            time: Number.isFinite(record2.time) ? record2.time : null
+          });
+      }
+    }
+    if (digest(this.namespace(caller, scope)) !== digest(ns))
+      throw new MemoryError("\u4FDD\u5B58\u671F\u95F4\u77E5\u8BC6\u53D7\u4F17\u5DF2\u53D8\u5316\uFF0C\u672A\u5199\u5165", 409);
     const metadata = {
       schema: 1,
       sources,
+      ...events ? { events } : {},
       author: sourceAuthor ?? (origin ? { kind: "unknown", at: (/* @__PURE__ */ new Date()).toISOString() } : { kind: caller.actor ?? "model", at: (/* @__PURE__ */ new Date()).toISOString() }),
       ...migration ?? oldMetadata?.migration ? { migration: migration ?? oldMetadata?.migration } : {},
       ...origin ? { sharedBy: { kind: caller.actor ?? "model", at: (/* @__PURE__ */ new Date()).toISOString() } } : {},
@@ -1750,13 +1992,22 @@ var KnowledgeBank = class {
   async dispose() {
     for (const runtime of this.runtimes.values()) await runtime.dispose?.();
     this.runtimes.clear();
+    this.feedbackStore.close();
   }
 };
 
 // packages/dsh-px-memory/src/knowledge-source.ts
-import { createHash as createHash3, randomUUID as randomUUID2 } from "node:crypto";
+import { createHash as createHash4, randomUUID as randomUUID2 } from "node:crypto";
 var properties = {
-  action: { type: "string", enum: ["catalog", "search", "read", "write", "share", "archive"] },
+  action: { type: "string", enum: ["catalog", "search", "read", "write", "share", "archive", "feedback"] },
+  kind: { type: "string", enum: ["confirmed", "useful", "not-applicable", "disputed"] },
+  reason: { type: "string", maxLength: 1e3 },
+  evidence: {
+    type: "object",
+    additionalProperties: false,
+    required: ["sessionId", "seq"],
+    properties: { sessionId: { type: "string", maxLength: 200 }, seq: { type: "integer", minimum: 0 } }
+  },
   scope: { type: "string", enum: ["visible", ...KNOWLEDGE_SCOPES] },
   query: { type: "string", maxLength: 256 },
   id: { type: "string" },
@@ -1767,12 +2018,22 @@ var properties = {
   targetScope: { type: "string", enum: [...KNOWLEDGE_SCOPES] },
   historical: { type: "boolean" },
   offset: { type: "integer", minimum: 0 },
-  sourcePaths: { type: "array", maxItems: 12, items: { type: "string", maxLength: 4096 } }
+  sourcePaths: { type: "array", maxItems: 12, items: { type: "string", maxLength: 4096 } },
+  sourceEvents: {
+    type: "array",
+    maxItems: 12,
+    items: {
+      type: "object",
+      additionalProperties: false,
+      required: ["sessionId", "seq"],
+      properties: { sessionId: { type: "string", maxLength: 200 }, seq: { type: "integer", minimum: 0 } }
+    }
+  }
 };
 function knowledgeCaller(scope) {
   return { sessionId: scope.sessionId ?? scope.agentId ?? "", project: scope.workspaceId };
 }
-async function knowledgeAction(bank, caller, input2) {
+async function knowledgeAction(bank, caller, input2, signal) {
   if (!input2 || typeof input2 !== "object" || input2.scope !== "visible" && !KNOWLEDGE_SCOPES.includes(input2.scope))
     throw new MemoryError("\u8BF7\u9009\u62E9\u6709\u6548\u77E5\u8BC6\u8303\u56F4");
   if (input2.historical !== void 0 && typeof input2.historical !== "boolean")
@@ -1811,7 +2072,8 @@ async function knowledgeAction(bank, caller, input2) {
         key: input2.key,
         body: input2.body,
         revision: input2.revision,
-        sourcePaths: input2.sourcePaths
+        sourcePaths: input2.sourcePaths,
+        sourceEvents: input2.sourceEvents
       });
     case "share":
       return bank.share(
@@ -1824,11 +2086,13 @@ async function knowledgeAction(bank, caller, input2) {
       );
     case "archive":
       return bank.archive(caller, input2.scope, input2.id, input2.revision, input2.documentRevision);
+    case "feedback":
+      return bank.feedback(caller, input2.scope, input2, signal);
     default:
       throw new MemoryError("\u77E5\u8BC6\u64CD\u4F5C\u65E0\u6548");
   }
 }
-var hash2 = (v) => createHash3("sha256").update(JSON.stringify(v)).digest("hex");
+var hash2 = (v) => createHash4("sha256").update(JSON.stringify(v)).digest("hex");
 var schema = (keys, required2) => ({
   type: "object",
   additionalProperties: false,
@@ -1837,7 +2101,7 @@ var schema = (keys, required2) => ({
 });
 function knowledgeContractText(instance) {
   return `PX knowledge operations available in the current native Mnemon View (keep these exact IDs after compaction):
-Read tool mnemon_view_route: routeId="${instance}/catalog", input={scope:"project"} returns a CONTROL item containing the current string revision, even when empty. Search: routeId="${instance}/search", input={scope:"visible",query:"1-3 key words"}. visible already combines all accessible scopes; use CONTROL.revisions[targetScope] directly and do not recheck every scope. Read: routeId="${instance}/read", input={scope:"project",id:"copy a returned document id",offset:0}.
+Read tool mnemon_view_route: routeId="${instance}/catalog", input={scope:"project"} returns a CONTROL item containing the current string revision, even when empty. Search: routeId="${instance}/search", input={scope:"visible",query:"1-3 key words"}. visible already combines all accessible scopes; use CONTROL.revisions[targetScope] directly and do not recheck every scope. Read: routeId="${instance}/read", input={scope:"project",id:"copy a returned document id",offset:0}. Native action ${instance}/feedback records revision-specific useful/not-applicable observations with original event evidence; it does not confirm facts, alter permissions or turn repeated retrieval into independent evidence.
 Write tool mnemon_view_action: offerId="${instance}/write", input={scope:"project",key:"one stable topic",body:"the corrected CURRENT statement",revision:"copy CONTROL.revision exactly"}. For an explicit save to a named scope/key: catalog that scope ONCE, write, then read the returned id if verification was requested. Do not repeatedly search other scopes or old archives before this write; uniqueness is per scope and write updates the existing exact key. Never put a version number in a new topic key. The string store revision is NOT the numeric document revision. Do not guess IDs or revisions; after a real conflict call catalog again. Other native offers are ${instance}/share and ${instance}/archive. Private scopes are persona/persona-project; shared scopes project/global. Historical or stale records are not current facts. Task progress stays in the work ledger, not knowledge. Read-only permissions remain enforced by native Mnemon.`;
 }
 function pxKnowledgeSource(bank, canParticipate, authorize, onContract, resolveCaller = (caller) => caller) {
@@ -1881,11 +2145,20 @@ function pxKnowledgeSource(bank, canParticipate, authorize, onContract, resolveC
       ],
       actions: [
         {
+          id: "feedback",
+          description: "\u8BB0\u5F55\u5177\u4F53\u4FEE\u8BA2\u7684\u5E94\u7528\u53CD\u9988\uFF1A\u6A21\u578B\u53EA\u53EF\u4F7F\u7528 useful / not-applicable\uFF0C\u5E76\u5F15\u7528 persona_history \u4E2D\u7684\u539F\u59CB\u4E8B\u4EF6\u3002\u6210\u529F\u5DE5\u5177\u56DE\u6267\u53EA\u80FD\u8BF4\u660E\u5E94\u7528\u6709\u7528\uFF0C\u4E0D\u80FD\u786E\u8BA4\u4E8B\u5B9E\uFF1B\u91CD\u590D\u68C0\u7D22\u6216\u6A21\u578B\u590D\u8FF0\u4E0D\u589E\u52A0\u6743\u91CD\u3002\u53CD\u9988\u53EA\u5C5E\u4E8E\u672C\u4EBA\u683C\u53CA\u5F53\u524D\u53D7\u4F17\uFF0C\u4E0D\u968F\u5171\u4EAB\u8D44\u6599\u4F20\u64AD\u3002",
+          capability: "write",
+          inputSchema: schema(
+            ["scope", "id", "documentRevision", "kind", "reason", "evidence"],
+            ["scope", "id", "documentRevision", "kind", "reason", "evidence"]
+          )
+        },
+        {
           id: "write",
           description: "\u521B\u5EFA\u6216\u7EA0\u6B63\u4E00\u4E2A\u7A33\u5B9A\u4E3B\u9898\uFF1B\u5148 catalog \u53D6\u5F97 CONTROL.revision \u5B57\u7B26\u4E32\uFF0C\u4E0D\u7528\u6570\u5B57\u6587\u6863\u7248\u672C\uFF0C\u4E0D\u731C\u7248\u672C\u3002",
           capability: "write",
           inputSchema: schema(
-            ["scope", "key", "body", "revision", "sourcePaths"],
+            ["scope", "key", "body", "revision", "sourcePaths", "sourceEvents"],
             ["scope", "key", "body", "revision"]
           )
         },
@@ -1929,7 +2202,7 @@ function pxKnowledgeSource(bank, canParticipate, authorize, onContract, resolveC
       const revision = (rows) => hash2(
         rows.map((r) => [
           r.scope,
-          r.documents.map((d) => [d.id, d.revision, d.contentHash, d.status, d.healthy])
+          r.documents.map((d) => [d.id, d.revision, d.contentHash, d.status, d.healthy, d.feedback])
         ])
       );
       return {
@@ -1945,7 +2218,7 @@ function pxKnowledgeSource(bank, canParticipate, authorize, onContract, resolveC
             revision: revision(rows),
             capabilities: enabled ? ["status", "project", "search", "read", "write", "archive"] : ["status"],
             routeIds: enabled ? ["catalog", "search", "read"] : [],
-            actionIds: enabled ? ["write", "share", "archive"] : [],
+            actionIds: enabled ? ["write", "share", "archive", "feedback"] : [],
             hints: {
               scopes: rows.map((r) => r.scope),
               activeCount: rows.reduce(
@@ -2042,7 +2315,14 @@ function pxKnowledgeSource(bank, canParticipate, authorize, onContract, resolveC
                 sourceMeaning: row.sourceMeaning ?? null,
                 nextOffset,
                 totalCharacters: body.length,
-                sources: row.sources ?? []
+                sources: row.sources ?? [],
+                events: row.events ?? [],
+                feedback: row.feedback ? {
+                  confirmed: row.feedback.confirmed,
+                  disputed: row.feedback.disputed,
+                  strength: row.feedback.strength,
+                  count: row.feedback.count
+                } : null
               }
             });
           }
@@ -2065,11 +2345,11 @@ function pxKnowledgeSource(bank, canParticipate, authorize, onContract, resolveC
         async mutate(request) {
           const input2 = { ...request.input, action: request.offer.sourceActionId }, caller = resolveCaller(knowledgeCaller(request.view.scope));
           if (!canParticipate(caller)) throw new MemoryError("\u5F53\u524D\u4EBA\u683C\u7684\u8BB0\u5FC6\u5DF2\u5173\u95ED");
-          if (!["write", "share", "archive"].includes(input2?.action))
+          if (!["write", "share", "archive", "feedback"].includes(input2?.action))
             throw new MemoryError("\u77E5\u8BC6\u4FEE\u6539\u64CD\u4F5C\u65E0\u6548");
           await authorize(caller, input2, request.signal);
           request.signal?.throwIfAborted();
-          const result = await knowledgeAction(bank, caller, input2);
+          const result = await knowledgeAction(bank, caller, input2, request.signal);
           return {
             id: randomUUID2(),
             viewId: request.view.id,
@@ -2096,7 +2376,7 @@ function pxKnowledgeSource(bank, canParticipate, authorize, onContract, resolveC
             const rows = await catalogs(request.scope);
             return { revision: revision(rows), value: { scopes: rows } };
           }
-          const mutate = ["write", "share", "archive"].includes(input2?.action);
+          const mutate = ["write", "share", "archive", "feedback"].includes(input2?.action);
           if (mutate && (request.mode !== "mutate" || !request.confirmed))
             throw new MemoryError("\u4FEE\u6539\u77E5\u8BC6\u9700\u8981\u660E\u786E\u786E\u8BA4");
           if (!mutate && request.mode !== "read") throw new MemoryError("\u77E5\u8BC6\u8BFB\u53D6\u6A21\u5F0F\u65E0\u6548");
@@ -2109,11 +2389,11 @@ function pxKnowledgeSource(bank, canParticipate, authorize, onContract, resolveC
 }
 
 // packages/dsh-px-memory/src/native-resources.ts
-import { join as join3, dirname as dirname3, resolve as resolve3 } from "node:path";
+import { join as join3, dirname as dirname4, resolve as resolve3 } from "node:path";
 
 // packages/dsh-px-memory/src/persona-skills.ts
-import { createHash as createHash4 } from "node:crypto";
-import { lstatSync, readFileSync as readFileSync2, readdirSync, realpathSync as realpathSync2, mkdirSync as mkdirSync4, watch } from "node:fs";
+import { createHash as createHash5 } from "node:crypto";
+import { lstatSync, readFileSync as readFileSync2, readdirSync, realpathSync as realpathSync2, mkdirSync as mkdirSync5, watch } from "node:fs";
 import { join as join2, resolve as resolve2, relative, sep } from "node:path";
 var PERSONA_SKILL_PROVIDER = "dsh-px-persona";
 var NAME = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -2123,7 +2403,7 @@ function personaSkillDirectory(home, personaId) {
     home,
     "storages",
     "dsh-px-persona-skills",
-    createHash4("sha256").update(personaId).digest("hex")
+    createHash5("sha256").update(personaId).digest("hex")
   );
 }
 var PersonaSkillFiles = class {
@@ -2168,7 +2448,7 @@ var PersonaSkillFiles = class {
         userInvocable: meta3["user-invocable"] !== false
       },
       metadata: { "dsh-px-managed": true, "dsh-px-persona": personaId },
-      version: createHash4("sha256").update(raw).digest("hex")
+      version: createHash5("sha256").update(raw).digest("hex")
     };
   }
   async list(personaId) {
@@ -2225,7 +2505,7 @@ function installPersonaSkillProviders(ctx, store, home) {
     for (const control of controls.values()) control.invalidate();
   };
   const root = join2(home, "storages", "dsh-px-persona-skills");
-  mkdirSync4(root, { recursive: true });
+  mkdirSync5(root, { recursive: true });
   const watcher = watch(root, { recursive: true }, invalidate);
   watcher.unref();
   watcher.on("error", (error62) => {
@@ -2317,7 +2597,7 @@ async function nativeSkillProjectRoot(fs, cwd) {
       if (await fs.stat(await fs.resolve(join3(current, ".git")))) return current;
     } catch {
     }
-    const parent = dirname3(current);
+    const parent = dirname4(current);
     if (parent === current) return resolve3(cwd);
     current = parent;
   }
@@ -2575,10 +2855,10 @@ function delegatedContract(agent, get, lookup, store) {
 }
 
 // packages/dsh-px-memory/src/experience-service.ts
-import { createHash as createHash6 } from "node:crypto";
+import { createHash as createHash7 } from "node:crypto";
 
 // packages/dsh-px-memory/src/experience.ts
-import { createHash as createHash5 } from "node:crypto";
+import { createHash as createHash6 } from "node:crypto";
 import { join as join4 } from "node:path";
 var reads = /* @__PURE__ */ new Set([
   "overview",
@@ -2631,7 +2911,7 @@ var ExperienceBank = class {
   async withRuntime(caller, run) {
     if (this.disposed) throw new MemoryError("\u7ECF\u9A8C\u670D\u52A1\u5DF2\u505C\u6B62", 503);
     caller.signal?.throwIfAborted();
-    const identity = this.identity(caller), key = createHash5("sha256").update(JSON.stringify([identity.personaId, identity.project])).digest("hex");
+    const identity = this.identity(caller), key = createHash6("sha256").update(JSON.stringify([identity.personaId, identity.project])).digest("hex");
     const previous = this.tails.get(key) ?? Promise.resolve();
     const next = previous.catch(() => {
     }).then(async () => {
@@ -23015,7 +23295,7 @@ var signals = [
   "skill-misleading",
   "success"
 ];
-var hash4 = (value) => createHash6("sha256").update(JSON.stringify(value)).digest("hex");
+var hash4 = (value) => createHash7("sha256").update(JSON.stringify(value)).digest("hex");
 var skillName2 = { type: "string", pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$", maxLength: 64 };
 var newest = (rows) => [...rows].sort(
   (a, b) => String(b.updatedAt ?? b.startedAt ?? b.createdAt ?? "").localeCompare(
@@ -23061,7 +23341,7 @@ var ExperienceService = class {
       const result = await this.bank.read(caller, input2.kind, { id: input2.id });
       if (input2.kind !== "draft") return result;
       const value = result.value;
-      const digest2 = (content) => createHash6("sha256").update(content).digest("hex");
+      const digest2 = (content) => createHash7("sha256").update(content).digest("hex");
       return {
         ...result,
         value: {
@@ -23401,6 +23681,122 @@ var ExperienceService = class {
   }
 };
 
+// packages/dsh-px-memory/src/persona-resources.ts
+var PersonaResourceAccess = class {
+  constructor(store, identity, parentAgent = () => void 0, nativeChild = () => false) {
+    this.store = store;
+    this.identity = identity;
+    this.parentAgent = parentAgent;
+    this.nativeChild = nativeChild;
+  }
+  captured = /* @__PURE__ */ new WeakMap();
+  policies(agent, visited = /* @__PURE__ */ new Set()) {
+    if (visited.size >= 32 || visited.has(agent.session.id)) throw new MemoryError("\u4EBA\u683C\u8D44\u6E90\u7EE7\u627F\u94FE\u65E0\u6548", 403);
+    visited.add(agent.session.id);
+    const identity = this.identity.current(agent), saved = this.captured.get(agent);
+    if (saved?.identity === identity) return saved.policies;
+    const parentId = agent.session.header.parentSession, parent = parentId && this.parentAgent(parentId);
+    const policies = [identity.resources, ...parent ? this.policies(parent, visited) : []];
+    this.captured.set(agent, { identity, policies });
+    return policies;
+  }
+  current(personaId) {
+    const persona = this.store.read().personas.find((p) => p.id === personaId);
+    if (!persona || persona.archived) throw new MemoryError("\u4EBA\u683C\u4E0D\u5B58\u5728\u6216\u5DF2\u5F52\u6863", 403);
+    return persona;
+  }
+  tool(agent, name2) {
+    if (this.isResultSubmission(agent, name2)) return;
+    return this.checker(agent)(name2);
+  }
+  isResultSubmission(agent, name2) {
+    if (name2 !== "structured_output") return false;
+    const parentId = agent.session.header.parentSession, parent = parentId && this.parentAgent(parentId);
+    return !!parent && this.nativeChild(agent, parent);
+  }
+  checker(agent) {
+    try {
+      const captured = this.identity.current(agent), current = this.current(captured.id), policies = [...this.policies(agent), current.resources];
+      const channel = this.store.read().bindings[agent.session.id]?.channel;
+      if (channel && policies.some((policy) => !personaChannelAllowed(policy, channel.provider, channel.accountId)))
+        return () => "\u672C\u4F1A\u8BDD\u4EBA\u683C\u5DF2\u5931\u53BB\u6B64\u6E20\u9053\u8D26\u53F7\u7684\u4F7F\u7528\u6743\u9650";
+      return (name2) => policies.some((policy) => !personaToolAllowed(policy, name2)) ? `\u4EBA\u683C\u201C${current.name}\u201D\u672A\u83B7\u51C6\u6267\u884C\u5DE5\u5177 ${name2}\uFF1B\u8BF7\u7531\u7528\u6237\u5728\u201C\u4EBA\u683C\u4E0E\u4F1A\u8BDD \u2192 \u53EF\u7528\u8D44\u6E90\u201D\u4E2D\u8C03\u6574\u3002\u5F53\u524D\u8F6E\u4E0D\u4F1A\u83B7\u5F97\u4E2D\u9014\u65B0\u589E\u7684\u5DE5\u5177\u6388\u6743\u3002` : void 0;
+    } catch (error62) {
+      return () => error62 instanceof Error ? error62.message : "\u4EBA\u683C\u8D44\u6E90\u89C4\u5219\u6682\u4E0D\u53EF\u7528";
+    }
+  }
+  filter(agent, tools) {
+    const check2 = this.checker(agent);
+    return tools.filter((tool) => this.isResultSubmission(agent, tool.name) || !check2(tool.name));
+  }
+  channel(personaId, provider, accountId) {
+    try {
+      return personaChannelAllowed(this.current(personaId).resources, provider, accountId);
+    } catch {
+      return false;
+    }
+  }
+  snapshot(personaId) {
+    const persona = this.current(personaId);
+    return { personaId, policy: persona.resources ?? null };
+  }
+  save(personaId, revision, input2) {
+    validId(personaId);
+    const state = this.store.read(), persona = state.personas.find((p) => p.id === personaId);
+    if (!persona || persona.archived) throw new MemoryError("\u4EBA\u683C\u4E0D\u5B58\u5728\u6216\u5DF2\u5F52\u6863", 403);
+    if (revision !== (persona.resources?.revision ?? 0))
+      throw new MemoryError("\u8D44\u6E90\u89C4\u5219\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5\uFF1B\u6CA1\u6709\u8986\u76D6\u65E7\u4FEE\u6539", 409);
+    let policy;
+    try {
+      policy = parsePersonaResources({ ...input2, revision: Number(revision) + 1 });
+    } catch (error62) {
+      throw new MemoryError(error62 instanceof Error ? error62.message : "\u8D44\u6E90\u89C4\u5219\u65E0\u6548");
+    }
+    this.store.change(state.revision, (next) => {
+      next.personas.find((p) => p.id === personaId).resources = policy;
+    });
+  }
+};
+function installPersonaResourceAccess(ctx, access) {
+  const provided = ctx.provide("pxPersonaResources", {
+    version: 1,
+    allowsChannel: (personaId, provider, accountId) => access.channel(personaId, provider, accountId),
+    inspect: (personaId) => access.snapshot(personaId),
+    save: (personaId, revision, input2) => access.save(personaId, revision, input2)
+  });
+  const injection = ctx.inject(
+    ["tools"],
+    (host) => host.effect(function* () {
+      yield host.tools.guard((exec) => exec.agent ? access.tool(exec.agent, exec.name) : void 0);
+      yield host.on(
+        "system-prompt/assemble",
+        async (_, context, next) => {
+          const assembly = await next();
+          if (!context.agent) return assembly;
+          return {
+            ...assembly,
+            tools: access.filter(context.agent, assembly.tools)
+          };
+        },
+        { prepend: true }
+      );
+    }, "memory: persona resource guard")
+  );
+  return () => {
+    if (typeof provided === "function") provided();
+    return injection.dispose();
+  };
+}
+function resourceToolCatalog(ctx) {
+  const tools = service(ctx, "tools"), agents = service(ctx, "agents");
+  if (!tools?.schemas) return [];
+  const seen = /* @__PURE__ */ new Map();
+  for (const agent of [void 0, ...agents?.list?.() ?? []]) {
+    for (const schema2 of tools.schemas(agent)) seen.set(schema2.name, (schema2.description ?? "").slice(0, 240));
+  }
+  return [...seen].sort(([a], [b]) => a.localeCompare(b)).map(([name2, description]) => ({ name: name2, description }));
+}
+
 // packages/dsh-px-memory/src/persona-hub.ts
 async function personaHubView(host, store, personaId, offset = 0) {
   if (!Number.isSafeInteger(offset) || offset < 0 || offset > 2e4) throw new MemoryError("\u5206\u9875\u4F4D\u7F6E\u65E0\u6548");
@@ -23491,6 +23887,14 @@ function registerPersonaHub(ctx, store) {
         try {
           if (req.method === "GET") {
             const query = new URL(req.url, "http://127.0.0.1").searchParams;
+            if (query.get("view") === "resources") {
+              const access = service(host, "pxPersonaResources");
+              if (!access) throw new MemoryError("\u4EBA\u683C\u8D44\u6E90\u670D\u52A1\u672A\u5C31\u7EEA", 503);
+              return send(200, {
+                ...access.inspect(validId(query.get("personaId"))),
+                tools: resourceToolCatalog(host)
+              });
+            }
             return send(
               200,
               await personaHubView(
@@ -23508,7 +23912,7 @@ function registerPersonaHub(ctx, store) {
           let length = 0;
           for await (const chunk of req) {
             length += Buffer.byteLength(chunk);
-            if (length > 8192) throw new MemoryError("\u8BF7\u6C42\u8FC7\u5927", 413);
+            if (length > 96e3) throw new MemoryError("\u8BF7\u6C42\u8FC7\u5927", 413);
             chunks.push(Buffer.from(chunk));
           }
           let args;
@@ -23519,6 +23923,12 @@ function registerPersonaHub(ctx, store) {
           }
           if (!args || typeof args !== "object" || Array.isArray(args)) throw new MemoryError("\u64CD\u4F5C\u65E0\u6548");
           if (args.type === "create-persona") return send(200, store.createPersona(args.name));
+          if (args.type === "resources") {
+            const access = service(host, "pxPersonaResources");
+            if (!access) throw new MemoryError("\u4EBA\u683C\u8D44\u6E90\u670D\u52A1\u672A\u5C31\u7EEA", 503);
+            access.save(args.personaId, args.revision, args.policy);
+            return send(200, access.inspect(args.personaId));
+          }
           if (args.type !== "create-session") throw new MemoryError("\u64CD\u4F5C\u65E0\u6548");
           const createdSessionId = await once(
             args.requestId,
@@ -23586,13 +23996,21 @@ function apply(ctx) {
     store,
     (agent) => service(ctx, "sessionProjections")?.stateOf?.(agent.session, "turnBoundary")
   );
+  const resourceAccess = new PersonaResourceAccess(
+    store,
+    identity,
+    (id) => service(ctx, "agents")?.get(id),
+    (child, parent) => service(ctx, "agents")?.isOwnedBy?.(child.session.id, parent) === true
+  );
+  ctx.effect(() => installPersonaResourceAccess(ctx, resourceAccess), "memory: persona resource access");
   const contracts = /* @__PURE__ */ new Map();
   const currentTurn = (agent) => service(ctx, "sessionProjections")?.stateOf?.(agent.session, "turnBoundary")?.lastTurn ?? agent.session.snapshotEvents?.().findLast((e) => e.type === "turn/start")?.data?.turn ?? 0;
   ctx.effect(() => () => contracts.clear(), "memory: current knowledge contracts");
   const knowledge = new KnowledgeBank(
     join5(root, "storages", "dsh-px-knowledge-scopes"),
     store,
-    (caller, path) => observeFile(ctx, caller, path)
+    (caller, path) => observeFile(ctx, caller, path),
+    (caller, source, seq, signal) => history.read(ctx, caller.sessionId, source, seq, 0, signal)
   );
   const channelNotes = new ChannelNotes(
     store,
@@ -23707,6 +24125,7 @@ function apply(ctx) {
               knowledge,
               knowledgeEnabled,
               async (caller, input2, signal) => {
+                if (input2.action === "feedback") return;
                 if (input2.action !== "share" && input2.scope !== "global") return;
                 const approval = service(host, "approval"), agent = service(host, "agents")?.get(caller.sessionId);
                 if (!approval?.request || !agent) throw new MemoryError("\u5171\u4EAB\u77E5\u8BC6\u9700\u8981\u5F53\u524D\u4F1A\u8BDD\u4E2D\u7684\u539F\u751F\u786E\u8BA4");
@@ -24015,7 +24434,9 @@ ${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
                 return send(200, result);
               }
               if (args.type === "conversation-memory") {
-                if (!["catalog", "search", "read"].includes(args.input?.action))
+                if (!["catalog", "search", "read", "feedback", "correct", "archive"].includes(
+                  args.input?.action
+                ))
                   throw new MemoryError("\u8BF7\u4F7F\u7528\u804A\u5929\u8BB0\u5FC6\u7684\u53EA\u8BFB\u64CD\u4F5C");
                 return send(
                   200,

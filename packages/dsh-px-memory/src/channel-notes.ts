@@ -2,7 +2,7 @@ import { MemoryError, type MemoryStore } from './store'
 import type { KnowledgeBank } from './knowledge'
 
 export interface ChannelNoteInput {
-  action: 'catalog' | 'search' | 'read' | 'save'
+  action: 'catalog' | 'search' | 'read' | 'save' | 'feedback' | 'correct' | 'archive'
   query?: string
   id?: string
   topic?: string
@@ -10,6 +10,9 @@ export interface ChannelNoteInput {
   revision?: string
   offset?: number
   evidence?: Array<{ sessionId: string; seq: number }>
+  documentRevision?: number
+  kind?: 'confirmed' | 'useful' | 'not-applicable' | 'disputed'
+  reason?: string
 }
 const checkedText = (value: unknown, label: string, max: number) => {
   if (typeof value !== 'string' || !value.trim() || value.length > max) throw new MemoryError(label + '无效')
@@ -76,6 +79,8 @@ export class ChannelNotes {
       revision: document.revision,
       body: document.body ?? null,
       current: document.current,
+      status: document.status,
+      feedback: document.feedback,
       updatedAt: document.updatedAt ?? null,
       source: 'mnemon-persona-conversation-document',
       authority: 'conversation-evidence-only'
@@ -91,15 +96,59 @@ export class ChannelNotes {
         partial: offset + 100 < notes.length,
         nextOffset: offset + 100 < notes.length ? offset + 100 : null
       }
-    if (input.action === 'read') {
+    if (['read', 'feedback', 'correct', 'archive'].includes(input.action)) {
       const id = notes.some((d: any) => d.id === input.id)
         ? input.id
         : await this.bank.conversationAlias(scope.caller, input.id!)
       if (!id || !notes.some((d: any) => d.id === id))
         throw new MemoryError('条目不属于本群当前人格的交流记忆', 403)
-      const result = await this.bank.read(scope.caller, 'project', id)
+      if (input.action === 'correct' || input.action === 'archive') {
+        if (actor !== 'human')
+          throw new MemoryError('请由用户在本聊天记忆页面纠正或归档；模型修订仍须提供原始依据', 403)
+        const original = await this.bank.read(scope.caller, 'project', id, true)
+        if (original.document.revision !== input.documentRevision || original.revision !== input.revision)
+          throw new MemoryError('交流记忆已经变化，请重新读取后修改', 409)
+        signal.throwIfAborted()
+        const body = JSON.parse(original.document.body)
+        const result =
+          input.action === 'archive'
+            ? await this.bank.archive(scope.caller, 'project', id, original.revision, input.documentRevision!)
+            : await this.bank.write(scope.caller, 'project', {
+                key: original.document.key,
+                revision: original.revision,
+                body: JSON.stringify(
+                  {
+                    ...body,
+                    observation: checkedText(input.text, '纠正后的记忆', 4000),
+                    correction: { kind: 'human', at: new Date().toISOString() }
+                  },
+                  null,
+                  2
+                )
+              })
+        return { revision: result.revision, note: safeDocument(result.document) }
+      }
+      const result =
+        input.action === 'feedback'
+          ? await this.bank.feedback(
+              scope.caller,
+              'project',
+              {
+                id,
+                documentRevision: input.documentRevision!,
+                kind: input.kind!,
+                reason: input.reason!,
+                evidence: input.evidence?.[0]
+              },
+              signal
+            )
+          : await this.bank.read(scope.caller, 'project', id, actor === 'human')
       signal.throwIfAborted()
-      return { revision: result.revision, note: safeDocument(result.document) }
+      return {
+        revision: result.revision,
+        note: safeDocument(result.document),
+        ...(input.action === 'feedback' ? { duplicate: result.duplicate } : {})
+      }
     }
     if (input.action === 'search') {
       const terms = checkedText(input.query, '检索词', 256).toLocaleLowerCase().split(/\s+/)

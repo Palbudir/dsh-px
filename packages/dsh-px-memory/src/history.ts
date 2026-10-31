@@ -24,6 +24,7 @@ export interface HistoryRecord {
   kind: string
   text: string
   tool?: string
+  failed?: boolean
 }
 // Loaded skills can contain persona-private instructions. Keep the original native event,
 // but do not re-export its body or invocation metadata through history and handoff tools.
@@ -43,7 +44,7 @@ export function historyRecord(
   resolveTool?: string | ((id: string) => string | undefined)
 ): HistoryRecord | undefined {
   const d = event.data ?? {}
-  let kind: string, text: string, toolName: string | undefined
+  let kind: string, text: string, toolName: string | undefined, failed: boolean | undefined
   if (event.type === 'user/message' && conversationalSource(d.source)) {
     kind = 'user'
     text = texts(d.content)
@@ -70,11 +71,18 @@ export function historyRecord(
             ? resolveTool
             : undefined
       return name && !privateTools.test(name)
-        ? [{ name, text: `${name}\n${b.isError ? '[error] ' : ''}${texts(b.content)}` }]
+        ? [
+            {
+              name,
+              failed: b.isError === true,
+              text: `${name}\n${b.isError ? '[error] ' : ''}${texts(b.content)}`
+            }
+          ]
         : []
     })
     if (!visible.length) return
     toolName = visible.map((b: any) => b.name).join(', ')
+    failed = visible.some((b: any) => b.failed)
     kind = visible.every((b: any) => ['task_checkpoint', 'task_review'].includes(b.name))
       ? 'ledger'
       : 'tool-result'
@@ -84,7 +92,7 @@ export function historyRecord(
     text = `${event.type}\n${JSON.stringify(d)}`
   } else return
   return text.trim()
-    ? { seq: event.seq, time: event.time, kind, text, ...(toolName ? { tool: toolName } : {}) }
+    ? { seq: event.seq, time: event.time, kind, text, ...(toolName ? { tool: toolName, failed } : {}) }
     : undefined
 }
 export function service(host: any, name: string): any {
@@ -441,10 +449,12 @@ export class HistoryIndex {
       if (!row) throw new MemoryError('该事件不是可共享的对话、执行结果或原生状态', 403)
       return {
         sessionId: target,
+        eventHash: hash(event),
         seq,
         time: row.time,
         kind: row.kind,
         tool: row.tool,
+        failed: row.failed,
         text: row.text.slice(offset, offset + 12000),
         offset,
         nextOffset: offset + 12000 < row.text.length ? offset + 12000 : null,

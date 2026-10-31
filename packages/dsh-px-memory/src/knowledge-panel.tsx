@@ -3,6 +3,7 @@ import { requestJson } from '../../shared/client-http'
 import { controlStyle, cardStyle } from '../../shared/ui'
 import { createDraftRegistry } from '../../shared/draft-store'
 import { ExperiencePanel } from './experience-panel'
+import { MemoryFeedbackPanel } from './memory-feedback-panel'
 const drafts = createDraftRegistry(64)
 const newest = (rows: any[]) =>
   [...rows].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))
@@ -326,7 +327,11 @@ export function KnowledgePanel({
                 ；文件引用只核对版本是否变化，不代表正文已被逐条证实。
               </p>
               {!selected.current && (
-                <p role="status">这条知识已过时、已归档或来源无法验证，不作为当前结论使用。</p>
+                <p role="status">
+                  {selected.feedback?.disputed
+                    ? '此人格已将该修订标为不正确，纠正前不作为当前结论使用。'
+                    : '这条知识已过时、已归档或来源无法验证，不作为当前结论使用。'}
+                </p>
               )}
               {selected.body !== undefined ? (
                 <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}>{selected.body}</pre>
@@ -373,6 +378,26 @@ export function KnowledgePanel({
                   归档
                 </button>
               </div>
+              <MemoryFeedbackPanel
+                key={selected.id + ':' + selected.revision}
+                value={selected.feedback}
+                busy={busy}
+                disabled={selected.status !== 'active'}
+                submit={(kind, reason) =>
+                  run(async () => {
+                    const result = await call('knowledge', {
+                      action: 'feedback',
+                      scope,
+                      id: selected.id,
+                      documentRevision: selected.revision,
+                      kind,
+                      reason
+                    })
+                    setSelected(result.document)
+                    setNotice(result.duplicate ? '此修订已经记录过同类反馈，未重复加权。' : '反馈已记录。')
+                  })
+                }
+              />
               {selected.current && (
                 <div className="px-actions">
                   <select

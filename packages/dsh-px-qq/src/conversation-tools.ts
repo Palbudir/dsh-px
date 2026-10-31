@@ -41,7 +41,10 @@ export function installConversationTools(ctx: any, publicMemory = false, explici
         additionalProperties: false,
         required: ['action'],
         properties: {
-          action: { type: 'string', enum: ['catalog', 'search', 'read', 'save'] },
+          action: { type: 'string', enum: ['catalog', 'search', 'read', 'save', 'feedback'] },
+          kind: { type: 'string', enum: ['useful', 'not-applicable'] },
+          reason: { type: 'string', maxLength: 1000 },
+          documentRevision: { type: 'integer', minimum: 1 },
           query: { type: 'string', maxLength: 256 },
           id: { type: 'string', maxLength: 300 },
           topic: { type: 'string', maxLength: 90 },

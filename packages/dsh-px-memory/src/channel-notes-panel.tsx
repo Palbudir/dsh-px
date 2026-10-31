@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { requestJson } from '../../shared/client-http'
 import { cardStyle } from '../../shared/ui'
+import { MemoryFeedbackPanel } from './memory-feedback-panel'
+import { ChannelNoteEditor } from './channel-note-editor'
 
 export function ChannelNotesPanel({ url }: { url: string }) {
   const [catalog, setCatalog] = useState<any>(null),
@@ -9,6 +11,7 @@ export function ChannelNotesPanel({ url }: { url: string }) {
     [busy, setBusy] = useState(false),
     [refresh, setRefresh] = useState(0),
     [original, setOriginal] = useState<any>(null)
+  const [noteRevision, setNoteRevision] = useState('')
   const request = <T,>(input: unknown, signal?: AbortSignal) =>
     requestJson<T>(url, {
       method: 'POST',
@@ -67,6 +70,7 @@ export function ChannelNotesPanel({ url }: { url: string }) {
             void run(async () => {
               const value: any = await request({ action: 'read', id: row.id })
               setNote(value.note)
+              setNoteRevision(value.revision)
               setOriginal(null)
             })
           }
@@ -98,6 +102,70 @@ export function ChannelNotesPanel({ url }: { url: string }) {
           <p className="px-muted">
             修订 {note.revision} · {note.current ? '现行记录' : '历史记录，使用前需核对'}
           </p>
+          {note.status === 'active' && (
+            <>
+              <ChannelNoteEditor
+                key={note.id}
+                storageKey={url + ':' + note.id}
+                initial={body?.observation ?? note.body ?? ''}
+                revision={noteRevision}
+                documentRevision={note.revision}
+                busy={busy}
+                save={async (text, revision, documentRevision) => {
+                  let saved = false
+                  await run(async () => {
+                    const result: any = await request({
+                      action: 'correct',
+                      id: note.id,
+                      text,
+                      revision,
+                      documentRevision
+                    })
+                    setNote(result.note)
+                    setNoteRevision(result.revision)
+                    saved = true
+                  })
+                  return saved
+                }}
+              />
+              <button
+                disabled={busy}
+                onClick={() => {
+                  if (confirm('归档后不再使用这条聊天记忆。继续吗？'))
+                    void run(async () => {
+                      await request({
+                        action: 'archive',
+                        id: note.id,
+                        revision: noteRevision,
+                        documentRevision: note.revision
+                      })
+                      setRefresh((value) => value + 1)
+                    })
+                }}
+              >
+                归档这条记忆
+              </button>
+            </>
+          )}
+          <MemoryFeedbackPanel
+            key={note.id + ':' + note.revision}
+            value={note.feedback}
+            busy={busy}
+            disabled={note.status !== 'active'}
+            submit={(kind, reason) =>
+              run(async () => {
+                const result: any = await request({
+                  action: 'feedback',
+                  id: note.id,
+                  documentRevision: note.revision,
+                  kind,
+                  reason
+                })
+                setNote(result.note)
+                setNoteRevision(result.revision)
+              })
+            }
+          />
           {(body?.evidence ?? []).map((evidence: any, index: number) => (
             <button
               key={index}

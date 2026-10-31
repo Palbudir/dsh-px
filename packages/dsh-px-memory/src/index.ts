@@ -30,6 +30,7 @@ import { runAnalysisTask } from './experience-task'
 import { inspectMemorySession } from './session-context'
 import { installPersonaSkillProviders } from './persona-skills'
 import { registerPersonaHub } from './persona-hub'
+import { PersonaResourceAccess, installPersonaResourceAccess } from './persona-resources'
 
 export const name = 'dsh-px-memory'
 export const inject: string[] = []
@@ -88,6 +89,13 @@ export function apply(ctx: any): void {
   const identity = new TurnIdentity(store, (agent) =>
     service(ctx, 'sessionProjections')?.stateOf?.(agent.session, 'turnBoundary')
   )
+  const resourceAccess = new PersonaResourceAccess(
+    store,
+    identity,
+    (id) => service(ctx, 'agents')?.get(id),
+    (child, parent) => service(ctx, 'agents')?.isOwnedBy?.(child.session.id, parent) === true
+  )
+  ctx.effect(() => installPersonaResourceAccess(ctx, resourceAccess), 'memory: persona resource access')
   const contracts = new Map<string, { turn: number; instance: string }>()
   const currentTurn = (agent: Agent): number =>
     service(ctx, 'sessionProjections')?.stateOf?.(agent.session, 'turnBoundary')?.lastTurn ??
@@ -97,7 +105,8 @@ export function apply(ctx: any): void {
   const knowledge = new KnowledgeBank(
     join(root, 'storages', 'dsh-px-knowledge-scopes'),
     store,
-    (caller, path) => observeFile(ctx, caller, path)
+    (caller, path) => observeFile(ctx, caller, path),
+    (caller, source, seq, signal) => history.read(ctx, caller.sessionId, source, seq, 0, signal)
   )
   // Local plugin contract only: remote callers still go through their authenticated channel owner.
   const channelNotes = new ChannelNotes(
@@ -250,6 +259,7 @@ export function apply(ctx: any): void {
                 knowledge,
                 knowledgeEnabled,
                 async (caller, input, signal) => {
+                  if (input.action === 'feedback') return // Persona/audience-local, not a shared-content edit.
                   if (input.action !== 'share' && input.scope !== 'global') return
                   const approval = service(host, 'approval'),
                     agent = service(host, 'agents')?.get(caller.sessionId)
@@ -594,7 +604,11 @@ export function apply(ctx: any): void {
                   return send(200, result)
                 }
                 if (args.type === 'conversation-memory') {
-                  if (!['catalog', 'search', 'read'].includes(args.input?.action))
+                  if (
+                    !['catalog', 'search', 'read', 'feedback', 'correct', 'archive'].includes(
+                      args.input?.action
+                    )
+                  )
                     throw new MemoryError('请使用聊天记忆的只读操作')
                   return send(
                     200,

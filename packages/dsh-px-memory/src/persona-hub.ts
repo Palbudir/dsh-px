@@ -2,6 +2,7 @@ import { MemoryError, isInternalSession, validId, projectKey, type MemoryStore }
 import { service } from './history'
 import { continuationRequests } from './continuation'
 import { rejectUnauthenticatedRequest } from '../../shared/request-trust'
+import { resourceToolCatalog } from './persona-resources'
 
 export interface PersonaHubView {
   revision: number
@@ -136,6 +137,14 @@ export function registerPersonaHub(ctx: any, store: MemoryStore): () => void {
         try {
           if (req.method === 'GET') {
             const query = new URL(req.url, 'http://127.0.0.1').searchParams
+            if (query.get('view') === 'resources') {
+              const access = service(host, 'pxPersonaResources')
+              if (!access) throw new MemoryError('人格资源服务未就绪', 503)
+              return send(200, {
+                ...access.inspect(validId(query.get('personaId'))),
+                tools: resourceToolCatalog(host)
+              })
+            }
             return send(
               200,
               await personaHubView(
@@ -153,7 +162,7 @@ export function registerPersonaHub(ctx: any, store: MemoryStore): () => void {
           let length = 0
           for await (const chunk of req) {
             length += Buffer.byteLength(chunk)
-            if (length > 8192) throw new MemoryError('请求过大', 413)
+            if (length > 96000) throw new MemoryError('请求过大', 413)
             chunks.push(Buffer.from(chunk))
           }
           let args: any
@@ -164,6 +173,12 @@ export function registerPersonaHub(ctx: any, store: MemoryStore): () => void {
           }
           if (!args || typeof args !== 'object' || Array.isArray(args)) throw new MemoryError('操作无效')
           if (args.type === 'create-persona') return send(200, store.createPersona(args.name))
+          if (args.type === 'resources') {
+            const access = service(host, 'pxPersonaResources')
+            if (!access) throw new MemoryError('人格资源服务未就绪', 503)
+            access.save(args.personaId, args.revision, args.policy)
+            return send(200, access.inspect(args.personaId))
+          }
           if (args.type !== 'create-session') throw new MemoryError('操作无效')
           const createdSessionId = await once(
             args.requestId,

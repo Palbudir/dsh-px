@@ -139,6 +139,7 @@ export class QqSessionPolicy {
       this.routing = new QqPersonaRouting(this.routes, {
         known: (chatId) => inbox.knownChats().includes(chatId),
         available: (personaId) =>
+          this.personaAccountAllowed(personaId) &&
           this.memory()
             .personas()
             .some((p: any) => p.id === personaId),
@@ -254,6 +255,7 @@ export class QqSessionPolicy {
           const personaId = rows[0] && this.personaForChat(rows[0].chatId)
           if (
             !personaId ||
+            !this.personaAccountAllowed(personaId) ||
             rows.some(
               (row) => this.routing?.blocked(row.chatId) || this.personaForChat(row.chatId) !== personaId
             )
@@ -402,6 +404,10 @@ export class QqSessionPolicy {
     const id = this.bridge?.chat?.(chatId)?.sessionId
     return (id && this.memory().inspect(id).binding?.personaId) || this.settings.personaId
   }
+  private personaAccountAllowed(personaId: string): boolean {
+    const resources = get(this.host, 'pxPersonaResources')
+    return !resources || resources.allowsChannel(personaId, 'qq', this.settings.accountId) === true
+  }
   private routeBusy(chatId: string): string[] {
     const reasons: string[] = [],
       transport = this.bridge?.routeState?.(chatId)
@@ -495,10 +501,12 @@ export class QqSessionPolicy {
       personaId: this.personaForChat(chatId),
       pendingInputs: this.inbox.routePendingCount(chatId),
       persistenceBlocked: this.writeProblem || this.recovering,
+      accountAllowed: this.personaAccountAllowed(this.personaForChat(chatId)),
       busy: this.routeBusy(chatId)
     }
   }
   private async createRoutedSession(chatId: string, personaId: string, sessionId: string): Promise<void> {
+    if (!this.personaAccountAllowed(personaId)) throw new QqError('目标人格未获准使用此 QQ 账号', 403)
     const memory = this.memory(),
       existing = memory.inspect(sessionId).binding
     const expected = channelFor(this.settings, chatId)
@@ -536,6 +544,7 @@ export class QqSessionPolicy {
   }
   private routedSessionAllowed(sessionId: string, chatId: string): boolean {
     const route = this.routes?.route(chatId)
+    if (!this.personaAccountAllowed(this.personaForChat(chatId))) return false
     if (!route && !this.bridge?.routeState) return !this.routing?.blocked(chatId)
     const binding = this.memory().inspect(sessionId).binding
     return (
@@ -564,6 +573,8 @@ export class QqSessionPolicy {
           sessionId: source,
           assert: () => {
             this.assertActive()
+            if (!this.personaAccountAllowed(this.personaForChat(chatId)))
+              throw new QqError('人格的 QQ 账号授权已撤销，未继续交付', 403)
             lease?.assert()
           }
         },
@@ -632,7 +643,8 @@ export class QqSessionPolicy {
     const config = this.attention.effective()
     if (!this.inbox || !config.allowAgentChanges || config.mode === 'focus') return []
     const rows = this.inbox.notifications().filter((row) => {
-      if (this.routing?.blocked(row.chatId)) return false
+      if (this.routing?.blocked(row.chatId) || !this.personaAccountAllowed(this.personaForChat(row.chatId)))
+        return false
       const delivery = attentionDelivery(config, { ...row, self: false })
       return config.mode === 'normal'
         ? delivery.content === 'preview' && delivery.reason !== 'muted'
@@ -645,6 +657,7 @@ export class QqSessionPolicy {
     if (this.disposed || !this.inbox || !this.privateAttentionAgent(agent)) return ''
     const settings = this.attention.effective()
     const personaId = this.memory().inspect(agent.session.id).binding.personaId
+    if (!this.personaAccountAllowed(personaId)) return ''
     const items = this.inbox
       .summaries(50)
       .items.filter(
@@ -683,6 +696,7 @@ export class QqSessionPolicy {
     )
       throw new QqError('QQ 注意力操作无效')
     const personaId = this.memory().inspect(exec.agent.session.id).binding.personaId
+    if (!this.personaAccountAllowed(personaId)) throw new QqError('本人格未获准使用此 QQ 账号', 403)
     const ownChat = (chatId: string) =>
       !this.routing?.blocked(chatId) && this.personaForChat(chatId) === personaId
     const status = () => {
@@ -1019,6 +1033,8 @@ export class QqSessionPolicy {
     this.assertActive()
     const chatId =
       event.message_type === 'group' ? 'group:' + String(event.group_id) : 'private:' + String(event.user_id)
+    if (!this.personaAccountAllowed(this.personaForChat(chatId)))
+      throw new QqError('本聊天人格未获准使用此 QQ 账号；输入保留在收件记录中', 403)
     const senderId = String(event.user_id)
     const messageId =
       typeof event.message_id === 'string' || typeof event.message_id === 'number'

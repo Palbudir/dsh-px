@@ -22,7 +22,9 @@ function fixture(t: any) {
   const other = s.personas.find((p) => p.id !== 'default')!
   identities.bind('session-c', { personaId: other.id })
   const bank = new KnowledgeBank(join(root, 'knowledge'), identities)
+  const cleanups: Array<() => Promise<void>> = []
   t.after(async () => {
+    for (const cleanup of cleanups) await cleanup()
     await bank.dispose()
     assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
     rmSync(root, { recursive: true, force: true })
@@ -31,6 +33,7 @@ function fixture(t: any) {
     root,
     identities,
     bank,
+    cleanups,
     a: { sessionId: 'session-a', project: projectA },
     b: { sessionId: 'session-b', project: projectA },
     aElsewhere: { sessionId: 'session-a', project: projectB }
@@ -160,7 +163,7 @@ test('public Mnemon compiler composes PX source and enforces readonly routes wit
   })
   t.after(() => turn.release())
   assert.equal(turn.view.routes.length, 3)
-  assert.equal(turn.view.actionOffers.length, 3)
+  assert.equal(turn.view.actionOffers.length, 4)
   for (const item of [...turn.view.routes, ...turn.view.actionOffers]) assert.ok(contract.includes(item.id))
   const route = turn.view.routes.find((r) => r.sourceRouteId === 'read')!.id
   const first = await turn.executeRoute(route, { scope: 'persona', id: saved.document.id })
@@ -217,7 +220,7 @@ test('file freshness references suppress obsolete knowledge until it is explicit
       ? { path, version: versions.get(path)!, observedAt: new Date().toISOString() }
       : undefined
   )
-  t.after(() => bank.dispose())
+  f.cleanups.push(() => bank.dispose())
   const start = await bank.catalog(f.a, 'project'),
     saved = await bank.write(f.a, 'project', {
       key: '文件结论',
