@@ -30,6 +30,7 @@ interface BridgePort {
   receive(event: unknown): Promise<void>
   send(chatId: string, text: string): Promise<unknown>
   segments?(chatId: string, segments: unknown[]): Promise<unknown>
+  classifySendError?(error: unknown): 'retryable' | 'uncertain'
   chat?(chatId: string): any
   reset?(chatId: string): Promise<void>
   adopt?(chatId: string, sessionId: string): Promise<any>
@@ -56,9 +57,19 @@ export class QqSessionPolicy {
       if (!this.bridge?.segments) throw new QqError('配套 QQ 发送组件未就绪，请更新后重试', 409)
       this.beforeConnectionCall('send_msg', data, target)
       const actor = this.toolCall.getStore()?.agent
-      if (actor) this.recordReply(actor)
-      const message_id = await this.bridge.segments(target, data.message)
-      return { message_id }
+      const prior = actor ? this.explicitReplies(actor.session.id) : false
+      const turn = actor ? this.recordReply(actor) : undefined
+      try {
+        const message_id = await this.bridge.segments(target, data.message)
+        return { message_id }
+      } catch (error) {
+        this.deliveryProblem = true
+        // Reuse the transport's distinction: a timeout may have reached QQ. Never auto-repeat it.
+        // Only a confirmed rejection may restore the ordinary explanatory final response.
+        if (actor && !prior && turn !== undefined && this.bridge.classifySendError?.(error) === 'retryable')
+          this.clearReply(actor, turn)
+        throw error
+      }
     }
     return this.connection.call(action, params, signal)
   })
@@ -256,7 +267,8 @@ export class QqSessionPolicy {
       : this.deliveryProblem
         ? {
             state: 'error',
-            message: '上次群任务结果未确认送达。原生记录保留，请核对原群与客户端中的任务记录；未自动重发。',
+            message:
+              '上次 QQ 回复或任务结果未确认送达。原生记录保留，请核对原聊天与客户端中的执行记录；未自动重发。',
             persistenceBlocked: false
           }
         : { ...this.connectionState, persistenceBlocked: false }
@@ -899,12 +911,21 @@ export class QqSessionPolicy {
         })())
     )
   }
-  private recordReply(agent: any): void {
+  private recordReply(agent: any): string {
     const id = agent?.session?.id
     if (!id) throw new QqError('QQ 回复缺少原生会话身份', 403)
     const start = agent.session.snapshotEvents?.().findLast((event: any) => event.type === 'turn/start')
-    if (start && this.inbox) this.inbox.recordReply(id, String(start.seq ?? start.data?.turn))
+    const turn = start ? String(start.seq ?? start.data?.turn) : ''
+    if (start && this.inbox) this.inbox.recordReply(id, turn)
     this.replyDecisions.add(id)
+    return turn
+  }
+  private clearReply(agent: any, turn: string): void {
+    const id = agent.session.id
+    const start = agent.session.snapshotEvents?.().findLast((event: any) => event.type === 'turn/start')
+    if ((start ? String(start.seq ?? start.data?.turn) : '') !== turn) return
+    this.inbox?.clearReply(id, turn)
+    this.replyDecisions.delete(id)
   }
   async borrow(agent: any, setup: (ctx: any) => void): Promise<{ agent: any; dispose(): Promise<void> }> {
     this.assertActive()

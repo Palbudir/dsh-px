@@ -7,9 +7,78 @@ import { join, sep } from 'node:path'
 import { createHash } from 'node:crypto'
 import { QqConversation } from '../packages/dsh-px-qq/src/conversation'
 import { QqSessionPolicy } from '../packages/dsh-px-qq/src/session-policy'
+import { QqAttentionInbox } from '../packages/dsh-px-qq/src/attention-inbox'
 import { DEFAULT_QQ_SETTINGS, channelFor, messageSource } from '../packages/dsh-px-qq/src/policy'
 
 const signal = () => new AbortController().signal
+for (const [tool, args] of [
+  ['qq_reply', { action: 'text', text: 'hello' }],
+  ['qq_expression', { action: 'face', face: 14 }],
+  ['qq_document', { title: 'report', text: 'delivery content' }]
+] as const) {
+  for (const outcome of ['retryable', 'uncertain'] as const) {
+    test(`${tool} restores fallback only after confirmed rejection and preserves earlier decisions (${outcome})`, async () => {
+      const dir = mkdtempSync(join(tmpdir(), 'px-qq-reply-failure-'))
+      const inbox = new QqAttentionInbox(join(dir, 'inbox.sqlite'), '12001')
+      const settings = {
+        ...DEFAULT_QQ_SETTINGS,
+        accountId: '12001',
+        authorizedUsers: ['23007'],
+        personaId: 'p'
+      }
+      const session = { id: 'group', snapshotEvents: () => [{ type: 'turn/start', seq: 5 }] }
+      const memory = {
+        version: 1,
+        inspect: () => ({ binding: { personaId: 'p', channel: channelFor(settings, 'group:34007') } })
+      }
+      const policy = new QqSessionPolicy(
+        {
+          get: (key: string) =>
+            key === 'pxMemoryChannels' ? memory : key === 'sessions' ? { get: () => session } : undefined
+        },
+        settings,
+        {} as any,
+        inbox
+      )
+      policy.attach({
+        receive: async () => {},
+        send: async () => {},
+        classifySendError: () => outcome,
+        segments: async () => {
+          assert.equal(policy.explicitReplies('group'), true, 'pending send suppresses timer')
+          throw Error('test gateway failure')
+        }
+      })
+      policy.bindConnection({
+        call: async (action: string) =>
+          action === 'get_login_info'
+            ? { user_id: 12001 }
+            : action === 'get_status'
+              ? { online: true, good: true }
+              : []
+      })
+      policy.connectionStatus(true)
+      const exec = { name: tool, agent: { session }, signal: signal() }
+      try {
+        await assert.rejects(policy.conversationAction(tool, args, exec), /test gateway failure/)
+        assert.equal(policy.explicitReplies('group'), outcome === 'uncertain')
+        assert.equal(inbox.hasReply('group', '5'), outcome === 'uncertain', 'durable marker follows outcome')
+        assert.equal(policy.snapshot().state, 'error', 'delivery issue remains visible')
+        await policy.conversationAction('qq_reply', { action: 'silent' }, { ...exec, name: 'qq_reply' })
+        await assert.rejects(policy.conversationAction(tool, args, exec), /test gateway failure/)
+        assert.equal(
+          policy.explicitReplies('group'),
+          true,
+          'failure does not erase an earlier explicit decision'
+        )
+      } finally {
+        await policy.dispose()
+        assert.ok(resolve(dir).startsWith(resolve(tmpdir()) + sep))
+        rmSync(dir, { recursive: true, force: true })
+      }
+    })
+  }
+}
 test('explicit reply can stay silent or send only the intended text without an acknowledgement', async () => {
   const calls: any[] = []
   const channel = new QqConversation(async (action, params) => {

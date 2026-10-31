@@ -149,6 +149,9 @@ export class QqAttentionInbox {
       this.db.prepare('SELECT value FROM inbox_meta WHERE key=?').get('reply/' + sessionId)?.value === turn
     )
   }
+  clearReply(sessionId: string, turn: string): void {
+    this.db.prepare('DELETE FROM inbox_meta WHERE key=? AND value=?').run('reply/' + sessionId, turn)
+  }
   notifications(): QqNotice[] {
     const groups = this.db
       .prepare(

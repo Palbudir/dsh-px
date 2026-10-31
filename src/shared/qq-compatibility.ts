@@ -12,6 +12,7 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
     code = code.replace(from, to)
   }
   if (file === 'index.js') {
+    code = "import { classifySendError as classifyPxSendError } from './deferred.js';\n" + code
     replace("export const inject = ['tools',", "export const inject = ['pxQq', 'tools',")
     replace(
       'export const Config = z.object({',
@@ -37,7 +38,7 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
     replace('await connection.stop();', 'await connection.stop();\n            px.dispose();')
     replace(
       'adopt: (chatId, sessionId) => bridge.registry.pxAdopt(chatId, sessionId),',
-      'adopt: (chatId, sessionId) => bridge.registry.pxAdopt(chatId, sessionId),\n        segments: (chatId, segments) => bridge.sendSegments(chatId, segments),\n        flush: () => bridge.registry.pxFlush(),\n        message: input => bridge.pxMessage(input),\n        scope: (ctx, sessionId, chatId) => bridge.installChannelScope(ctx, sessionId, chatId),\n        model: (ctx, sessionId) => bridge.registry.pxModel(ctx, sessionId),\n        recordedPreset: sessionId => bridge.registry.recordedPresetFor(sessionId),\n        attachWorkspace: (sessionId, cwd) => bridge.registry.attachToWorkspace(sessionId, cwd),'
+      'adopt: (chatId, sessionId) => bridge.registry.pxAdopt(chatId, sessionId),\n        segments: (chatId, segments) => bridge.sendSegments(chatId, segments),\n        classifySendError: error => classifyPxSendError(error),\n        flush: () => bridge.registry.pxFlush(),\n        message: input => bridge.pxMessage(input),\n        scope: (ctx, sessionId, chatId) => bridge.installChannelScope(ctx, sessionId, chatId),\n        model: (ctx, sessionId) => bridge.registry.pxModel(ctx, sessionId),\n        recordedPreset: sessionId => bridge.registry.recordedPresetFor(sessionId),\n        attachWorkspace: (sessionId, cwd) => bridge.registry.attachToWorkspace(sessionId, cwd),'
     )
   } else if (file === 'registry.js') {
     replace(
