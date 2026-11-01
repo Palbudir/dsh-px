@@ -10,6 +10,11 @@ import { nsisAppGuid } from './nsis-guid.mjs'
 import { validDistribution, compositionMembers, componentFile } from '../src/shared/distribution.ts'
 import { patchNativeModelGuard, patchNativeCompactionBudget } from '../src/shared/native-model-guard.ts'
 import { patchNativeSkillCatalog } from '../src/shared/native-skill-catalog.ts'
+import {
+  patchNativePersonaController,
+  patchNativePersonaSessionClient,
+  patchNativePersonaWorkspaceClient
+} from '../src/shared/native-persona-navigation.ts'
 import { DESKTOP_PNPM_ENTRY } from '../src/shared/native-desktop-runtime.ts'
 import { applyRuntimeDependencyOverrides } from './native-runtime-dependencies.mjs'
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -167,7 +172,19 @@ const runtimeInventory = JSON.parse(readFileSync(join(nativeRuntime, 'desktop-ru
 const modelControllerRelative = 'node_modules/@deepseek-ai/dsh-api-session-controller/lib/index.js'
 writeFileSync(
   join(pxRuntime, modelControllerRelative),
-  patchNativeModelGuard(readFileSync(join(nativeRuntime, modelControllerRelative), 'utf8'))
+  patchNativePersonaController(
+    patchNativeModelGuard(readFileSync(join(nativeRuntime, modelControllerRelative), 'utf8'))
+  )
+)
+const personaSessionClientRelative = 'node_modules/@deepseek-ai/dsh-api-session-controller/lib/client.js'
+const personaWorkspaceClientRelative = 'node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js'
+writeFileSync(
+  join(pxRuntime, personaSessionClientRelative),
+  patchNativePersonaSessionClient(readFileSync(join(nativeRuntime, personaSessionClientRelative), 'utf8'))
+)
+writeFileSync(
+  join(pxRuntime, personaWorkspaceClientRelative),
+  patchNativePersonaWorkspaceClient(readFileSync(join(nativeRuntime, personaWorkspaceClientRelative), 'utf8'))
 )
 const compactionRelative = 'node_modules/@deepseek-ai/dsh-compaction-basic/lib/index.js'
 writeFileSync(
@@ -183,6 +200,8 @@ for (const path of [
   hostRelative,
   helperRelative,
   modelControllerRelative,
+  personaSessionClientRelative,
+  personaWorkspaceClientRelative,
   compactionRelative,
   skillClientRelative
 ]) {

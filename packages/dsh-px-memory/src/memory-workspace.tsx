@@ -64,6 +64,10 @@ export function registerMemoryWorkspace(host: any, Panel: any) {
         </div>
         {directory ? (
           <PersonaHubPanel
+            nativeNavigation={
+              host.sessions.pxPersonaTransportVersion === 1 &&
+              host.uiWorkspace.pxPersonaNavigationVersion === 1
+            }
             currentSessionId={id ?? undefined}
             titles={sessions.byId}
             openSession={(target: string) => {

@@ -35,8 +35,10 @@
     "zod@4.4.3": "4.6.7"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-api-session-controller": "0.2.1-rc.3",
     "@deepseek-ai/dsh-client-ui-skill": "0.2.1-rc.3",
     "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-client-ui-workspace": "0.2.1-rc.3",
     "@deepseek-ai/dsh-compaction": "0.2.1-rc.3",
     "@deepseek-ai/dsh-compaction-basic": "0.2.1-rc.3",
     "@deepseek-ai/dsh-jobs": "0.2.1-rc.3",

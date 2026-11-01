@@ -2,34 +2,19 @@ import { useEffect, useRef, useState } from 'react'
 import { requestJson } from '../../shared/client-http'
 import type { PersonaHubView as HubView } from './persona-hub'
 import { PersonaResourcesPanel } from './persona-resources-panel'
-
-const selectionKey = 'dsh-px-persona-directory'
-const savedPersona = () => {
-  try {
-    const value = sessionStorage.getItem(selectionKey)
-    return value && /^(?:default|[a-f0-9-]{36})$/.test(value) ? value : undefined
-  } catch {
-    return undefined
-  }
-}
-const rememberPersona = (value?: string) => {
-  try {
-    if (value) sessionStorage.setItem(selectionKey, value)
-    else sessionStorage.removeItem(selectionKey)
-  } catch {
-    /* Navigation still works when this browser forbids local persistence. */
-  }
-}
+import { savedPersona, rememberPersona } from './persona-navigation-client'
 
 /** Switching this directory never rebinds native sessions or changes another window's selection. */
 export function PersonaHubPanel({
   openSession,
   titles,
-  currentSessionId
+  currentSessionId,
+  nativeNavigation = false
 }: {
   openSession: (id: string) => void
   titles: Record<string, any>
   currentSessionId?: string
+  nativeNavigation?: boolean
 }) {
   const [personaId, setPersonaId] = useState<string | undefined>(savedPersona),
     [workspaceId, setWorkspaceId] = useState('')
@@ -107,9 +92,9 @@ export function PersonaHubPanel({
         <>
           <div className="px-actions">
             <label>
-              查看人格{' '}
+              {view.nativeNavigation && nativeNavigation ? '本窗口人格' : '查看人格'}{' '}
               <select
-                aria-label="查看人格"
+                aria-label={view.nativeNavigation && nativeNavigation ? '本窗口人格' : '查看人格'}
                 value={selectedId}
                 disabled={busy}
                 onChange={(event: any) => choosePersona(event.target.value)}
@@ -126,6 +111,11 @@ export function PersonaHubPanel({
               刷新目录
             </button>
           </div>
+          <p className="px-muted">
+            {view.nativeNavigation && nativeNavigation
+              ? `本窗口“新建会话”使用${selected?.name ?? '所选人格'}，可复用该人格的空白会话。打开已有会话不会改变其身份。`
+              : '当前宿主未接入原生新建，请使用下面的“用此人格新建会话”。'}
+          </p>
           <details style={{ marginTop: 16 }}>
             <summary>创建人格</summary>
             <label>

@@ -30,6 +30,7 @@ import { runAnalysisTask } from './experience-task'
 import { inspectMemorySession } from './session-context'
 import { installPersonaSkillProviders } from './persona-skills'
 import { registerPersonaHub } from './persona-hub'
+import { PersonaNavigation } from './persona-navigation'
 import { PersonaResourceAccess, installPersonaResourceAccess } from './persona-resources'
 import { SegmentRuntime } from './segment-runtime'
 import { registerSegmentBoundary } from './segment-context'
@@ -54,7 +55,14 @@ export function apply(ctx: any): void {
     version: 1,
     scope: (agent: any, tool: string) => nativeHistoryScope(store, agent, tool)
   })
-  ctx.effect(() => registerPersonaHub(ctx, store), 'memory: persona workspace API')
+  ctx.effect(() => {
+    const navigation = new PersonaNavigation(store, join(root, 'storages', name, 'navigation.sqlite'))
+    const off = registerPersonaHub(ctx, store, navigation)
+    return () => {
+      off()
+      navigation.close()
+    }
+  }, 'memory: persona workspace API')
   const channelBindings = new WeakMap<object, SessionBinding | null>()
   const bindingFor = (agent: Agent | undefined): SessionBinding | undefined => {
     if (!agent) return

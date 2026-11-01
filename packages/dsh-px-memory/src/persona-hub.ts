@@ -3,8 +3,10 @@ import { service } from './history'
 import { continuationRequests } from './continuation'
 import { rejectUnauthenticatedRequest } from '../../shared/request-trust'
 import { resourceToolCatalog } from './persona-resources'
+import type { PersonaNavigation } from './persona-navigation'
 
 export interface PersonaHubView {
+  nativeNavigation: boolean
   revision: number
   selectedPersonaId: string
   personas: Array<{ id: string; name: string; revision: number; archived: boolean; sessionCount: number }>
@@ -52,6 +54,7 @@ export async function personaHubView(
   )
   const workspaceRegistry = service(host, 'workspaceRegistry')
   return {
+    nativeNavigation: controller.pxPersonaCreationVersion === 1,
     revision: state.revision,
     selectedPersonaId: selected,
     personas: state.personas.map((p) => ({
@@ -123,7 +126,7 @@ export async function createHubSession(host: any, store: MemoryStore, args: any)
   return id
 }
 
-export function registerPersonaHub(ctx: any, store: MemoryStore): () => void {
+export function registerPersonaHub(ctx: any, store: MemoryStore, navigation?: PersonaNavigation): () => void {
   const once = continuationRequests()
   const injection = ctx.inject(['connection', 'webServer', 'sessionController'], (host: any) =>
     host.webServer.register({
@@ -177,6 +180,10 @@ export function registerPersonaHub(ctx: any, store: MemoryStore): () => void {
             throw new MemoryError('JSON 无效')
           }
           if (!args || typeof args !== 'object' || Array.isArray(args)) throw new MemoryError('操作无效')
+          if (args.type === 'navigate-new') {
+            if (!navigation) throw new MemoryError('人格导航服务未就绪', 503)
+            return send(200, await navigation.create(host, args))
+          }
           if (args.type === 'create-persona') return send(200, store.createPersona(args.name))
           if (args.type === 'resources') {
             const access = service(host, 'pxPersonaResources')

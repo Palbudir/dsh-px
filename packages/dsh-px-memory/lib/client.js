@@ -2053,28 +2053,101 @@ function PersonaResourcesPanel({ personaId }) {
   ] });
 }
 
-// packages/dsh-px-memory/src/persona-hub-panel.tsx
-var import_jsx_runtime10 = require("react/jsx-runtime");
+// packages/dsh-px-memory/src/persona-navigation-client.ts
 var selectionKey = "dsh-px-persona-directory";
+var pendingKey = "dsh-px-persona-new-pending";
+var transientSelection;
 var savedPersona = () => {
   try {
     const value = sessionStorage.getItem(selectionKey);
     return value && /^(?:default|[a-f0-9-]{36})$/.test(value) ? value : void 0;
   } catch {
-    return void 0;
+    return transientSelection;
   }
 };
 var rememberPersona = (value) => {
+  transientSelection = value;
   try {
     if (value) sessionStorage.setItem(selectionKey, value);
     else sessionStorage.removeItem(selectionKey);
   } catch {
   }
 };
+function personaNavigationClient(ports) {
+  const pending = ports.load();
+  return {
+    capture() {
+      const selection = ports.selection(), key = JSON.stringify(selection);
+      return {
+        key,
+        transport: async (request) => {
+          const operation = JSON.stringify([key, request.workspaceId, request.agentPreset]), requestId = pending[operation] ?? ports.uuid();
+          pending[operation] = requestId;
+          ports.save(pending);
+          const result = await ports.post({
+            type: "navigate-new",
+            ...selection,
+            workspaceId: request.workspaceId,
+            agentPreset: request.agentPreset,
+            requestId
+          });
+          if (pending[operation] === requestId) {
+            delete pending[operation];
+            ports.save(pending);
+          }
+          return result;
+        }
+      };
+    }
+  };
+}
+function registerPersonaNavigationClient(host) {
+  if (host.sessions.pxPersonaTransportVersion !== 1 || host.uiWorkspace.pxPersonaNavigationVersion !== 1)
+    return () => {
+    };
+  const navigation = personaNavigationClient({
+    selection: () => {
+      const personaId = savedPersona();
+      return personaId ? { personaId } : { currentSessionId: selectedSession(host.sessions.list.getSnapshot(), null) };
+    },
+    load: () => {
+      try {
+        const entries = JSON.parse(sessionStorage.getItem(pendingKey) ?? "{}");
+        if (!entries || typeof entries !== "object" || Array.isArray(entries)) return /* @__PURE__ */ Object.create(null);
+        return Object.fromEntries(
+          Object.entries(entries).filter(
+            ([key, value]) => key.length < 1e3 && typeof value === "string" && /^[a-f0-9-]{36}$/.test(value)
+          )
+        );
+      } catch {
+        return /* @__PURE__ */ Object.create(null);
+      }
+    },
+    save: (value) => {
+      try {
+        sessionStorage.setItem(pendingKey, JSON.stringify(value));
+      } catch {
+      }
+    },
+    uuid: () => crypto.randomUUID(),
+    post: (body) => requestJson("/dsh-px-personas", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    })
+  });
+  return host.effect(() => {
+    host.provide("pxPersonaNavigation", navigation);
+  }, "memory: native New persona selection");
+}
+
+// packages/dsh-px-memory/src/persona-hub-panel.tsx
+var import_jsx_runtime10 = require("react/jsx-runtime");
 function PersonaHubPanel({
   openSession,
   titles,
-  currentSessionId
+  currentSessionId,
+  nativeNavigation = false
 }) {
   const [personaId, setPersonaId] = (0, import_react9.useState)(savedPersona), [workspaceId, setWorkspaceId] = (0, import_react9.useState)("");
   const [view, setView] = (0, import_react9.useState)(null), [error, setError] = (0, import_react9.useState)("");
@@ -2141,12 +2214,12 @@ function PersonaHubPanel({
     view && /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)(import_jsx_runtime10.Fragment, { children: [
       /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("div", { className: "px-actions", children: [
         /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("label", { children: [
-          "\u67E5\u770B\u4EBA\u683C",
+          view.nativeNavigation && nativeNavigation ? "\u672C\u7A97\u53E3\u4EBA\u683C" : "\u67E5\u770B\u4EBA\u683C",
           " ",
           /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(
             "select",
             {
-              "aria-label": "\u67E5\u770B\u4EBA\u683C",
+              "aria-label": view.nativeNavigation && nativeNavigation ? "\u672C\u7A97\u53E3\u4EBA\u683C" : "\u67E5\u770B\u4EBA\u683C",
               value: selectedId,
               disabled: busy,
               onChange: (event) => choosePersona(event.target.value),
@@ -2162,6 +2235,7 @@ function PersonaHubPanel({
         ] }),
         /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("button", { disabled: busy, onClick: () => setRefresh((v) => v + 1), children: "\u5237\u65B0\u76EE\u5F55" })
       ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("p", { className: "px-muted", children: view.nativeNavigation && nativeNavigation ? `\u672C\u7A97\u53E3\u201C\u65B0\u5EFA\u4F1A\u8BDD\u201D\u4F7F\u7528${selected?.name ?? "\u6240\u9009\u4EBA\u683C"}\uFF0C\u53EF\u590D\u7528\u8BE5\u4EBA\u683C\u7684\u7A7A\u767D\u4F1A\u8BDD\u3002\u6253\u5F00\u5DF2\u6709\u4F1A\u8BDD\u4E0D\u4F1A\u6539\u53D8\u5176\u8EAB\u4EFD\u3002` : "\u5F53\u524D\u5BBF\u4E3B\u672A\u63A5\u5165\u539F\u751F\u65B0\u5EFA\uFF0C\u8BF7\u4F7F\u7528\u4E0B\u9762\u7684\u201C\u7528\u6B64\u4EBA\u683C\u65B0\u5EFA\u4F1A\u8BDD\u201D\u3002" }),
       /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("details", { style: { marginTop: 16 }, children: [
         /* @__PURE__ */ (0, import_jsx_runtime10.jsx)("summary", { children: "\u521B\u5EFA\u4EBA\u683C" }),
         /* @__PURE__ */ (0, import_jsx_runtime10.jsxs)("label", { children: [
@@ -2360,6 +2434,7 @@ function registerMemoryWorkspace(host, Panel) {
           directory ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
             PersonaHubPanel,
             {
+              nativeNavigation: host.sessions.pxPersonaTransportVersion === 1 && host.uiWorkspace.pxPersonaNavigationVersion === 1,
               currentSessionId: id ?? void 0,
               titles: sessions.byId,
               openSession: (target) => {
@@ -4027,6 +4102,7 @@ function apply(ctx) {
   ctx.inject(
     ["slots", "layout", "sessions", "uiWorkspace", "sidebarRight", "sidebarRightTabs"],
     (host) => host.effect(() => {
+      const personaNavigation = registerPersonaNavigationClient(host);
       const workspace = registerMemoryWorkspace(host, MemoryPanel);
       const nativePage = registerMnemonKnowledgePage(host, workspace.open);
       const skillNavigation = registerMnemonSkillNavigation(host, workspace.openSkill);
@@ -4041,6 +4117,7 @@ function apply(ctx) {
         ] })
       });
       return () => {
+        personaNavigation();
         sidebar();
         nativePage();
         skillNavigation();

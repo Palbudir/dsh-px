@@ -24123,6 +24123,7 @@ async function personaHubView(host, store, personaId, offset = 0, currentSession
   );
   const workspaceRegistry = service(host, "workspaceRegistry");
   return {
+    nativeNavigation: controller.pxPersonaCreationVersion === 1,
     revision: state.revision,
     selectedPersonaId: selected,
     personas: state.personas.map((p) => ({
@@ -24176,7 +24177,7 @@ async function createHubSession(host, store, args) {
   store.bind(id, { personaId });
   return id;
 }
-function registerPersonaHub(ctx, store) {
+function registerPersonaHub(ctx, store, navigation) {
   const once = continuationRequests();
   const injection = ctx.inject(
     ["connection", "webServer", "sessionController"],
@@ -24231,6 +24232,10 @@ function registerPersonaHub(ctx, store) {
             throw new MemoryError("JSON \u65E0\u6548");
           }
           if (!args || typeof args !== "object" || Array.isArray(args)) throw new MemoryError("\u64CD\u4F5C\u65E0\u6548");
+          if (args.type === "navigate-new") {
+            if (!navigation) throw new MemoryError("\u4EBA\u683C\u5BFC\u822A\u670D\u52A1\u672A\u5C31\u7EEA", 503);
+            return send(200, await navigation.create(host, args));
+          }
           if (args.type === "create-persona") return send(200, store.createPersona(args.name));
           if (args.type === "resources") {
             const access = service(host, "pxPersonaResources");
@@ -24255,6 +24260,190 @@ function registerPersonaHub(ctx, store) {
   );
   return () => injection.dispose();
 }
+
+// packages/dsh-px-memory/src/persona-navigation.ts
+import { DatabaseSync as DatabaseSync3 } from "node:sqlite";
+import { mkdirSync as mkdirSync6 } from "node:fs";
+import { dirname as dirname5 } from "node:path";
+var PersonaNavigation = class {
+  constructor(store, path) {
+    this.store = store;
+    mkdirSync6(dirname5(path), { recursive: true });
+    this.db = new DatabaseSync3(path);
+    try {
+      this.db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=3000; PRAGMA synchronous=FULL;");
+      if (this.db.prepare("PRAGMA user_version").get().user_version > 1 || this.db.prepare("PRAGMA quick_check").get().quick_check !== "ok")
+        throw new MemoryError("\u65B0\u4F1A\u8BDD\u521B\u5EFA\u8BB0\u5F55\u9700\u8981\u68C0\u67E5\uFF0C\u672A\u8986\u76D6\u539F\u8BB0\u5F55", 503);
+      this.db.exec(
+        "CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY, body TEXT NOT NULL); PRAGMA user_version=1;"
+      );
+    } catch (error62) {
+      this.db.close();
+      throw error62;
+    }
+  }
+  db;
+  pending = /* @__PURE__ */ new Map();
+  close() {
+    this.db.close();
+  }
+  read(id) {
+    const row = this.db.prepare("SELECT body FROM requests WHERE id=?").get(id);
+    return row ? JSON.parse(String(row.body)) : void 0;
+  }
+  save(id, receipt) {
+    this.db.prepare("INSERT INTO requests(id,body) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body").run(id, JSON.stringify(receipt));
+  }
+  create(host, args) {
+    const requestId = args.requestId;
+    if (typeof requestId !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(requestId))
+      throw new MemoryError("\u65B0\u4F1A\u8BDD\u8BF7\u6C42\u6807\u8BC6\u65E0\u6548");
+    const workspaceId = validId(args.workspaceId), personaId = args.personaId === void 0 ? void 0 : validId(args.personaId), currentSessionId = args.currentSessionId === void 0 ? void 0 : validId(args.currentSessionId), agentPreset = args.agentPreset === void 0 ? void 0 : validId(args.agentPreset), fingerprint = JSON.stringify([personaId, currentSessionId, workspaceId, agentPreset]), active = this.pending.get(requestId);
+    if (active) {
+      if (active.fingerprint !== fingerprint) throw new MemoryError("\u6B64\u8BF7\u6C42\u5DF2\u7528\u4E8E\u53E6\u4E00\u9879\u65B0\u5EFA\u64CD\u4F5C", 409);
+      return active.promise;
+    }
+    const promise2 = Promise.resolve().then(
+      () => this.run(host, requestId, fingerprint, { personaId, currentSessionId, workspaceId, agentPreset })
+    );
+    this.pending.set(requestId, { fingerprint, promise: promise2 });
+    void promise2.finally(() => {
+      this.pending.delete(requestId);
+    }).catch(() => {
+    });
+    return promise2;
+  }
+  async run(host, requestId, fingerprint, args) {
+    const controller = service(host, "sessionController"), registry2 = service(host, "workspaceRegistry");
+    if (controller?.pxPersonaCreationVersion !== 1 || typeof controller.createForPersona !== "function")
+      throw new MemoryError("\u5F53\u524D\u5BBF\u4E3B\u672A\u5B89\u88C5\u4EBA\u683C\u5BFC\u822A\u63A5\u5165\uFF0C\u8BF7\u4ECE\u201C\u4EBA\u683C\u4E0E\u4F1A\u8BDD\u201D\u65B0\u5EFA", 503);
+    const workspace = registry2?.get?.(args.workspaceId);
+    if (!workspace) throw new MemoryError("\u5DE5\u4F5C\u533A\u4E0D\u5B58\u5728\uFF0C\u8BF7\u5237\u65B0\u540E\u9009\u62E9", 404);
+    let receipt = this.read(requestId);
+    if (receipt && (receipt.fingerprint !== fingerprint || projectKey(receipt.cwd) !== projectKey(workspace.path)))
+      throw new MemoryError("\u6B64\u8BF7\u6C42\u7684\u76EE\u6807\u6216\u5DE5\u4F5C\u533A\u8DEF\u5F84\u5DF2\u6539\u53D8\uFF0C\u8BF7\u91CD\u65B0\u9009\u62E9", 409);
+    if (!receipt) {
+      const state = this.store.read(), current = state.bindings[args.currentSessionId], personaId = args.personaId ?? (current && !current.purpose && !current.pending ? current.personaId : "default");
+      this.assertPersona(personaId);
+      const native = await controller.list({});
+      if (!Array.isArray(native?.items)) throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u76EE\u5F55\u4E0D\u53EF\u7528", 503);
+      const blank = native.items.find(
+        (row) => row.blank === true && row.running !== true && row.origin !== "subagent" && projectKey(row.cwd) === projectKey(workspace.path) && workspace.sessionIds.includes(row.sessionId) && !registry2.archivedSessionIds.includes(row.sessionId) && this.owned(row.sessionId, personaId, false, state.bindings) && (args.agentPreset === void 0 || row.projectionValues?.agentPreset === void 0 || row.projectionValues.agentPreset === args.agentPreset)
+      );
+      receipt = {
+        fingerprint,
+        personaId,
+        workspaceId: workspace.id,
+        cwd: workspace.path,
+        requestedPreset: args.agentPreset,
+        target: blank?.sessionId ?? "session-" + requestId
+      };
+      this.save(requestId, receipt);
+    }
+    this.assertPersona(receipt.personaId);
+    if (receipt.resolved || receipt.attempt) {
+      const previous = receipt.resolved ?? receipt.attempt;
+      let inspected;
+      try {
+        const observation = await service(host, "sessionQuery").observeSession(previous.sessionId, {
+          projectionMode: "none"
+        });
+        try {
+          inspected = { meta: observation.header, events: [...observation.events] };
+        } finally {
+          observation[Symbol.dispose]();
+        }
+      } catch (error62) {
+        if (error62?.code !== "SESSION_QUERY_SESSION_NOT_FOUND") throw error62;
+        if (receipt.resolved || receipt.attempt?.kind !== "create")
+          throw new MemoryError("\u539F\u521B\u5EFA\u4F1A\u8BDD\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u5728\u76EE\u5F55\u786E\u8BA4\u540E\u91CD\u65B0\u65B0\u5EFA", 409);
+      }
+      if (inspected) {
+        const recoveringCreation = !receipt.resolved && receipt.attempt?.kind === "create";
+        if (!this.owned(previous.sessionId, receipt.personaId, recoveringCreation) || projectKey(inspected.meta.cwd) !== projectKey(receipt.cwd))
+          throw new MemoryError("\u539F\u521B\u5EFA\u4F1A\u8BDD\u7684\u8EAB\u4EFD\u6216\u76EE\u5F55\u5DF2\u53D8\u5316\uFF0C\u672A\u91CD\u5EFA\u6216\u91CD\u65B0\u7ED1\u5B9A", 409);
+        const preset = [...inspected.events].reverse().find((e) => e.type === "agent-preset/selected")?.data?.agentPreset ?? inspected.meta.agentPreset;
+        if (!receipt.resolved && preset !== previous.agentPreset)
+          throw new MemoryError("\u4E0A\u6B21\u65B0\u5EFA\u7ED3\u679C\u5C1A\u4E0D\u660E\u786E\uFF0C\u8BF7\u5728\u201C\u4EBA\u683C\u4E0E\u4F1A\u8BDD\u201D\u6253\u5F00\u539F\u4F1A\u8BDD\u68C0\u67E5\uFF1B\u672A\u91CD\u590D\u5207\u6362\u9884\u8BBE", 409);
+        const value = {
+          sessionId: previous.sessionId,
+          ...preset === void 0 ? {} : { agentPreset: preset }
+        };
+        this.store.bind(value.sessionId, { personaId: receipt.personaId, locked: true });
+        receipt.resolved = value;
+        this.save(requestId, receipt);
+        if (receipt.complete && !workspace.sessionIds.includes(value.sessionId))
+          throw new MemoryError("\u539F\u4F1A\u8BDD\u5DF2\u79FB\u51FA\u8FD9\u4E2A\u5DE5\u4F5C\u533A\uFF0C\u8BF7\u4ECE\u4EBA\u683C\u76EE\u5F55\u6253\u5F00\uFF1B\u672A\u81EA\u52A8\u79FB\u56DE", 409);
+        try {
+          if (!workspace.sessionIds.includes(value.sessionId)) await workspace.attachSession(value.sessionId);
+        } catch (error62) {
+          return this.attachmentFailure(value.sessionId, workspace.id, error62);
+        }
+        receipt.complete = true;
+        this.save(requestId, receipt);
+        return { ok: true, value };
+      }
+      receipt.target = previous.sessionId;
+    }
+    const attempt = (kind, value) => {
+      this.assertPersona(receipt.personaId);
+      if (projectKey(value.cwd) !== projectKey(receipt.cwd)) throw new MemoryError("\u539F\u751F\u521B\u5EFA\u76EE\u5F55\u5DF2\u53D8\u5316", 409);
+      if (kind === "reuse" && !this.owned(value.sessionId, receipt.personaId)) return false;
+      receipt.attempt = { kind, sessionId: value.sessionId, agentPreset: value.agentPreset };
+      this.save(requestId, receipt);
+      this.store.bind(value.sessionId, {
+        personaId: receipt.personaId,
+        locked: true,
+        ...kind === "create" ? { pending: true, creationWorkspaceId: workspace.id } : {}
+      });
+      return true;
+    };
+    const result = await controller.createForPersona(
+      {
+        sessionId: receipt.target,
+        workspaceId: workspace.id,
+        ...receipt.requestedPreset === void 0 ? {} : { agentPreset: receipt.requestedPreset }
+      },
+      {
+        reusable: (id) => this.owned(id, receipt.personaId),
+        beforeReuse: (value) => attempt("reuse", value),
+        beforeCreate: (value) => {
+          attempt("create", value);
+        },
+        resolved: (value) => {
+          if (!this.owned(value.sessionId, receipt.personaId, true))
+            throw new MemoryError("\u521B\u5EFA\u7ED3\u679C\u7684\u4EBA\u683C\u4E0D\u5339\u914D", 409);
+          this.store.bind(value.sessionId, { personaId: receipt.personaId, locked: true });
+          receipt.resolved = { sessionId: value.sessionId, agentPreset: value.agentPreset };
+          this.save(requestId, receipt);
+        }
+      }
+    );
+    if (result.ok) {
+      receipt.complete = true;
+      this.save(requestId, receipt);
+    }
+    return result;
+  }
+  assertPersona(id) {
+    if (!this.store.read().personas.some((p) => p.id === id && !p.archived))
+      throw new MemoryError("\u4EBA\u683C\u4E0D\u5B58\u5728\u6216\u5DF2\u5F52\u6863\uFF0C\u8BF7\u91CD\u65B0\u9009\u62E9", 409);
+  }
+  owned(id, personaId, pending = false, bindings) {
+    const b = (bindings ?? this.store.read().bindings)[id];
+    return !isInternalSession(id) && !b?.channel && !b?.purpose && (pending || !b?.pending) && (b?.personaId ?? "default") === personaId;
+  }
+  attachmentFailure(sessionId, workspaceId, error62) {
+    return {
+      ok: false,
+      error: {
+        code: "session/workspace-attach-failed",
+        message: "\u4F1A\u8BDD\u5DF2\u521B\u5EFA\uFF0C\u4F46\u672A\u80FD\u52A0\u5165\u5DE5\u4F5C\u533A\uFF1A" + String(error62),
+        details: { sessionId, workspaceId }
+      }
+    };
+  }
+};
 
 // packages/dsh-px-memory/src/segment-runtime.ts
 import { randomUUID as randomUUID5, createHash as createHash9 } from "node:crypto";
@@ -24607,15 +24796,15 @@ async function summarizeSegment(host, record2, source, allowedSeqs, signal) {
 }
 
 // packages/dsh-px-memory/src/segment-store.ts
-import { DatabaseSync as DatabaseSync3 } from "node:sqlite";
-import { mkdirSync as mkdirSync6 } from "node:fs";
-import { dirname as dirname5 } from "node:path";
+import { DatabaseSync as DatabaseSync4 } from "node:sqlite";
+import { mkdirSync as mkdirSync7 } from "node:fs";
+import { dirname as dirname6 } from "node:path";
 var SegmentStore = class {
   db;
   closed = false;
   constructor(path) {
-    mkdirSync6(dirname5(path), { recursive: true });
-    this.db = new DatabaseSync3(path);
+    mkdirSync7(dirname6(path), { recursive: true });
+    this.db = new DatabaseSync4(path);
     try {
       this.db.exec("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=3000;");
       const version2 = this.db.prepare("PRAGMA user_version").get().user_version;
@@ -25397,7 +25586,14 @@ function apply(ctx) {
     version: 1,
     scope: (agent, tool) => nativeHistoryScope(store, agent, tool)
   });
-  ctx.effect(() => registerPersonaHub(ctx, store), "memory: persona workspace API");
+  ctx.effect(() => {
+    const navigation = new PersonaNavigation(store, join5(root, "storages", name, "navigation.sqlite"));
+    const off = registerPersonaHub(ctx, store, navigation);
+    return () => {
+      off();
+      navigation.close();
+    };
+  }, "memory: persona workspace API");
   const channelBindings = /* @__PURE__ */ new WeakMap();
   const bindingFor = (agent) => {
     if (!agent) return;

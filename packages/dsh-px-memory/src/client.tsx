@@ -8,6 +8,7 @@ import { KnowledgePanel } from './knowledge-panel'
 import { registerMnemonKnowledgePage } from './mnemon-page'
 import { registerMnemonSkillNavigation } from './mnemon-skill-navigation'
 import { registerMemoryWorkspace } from './memory-workspace'
+import { registerPersonaNavigationClient } from './persona-navigation-client'
 import { createDraftRegistry } from '../../shared/draft-store'
 import {
   parsePersonaExpression,
@@ -907,6 +908,7 @@ export function apply(ctx: any): void {
     ['slots', 'layout', 'sessions', 'uiWorkspace', 'sidebarRight', 'sidebarRightTabs'],
     (host: any) =>
       host.effect(() => {
+        const personaNavigation = registerPersonaNavigationClient(host)
         const workspace = registerMemoryWorkspace(host, MemoryPanel)
         const nativePage = registerMnemonKnowledgePage(host, workspace.open)
         const skillNavigation = registerMnemonSkillNavigation(host, workspace.openSkill)
@@ -923,6 +925,7 @@ export function apply(ctx: any): void {
           )
         })
         return () => {
+          personaNavigation()
           sidebar()
           nativePage()
           skillNavigation()
