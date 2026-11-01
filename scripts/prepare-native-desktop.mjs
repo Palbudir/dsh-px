@@ -9,6 +9,7 @@ import { releaseAssetNames } from './release-version.mjs'
 import { nsisAppGuid } from './nsis-guid.mjs'
 import { validDistribution, compositionMembers, componentFile } from '../src/shared/distribution.ts'
 import { patchNativeModelGuard, patchNativeCompactionBudget } from '../src/shared/native-model-guard.ts'
+import { patchNativeSkillCatalog } from '../src/shared/native-skill-catalog.ts'
 import { DESKTOP_PNPM_ENTRY } from '../src/shared/native-desktop-runtime.ts'
 import { applyRuntimeDependencyOverrides } from './native-runtime-dependencies.mjs'
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -173,7 +174,18 @@ writeFileSync(
   join(pxRuntime, compactionRelative),
   patchNativeCompactionBudget(readFileSync(join(nativeRuntime, compactionRelative), 'utf8'))
 )
-for (const path of [hostRelative, helperRelative, modelControllerRelative, compactionRelative]) {
+const skillClientRelative = 'node_modules/@deepseek-ai/dsh-client-ui-skill/lib/client.js'
+writeFileSync(
+  join(pxRuntime, skillClientRelative),
+  patchNativeSkillCatalog(readFileSync(join(nativeRuntime, skillClientRelative), 'utf8'))
+)
+for (const path of [
+  hostRelative,
+  helperRelative,
+  modelControllerRelative,
+  compactionRelative,
+  skillClientRelative
+]) {
   const bytes = readFileSync(join(pxRuntime, path)),
     record = {
       path,

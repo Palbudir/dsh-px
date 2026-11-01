@@ -66,6 +66,8 @@ IM 保留原生机器人配置与渠道管理入口。机器人 App ID、密钥�
 
 taskflow 的 `task_state` 读取原生权威状态；冷读取只使用原生投影恢复与只读存储，不唤醒 Agent。账本保存时的 Goal/Team 引用由宿主校验，并与当前状态分开。`task_wait` 只观察当前会话的原生 Job、Team 变化和插话，最长等待 60 秒；它不读取作业输出、不唤醒成员、不启动或取消工作。电脑驱动使用可取消的子进程；异常后旧观察失效，不自动重发动作。0.8 代际升级到 DSH 0.2.1-rc.3，并复验模型选择及压缩预算覆盖层；先更新 Desktop，再使用同代际 Pack 独立更新。
 
+Desktop 构建覆盖层还修复原生 Skill 菜单的永久目录缓存：查询候选和打开技能引用时重新使用原生 `skills.list`，合并同一会话正在进行的请求，只在名称变化时通知词表；不会后台轮询或改写调用权限。禁用仍由宿主检查。该修复位于 [native-skill-catalog.ts](../src/shared/native-skill-catalog.ts)，校验锁定版本的完整行为函数并更新运行时文件摘要；CSS 构建路径差异不影响行为校验。连接该宿主的 Web 页面使用相同客户端模块；仅在未修改的官方宿主安装 Pack 不会替换它的原生 UI 文件。
+
 ## QQ 兼容成员
 
 QQ 社区成员使用独立包身份 `dsh-onebot-qq`，从上游 0.9.6 派生为 0.9.6-px.4。构建首先核对固定 npm SRI 和文件摘要，再应用可审查的兼容修改；发行验收重新生成派生结果并逐文件对照。上游名称、许可与来源保留，不能把派生版本称为未修改的社区原包。原始来源在 [qq-community.json](../config/qq-community.json)，修改在 [qq-compatibility.ts](../src/shared/qq-compatibility.ts)。
