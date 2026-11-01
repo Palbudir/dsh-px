@@ -93,6 +93,11 @@ export function SegmentPanel({ url, visible }: { url: string; visible: boolean }
           {view.settings.inheritedNativeAutoOff && (
             <p className="px-muted">原生自动压缩已关闭，因此暂不自动整理。可单独为本会话开启上方开关。</p>
           )}
+          {view.settings.inheritedNativeAutoUnknown && (
+            <p className="px-muted">
+              尚未读取此会话的自动压缩设置，开始会话后会重新核对；也可单独开启后台整理。
+            </p>
+          )}
           {!view.ready && <p role="status">后台提交服务暂未就绪，原生压缩仍可继续。</p>}
           {view.problem && <p role="status">{view.problem}</p>}
           <div className="px-actions">

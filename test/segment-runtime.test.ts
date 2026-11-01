@@ -222,6 +222,54 @@ test('explicit native auto-off is inherited until the user enables background pr
   assert.equal(f.runtime.snapshot(a.agent.id).settings.enabled, true, 'saved opt-in survives restart')
 })
 
+test('background defaults use the owning preset backend and do not guess when a cold backend is unavailable', async (t) => {
+  const f = await fixture(t),
+    enabled = f.create('preset-auto-on', false, false, false),
+    disabled = f.create('preset-auto-off', false, false, false),
+    isolated = f.app.isolate('compaction'),
+    fiber = isolated.plugin(BasicCompactionEngine, { auto: true })
+  await fiber.await()
+  const release = f.app.provide('agentPresets', {
+    serviceFor: (agent: any, name: string) =>
+      name === 'compaction' && agent === enabled.agent ? isolated.get('compaction') : undefined
+  })
+  try {
+    assert.equal(f.app.get('compaction').config.auto, false)
+    assert.equal(f.runtime.snapshot(enabled.agent.id).settings.enabled, true, 'preset overrides host backend')
+    assert.equal(f.runtime.snapshot(disabled.agent.id).settings.enabled, false)
+    assert.equal(f.runtime.snapshot(disabled.agent.id).settings.inheritedNativeAutoOff, true)
+    await f.runtime.boundary(disabled.agent, new AbortController().signal)
+    assert.equal(f.pending.length, 0)
+    await f.runtime.boundary(enabled.agent, new AbortController().signal)
+    await until(() => f.pending.length === 1, 'enabled preset prepares')
+    f.pending[0].release()
+    await until(() => f.runtime.snapshot(enabled.agent.id).records[0].phase === 'ready', 'preset prepared')
+    const coldScope = f.app.isolate('compaction'),
+      cold = new SegmentRuntime(
+        coldScope,
+        f.identities,
+        f.bank,
+        f.history,
+        join(f.root, 'cold-segments.sqlite')
+      )
+    try {
+      assert.equal(cold.snapshot('unloaded-session').settings.enabled, false)
+      assert.equal(cold.snapshot('unloaded-session').settings.inheritedNativeAutoUnknown, true)
+      cold.configure('unloaded-session', 0, true)
+      assert.equal(
+        cold.snapshot('unloaded-session').settings.enabled,
+        true,
+        'explicit choice requires no agent wake'
+      )
+    } finally {
+      await cold.dispose()
+    }
+  } finally {
+    await release()
+    await fiber.dispose()
+  }
+})
+
 test(
   'native Job overlaps main progress and commits at a later boundary, with separate explicit memory adoption',
   { timeout: 20000 },

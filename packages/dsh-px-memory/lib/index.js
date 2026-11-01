@@ -25048,9 +25048,15 @@ var SegmentRuntime = class {
     });
   }
   settings(sessionId) {
-    const saved = this.store.settings(sessionId);
-    const inheritedNativeAutoOff = saved.revision === 0 && service(this.host, "compaction")?.config?.auto === false;
-    return { ...saved, enabled: saved.enabled && !inheritedNativeAutoOff, inheritedNativeAutoOff };
+    const saved = this.store.settings(sessionId), nativeAuto = scopedService(this.host, { sessionId }, "compaction")?.config?.auto;
+    const inheritedNativeAutoOff = saved.revision === 0 && nativeAuto === false;
+    const inheritedNativeAutoUnknown = saved.revision === 0 && typeof nativeAuto !== "boolean";
+    return {
+      ...saved,
+      enabled: saved.enabled && !inheritedNativeAutoOff && !inheritedNativeAutoUnknown,
+      inheritedNativeAutoOff,
+      inheritedNativeAutoUnknown
+    };
   }
   route(agent) {
     const pending = service(this.host, "sessionProjections")?.stateOf(

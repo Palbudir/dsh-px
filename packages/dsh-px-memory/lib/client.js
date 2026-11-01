@@ -3165,6 +3165,7 @@ function SegmentPanel({ url, visible }) {
         "\u540E\u53F0\u6574\u7406\u8F83\u65E9\u5BF9\u8BDD"
       ] }),
       view.settings.inheritedNativeAutoOff && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { className: "px-muted", children: "\u539F\u751F\u81EA\u52A8\u538B\u7F29\u5DF2\u5173\u95ED\uFF0C\u56E0\u6B64\u6682\u4E0D\u81EA\u52A8\u6574\u7406\u3002\u53EF\u5355\u72EC\u4E3A\u672C\u4F1A\u8BDD\u5F00\u542F\u4E0A\u65B9\u5F00\u5173\u3002" }),
+      view.settings.inheritedNativeAutoUnknown && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { className: "px-muted", children: "\u5C1A\u672A\u8BFB\u53D6\u6B64\u4F1A\u8BDD\u7684\u81EA\u52A8\u538B\u7F29\u8BBE\u7F6E\uFF0C\u5F00\u59CB\u4F1A\u8BDD\u540E\u4F1A\u91CD\u65B0\u6838\u5BF9\uFF1B\u4E5F\u53EF\u5355\u72EC\u5F00\u542F\u540E\u53F0\u6574\u7406\u3002" }),
       !view.ready && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { role: "status", children: "\u540E\u53F0\u63D0\u4EA4\u670D\u52A1\u6682\u672A\u5C31\u7EEA\uFF0C\u539F\u751F\u538B\u7F29\u4ECD\u53EF\u7EE7\u7EED\u3002" }),
       view.problem && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { role: "status", children: view.problem }),
       /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("div", { className: "px-actions", children: [

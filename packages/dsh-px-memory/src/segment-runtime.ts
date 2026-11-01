@@ -10,6 +10,7 @@ import {
 } from './segment-context'
 import { summarizeSegment, SegmentSummaryError } from './segment-summarizer'
 import { SegmentStore, type SegmentRecord } from './segment-store'
+import { scopedService } from './native-resources'
 import type { KnowledgeBank, KnowledgeCaller } from './knowledge'
 
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
@@ -52,10 +53,16 @@ export class SegmentRuntime {
     }))
   }
   private settings(sessionId: string) {
-    const saved = this.store.settings(sessionId)
-    const inheritedNativeAutoOff =
-      saved.revision === 0 && service(this.host, 'compaction')?.config?.auto === false
-    return { ...saved, enabled: saved.enabled && !inheritedNativeAutoOff, inheritedNativeAutoOff }
+    const saved = this.store.settings(sessionId),
+      nativeAuto = scopedService(this.host, { sessionId }, 'compaction')?.config?.auto
+    const inheritedNativeAutoOff = saved.revision === 0 && nativeAuto === false
+    const inheritedNativeAutoUnknown = saved.revision === 0 && typeof nativeAuto !== 'boolean'
+    return {
+      ...saved,
+      enabled: saved.enabled && !inheritedNativeAutoOff && !inheritedNativeAutoUnknown,
+      inheritedNativeAutoOff,
+      inheritedNativeAutoUnknown
+    }
   }
   private route(agent: any) {
     const pending = service(this.host, 'sessionProjections')?.stateOf(
