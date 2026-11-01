@@ -1,9 +1,10 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { requestJson } from '../../shared/client-http'
 import { controlStyle, cardStyle } from '../../shared/ui'
 import { createDraftRegistry } from '../../shared/draft-store'
 import { ExperiencePanel } from './experience-panel'
 import { MemoryFeedbackPanel } from './memory-feedback-panel'
+import type { SkillPageRequest } from './workspace-navigation'
 const drafts = createDraftRegistry(64)
 const newest = (rows: any[]) =>
   [...rows].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))
@@ -17,11 +18,13 @@ const scopes = [
 export function KnowledgePanel({
   sessionId,
   personaId,
-  project
+  project,
+  skillRequest
 }: {
   sessionId: string
   personaId: string
   project: string | null
+  skillRequest?: SkillPageRequest
 }): unknown {
   const initial = {
     editing: false,
@@ -69,7 +72,7 @@ export function KnowledgePanel({
     [paths, setPaths] = useState(saved.paths),
     [editRevision, setEditRevision] = useState(saved.revision),
     [destination, setDestination] = useState('project')
-  const [tab, setTab] = useState(saved.tab),
+  const [tab, setTab] = useState(saved.editing ? saved.tab : skillRequest ? 'skills' : saved.tab),
     [skillDirectories, setSkillDirectories] = useState<any>(saved.skillDirectories),
     [skills, setSkills] = useState<any[]>([]),
     [skill, setSkill] = useState<any>(saved.skill),
@@ -125,6 +128,7 @@ export function KnowledgePanel({
       signal
     })
   useEffect(() => {
+    if (tab !== 'knowledge') return
     const ac = new AbortController()
     setCatalog(null)
     setRows([])
@@ -144,7 +148,7 @@ export function KnowledgePanel({
         if (!ac.signal.aborted) setError(String(e.message))
       })
     return () => ac.abort()
-  }, [url, scope])
+  }, [url, scope, tab])
   const run = async (action: () => Promise<void>) => {
     setBusy(true)
     setError('')
@@ -193,6 +197,18 @@ export function KnowledgePanel({
     )
     setEditing(false)
   }
+  const handledSkill = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    if (!skillRequest || skillRequest.serial === handledSkill.current || editing || busy) return
+    handledSkill.current = skillRequest.serial
+    void run(async () => {
+      setTab('skills')
+      const value = await call('skills', { action: 'list' })
+      setSkills(value.skills)
+      setSkillDirectories(value.directories)
+      await readSkill(skillRequest.name)
+    })
+  }, [skillRequest?.serial, editing, busy])
   return (
     <section>
       <div className="px-actions">
@@ -216,6 +232,9 @@ export function KnowledgePanel({
       </div>
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
+      {editing && skillRequest && skillRequest.serial !== handledSkill.current && (
+        <p role="status">已有未保存的知识或技能草稿。保存或取消后，再打开技能 {skillRequest.name}。</p>
+      )}
       {editing && (
         <p role="status" className="px-muted">
           编辑草稿保留在当前窗口。返回或切换会话不会自动提交；保存仍检查原版本，避免覆盖后来修改。

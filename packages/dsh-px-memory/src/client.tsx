@@ -6,6 +6,7 @@ import type { Persona, MemoryEntry, SessionBinding } from './store'
 import { HistoryPanel } from './history-panel'
 import { KnowledgePanel } from './knowledge-panel'
 import { registerMnemonKnowledgePage } from './mnemon-page'
+import { registerMnemonSkillNavigation } from './mnemon-skill-navigation'
 import { registerMemoryWorkspace } from './memory-workspace'
 import { createDraftRegistry } from '../../shared/draft-store'
 import {
@@ -17,6 +18,7 @@ import { PersonaExpressionEditor } from '../../shared/persona-expression-editor'
 import { ChannelNotesPanel } from './channel-notes-panel'
 import { SegmentPanel } from './segment-panel'
 import { MemoryFeedbackPanel } from './memory-feedback-panel'
+import type { SkillPageRequest } from './workspace-navigation'
 
 const personaDrafts = createDraftRegistry(64)
 
@@ -35,7 +37,8 @@ export function MemoryPanel({
   openKnowledge,
   openSession,
   openSettings,
-  openTasks
+  openTasks,
+  skillRequest
 }: {
   sessionId: string
   visible: boolean
@@ -43,6 +46,7 @@ export function MemoryPanel({
   openSession: (id: string) => void
   openSettings: () => void
   openTasks: () => void
+  skillRequest?: SkillPageRequest
 }): unknown {
   const draft = useMemo(() => {
     let storage
@@ -125,6 +129,12 @@ export function MemoryPanel({
       enabled !== view.template.memoryEnabled)
   )
   const dirty = !!note || !!newName || configDirty || (restoring.current && !!saved?.configDirty)
+  const handledSkill = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    if (!skillRequest || handledSkill.current === skillRequest.serial || dirty) return
+    handledSkill.current = skillRequest.serial
+    setTab('knowledge')
+  }, [skillRequest?.serial, dirty])
   const identityChanged = !!(view && draftPersona && draftPersona !== view.persona.id)
   const beginEdit = () => {
     if (draftRevision === undefined && view) {
@@ -375,6 +385,9 @@ export function MemoryPanel({
 
         {error && <p role="alert">{error} </p>}
         {loadError && <p role="alert">{loadError}</p>}
+        {dirty && skillRequest && handledSkill.current !== skillRequest.serial && (
+          <p role="status">先保存或取消当前人格编辑，再打开技能 {skillRequest.name}。草稿仍保留。</p>
+        )}
         {conflict && (
           <button disabled={busy} onClick={discardDraft}>
             放弃草稿并读取最新
@@ -401,6 +414,7 @@ export function MemoryPanel({
                 sessionId={sessionId}
                 personaId={view.persona.id}
                 project={view.project}
+                skillRequest={skillRequest}
               />
             )}
             <section hidden={tab !== 'advanced'}>
@@ -895,6 +909,7 @@ export function apply(ctx: any): void {
       host.effect(() => {
         const workspace = registerMemoryWorkspace(host, MemoryPanel)
         const nativePage = registerMnemonKnowledgePage(host, workspace.open)
+        const skillNavigation = registerMnemonSkillNavigation(host, workspace.openSkill)
         const sidebar = createNativeSidebar(host).registerTab({
           id: 'dsh-px-memory',
           title: '记忆与知识',
@@ -910,6 +925,7 @@ export function apply(ctx: any): void {
         return () => {
           sidebar()
           nativePage()
+          skillNavigation()
           workspace.dispose()
         }
       }, 'memory: unified workspace')

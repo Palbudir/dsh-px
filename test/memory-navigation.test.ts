@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { SlotCore } from '@deepseek-ai/dsh-client-ui-slots'
 import { memoryNavigation } from '../packages/dsh-px-memory/src/workspace-navigation'
 
-function setup(initiallyDeclared = true) {
+function setup(initiallyDeclared = true, events?: EventTarget) {
   const core = new SlotCore() as any
   const native = () => 'native',
     px = () => 'px',
@@ -66,7 +66,7 @@ function setup(initiallyDeclared = true) {
       }
     }
   }
-  const navigation = memoryNavigation(host, px, icon)
+  const navigation = memoryNavigation(host, px, icon, events)
   return {
     core,
     host,
@@ -140,5 +140,39 @@ test('removing the native owner from another window while advanced is open resto
   f.offNative()
   await Promise.resolve()
   assert.equal(f.core.entriesOfSlot('main')[0].component, f.px)
+  f.navigation.dispose()
+})
+
+test('native detail anchors retain their source seed and reach the community view, while ordinary navigation stays unified', () => {
+  const events = new EventTarget(),
+    f = setup(true, events)
+  const detail = { page: 'skills/library', seed: 'name:private-procedure', sessionId: 'a' }
+  events.dispatchEvent(new CustomEvent('mnemon:anchor', { detail }))
+  assert.equal(f.core.entriesOfSlot('main')[0].component, f.native)
+  assert.deepEqual(detail, { page: 'skills/library', seed: 'name:private-procedure', sessionId: 'a' })
+  f.host.layout.selectPanel(null)
+  f.navigation.open()
+  assert.equal(f.core.entriesOfSlot('main')[0].component, f.px)
+  events.dispatchEvent(new CustomEvent('mnemon:anchor', { detail: { page: null } }))
+  assert.equal(f.core.entriesOfSlot('main')[0].component, f.px)
+  f.offNative()
+  assert.doesNotThrow(() => events.dispatchEvent(new CustomEvent('mnemon:anchor', { detail })))
+  f.navigation.dispose()
+})
+
+test('an independent native Skills panel retains ownership of its detail anchors', () => {
+  const events = new EventTarget(),
+    f = setup(true, events)
+  const off = f.core.register({ name: 'main', key: 'mnemon-skills' }, () => null)
+  f.host.layout.selectPanel('mnemon-skills')
+  events.dispatchEvent(
+    new CustomEvent('mnemon:anchor', { detail: { page: 'skills/library', seed: 'name:x' } })
+  )
+  assert.equal(f.host.layout.panelInfo.getSnapshot().activePanelId, 'mnemon-skills')
+  assert.equal(
+    f.core.entriesOfSlot('main').find((entry: any) => entry.options.key === 'mnemon').component,
+    f.px
+  )
+  off()
   f.navigation.dispose()
 })
