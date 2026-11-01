@@ -67,6 +67,9 @@ test('persona hub reads native summaries without waking agents or exposing anoth
     (await personaHubView(host, store, 'default')).sessions.map((row) => row.id),
     ['legacy']
   )
+  assert.equal((await personaHubView(host, store, undefined, 0, 'b-private')).selectedPersonaId, b.id)
+  assert.equal((await personaHubView(host, store, a.id, 0, 'b-private')).selectedPersonaId, a.id)
+  assert.equal((await personaHubView(host, store, undefined, 0, 'analysis')).selectedPersonaId, 'default')
   assert.deepEqual(store.read(), original)
 })
 

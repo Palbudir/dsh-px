@@ -3,15 +3,35 @@ import { requestJson } from '../../shared/client-http'
 import type { PersonaHubView as HubView } from './persona-hub'
 import { PersonaResourcesPanel } from './persona-resources-panel'
 
+const selectionKey = 'dsh-px-persona-directory'
+const savedPersona = () => {
+  try {
+    const value = sessionStorage.getItem(selectionKey)
+    return value && /^(?:default|[a-f0-9-]{36})$/.test(value) ? value : undefined
+  } catch {
+    return undefined
+  }
+}
+const rememberPersona = (value?: string) => {
+  try {
+    if (value) sessionStorage.setItem(selectionKey, value)
+    else sessionStorage.removeItem(selectionKey)
+  } catch {
+    /* Navigation still works when this browser forbids local persistence. */
+  }
+}
+
 /** Switching this directory never rebinds native sessions or changes another window's selection. */
 export function PersonaHubPanel({
   openSession,
-  titles
+  titles,
+  currentSessionId
 }: {
   openSession: (id: string) => void
   titles: Record<string, any>
+  currentSessionId?: string
 }) {
-  const [personaId, setPersonaId] = useState('default'),
+  const [personaId, setPersonaId] = useState<string | undefined>(savedPersona),
     [workspaceId, setWorkspaceId] = useState('')
   const [view, setView] = useState<HubView | null>(null),
     [error, setError] = useState('')
@@ -30,7 +50,10 @@ export function PersonaHubPanel({
     const ac = new AbortController()
     setError('')
     setView(null)
-    void requestJson<HubView>('/dsh-px-personas?personaId=' + encodeURIComponent(personaId), {
+    const query = new URLSearchParams()
+    if (personaId) query.set('personaId', personaId)
+    if (currentSessionId) query.set('currentSessionId', currentSessionId)
+    void requestJson<HubView>('/dsh-px-personas?' + query, {
       signal: ac.signal
     })
       .then((data) => {
@@ -41,10 +64,18 @@ export function PersonaHubPanel({
         )
       })
       .catch((error) => {
-        if (!ac.signal.aborted) setError(error.message)
+        if (ac.signal.aborted) return
+        if (personaId && error.status === 404) {
+          rememberPersona()
+          setPersonaId(undefined)
+        } else setError(error.message)
       })
     return () => ac.abort()
-  }, [personaId, refresh])
+  }, [personaId, refresh, currentSessionId])
+  const choosePersona = (value: string) => {
+    rememberPersona(value)
+    setPersonaId(value)
+  }
   const run = async (work: () => Promise<void>) => {
     setBusy(true)
     setError('')
@@ -62,7 +93,8 @@ export function PersonaHubPanel({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input)
     })
-  const selected = view?.personas.find((p) => p.id === personaId)
+  const selectedId = view?.selectedPersonaId ?? personaId ?? 'default'
+  const selected = view?.personas.find((p) => p.id === selectedId)
   return (
     <section className="px-ui" style={{ padding: 20, overflow: 'auto', minHeight: 0 }}>
       <h2>人格与会话</h2>
@@ -78,9 +110,9 @@ export function PersonaHubPanel({
               查看人格{' '}
               <select
                 aria-label="查看人格"
-                value={personaId}
+                value={selectedId}
                 disabled={busy}
-                onChange={(event: any) => setPersonaId(event.target.value)}
+                onChange={(event: any) => choosePersona(event.target.value)}
               >
                 {view.personas.map((persona) => (
                   <option key={persona.id} value={persona.id}>
@@ -113,7 +145,7 @@ export function PersonaHubPanel({
                   const created = await post<{ id: string }>({ type: 'create-persona', name: newName })
                   if (alive.current) {
                     setNewName('')
-                    setPersonaId(created.id)
+                    choosePersona(created.id)
                   }
                 })
               }
@@ -142,11 +174,11 @@ export function PersonaHubPanel({
               disabled={busy || !workspaceId || !!selected?.archived}
               onClick={() =>
                 void run(async () => {
-                  const key = JSON.stringify([personaId, workspaceId])
+                  const key = JSON.stringify([selectedId, workspaceId])
                   if (request.current?.key !== key) request.current = { key, id: crypto.randomUUID() }
                   const created = await post<{ createdSessionId: string }>({
                     type: 'create-session',
-                    personaId,
+                    personaId: selectedId,
                     workspaceId,
                     requestId: request.current.id
                   })
@@ -164,7 +196,7 @@ export function PersonaHubPanel({
           {!selected?.archived && (
             <details style={{ marginBottom: 16 }}>
               <summary>可用资源</summary>
-              <PersonaResourcesPanel key={personaId} personaId={personaId} />
+              <PersonaResourcesPanel key={selectedId} personaId={selectedId} />
             </details>
           )}
           {!view.sessions.length && <p>这个人格还没有已保存的普通会话。</p>}
@@ -184,7 +216,7 @@ export function PersonaHubPanel({
               onClick={() =>
                 void run(async () => {
                   const more = await requestJson<HubView>(
-                    `/dsh-px-personas?personaId=${encodeURIComponent(personaId)}&offset=${view.nextOffset}`
+                    `/dsh-px-personas?personaId=${encodeURIComponent(selectedId)}&offset=${view.nextOffset}`
                   )
                   if (alive.current)
                     setView((old) =>
@@ -211,7 +243,7 @@ export function PersonaHubPanel({
       {error && !view && (
         <button
           onClick={() => {
-            setPersonaId('default')
+            choosePersona('default')
             setRefresh((v) => v + 1)
           }}
         >

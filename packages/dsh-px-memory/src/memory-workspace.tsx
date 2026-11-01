@@ -32,6 +32,7 @@ export function registerMemoryWorkspace(host: any, Panel: any) {
         </div>
         {hub || !id ? (
           <PersonaHubPanel
+            currentSessionId={id ?? undefined}
             titles={sessions.byId}
             openSession={(target: string) => {
               host.uiWorkspace.openSession(target)

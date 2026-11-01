@@ -24081,9 +24081,9 @@ function resourceToolCatalog(ctx) {
 }
 
 // packages/dsh-px-memory/src/persona-hub.ts
-async function personaHubView(host, store, personaId, offset = 0) {
+async function personaHubView(host, store, personaId, offset = 0, currentSessionId) {
   if (!Number.isSafeInteger(offset) || offset < 0 || offset > 2e4) throw new MemoryError("\u5206\u9875\u4F4D\u7F6E\u65E0\u6548");
-  const state = store.read(), selected = personaId ?? "default";
+  const state = store.read(), current = currentSessionId && !isInternalSession(currentSessionId) ? state.bindings[currentSessionId] : void 0, selected = personaId ?? (current?.purpose || current?.pending ? void 0 : current?.personaId) ?? "default";
   if (!state.personas.some((p) => p.id === selected)) throw new MemoryError("\u4EBA\u683C\u4E0D\u5B58\u5728", 404);
   const controller = service(host, "sessionController");
   if (!controller?.list) throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u76EE\u5F55\u4E0D\u53EF\u7528", 503);
@@ -24184,7 +24184,8 @@ function registerPersonaHub(ctx, store) {
                 host,
                 store,
                 query.get("personaId") ?? void 0,
-                Number(query.get("offset") ?? 0)
+                Number(query.get("offset") ?? 0),
+                query.get("currentSessionId") ?? void 0
               )
             );
           }

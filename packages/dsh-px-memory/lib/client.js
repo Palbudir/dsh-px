@@ -1959,11 +1959,28 @@ function PersonaResourcesPanel({ personaId }) {
 
 // packages/dsh-px-memory/src/persona-hub-panel.tsx
 var import_jsx_runtime9 = require("react/jsx-runtime");
+var selectionKey = "dsh-px-persona-directory";
+var savedPersona = () => {
+  try {
+    const value = sessionStorage.getItem(selectionKey);
+    return value && /^(?:default|[a-f0-9-]{36})$/.test(value) ? value : void 0;
+  } catch {
+    return void 0;
+  }
+};
+var rememberPersona = (value) => {
+  try {
+    if (value) sessionStorage.setItem(selectionKey, value);
+    else sessionStorage.removeItem(selectionKey);
+  } catch {
+  }
+};
 function PersonaHubPanel({
   openSession,
-  titles
+  titles,
+  currentSessionId
 }) {
-  const [personaId, setPersonaId] = (0, import_react8.useState)("default"), [workspaceId, setWorkspaceId] = (0, import_react8.useState)("");
+  const [personaId, setPersonaId] = (0, import_react8.useState)(savedPersona), [workspaceId, setWorkspaceId] = (0, import_react8.useState)("");
   const [view, setView] = (0, import_react8.useState)(null), [error, setError] = (0, import_react8.useState)("");
   const [busy, setBusy] = (0, import_react8.useState)(false), [newName, setNewName] = (0, import_react8.useState)(""), [refresh, setRefresh] = (0, import_react8.useState)(0);
   const request = (0, import_react8.useRef)(null);
@@ -1978,7 +1995,10 @@ function PersonaHubPanel({
     const ac = new AbortController();
     setError("");
     setView(null);
-    void requestJson("/dsh-px-personas?personaId=" + encodeURIComponent(personaId), {
+    const query = new URLSearchParams();
+    if (personaId) query.set("personaId", personaId);
+    if (currentSessionId) query.set("currentSessionId", currentSessionId);
+    void requestJson("/dsh-px-personas?" + query, {
       signal: ac.signal
     }).then((data) => {
       if (ac.signal.aborted) return;
@@ -1987,10 +2007,18 @@ function PersonaHubPanel({
         (current) => data.workspaces.some((w) => w.id === current) ? current : data.workspaces[0]?.id ?? ""
       );
     }).catch((error2) => {
-      if (!ac.signal.aborted) setError(error2.message);
+      if (ac.signal.aborted) return;
+      if (personaId && error2.status === 404) {
+        rememberPersona();
+        setPersonaId(void 0);
+      } else setError(error2.message);
     });
     return () => ac.abort();
-  }, [personaId, refresh]);
+  }, [personaId, refresh, currentSessionId]);
+  const choosePersona = (value) => {
+    rememberPersona(value);
+    setPersonaId(value);
+  };
   const run = async (work) => {
     setBusy(true);
     setError("");
@@ -2007,7 +2035,8 @@ function PersonaHubPanel({
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input)
   });
-  const selected = view?.personas.find((p) => p.id === personaId);
+  const selectedId = view?.selectedPersonaId ?? personaId ?? "default";
+  const selected = view?.personas.find((p) => p.id === selectedId);
   return /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("section", { className: "px-ui", style: { padding: 20, overflow: "auto", minHeight: 0 }, children: [
     /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("h2", { children: "\u4EBA\u683C\u4E0E\u4F1A\u8BDD" }),
     /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { className: "px-muted", children: "\u6BCF\u4E2A\u4EBA\u683C\u4F7F\u7528\u81EA\u5DF1\u7684\u4F1A\u8BDD\u3001\u8BB0\u5FC6\u548C\u79C1\u6709\u6280\u80FD\u3002\u5DF2\u5F00\u59CB\u7684\u4F1A\u8BDD\u4FDD\u7559\u539F\u8EAB\u4EFD\uFF0C\u6B63\u5728\u8FD0\u884C\u7684\u5DE5\u4F5C\u7EE7\u7EED\u3002" }),
@@ -2022,9 +2051,9 @@ function PersonaHubPanel({
             "select",
             {
               "aria-label": "\u67E5\u770B\u4EBA\u683C",
-              value: personaId,
+              value: selectedId,
               disabled: busy,
-              onChange: (event) => setPersonaId(event.target.value),
+              onChange: (event) => choosePersona(event.target.value),
               children: view.personas.map((persona) => /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("option", { value: persona.id, children: [
                 persona.name,
                 persona.archived ? "\uFF08\u5DF2\u5F52\u6863\uFF09" : "",
@@ -2061,7 +2090,7 @@ function PersonaHubPanel({
               const created = await post({ type: "create-persona", name: newName });
               if (alive.current) {
                 setNewName("");
-                setPersonaId(created.id);
+                choosePersona(created.id);
               }
             }),
             children: "\u521B\u5EFA\u72EC\u7ACB\u4EBA\u683C"
@@ -2091,11 +2120,11 @@ function PersonaHubPanel({
           {
             disabled: busy || !workspaceId || !!selected?.archived,
             onClick: () => void run(async () => {
-              const key = JSON.stringify([personaId, workspaceId]);
+              const key = JSON.stringify([selectedId, workspaceId]);
               if (request.current?.key !== key) request.current = { key, id: crypto.randomUUID() };
               const created = await post({
                 type: "create-session",
-                personaId,
+                personaId: selectedId,
                 workspaceId,
                 requestId: request.current.id
               });
@@ -2114,7 +2143,7 @@ function PersonaHubPanel({
       ] }),
       !selected?.archived && /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("details", { style: { marginBottom: 16 }, children: [
         /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("summary", { children: "\u53EF\u7528\u8D44\u6E90" }),
-        /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(PersonaResourcesPanel, { personaId }, personaId)
+        /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(PersonaResourcesPanel, { personaId: selectedId }, selectedId)
       ] }),
       !view.sessions.length && /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { children: "\u8FD9\u4E2A\u4EBA\u683C\u8FD8\u6CA1\u6709\u5DF2\u4FDD\u5B58\u7684\u666E\u901A\u4F1A\u8BDD\u3002" }),
       view.sessions.map((row) => /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("div", { className: "px-card", style: { marginTop: 8 }, children: [
@@ -2131,7 +2160,7 @@ function PersonaHubPanel({
           disabled: busy,
           onClick: () => void run(async () => {
             const more = await requestJson(
-              `/dsh-px-personas?personaId=${encodeURIComponent(personaId)}&offset=${view.nextOffset}`
+              `/dsh-px-personas?personaId=${encodeURIComponent(selectedId)}&offset=${view.nextOffset}`
             );
             if (alive.current)
               setView(
@@ -2160,7 +2189,7 @@ function PersonaHubPanel({
       "button",
       {
         onClick: () => {
-          setPersonaId("default");
+          choosePersona("default");
           setRefresh((v) => v + 1);
         },
         children: "\u8FD4\u56DE\u9ED8\u8BA4\u4EBA\u683C\u5E76\u91CD\u8BD5"
@@ -2196,6 +2225,7 @@ function registerMemoryWorkspace(host, Panel) {
           hub || !id ? /* @__PURE__ */ (0, import_jsx_runtime10.jsx)(
             PersonaHubPanel,
             {
+              currentSessionId: id ?? void 0,
               titles: sessions.byId,
               openSession: (target) => {
                 host.uiWorkspace.openSession(target);

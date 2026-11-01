@@ -27,11 +27,15 @@ export async function personaHubView(
   host: any,
   store: MemoryStore,
   personaId?: string,
-  offset = 0
+  offset = 0,
+  currentSessionId?: string
 ): Promise<PersonaHubView> {
   if (!Number.isSafeInteger(offset) || offset < 0 || offset > 20000) throw new MemoryError('分页位置无效')
   const state = store.read(),
-    selected = personaId ?? 'default'
+    current =
+      currentSessionId && !isInternalSession(currentSessionId) ? state.bindings[currentSessionId] : undefined,
+    selected =
+      personaId ?? (current?.purpose || current?.pending ? undefined : current?.personaId) ?? 'default'
   if (!state.personas.some((p) => p.id === selected)) throw new MemoryError('人格不存在', 404)
   const controller = service(host, 'sessionController')
   if (!controller?.list) throw new MemoryError('原生会话目录不可用', 503)
@@ -151,7 +155,8 @@ export function registerPersonaHub(ctx: any, store: MemoryStore): () => void {
                 host,
                 store,
                 query.get('personaId') ?? undefined,
-                Number(query.get('offset') ?? 0)
+                Number(query.get('offset') ?? 0),
+                query.get('currentSessionId') ?? undefined
               )
             )
           }
