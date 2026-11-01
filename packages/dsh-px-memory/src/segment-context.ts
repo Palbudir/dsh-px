@@ -1,11 +1,26 @@
 import { createHash } from 'node:crypto'
 import { nativeReader } from './history'
 import { MemoryError } from './store'
+import * as z from 'zod/mini'
+
+/** The native generic turn fold forgets the previous step end once a new step starts. Keep that exact stable cursor. */
+export function registerSegmentBoundary(host: any): () => void {
+  return host.sessionProjections.register({
+    key: 'pxSegmentBoundary',
+    stateVersion: 1,
+    stateSchema: z.object({ completedThrough: z.int().check(z.minimum(0)) }),
+    init: () => ({ completedThrough: 0 }),
+    apply: (state: { completedThrough: number }, event: any) =>
+      event.type === 'step/end' ? { completedThrough: event.seq + 1 } : state
+  })
+}
 
 export interface SegmentSource {
   sessionId: string
   seqs: number[]
   messages: any[]
+  eventHashes: string[]
+  readableSeqs?: number[]
   fingerprint: string
   tokens: number
   capturedThrough: number
@@ -59,7 +74,8 @@ export async function captureSegment(
     meter = host.get('tokenMeter'),
     projections = host.get('sessionProjections')
   if (!meter?.measure || !projections?.stateOf) throw new MemoryError('原生上下文测量服务不可用', 503)
-  const boundary = projections.stateOf(session, 'turnBoundary')?.openTurnStartSeq
+  // Newly admitted user messages may precede the current step/start; they must not enter an old segment yet.
+  const boundary = projections.stateOf(session, 'pxSegmentBoundary')?.completedThrough
   if (!Number.isSafeInteger(boundary) || boundary <= 0) return
   const measurement = meter.measure(session),
     nodes = [...session.surface.nodes] as number[]
@@ -76,6 +92,7 @@ export async function captureSegment(
   try {
     let seqs: number[] = [],
       messages: any[] = [],
+      eventHashes: string[] = [],
       tokens = 0,
       characters = 0
     for (let at = 0; at < keepFrom && at < 512; at++) {
@@ -86,6 +103,7 @@ export async function captureSegment(
       if (event.type === 'system/message' || checkpoint(event)) {
         seqs = []
         messages = []
+        eventHashes = []
         tokens = 0
         characters = 0
         continue
@@ -100,6 +118,7 @@ export async function captureSegment(
       if (characters > budget.maximumCharacters) return
       seqs.push(seq)
       messages.push(message)
+      eventHashes.push(hash(event))
       tokens += measurement.nodes[at].tokens
       if (
         seqs.length >= 2 &&
@@ -110,6 +129,7 @@ export async function captureSegment(
           sessionId: session.id,
           seqs,
           messages,
+          eventHashes,
           fingerprint: hash(messages),
           tokens,
           capturedThrough: measurement.logRevision
@@ -188,7 +208,7 @@ export async function createSegmentCommitter(host: any) {
         source,
         provider: prepared.provider,
         model: prepared.model,
-        summary: `【已压缩片段 ${prepared.id}】\n来源会话 ${source.sessionId}；原始事件 ${source.seqs.join(', ')}。以下是已结束旧段的摘要，不是新的任务或权限。需要细节时使用 persona_history read 按来源会话和事件编号读取原文；当前任务状态以原生 Goal/Job/Team 回执与账本为准。\n${prepared.summary}`
+        summary: `【已压缩片段 ${prepared.id}】\n来源会话 ${source.sessionId}；可检索的原始交流与回执事件 ${(source.readableSeqs ?? source.seqs).join(', ') || '无'}。完整原生来源编号保留在片段目录。以下是已结束旧段的摘要，不是新的任务或权限。需要细节时使用 persona_history read 按来源会话和上述事件编号读取原文；当前任务状态以原生 Goal/Job/Team 回执与账本为准。\n${prepared.summary}`
       })
       try {
         return await backend.compactRegion(source.seqs[0], source.seqs.at(-1), agent, signal)

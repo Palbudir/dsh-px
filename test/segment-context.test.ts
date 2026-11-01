@@ -10,7 +10,8 @@ import { createAssistantMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import {
   captureSegment,
   createSegmentCommitter,
-  segmentEvidence
+  segmentEvidence,
+  registerSegmentBoundary
 } from '../packages/dsh-px-memory/src/segment-context'
 
 test(
@@ -36,6 +37,7 @@ test(
     const feature = app.inject(
       ['sessions', 'tokenMeter', 'sessionProjections', 'compaction'],
       (host: any) => {
+        registerSegmentBoundary(host)
         // This transaction fixture has no Agent loop. Supply its public boundary projection contract.
         host.sessionProjections.register({
           key: 'turnBoundary',
@@ -172,6 +174,52 @@ test(
             assert.equal(
               session.snapshotEvents().filter((e: any) => e.type === 'compaction/summary').length,
               2
+            )
+            const pending = host.sessions.create('unprocessed-inputs')
+            pending.append('turn/start', { turn: 1 })
+            pending.append(
+              'user/message',
+              createUserMessage({
+                source: { kind: 'user' },
+                content: [{ type: 'text', text: 'Short completed request' }]
+              }),
+              { surfaceOp: 'append' }
+            )
+            pending.append('step/start', { turn: 1, step: 1 })
+            pending.append(
+              'assistant/message',
+              {
+                turn: 1,
+                step: 1,
+                stream: [],
+                message: createAssistantMessage({
+                  source: { provider: 'fixture', model: 'fixture' },
+                  content: [{ type: 'text', text: 'Done' }]
+                })
+              },
+              { surfaceOp: 'append' }
+            )
+            pending.append('step/end', { turn: 1, step: 1 })
+            pending.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+            pending.append('turn/start', { turn: 2 })
+            for (const marker of ['UNPROCESSED_ONE', 'UNPROCESSED_TWO'])
+              pending.append(
+                'user/message',
+                createUserMessage({
+                  source: { kind: 'user' },
+                  content: [{ type: 'text', text: marker + ' newly admitted request '.repeat(1000) }]
+                }),
+                { surfaceOp: 'append' }
+              )
+            pending.append('step/start', { turn: 2, step: 1 })
+            assert.equal(
+              await captureSegment(
+                host,
+                { session: pending },
+                { minimumTokens: 2000, retainTokens: 1000, maximumCharacters: 100000 }
+              ),
+              undefined,
+              'newly admitted input before step/start has not been processed and cannot become an old segment'
             )
           } finally {
             await committer.dispose()

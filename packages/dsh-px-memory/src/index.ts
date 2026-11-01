@@ -31,6 +31,9 @@ import { inspectMemorySession } from './session-context'
 import { installPersonaSkillProviders } from './persona-skills'
 import { registerPersonaHub } from './persona-hub'
 import { PersonaResourceAccess, installPersonaResourceAccess } from './persona-resources'
+import { SegmentRuntime } from './segment-runtime'
+import { registerSegmentBoundary } from './segment-context'
+import { nativeHistoryGuard, nativeHistoryScope } from './native-history-policy'
 
 export const name = 'dsh-px-memory'
 export const inject: string[] = []
@@ -45,6 +48,10 @@ export function apply(ctx: any): void {
   const root = process.env.DSH_HOME
   if (!root) throw new Error('DSH_HOME 未设置，无法保存人格与记忆')
   const store = new MemoryStore(join(root, 'storages', name, 'memory.json'))
+  ctx.provide('pxNativeHistorySubjects', {
+    version: 1,
+    scope: (agent: any, tool: string) => nativeHistoryScope(store, agent, tool)
+  })
   ctx.effect(() => registerPersonaHub(ctx, store), 'memory: persona workspace API')
   const channelBindings = new WeakMap<object, SessionBinding | null>()
   const bindingFor = (agent: Agent | undefined): SessionBinding | undefined => {
@@ -70,6 +77,9 @@ export function apply(ctx: any): void {
     host.effect(
       () =>
         host.tools.guard((exec: any) => {
+          const adapted = host.tools.get?.(exec.name, exec.agent)?.pxSubjectPolicyVersion === 1
+          const historyDenial = nativeHistoryGuard(store, exec, adapted)
+          if (historyDenial) return historyDenial
           const binding = bindingFor(exec.agent)
           if (!publicSession(binding)) return
           if (binding!.channel?.task) {
@@ -326,6 +336,51 @@ export function apply(ctx: any): void {
   )
   const history = new HistoryIndex(join(root, 'storages', name, 'history.sqlite'), store)
   ctx.effect(() => () => history.close(), 'memory: history index')
+  const segments = new SegmentRuntime(
+    ctx,
+    store,
+    knowledge,
+    history,
+    join(root, 'storages', name, 'segments.sqlite')
+  )
+  ctx.effect(() => () => segments.dispose(), 'memory: background segments')
+  ctx.effect(() => store.subscribe(() => segments.changed()), 'memory: segment identity invalidation')
+  ctx.provide('pxContextSegments', {
+    snapshot: (id: string) => segments.snapshot(id),
+    cancel: (id: string) => segments.cancel(id)
+  })
+  ctx.inject(['jobs'], (host: any) =>
+    host.effect(
+      () => host.jobs.attachController('px-context-segments'),
+      'memory: native segment job controller'
+    )
+  )
+  ctx.inject(['llm', 'tokenMeter', 'sessionProjections', 'agents'], (host: any) => {
+    host.effect(() => registerSegmentBoundary(host), 'memory: native stable segment cursor')
+    void segments
+      .ready()
+      .catch((error) => ctx.logger?.warn('后台片段提交服务未启动；原生压缩继续：%s', String(error)))
+  })
+  ctx.on(
+    'agent/pre-step',
+    async ({ agent, signal }: any, next: () => Promise<any>) => {
+      await segments.boundary(agent, signal)
+      return next()
+    },
+    { prepend: true }
+  )
+  ctx.on('agent/turn-stopping', ({ agent, signal }: any) => {
+    if (signal.aborted) segments.cancel(agent.session.id, '本轮已停止')
+    else segments.schedule(agent)
+  })
+  ctx.on('session/event', (session: any, event: any) => {
+    if (event.surfaceOp?.op === 'replace') segments.surfaceChanged(session)
+    if (
+      event.type === 'turn/end' &&
+      ['aborted', 'interrupted', 'error', 'blocked', 'max-tokens'].includes(event.data?.reason?.kind)
+    )
+      segments.cancel(session.id, '来源轮次未正常结束')
+  })
   ctx.inject(['agents'], (host: any) => {
     try {
       const live = new Set(host.agents.list().map((agent: any) => agent.id))
@@ -335,6 +390,7 @@ export function apply(ctx: any): void {
     }
   })
   ctx.on('agent/disposed', ({ agent }: { agent: Agent }) => {
+    segments.cancel(agent.session.id, '来源会话已卸载')
     try {
       store.releaseInternalBindings([agent.session.id])
     } catch (error) {
@@ -412,7 +468,7 @@ export function apply(ctx: any): void {
         required: ['action'],
         additionalProperties: false,
         properties: {
-          action: { type: 'string', enum: ['search', 'sessions', 'read'] },
+          action: { type: 'string', enum: ['search', 'sessions', 'read', 'segments'] },
           query: { type: 'string', maxLength: 256 },
           sessionId: { type: 'string' },
           seq: { type: 'integer', minimum: 0 },
@@ -433,9 +489,18 @@ export function apply(ctx: any): void {
             .personas.some(
               (persona) => persona.id === binding?.personaId && persona.memoryEnabled && !persona.archived
             )
-        if (!p.memoryEnabled && !channelMemory) throw new MemoryError('当前人格的记忆已关闭')
+        const localContext =
+          args.action === 'segments' || (args.action === 'read' && args.sessionId === run.agent.session.id)
+        if (!p.memoryEnabled && !channelMemory && !localContext)
+          throw new MemoryError('当前人格的跨会话记忆已关闭；仍可按原始事件读取本会话上下文')
+        if (args.action === 'segments')
+          return JSON.stringify({
+            source: 'native-compaction-segments',
+            sessionId: run.agent.session.id,
+            segments: segments.modelSnapshot(run.agent.session.id)
+          })
         const id = run.agent.session.id,
-          coverage = await history.refresh(ctx, id, run.signal)
+          coverage = localContext ? { currentSessionOnly: true } : await history.refresh(ctx, id, run.signal)
         const result =
           args.action === 'read'
             ? await history.read(ctx, id, validId(args.sessionId), args.seq, args.offset ?? 0, run.signal)
@@ -602,6 +667,20 @@ export function apply(ctx: any): void {
                     args.input
                   )
                   return send(200, result)
+                }
+                if (args.type === 'segments') {
+                  const input = args.input
+                  if (
+                    !input ||
+                    !['status', 'configure', 'stop', 'retry', 'accept', 'dismiss'].includes(input.action)
+                  )
+                    throw new MemoryError('后台整理操作无效')
+                  if (input.action === 'configure') segments.configure(id, input.revision, input.enabled)
+                  if (input.action === 'stop') segments.cancel(id)
+                  if (input.action === 'retry') segments.requestRetry(id)
+                  if (input.action === 'accept' || input.action === 'dismiss')
+                    await segments.decideMemory(id, validId(input.id), input.index, input.action, meta.cwd)
+                  return send(200, segments.snapshot(id))
                 }
                 if (args.type === 'conversation-memory') {
                   if (

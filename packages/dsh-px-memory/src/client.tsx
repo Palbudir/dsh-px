@@ -15,6 +15,7 @@ import {
 } from '../../shared/persona-expression'
 import { PersonaExpressionEditor } from '../../shared/persona-expression-editor'
 import { ChannelNotesPanel } from './channel-notes-panel'
+import { SegmentPanel } from './segment-panel'
 
 const personaDrafts = createDraftRegistry(64)
 
@@ -360,6 +361,7 @@ export function MemoryPanel({
               <ChannelNotesPanel key={sessionId + ':' + view.persona.id} url={url} />
             )}
             <div hidden={tab !== 'history'}>
+              <SegmentPanel key={sessionId + ':segments'} url={url} visible={visible && tab === 'history'} />
               <HistoryPanel
                 key={view.persona.id}
                 url={url}
@@ -378,8 +380,8 @@ export function MemoryPanel({
             <section hidden={tab !== 'advanced'}>
               <h3>引擎配置与诊断</h3>
               <p className="px-muted">
-                日常资料在前三个页面管理。下面保留 Mnemon
-                原生设置、项目档案及其他记忆来源；不会自动开启后台提炼或迁移资料。
+                日常资料在前面的页面管理。这里保留 Mnemon 原生设置、项目档案及其他记忆来源。
+                后台上下文整理由“经历与历史”中的开关控制；记忆建议和技能更改仍需明确采纳。
               </p>
               <div className="px-actions">
                 <button

@@ -21,6 +21,9 @@
   ],
   "license": "MIT",
   "dependencies": {
+    "@deepseek-ai/dsh-compaction": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-compaction-basic": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.3",
     "dsh-mnemon": "0.5.34",
     "dsh-mnemon-source-documents": "0.5.11",
     "yaml": "2.9.1",
