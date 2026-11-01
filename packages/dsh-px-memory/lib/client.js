@@ -944,7 +944,7 @@ function MemoryFeedbackPanel({
       " ",
       value?.strength ?? 0
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { className: "px-muted", children: "\u53CD\u9988\u53EA\u5F71\u54CD\u6B64\u4EBA\u683C\u5728\u5F53\u524D\u53D7\u4F17\u4E0B\u7684\u4F7F\u7528\uFF0C\u7ED1\u5B9A\u5F53\u524D\u4FEE\u8BA2\u3002\u91CD\u590D\u70B9\u51FB\u4E0D\u7D2F\u8BA1\u7968\u6570\u3002\u6807\u4E3A\u4E0D\u6B63\u786E\u540E\u505C\u6B62\u91C7\u7528\uFF0C\u4FEE\u6539\u6B63\u6587\u540E\u518D\u6838\u5BF9\uFF1B\u5171\u4EAB\u77E5\u8BC6\u7684\u7EA0\u6B63\u548C\u5F52\u6863\u4ECD\u901A\u8FC7\u4E0A\u65B9\u6309\u94AE\u5B8C\u6210\u3002" }),
+    /* @__PURE__ */ (0, import_jsx_runtime5.jsx)("p", { className: "px-muted", children: "\u53CD\u9988\u7ED1\u5B9A\u5F53\u524D\u4FEE\u8BA2\uFF0C\u53EA\u5F71\u54CD\u6B64\u4EBA\u683C\u5728\u5F53\u524D\u53D7\u4F17\u4E0B\u7684\u4F7F\u7528\u3002\u91CD\u590D\u70B9\u51FB\u4E0D\u7D2F\u8BA1\u7968\u6570\u3002\u6807\u4E3A\u4E0D\u6B63\u786E\u540E\u505C\u6B62\u91C7\u7528\uFF0C\u4FEE\u6539\u6B63\u6587\u540E\u518D\u6838\u5BF9\uFF1B\u6B63\u6587\u7684\u7EA0\u6B63\u548C\u9057\u5FD8\u4ECD\u901A\u8FC7\u5BF9\u5E94\u7F16\u8F91\u5165\u53E3\u5B8C\u6210\u3002" }),
     /* @__PURE__ */ (0, import_jsx_runtime5.jsxs)("label", { children: [
       "\u53CD\u9988\u539F\u56E0",
       " ",
@@ -2642,7 +2642,7 @@ function ChannelNotesPanel({ url }) {
     /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("button", { disabled: busy, onClick: () => setRefresh((value) => value + 1), children: "\u5237\u65B0\u804A\u5929\u8BB0\u5FC6" }),
     error && /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { role: "alert", children: error }),
     catalog?.total === 0 && /* @__PURE__ */ (0, import_jsx_runtime13.jsx)("p", { children: "\u6B64\u4EBA\u683C\u5728\u8FD9\u4E2A\u804A\u5929\u4E2D\u8FD8\u6CA1\u6709\u4FDD\u5B58\u7684\u8BB0\u5FC6\u3002" }),
-    (catalog?.notes ?? []).map((row) => /* @__PURE__ */ (0, import_jsx_runtime13.jsx)(
+    (catalog?.notes ?? []).map((row) => /* @__PURE__ */ (0, import_jsx_runtime13.jsxs)(
       "button",
       {
         style: { display: "block", marginTop: 8 },
@@ -2653,7 +2653,10 @@ function ChannelNotesPanel({ url }) {
           setNoteRevision(value.revision);
           setOriginal(null);
         }),
-        children: row.topic
+        children: [
+          row.topic,
+          row.current === false ? "\uFF08\u5F85\u7EA0\u6B63\uFF09" : ""
+        ]
       },
       row.id
     )),
@@ -3060,7 +3063,7 @@ function MemoryPanel({
   const [draftRevision, setDraftRevision] = (0, import_react13.useState)(
     saved && saved.revision >= 0 ? saved.revision : void 0
   ), [draftPersona, setDraftPersona] = (0, import_react13.useState)(saved?.personaId ?? ""), [conflict, setConflict] = (0, import_react13.useState)(false);
-  const [view, setView] = (0, import_react13.useState)(null), [error, setError] = (0, import_react13.useState)(""), [busy, setBusy] = (0, import_react13.useState)(false);
+  const [view, setView] = (0, import_react13.useState)(null), [error, setError] = (0, import_react13.useState)(""), [loadError, setLoadError] = (0, import_react13.useState)(""), [memoryEvidence, setMemoryEvidence] = (0, import_react13.useState)(null), [busy, setBusy] = (0, import_react13.useState)(false);
   const [name, setName] = (0, import_react13.useState)(saved?.name ?? ""), [instructions, setInstructions] = (0, import_react13.useState)(saved?.instructions ?? ""), [expression, setExpression] = (0, import_react13.useState)(saved?.expression ?? null), [enabled, setEnabled] = (0, import_react13.useState)(saved?.enabled ?? true);
   const [newName, setNewName] = (0, import_react13.useState)(saved?.newName ?? ""), [note, setNote] = (0, import_react13.useState)(saved?.note ?? ""), [editing, setEditing] = (0, import_react13.useState)(saved?.editing || void 0);
   const [scope, setScope] = (0, import_react13.useState)(saved?.scope ?? "project");
@@ -3155,6 +3158,7 @@ function MemoryPanel({
       try {
         const data = await requestJson(url, { signal: ac.signal });
         if (!ac.signal.aborted) {
+          setLoadError("");
           if (restoring.current) {
             restoring.current = false;
             setView(data);
@@ -3173,12 +3177,10 @@ function MemoryPanel({
             }
           } else {
             accept(data);
-            setError("");
-            setConflict(false);
           }
         }
       } catch (e) {
-        if (!ac.signal.aborted) setError(String(e.message));
+        if (!ac.signal.aborted) setLoadError(String(e.message));
       }
       if (!ac.signal.aborted) timer = setTimeout(() => void refresh(), 5e3);
     };
@@ -3209,7 +3211,7 @@ function MemoryPanel({
         setError("\u53E6\u4E00\u4E2A\u7A97\u53E3\u5207\u6362\u4E86\u4EBA\u683C\uFF1B\u8BF7\u53D6\u6D88\u5F53\u524D\u7F16\u8F91\u540E\u5237\u65B0\uFF0C\u8349\u7A3F\u672A\u88AB\u8986\u76D6\u3002");
         return false;
       }
-      if (configDirty && (!action || ["save", "forget"].includes(action.type)))
+      if (configDirty && (!action || ["save", "forget", "memory-feedback"].includes(action.type)))
         setView(data);
       else accept(data);
       setDraftRevision(void 0);
@@ -3229,6 +3231,24 @@ function MemoryPanel({
     setEditing(entry.id);
     setNote(entry.text);
     setScope(entry.project ? "project" : "persona");
+  };
+  const readMemoryEvidence = async (ref, offset = 0) => {
+    setBusy(true);
+    setError("");
+    try {
+      const result = await requestJson(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ type: "read-history", targetSessionId: ref.sessionId, seq: ref.seq, offset })
+      });
+      setMemoryEvidence(
+        (previous) => offset > 0 && previous?.sessionId === ref.sessionId && previous?.seq === ref.seq ? { ...result.result, text: previous.text + result.result.text } : result.result
+      );
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
   };
   const createSession = async (handoff) => {
     if (!targetPersona) return;
@@ -3294,6 +3314,7 @@ function MemoryPanel({
           error,
           " "
         ] }),
+        loadError && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { role: "alert", children: loadError }),
         conflict && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("button", { disabled: busy, onClick: discardDraft, children: "\u653E\u5F03\u8349\u7A3F\u5E76\u8BFB\u53D6\u6700\u65B0" }),
         !view && !error && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { children: "\u6B63\u5728\u8BFB\u53D6\u2026" }),
         view && !identityChanged && /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(import_jsx_runtime15.Fragment, { children: [
@@ -3607,6 +3628,15 @@ function MemoryPanel({
               !view.persona.memories.some((m) => !m.project || m.project === view.project) && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { className: "px-empty", children: "\u8FD8\u6CA1\u6709\u4FDD\u5B58\u7EA6\u5B9A\u3002\u53EF\u4EE5\u8BB0\u4E0B\u4F60\u7684\u534F\u4F5C\u504F\u597D\uFF0C\u4E5F\u53EF\u4EE5\u5728\u5BF9\u8BDD\u4E2D\u660E\u786E\u8981\u6C42\u52A9\u624B\u8BB0\u4F4F\u3002" }),
               view.persona.memories.filter((m) => !m.project || m.project === view.project).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).map((m) => /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("section", { style: { ...cardStyle, marginBottom: 8 }, children: [
                 /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("small", { children: m.project ? "\u672C\u76EE\u5F55" : "\u6B64\u4EBA\u683C\u901A\u7528" }),
+                /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("small", { children: [
+                  " ",
+                  "\xB7 v",
+                  m.entryRevision ?? 1,
+                  " \xB7",
+                  " ",
+                  m.provenance?.actor === "human" ? "\u7528\u6237\u4FDD\u5B58" : m.provenance?.actor === "model" ? "\u6A21\u578B\u6574\u7406" : "\u6765\u6E90\u672A\u6807\u6CE8"
+                ] }),
+                m.current === false && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { role: "status", children: "\u6B64\u4FEE\u8BA2\u5DF2\u6807\u8BB0\u4E3A\u4E0D\u6B63\u786E\uFF0C\u5DF2\u505C\u6B62\u81EA\u52A8\u6CE8\u5165\u3002\u53EF\u7F16\u8F91\u7EA0\u6B63\u6216\u5FD8\u8BB0\u3002" }),
                 /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { style: { whiteSpace: "pre-wrap" }, children: m.text }),
                 /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
                   "button",
@@ -3631,8 +3661,105 @@ function MemoryPanel({
                     }),
                     children: "\u5FD8\u8BB0"
                   }
+                ),
+                !!m.provenance?.events.length && /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("details", { children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("summary", { children: "\u539F\u59CB\u4F9D\u636E" }),
+                  m.provenance.events.map((ref) => /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(
+                    "button",
+                    {
+                      disabled: busy,
+                      onClick: () => void readMemoryEvidence(ref),
+                      children: [
+                        "\u8BFB\u53D6\u4E8B\u4EF6 ",
+                        ref.seq
+                      ]
+                    },
+                    ref.sessionId + ":" + ref.seq
+                  ))
+                ] }),
+                m.previous && /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("details", { children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("summary", { children: [
+                    "\u524D\u4E00\u7248\u6765\u6E90\uFF08v",
+                    m.previous.entryRevision,
+                    "\uFF09"
+                  ] }),
+                  m.previous.provenance?.events.length ? m.previous.provenance.events.map((ref) => /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(
+                    "button",
+                    {
+                      disabled: busy,
+                      onClick: () => void readMemoryEvidence(ref),
+                      children: [
+                        "\u8BFB\u53D6\u4E8B\u4EF6 ",
+                        ref.seq
+                      ]
+                    },
+                    ref.sessionId + ":" + ref.seq
+                  )) : /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { children: "\u524D\u4E00\u7248\u6CA1\u6709\u5173\u8054\u539F\u59CB\u4E8B\u4EF6\u3002" })
+                ] }),
+                m.origin && m.origin.entryRevision !== m.previous?.entryRevision && /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("details", { children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("summary", { children: [
+                    "\u6700\u65E9\u4FDD\u7559\u7684\u6765\u6E90\uFF08v",
+                    m.origin.entryRevision,
+                    "\uFF09"
+                  ] }),
+                  /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { className: "px-muted", children: "\u7528\u4E8E\u8FFD\u6EAF\u6761\u76EE\u7531\u6765\uFF0C\u4E0D\u8868\u793A\u65E7\u8BC1\u636E\u80FD\u8BC1\u660E\u5F53\u524D\u4FEE\u8BA2\u3002" }),
+                  m.origin.provenance?.events.length ? m.origin.provenance.events.map((ref) => /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)(
+                    "button",
+                    {
+                      disabled: busy,
+                      onClick: () => void readMemoryEvidence(ref),
+                      children: [
+                        "\u8BFB\u53D6\u4E8B\u4EF6 ",
+                        ref.seq
+                      ]
+                    },
+                    ref.sessionId + ":" + ref.seq
+                  )) : /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("p", { children: "\u8FD9\u4E00\u7248\u6CA1\u6709\u5173\u8054\u539F\u59CB\u4E8B\u4EF6\u3002" })
+                ] }),
+                /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
+                  MemoryFeedbackPanel,
+                  {
+                    value: m.feedback,
+                    busy,
+                    disabled: view.persona.archived || dirty,
+                    readSource: (ref) => void readMemoryEvidence(ref),
+                    submit: async (kind, reason) => {
+                      await act({
+                        type: "memory-feedback",
+                        id: m.id,
+                        entryRevision: m.entryRevision ?? 1,
+                        kind,
+                        reason
+                      });
+                    }
+                  },
+                  m.id + ":" + (m.entryRevision ?? 1)
                 )
               ] }, m.id)),
+              memoryEvidence && /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("section", { style: cardStyle, children: [
+                /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("button", { onClick: () => setMemoryEvidence(null), children: "\u6536\u8D77\u4F9D\u636E" }),
+                /* @__PURE__ */ (0, import_jsx_runtime15.jsxs)("p", { children: [
+                  "\u6765\u6E90\u4F1A\u8BDD ",
+                  memoryEvidence.sessionId,
+                  " \xB7 \u4E8B\u4EF6 ",
+                  memoryEvidence.seq,
+                  " \xB7 \u5DF2\u663E\u793A",
+                  " ",
+                  memoryEvidence.text.length,
+                  " / ",
+                  memoryEvidence.totalCharacters,
+                  " \u5B57\u7B26"
+                ] }),
+                /* @__PURE__ */ (0, import_jsx_runtime15.jsx)("pre", { style: { whiteSpace: "pre-wrap" }, children: memoryEvidence.text }),
+                memoryEvidence.nextOffset !== null && /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
+                  "button",
+                  {
+                    disabled: busy,
+                    onClick: () => void readMemoryEvidence(memoryEvidence, memoryEvidence.nextOffset),
+                    children: "\u7EE7\u7EED\u8BFB\u53D6\u539F\u6587"
+                  }
+                )
+              ] }),
               /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
                 "textarea",
                 {
@@ -3668,7 +3795,7 @@ function MemoryPanel({
                   "button",
                   {
                     style: controlStyle,
-                    disabled: busy || !note.trim() || !view.persona.memoryEnabled || view.persona.archived,
+                    disabled: busy || !note.trim() || view.persona.archived,
                     onClick: () => void act({ type: "save", id: editing, text: note, scope }).then((ok) => {
                       if (ok) {
                         setNote("");

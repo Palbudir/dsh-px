@@ -9,6 +9,7 @@ export interface ChannelNoteInput {
   text?: string
   revision?: string
   offset?: number
+  cursor?: string
   evidence?: Array<{ sessionId: string; seq: number }>
   documentRevision?: number
   kind?: 'confirmed' | 'useful' | 'not-applicable' | 'disputed'
@@ -69,10 +70,10 @@ export class ChannelNotes {
         (a: any, b: any) => String(b.updatedAt).localeCompare(String(a.updatedAt)) || a.id.localeCompare(b.id)
       )
     const offset = input.offset ?? 0
-    if (!Number.isSafeInteger(offset) || offset < 0 || offset > notes.length)
-      throw new MemoryError('交流记忆分页位置无效')
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new MemoryError('交流记忆分页位置无效')
     if (offset > 0 && input.revision !== catalog.revision)
       throw new MemoryError('交流记忆目录已变化，请从第一页重新查询', 409)
+    if (offset > notes.length) throw new MemoryError('交流记忆分页位置无效')
     const safeDocument = (document: any) => ({
       id: document.id,
       topic: document.key.slice(scope.prefix.length),
@@ -90,9 +91,13 @@ export class ChannelNotes {
         revision: catalog.revision,
         currentEvidence: this.currentEvidence(sessionId),
         total: notes.length,
-        notes: notes
-          .slice(offset, offset + 100)
-          .map((d: any) => ({ id: d.id, topic: d.key.slice(scope.prefix.length), updatedAt: d.updatedAt })),
+        notes: notes.slice(offset, offset + 100).map((d: any) => ({
+          id: d.id,
+          topic: d.key.slice(scope.prefix.length),
+          updatedAt: d.updatedAt,
+          current: !d.feedback?.disputed,
+          feedback: d.feedback
+        })),
         partial: offset + 100 < notes.length,
         nextOffset: offset + 100 < notes.length ? offset + 100 : null
       }
@@ -151,32 +156,32 @@ export class ChannelNotes {
       }
     }
     if (input.action === 'search') {
-      const terms = checkedText(input.query, '检索词', 256).toLocaleLowerCase().split(/\s+/)
-      const page = []
-      // Limit after selecting this persona's notes. General shared documents cannot crowd them out.
-      // Native Documents still owns the contents/revisions; pagination bounds reads without hiding matches.
-      for (const item of notes.slice(offset, offset + 8)) {
-        signal.throwIfAborted()
-        const result = await this.bank.read(scope.caller, 'project', item.id)
-        if (result.revision !== catalog.revision) throw new MemoryError('交流记忆目录已变化，请重新查询', 409)
-        const document = result.document
-        const searchable = (document.key + '\n' + (document.body ?? '')).toLocaleLowerCase()
-        if (document.current && terms.every((term) => searchable.includes(term))) page.push(document)
-      }
+      const result = await this.bank.searchConversation(
+        scope.caller,
+        checkedText(input.query, '检索词', 256),
+        offset,
+        input.cursor,
+        input.revision,
+        signal
+      )
       signal.throwIfAborted()
       return {
-        revision: catalog.revision,
-        notes: page.map((document: any) => ({
+        revision: result.revision,
+        cursor: result.cursor,
+        notes: result.documents.map((document: any) => ({
           id: document.id,
           topic: document.key.slice(scope.prefix.length),
           excerpt: String(document.body ?? '').slice(0, 1000),
           current: document.current,
+          feedback: document.feedback,
+          relevance: document.relevance,
+          rank: document.rank,
           authority: 'conversation-evidence-only'
         })),
         bounded: true,
-        partial: offset + 8 < notes.length,
-        nextOffset: offset + 8 < notes.length ? offset + 8 : null,
-        note: '仅在当前人格的本群经历中检索；partial=true 时请携带 revision 和 nextOffset 继续。用 read 核对全文和来源。'
+        partial: result.partial,
+        nextOffset: result.nextOffset,
+        note: '使用原生文档检索并按本人格反馈排序；partial=true 时携带 revision、cursor 与 nextOffset 继续。用 read 核对全文和来源。'
       }
     }
     if (input.action !== 'save') throw new MemoryError('未知交流记忆操作')

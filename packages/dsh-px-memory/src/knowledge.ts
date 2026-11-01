@@ -2,14 +2,15 @@ import { createHash } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { MemorySourceRuntime } from 'dsh-mnemon/contracts'
+import { DocumentSearchPager } from './document-search'
 import { MemoryError, projectKey, publicSession, type MemoryStore } from './store'
 import {
   MemoryFeedback,
   feedbackHash,
   rankMemoryMatch,
   presentFeedback,
-  type FeedbackKind,
-  type FeedbackEvidence
+  prepareFeedback,
+  type FeedbackKind
 } from './memory-feedback'
 
 export const KNOWLEDGE_SCOPES = ['persona', 'persona-project', 'project', 'global'] as const
@@ -113,6 +114,7 @@ const legacyConversationTitle = (title: unknown): boolean =>
 
 /** Mnemon owns document writes, locks, revisions, archives and search. PX only selects scope and adds provenance. */
 export class KnowledgeBank {
+  private conversationSearch = new DocumentSearchPager()
   private readonly feedbackStore: MemoryFeedback
   private runtimes = new Map<string, MemorySourceRuntime>()
   private factory?: Promise<typeof import('dsh-mnemon-source-documents')>
@@ -169,50 +171,19 @@ export class KnowledgeBank {
   ): Promise<any> {
     const ns = this.namespace(caller, scope),
       id = bounded(input.id, '知识编号', 300),
-      reason = bounded(input.reason, '反馈理由', 1000),
       actor = caller.actor === 'human' ? 'human' : 'model'
-    if (!['confirmed', 'useful', 'not-applicable', 'disputed'].includes(input.kind))
-      throw new MemoryError('反馈类型无效')
-    if (actor === 'model' && !['useful', 'not-applicable'].includes(input.kind))
-      throw new MemoryError('确认与判定不正确需由用户操作；模型只能记录有依据的应用反馈', 403)
     const before = (await this.call(ns, 'document', { id })).value as KnowledgeDocument
     this.assertReadableDocument(ns, before)
     if (before.status !== 'active' || before.revision !== input.documentRevision)
       throw new MemoryError('知识已变化或归档，请重新读取后反馈', 409)
     const target = this.feedbackTarget(caller, ns, before)
     if (!target) throw new MemoryError('反馈需要已固定的人格会话', 409)
-    let evidence: FeedbackEvidence | undefined
-    if (input.evidence !== undefined) {
-      const ref = input.evidence
-      if (
-        !ref ||
-        typeof ref.sessionId !== 'string' ||
-        !Number.isSafeInteger(ref.seq) ||
-        ref.seq < 0 ||
-        !this.readEvidence
-      )
-        throw new MemoryError('反馈需要可读取的原始事件依据')
-      const record = await this.readEvidence(caller, ref.sessionId, ref.seq, signal)
-      if (
-        !['user', 'tool-result'].includes(record?.kind) ||
-        typeof record.text !== 'string' ||
-        !record.text.trim()
-      )
-        throw new MemoryError('模型复述或记忆检索不是独立反馈依据', 403)
-      if (
-        actor === 'model' &&
-        input.kind === 'useful' &&
-        (record.kind !== 'tool-result' || record.failed !== false)
-      )
-        throw new MemoryError('成功应用需要原生工具的成功回执；交流陈述不等于任务成功', 403)
-      evidence = {
-        sessionId: ref.sessionId,
-        seq: ref.seq,
-        kind: record.kind,
-        hash: feedbackHash([record.kind, record.tool ?? null, record.text.trim()])
-      }
-    } else if (actor === 'model')
-      throw new MemoryError('模型应用反馈必须引用原始事件，不能通过重复检索自我加权', 403)
+    const feedback = await prepareFeedback(
+      input,
+      actor,
+      this.readEvidence ? (source, seq, stop) => this.readEvidence!(caller, source, seq, stop) : undefined,
+      signal
+    )
     signal?.throwIfAborted()
     const now = (await this.call(ns, 'document', { id })).value as KnowledgeDocument
     if (
@@ -222,15 +193,7 @@ export class KnowledgeBank {
       this.feedbackTarget(caller, this.namespace(caller, scope), now) !== target
     )
       throw new MemoryError('知识或反馈受众已变化，未采纳迟到反馈', 409)
-    // Human UI gives one opinion of each kind; repeated clicks/restarts cannot manufacture more votes.
-    const origin = feedbackHash(actor === 'human' ? ['human'] : ['native-evidence', evidence!.hash])
-    const result = this.feedbackStore.record(target, origin, {
-      actor,
-      kind: input.kind,
-      reason,
-      ...(evidence ? { evidence } : {}),
-      at: new Date().toISOString()
-    })
+    const result = this.feedbackStore.record(target, feedback.origin, feedback.entry)
     return {
       ...result,
       feedback: presentFeedback(result.feedback, caller.actor),
@@ -624,6 +587,76 @@ export class KnowledgeBank {
       excludedHistorical: includeHistorical ? 0 : matches.filter((d) => !d.current).length
     }
   }
+  async searchConversation(
+    caller: KnowledgeCaller,
+    query: string,
+    offset = 0,
+    cursor?: string,
+    revision?: string,
+    signal = new AbortController().signal
+  ) {
+    const ns = this.namespace(caller, 'project')
+    if (!ns.conversation) throw new MemoryError('此搜索需要人格交流记忆范围', 403)
+    const normalized = bounded(query, '关键词', 256),
+      catalog = await this.catalog(caller, 'project')
+    if (offset > 0 && revision !== catalog.revision)
+      throw new MemoryError('交流记忆目录已变化，请从第一页重新查询', 409)
+    const candidates = catalog.documents
+      .filter(
+        (d: any) =>
+          d.status === 'active' &&
+          d.healthy !== false &&
+          d.key.startsWith(`QQ 经历 / ${ns.personaId} / `) &&
+          !d.feedback.disputed
+      )
+      .map((d: any, order: number) => ({
+        id: d.id,
+        revision: d.revision,
+        strength: d.feedback.strength,
+        updatedAt: d.updatedAt,
+        order
+      }))
+    const signature = digest([
+      ns,
+      normalized,
+      catalog.revision,
+      catalog.documents.map((d: any) => [d.id, d.feedback])
+    ])
+    const page = await this.conversationSearch.page({
+      signature,
+      cursor,
+      requireCursor: catalog.documents.some((d: any) => d.feedback.count > 0),
+      offset,
+      query: normalized,
+      scope: { storage: 'workspace', workspaceId: ns.project, sessionId: caller.sessionId },
+      sourceKey: 'px-knowledge-' + digest(ns),
+      candidates,
+      runtime: () => this.runtime(ns),
+      signal
+    })
+    const documents = []
+    for (const hit of page.rows) {
+      signal.throwIfAborted()
+      const result = await this.read(caller, 'project', hit.id)
+      if (result.revision !== catalog.revision || !result.document.current)
+        throw new MemoryError('交流记忆目录已变化，请重新查询', 409)
+      documents.push({ ...result.document, relevance: hit.relevance, rank: hit.rank })
+    }
+    const after = await this.catalog(caller, 'project')
+    if (
+      digest([ns, normalized, after.revision, after.documents.map((d: any) => [d.id, d.feedback])]) !==
+        signature ||
+      digest(this.namespace(caller, 'project')) !== digest(ns)
+    )
+      throw new MemoryError('交流记忆目录已变化（正文或反馈），请重新查询', 409)
+    return {
+      revision: catalog.revision,
+      documents,
+      cursor: page.cursor,
+      nextOffset: page.nextOffset,
+      partial: page.partial
+    }
+  }
   async write(
     caller: KnowledgeCaller,
     scope: KnowledgeScope,
@@ -798,6 +831,7 @@ export class KnowledgeBank {
     }
   }
   async dispose(): Promise<void> {
+    this.conversationSearch.clear()
     for (const runtime of this.runtimes.values()) await runtime.dispose?.()
     this.runtimes.clear()
     this.feedbackStore.close()

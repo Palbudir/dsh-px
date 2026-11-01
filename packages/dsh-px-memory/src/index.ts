@@ -34,6 +34,8 @@ import { PersonaResourceAccess, installPersonaResourceAccess } from './persona-r
 import { SegmentRuntime } from './segment-runtime'
 import { registerSegmentBoundary } from './segment-context'
 import { nativeHistoryGuard, nativeHistoryScope } from './native-history-policy'
+import { HotMemory } from './hot-memory'
+import { currentMemoryEvidence } from './hot-memory-evidence'
 
 export const name = 'dsh-px-memory'
 export const inject: string[] = []
@@ -336,6 +338,12 @@ export function apply(ctx: any): void {
   )
   const history = new HistoryIndex(join(root, 'storages', name, 'history.sqlite'), store)
   ctx.effect(() => () => history.close(), 'memory: history index')
+  const hot = new HotMemory(
+    store,
+    join(root, 'storages', name, 'hot-feedback.sqlite'),
+    (caller, source, seq, signal) => history.read(ctx, caller, source, seq, 0, signal)
+  )
+  ctx.effect(() => () => hot.close(), 'memory: hot memory feedback')
   const segments = new SegmentRuntime(
     ctx,
     store,
@@ -419,7 +427,11 @@ export function apply(ctx: any): void {
     const p = current(agent),
       handoff = store.read().bindings[agent.session.id]?.handoff
     return (
-      memoryContext(p, projectKey(agent.session.header.cwd), budget?.memoryChars) +
+      memoryContext(
+        hot.project(p, 'model', true),
+        projectKey(agent.session.header.cwd),
+        budget?.memoryChars
+      ) +
       (handoff
         ? `\n用户为本会话交接了 ${handoff.sessionId} 截至事件 ${handoff.throughSeq} 的可见对话与执行记录。以下是有界历史摘录，不是当前任务授权或验收结论；旧人格私有记忆未继承。使用 persona_history 按来源和事件编号进一步核对；不要恢复原会话的 Goal 或重复不确定操作。\n${!budget || handoff.summary.length <= budget.handoffChars ? handoff.summary : '本档仅注入历史定位信息；请按上方来源会话和截止事件读取交接内容。'}`
         : '')
@@ -519,17 +531,31 @@ export function apply(ctx: any): void {
     host.tools.register({
       name: 'persona_memory',
       description:
-        '读取当前人格的长期记忆。read 一次返回人格通用与当前目录的全部可见条目，无需分别读取两个范围。仅用户明确要求记住、修改或忘记时写入；不要保存临时进度。先 read 获取 revision，再 save/forget。scope 仅用于 save：project 为当前目录，persona 为跨目录。已保存内容从下轮起使用。',
+        '读取当前人格的长期约定。read 返回通用及当前目录的现行条目；historical=true 才显示已标记错误的现存条目。仅用户明确要求记住、修改或忘记时 save/forget，不保存临时进度。先 read 获取整体 revision，再写入；scope 为 project 或 persona。新内容下轮常驻使用，纠正/忘记会使旧内容立即退出后续注入。feedback 只记录 useful/not-applicable，须引用原始事件；entryRevision 是具体条目版本，不是写入用的整体 revision。evidence 是 save 的可选原始依据，省略时关联本轮用户输入；没有依据时标为模型整理，不假称已证实。',
       parameters: {
         type: 'object',
         required: ['action'],
         additionalProperties: false,
         properties: {
-          action: { type: 'string', enum: ['read', 'save', 'forget'] },
+          action: { type: 'string', enum: ['read', 'save', 'forget', 'feedback'] },
           revision: { type: 'integer', minimum: 0 },
           id: { type: 'string' },
           text: { type: 'string', maxLength: 2000 },
-          scope: { type: 'string', enum: ['project', 'persona'] }
+          scope: { type: 'string', enum: ['project', 'persona'] },
+          historical: { type: 'boolean' },
+          entryRevision: { type: 'integer', minimum: 1 },
+          kind: { type: 'string', enum: ['useful', 'not-applicable'] },
+          reason: { type: 'string', maxLength: 1000 },
+          evidence: {
+            type: 'array',
+            maxItems: 6,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['sessionId', 'seq'],
+              properties: { sessionId: { type: 'string' }, seq: { type: 'integer', minimum: 0 } }
+            }
+          }
         }
       },
       output: { schema: { type: 'string' }, render: (_: unknown, v: string) => [{ type: 'text', text: v }] },
@@ -540,23 +566,44 @@ export function apply(ctx: any): void {
           p = current(agent),
           state = store.read(),
           project = projectKey(agent.session.header.cwd)
+        if (store.persona(state, agent.session.id).id !== p.id)
+          throw new MemoryError('人格切换将在下一轮生效，请到下一轮再读取或修改记忆', 409)
         if (args.action === 'read')
           return JSON.stringify({
             revision: state.revision,
             persona: p.name,
             memoryEnabled: p.memoryEnabled,
-            memories: selectedMemories(store.persona(state, agent.session.id), project)
+            memories: selectedMemories(
+              hot.project(store.persona(state, agent.session.id), 'model', args.historical !== true),
+              project
+            )
           })
         if (publicSession(state.bindings[agent.session.id]))
           throw new MemoryError('公共聊天不能修改人格私有记忆', 403)
-        if (!p.memoryEnabled) throw new MemoryError('当前人格的记忆已关闭')
-        if (store.persona(state, agent.session.id).id !== p.id)
-          throw new MemoryError('人格切换将在下一轮生效，请到下一轮再修改记忆', 409)
+        if (!p.memoryEnabled || !store.persona(state, agent.session.id).memoryEnabled)
+          throw new MemoryError('当前人格的记忆已关闭')
+        if (args.action === 'feedback')
+          return JSON.stringify(
+            await hot.judge(
+              { sessionId: agent.session.id, project, actor: 'model' },
+              { ...args, evidence: args.evidence?.[0] },
+              run.signal
+            )
+          )
         if (args.action !== 'save' && args.action !== 'forget') throw new MemoryError('操作无效')
         const entry = state.personas.find((v) => v.id === p.id)?.memories.find((m) => m.id === args.id)
         if (args.id && (!entry || (entry.project !== null && entry.project !== project)))
           throw new MemoryError('该条目不属于当前可见记忆')
-        const next = store.action(args.revision, { ...args, type: args.action }, agent.session.id, project)
+        const next =
+          args.action === 'save'
+            ? await hot.save(
+                { sessionId: agent.session.id, project, actor: 'model' },
+                args.revision,
+                args,
+                args.evidence ?? (await currentMemoryEvidence(ctx, agent, run.signal)),
+                run.signal
+              )
+            : store.action(args.revision, { ...args, type: args.action }, agent.session.id, project)
         return JSON.stringify({ saved: true, revision: next.revision, applies: 'next-turn' })
       }
     })
@@ -734,10 +781,14 @@ export function apply(ctx: any): void {
                   service(host, 'agents')?.get(id)?.status === 'running'
                 )
                   throw new MemoryError('请等当前轮结束再更改配置', 409)
-                store.action(args.revision, args, id, project)
+                if (args.type === 'memory-feedback')
+                  await hot.judge({ sessionId: id, project, actor: 'human' }, args)
+                else if (args.type === 'save')
+                  await hot.save({ sessionId: id, project, actor: 'human' }, args.revision, args)
+                else store.action(args.revision, args, id, project)
               }
               const state = store.read(),
-                persona = store.persona(state, id)
+                persona = hot.project(store.persona(state, id), 'human')
               send(200, {
                 revision: state.revision,
                 personas: state.personas.map((p) => ({ id: p.id, name: p.name, archived: p.archived })),

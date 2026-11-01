@@ -76,6 +76,7 @@ export function ChannelNotesPanel({ url }: { url: string }) {
           }
         >
           {row.topic}
+          {row.current === false ? '（待纠正）' : ''}
         </button>
       ))}
       {catalog?.nextOffset != null && (

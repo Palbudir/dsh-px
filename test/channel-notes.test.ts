@@ -320,6 +320,100 @@ test('group and persona boundaries survive crafted IDs and private evidence atte
   assert.equal(f.store.read().bindings.old.channel?.access, 'public')
 })
 
+test(
+  'native ranked conversation search finds old reinforced memories beyond the native result cap and fences feedback pagination',
+  { timeout: 30000 },
+  async (t) => {
+    const f = fixture(t),
+      ids: string[] = []
+    for (let i = 0; i < 64; i++) {
+      const catalog = await f.notes.execute('old', { action: 'catalog' }, signal())
+      const result = await f.notes.execute(
+        'old',
+        {
+          action: 'save',
+          topic: 'rank-target-' + i,
+          text: '同样相关的 rank-target 记忆。',
+          revision: catalog.revision,
+          evidence: [{ sessionId: 'old', seq: 1 }]
+        },
+        signal()
+      )
+      ids.push(result.note.id)
+    }
+    await f.notes.execute(
+      'old',
+      { action: 'feedback', id: ids[0], documentRevision: 1, kind: 'confirmed', reason: '旧条目仍然适用' },
+      signal(),
+      'human'
+    )
+    const first = await f.notes.execute('new', { action: 'search', query: 'rank-target' }, signal())
+    assert.equal(
+      first.notes[0].id,
+      ids[0],
+      'feedback must influence the whole namespace, not just the first native result batch'
+    )
+    assert.equal(first.notes[0].feedback.confirmed, true)
+    const found = [...first.notes.map((row: any) => row.id)]
+    let page = first
+    while (page.nextOffset !== null) {
+      page = await f.notes.execute(
+        'new',
+        {
+          action: 'search',
+          query: 'rank-target',
+          offset: page.nextOffset,
+          revision: page.revision,
+          cursor: page.cursor
+        },
+        signal()
+      )
+      found.push(...page.notes.map((row: any) => row.id))
+    }
+    assert.equal(found.length, 64)
+    assert.equal(new Set(found).size, 64)
+    const repeat = await f.notes.execute(
+      'new',
+      {
+        action: 'search',
+        query: 'rank-target',
+        offset: first.nextOffset,
+        revision: first.revision,
+        cursor: first.cursor
+      },
+      signal()
+    )
+    assert.deepEqual(
+      repeat.notes.map((row: any) => row.id),
+      found.slice(8, 16)
+    )
+    await f.notes.execute(
+      'old',
+      { action: 'feedback', id: ids[0], documentRevision: 1, kind: 'disputed', reason: '发现与新要求冲突' },
+      signal(),
+      'human'
+    )
+    await assert.rejects(
+      f.notes.execute(
+        'new',
+        {
+          action: 'search',
+          query: 'rank-target',
+          offset: first.nextOffset,
+          revision: first.revision,
+          cursor: first.cursor
+        },
+        signal()
+      ),
+      /目录已变化/
+    )
+    const current = await f.notes.execute('new', { action: 'search', query: 'rank-target' }, signal())
+    assert.ok(current.notes.every((row: any) => row.id !== ids[0]))
+    const other = await f.notes.execute('other-persona', { action: 'search', query: 'rank-target' }, signal())
+    assert.deepEqual(other.notes, [])
+  }
+)
+
 test('legacy generated notes migrate privately, preserve old IDs, and explicit shared snapshots remain valid until correction', async (t) => {
   const f = fixture(t),
     caller = { sessionId: 'old', project: f.root, actor: 'human' as const }

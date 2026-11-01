@@ -18,6 +18,66 @@ export interface FeedbackEntry {
   evidence?: FeedbackEvidence
   at: string
 }
+export interface FeedbackInput {
+  kind: FeedbackKind
+  reason: string
+  evidence?: { sessionId: string; seq: number }
+}
+/** Both hot memories and Documents use the same evidence/confirmation boundary. */
+export async function prepareFeedback(
+  input: FeedbackInput,
+  actor: 'human' | 'model',
+  read?: (source: string, seq: number, signal?: AbortSignal) => Promise<any>,
+  signal?: AbortSignal
+) {
+  if (
+    !input ||
+    !['confirmed', 'useful', 'not-applicable', 'disputed'].includes(input.kind) ||
+    typeof input.reason !== 'string' ||
+    !input.reason.trim() ||
+    input.reason.length > 1000
+  )
+    throw new MemoryError('反馈类型或理由无效')
+  if (actor === 'model' && !['useful', 'not-applicable'].includes(input.kind))
+    throw new MemoryError('确认与判定不正确需由用户操作；模型只能记录有依据的应用反馈', 403)
+  let evidence: FeedbackEvidence | undefined
+  if (input.evidence !== undefined) {
+    const ref = input.evidence
+    if (!ref || typeof ref.sessionId !== 'string' || !Number.isSafeInteger(ref.seq) || ref.seq < 0 || !read)
+      throw new MemoryError('反馈需要可读取的原始事件依据')
+    const record = await read(ref.sessionId, ref.seq, signal)
+    if (
+      !['user', 'tool-result'].includes(record?.kind) ||
+      typeof record.text !== 'string' ||
+      !record.text.trim()
+    )
+      throw new MemoryError('模型复述或记忆检索不是独立反馈依据', 403)
+    if (
+      actor === 'model' &&
+      input.kind === 'useful' &&
+      (record.kind !== 'tool-result' || record.failed !== false)
+    )
+      throw new MemoryError('成功应用需要原生工具的成功回执；交流陈述不等于任务成功', 403)
+    evidence = {
+      sessionId: ref.sessionId,
+      seq: ref.seq,
+      kind: record.kind,
+      hash: feedbackHash([record.kind, record.tool ?? null, record.text.trim()])
+    }
+  } else if (actor === 'model')
+    throw new MemoryError('模型应用反馈必须引用原始事件，不能通过重复检索自我加权', 403)
+  signal?.throwIfAborted()
+  return {
+    origin: feedbackHash(actor === 'human' ? ['human'] : ['native-evidence', evidence!.hash]),
+    entry: {
+      actor,
+      kind: input.kind,
+      reason: input.reason.trim(),
+      ...(evidence ? { evidence } : {}),
+      at: new Date().toISOString()
+    } as FeedbackEntry
+  }
+}
 export interface FeedbackView {
   confirmed: boolean
   disputed: boolean

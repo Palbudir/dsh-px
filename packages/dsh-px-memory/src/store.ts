@@ -27,6 +27,19 @@ export interface MemoryEntry {
   text: string
   project: string | null
   updatedAt: string
+  entryRevision?: number
+  provenance?: MemoryProvenance
+  previous?: { entryRevision: number; updatedAt: string; provenance?: MemoryProvenance }
+  /** Earliest retained source anchor; later manual edits must not erase the original event links. */
+  origin?: { entryRevision: number; updatedAt: string; provenance?: MemoryProvenance }
+  /** Read projection only; never trusted from action payloads. */
+  feedback?: { confirmed: boolean; disputed: boolean; strength: number; count: number; entries?: unknown[] }
+  current?: boolean
+}
+export interface MemoryProvenance {
+  actor: 'human' | 'model' | 'unknown'
+  sessionId: string
+  events: Array<{ sessionId: string; seq: number; eventHash: string; kind: string; time: number | null }>
 }
 export interface PersonaVersion {
   revision: number
@@ -112,6 +125,29 @@ export function validId(value: unknown): string {
     throw new MemoryError('标识无效')
   return value
 }
+function validateMemoryProvenance(source: MemoryProvenance): void {
+  if (!source || typeof source !== 'object' || Array.isArray(source))
+    throw new MemoryError('记忆来源格式无效', 503)
+  validId(source.sessionId)
+  if (
+    !['human', 'model', 'unknown'].includes(source.actor) ||
+    !Array.isArray(source.events) ||
+    source.events.length > 6
+  )
+    throw new MemoryError('记忆来源无效', 503)
+  for (const ref of source.events) {
+    if (!ref) throw new MemoryError('记忆事件来源无效', 503)
+    validId(ref.sessionId)
+    if (
+      !Number.isSafeInteger(ref.seq) ||
+      ref.seq < 0 ||
+      !/^[a-f0-9]{64}$/.test(ref.eventHash) ||
+      !['user', 'assistant', 'tool-result', 'native-state', 'ledger'].includes(ref.kind) ||
+      (ref.time !== null && !Number.isFinite(ref.time))
+    )
+      throw new MemoryError('记忆事件来源无效', 503)
+  }
+}
 function config(p: Persona): PersonaVersion {
   return {
     revision: p.revision,
@@ -188,9 +224,31 @@ function validate(s: MemoryState): void {
       if (
         entries.has(m.id) ||
         (m.project !== null && typeof m.project !== 'string') ||
-        !Number.isFinite(Date.parse(m.updatedAt))
+        !Number.isFinite(Date.parse(m.updatedAt)) ||
+        (m.entryRevision !== undefined && (!Number.isSafeInteger(m.entryRevision) || m.entryRevision < 1))
       )
         throw new MemoryError('记忆条目无效', 503)
+      if (m.provenance !== undefined) validateMemoryProvenance(m.provenance)
+      if (m.previous !== undefined) {
+        if (
+          !m.previous ||
+          m.previous.entryRevision !== (m.entryRevision ?? 1) - 1 ||
+          !Number.isFinite(Date.parse(m.previous.updatedAt))
+        )
+          throw new MemoryError('约定的前一版来源无效', 503)
+        if (m.previous.provenance) validateMemoryProvenance(m.previous.provenance)
+      }
+      if (m.origin !== undefined) {
+        if (
+          !m.origin ||
+          !Number.isSafeInteger(m.origin.entryRevision) ||
+          m.origin.entryRevision < 1 ||
+          m.origin.entryRevision >= (m.entryRevision ?? 1) ||
+          !Number.isFinite(Date.parse(m.origin.updatedAt))
+        )
+          throw new MemoryError('记忆初始来源无效', 503)
+        if (m.origin.provenance) validateMemoryProvenance(m.origin.provenance)
+      }
       entries.add(m.id)
     }
     if (p.memories.reduce((n, m) => n + m.text.length, 0) > 8000)
@@ -407,7 +465,13 @@ export class MemoryStore {
       for (const id of removable) delete next.bindings[id]
     })
   }
-  action(revision: unknown, action: any, sessionId: string, project: string | null): MemoryState {
+  action(
+    revision: unknown,
+    action: any,
+    sessionId: string,
+    project: string | null,
+    provenance?: MemoryProvenance
+  ): MemoryState {
     validId(sessionId)
     if (!action || typeof action !== 'object' || Array.isArray(action)) throw new MemoryError('操作内容无效')
     return this.change(revision, (s) => {
@@ -489,7 +553,8 @@ export class MemoryStore {
           break
         }
         case 'save': {
-          if (p.archived || !p.memoryEnabled) throw new MemoryError('人格记忆已关闭或归档')
+          if (p.archived || (!p.memoryEnabled && provenance?.actor !== 'human'))
+            throw new MemoryError('人格记忆已关闭或归档')
           const content = text(action.text, 2000, true)
           if (action.scope !== 'persona' && action.scope !== 'project') throw new MemoryError('记忆范围无效')
           if (action.scope === 'project' && !project) throw new MemoryError('当前会话没有项目目录')
@@ -500,7 +565,26 @@ export class MemoryStore {
             id: old?.id ?? randomUUID(),
             text: content,
             project: action.scope === 'project' ? project : null,
-            updatedAt: new Date().toISOString()
+            updatedAt: new Date().toISOString(),
+            entryRevision: (old?.entryRevision ?? (old ? 1 : 0)) + 1,
+            ...(provenance ? { provenance: structuredClone(provenance) } : {}),
+            ...(old
+              ? {
+                  previous: {
+                    entryRevision: old.entryRevision ?? 1,
+                    updatedAt: old.updatedAt,
+                    ...(old.provenance ? { provenance: structuredClone(old.provenance) } : {})
+                  },
+                  origin: structuredClone(
+                    old.origin ??
+                      old.previous ?? {
+                        entryRevision: old.entryRevision ?? 1,
+                        updatedAt: old.updatedAt,
+                        ...(old.provenance ? { provenance: old.provenance } : {})
+                      }
+                  )
+                }
+              : {})
           }
           if (old) p.memories[p.memories.indexOf(old)] = entry
           else p.memories.push(entry)
@@ -532,6 +616,9 @@ export function memoryContext(persona: Persona, project: string | null, maxChars
   const all = selectedMemories(persona, project).map((m) => ({
     id: m.id,
     text: m.text,
+    entryRevision: m.entryRevision ?? 1,
+    source: m.provenance?.actor ?? 'unknown',
+    confirmed: m.feedback?.confirmed === true,
     updatedAt: m.updatedAt
   }))
   const selected = []
@@ -543,5 +630,5 @@ export function memoryContext(persona: Persona, project: string | null, maxChars
     chars += cost
   }
   const omitted = all.length - selected.length
-  return `PX 本会话固定人格：${persona.name}（配置版本 ${persona.revision}）\n职责与协作方式：${persona.instructions || '沿用宿主默认方式'}\n人格不改变实际模型、工具或权限。以下是用户保存的参考记忆；当前明确指令优先，项目与运行事实须按需要重新核实。\n${persona.memoryEnabled ? JSON.stringify(selected) : '本轮不使用长期记忆。'}${omitted ? `\n另有 ${omitted} 条记忆未常驻注入；需要时使用 persona_memory read 读取。` : ''}\n需要回忆本人格过去的交流或工作时，使用 persona_history 搜索并按事件编号读取原文。搜索结果包含历史陈述而非当前事实；原生目标、任务和执行回执应按时间与来源核对。`
+  return `PX 本会话固定人格：${persona.name}（配置版本 ${persona.revision}）\n职责与协作方式：${persona.instructions || '沿用宿主默认方式'}\n人格不改变实际模型、工具或权限。以下是保存的参考记忆，来源与确认程度可能不同，不授予权限；当前明确指令优先，项目与运行事实须按需要重新核实。\n${persona.memoryEnabled ? JSON.stringify(selected) : '本轮不使用长期记忆。'}${omitted ? `\n另有 ${omitted} 条记忆未常驻注入；需要时使用 persona_memory read 读取。` : ''}\n需要回忆本人格过去的交流或工作时，使用 persona_history 搜索并按事件编号读取原文。搜索结果包含历史陈述而非当前事实；原生目标、任务和执行回执应按时间与来源核对。`
 }

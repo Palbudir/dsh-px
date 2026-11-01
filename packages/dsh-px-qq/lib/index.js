@@ -808,10 +808,15 @@ function installConversationTools(ctx, publicMemory = false, explicitReplies = t
           topic: { type: "string", maxLength: 90 },
           text: { type: "string", maxLength: 4e3 },
           revision: { type: "string", maxLength: 128 },
+          cursor: {
+            type: "string",
+            maxLength: 128,
+            description: "search \u540E\u7EED\u9875\u539F\u6837\u643A\u5E26\u8FD4\u56DE\u7684 cursor\uFF1B\u6B63\u6587\u6216\u53CD\u9988\u53D8\u5316\u65F6\u91CD\u65B0\u641C\u7D22\u3002"
+          },
           offset: {
             type: "integer",
             minimum: 0,
-            description: "catalog/search \u8FD4\u56DE nextOffset \u65F6\uFF0C\u643A\u5E26\u540C\u6B21 revision \u7EE7\u7EED\u67E5\u8BE2"
+            description: "\u8FD4\u56DE nextOffset \u65F6\u643A\u5E26\u540C\u6B21 revision\uFF1Bsearch \u8FD8\u9700\u643A\u5E26 cursor\u3002"
           },
           evidence: {
             type: "array",

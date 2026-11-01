@@ -50,10 +50,15 @@ export function installConversationTools(ctx: any, publicMemory = false, explici
           topic: { type: 'string', maxLength: 90 },
           text: { type: 'string', maxLength: 4000 },
           revision: { type: 'string', maxLength: 128 },
+          cursor: {
+            type: 'string',
+            maxLength: 128,
+            description: 'search 后续页原样携带返回的 cursor；正文或反馈变化时重新搜索。'
+          },
           offset: {
             type: 'integer',
             minimum: 0,
-            description: 'catalog/search 返回 nextOffset 时，携带同次 revision 继续查询'
+            description: '返回 nextOffset 时携带同次 revision；search 还需携带 cursor。'
           },
           evidence: {
             type: 'array',

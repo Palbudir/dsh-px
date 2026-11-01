@@ -16,6 +16,7 @@ import {
 import { PersonaExpressionEditor } from '../../shared/persona-expression-editor'
 import { ChannelNotesPanel } from './channel-notes-panel'
 import { SegmentPanel } from './segment-panel'
+import { MemoryFeedbackPanel } from './memory-feedback-panel'
 
 const personaDrafts = createDraftRegistry(64)
 
@@ -91,6 +92,8 @@ export function MemoryPanel({
     [conflict, setConflict] = useState(false)
   const [view, setView] = useState<View | null>(null),
     [error, setError] = useState(''),
+    [loadError, setLoadError] = useState(''),
+    [memoryEvidence, setMemoryEvidence] = useState<any>(null),
     [busy, setBusy] = useState(false)
   const [name, setName] = useState(saved?.name ?? ''),
     [instructions, setInstructions] = useState(saved?.instructions ?? ''),
@@ -198,6 +201,7 @@ export function MemoryPanel({
       try {
         const data = await requestJson<View>(url, { signal: ac.signal })
         if (!ac.signal.aborted) {
+          setLoadError('')
           if (restoring.current) {
             restoring.current = false
             setView(data)
@@ -216,12 +220,10 @@ export function MemoryPanel({
             }
           } else {
             accept(data)
-            setError('')
-            setConflict(false)
           }
         }
       } catch (e: any) {
-        if (!ac.signal.aborted) setError(String(e.message))
+        if (!ac.signal.aborted) setLoadError(String(e.message))
       }
       if (!ac.signal.aborted) timer = setTimeout(() => void refresh(), 5000)
     }
@@ -254,7 +256,10 @@ export function MemoryPanel({
         setError('另一个窗口切换了人格；请取消当前编辑后刷新，草稿未被覆盖。')
         return false
       }
-      if (configDirty && (!action || ['save', 'forget'].includes((action as { type: string }).type)))
+      if (
+        configDirty &&
+        (!action || ['save', 'forget', 'memory-feedback'].includes((action as { type: string }).type))
+      )
         setView(data)
       else accept(data)
       setDraftRevision(undefined)
@@ -274,6 +279,26 @@ export function MemoryPanel({
     setEditing(entry.id)
     setNote(entry.text)
     setScope(entry.project ? 'project' : 'persona')
+  }
+  const readMemoryEvidence = async (ref: { sessionId: string; seq: number }, offset = 0) => {
+    setBusy(true)
+    setError('')
+    try {
+      const result = await requestJson<any>(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'read-history', targetSessionId: ref.sessionId, seq: ref.seq, offset })
+      })
+      setMemoryEvidence((previous: any) =>
+        offset > 0 && previous?.sessionId === ref.sessionId && previous?.seq === ref.seq
+          ? { ...result.result, text: previous.text + result.result.text }
+          : result.result
+      )
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
   }
   const createSession = async (handoff: boolean) => {
     if (!targetPersona) return
@@ -349,6 +374,7 @@ export function MemoryPanel({
         )}
 
         {error && <p role="alert">{error} </p>}
+        {loadError && <p role="alert">{loadError}</p>}
         {conflict && (
           <button disabled={busy} onClick={discardDraft}>
             放弃草稿并读取最新
@@ -676,6 +702,18 @@ export function MemoryPanel({
                     .map((m) => (
                       <section key={m.id} style={{ ...cardStyle, marginBottom: 8 }}>
                         <small>{m.project ? '本目录' : '此人格通用'}</small>
+                        <small>
+                          {' '}
+                          · v{m.entryRevision ?? 1} ·{' '}
+                          {m.provenance?.actor === 'human'
+                            ? '用户保存'
+                            : m.provenance?.actor === 'model'
+                              ? '模型整理'
+                              : '来源未标注'}
+                        </small>
+                        {m.current === false && (
+                          <p role="status">此修订已标记为不正确，已停止自动注入。可编辑纠正或忘记。</p>
+                        )}
                         <p style={{ whiteSpace: 'pre-wrap' }}>{m.text}</p>
                         <button
                           style={controlStyle}
@@ -698,8 +736,93 @@ export function MemoryPanel({
                         >
                           忘记
                         </button>
+                        {!!m.provenance?.events.length && (
+                          <details>
+                            <summary>原始依据</summary>
+                            {m.provenance.events.map((ref) => (
+                              <button
+                                key={ref.sessionId + ':' + ref.seq}
+                                disabled={busy}
+                                onClick={() => void readMemoryEvidence(ref)}
+                              >
+                                读取事件 {ref.seq}
+                              </button>
+                            ))}
+                          </details>
+                        )}
+                        {m.previous && (
+                          <details>
+                            <summary>前一版来源（v{m.previous.entryRevision}）</summary>
+                            {m.previous.provenance?.events.length ? (
+                              m.previous.provenance.events.map((ref) => (
+                                <button
+                                  key={ref.sessionId + ':' + ref.seq}
+                                  disabled={busy}
+                                  onClick={() => void readMemoryEvidence(ref)}
+                                >
+                                  读取事件 {ref.seq}
+                                </button>
+                              ))
+                            ) : (
+                              <p>前一版没有关联原始事件。</p>
+                            )}
+                          </details>
+                        )}
+                        {m.origin && m.origin.entryRevision !== m.previous?.entryRevision && (
+                          <details>
+                            <summary>最早保留的来源（v{m.origin.entryRevision}）</summary>
+                            <p className="px-muted">用于追溯条目由来，不表示旧证据能证明当前修订。</p>
+                            {m.origin.provenance?.events.length ? (
+                              m.origin.provenance.events.map((ref) => (
+                                <button
+                                  key={ref.sessionId + ':' + ref.seq}
+                                  disabled={busy}
+                                  onClick={() => void readMemoryEvidence(ref)}
+                                >
+                                  读取事件 {ref.seq}
+                                </button>
+                              ))
+                            ) : (
+                              <p>这一版没有关联原始事件。</p>
+                            )}
+                          </details>
+                        )}
+                        <MemoryFeedbackPanel
+                          key={m.id + ':' + (m.entryRevision ?? 1)}
+                          value={m.feedback}
+                          busy={busy}
+                          disabled={view.persona.archived || dirty}
+                          readSource={(ref) => void readMemoryEvidence(ref)}
+                          submit={async (kind, reason) => {
+                            await act({
+                              type: 'memory-feedback',
+                              id: m.id,
+                              entryRevision: m.entryRevision ?? 1,
+                              kind,
+                              reason
+                            })
+                          }}
+                        />
                       </section>
                     ))}
+                  {memoryEvidence && (
+                    <section style={cardStyle}>
+                      <button onClick={() => setMemoryEvidence(null)}>收起依据</button>
+                      <p>
+                        来源会话 {memoryEvidence.sessionId} · 事件 {memoryEvidence.seq} · 已显示{' '}
+                        {memoryEvidence.text.length} / {memoryEvidence.totalCharacters} 字符
+                      </p>
+                      <pre style={{ whiteSpace: 'pre-wrap' }}>{memoryEvidence.text}</pre>
+                      {memoryEvidence.nextOffset !== null && (
+                        <button
+                          disabled={busy}
+                          onClick={() => void readMemoryEvidence(memoryEvidence, memoryEvidence.nextOffset)}
+                        >
+                          继续读取原文
+                        </button>
+                      )}
+                    </section>
+                  )}
                   <textarea
                     disabled={busy || view.persona.archived}
                     aria-label="记忆内容"
@@ -728,7 +851,7 @@ export function MemoryPanel({
                     </select>
                     <button
                       style={controlStyle}
-                      disabled={busy || !note.trim() || !view.persona.memoryEnabled || view.persona.archived}
+                      disabled={busy || !note.trim() || view.persona.archived}
                       onClick={() =>
                         void act({ type: 'save', id: editing, text: note, scope }).then((ok) => {
                           if (ok) {
