@@ -2846,7 +2846,7 @@ function SegmentPanel({ url, visible }) {
         (row) => ["preparing", "stopping", "ready", "committing"].includes(row.phase)
       ) ? " \xB7 \u6709\u540E\u53F0\u7247\u6BB5" : ""
     ] }),
-    /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { children: "\u5B9A\u671F\u5728\u540E\u53F0\u6574\u7406\u5DF2\u7ED3\u675F\u7684\u65E7\u6BB5\uFF0C\u4FDD\u7559\u8FD1\u671F\u539F\u6587\uFF0C\u5E76\u5728\u5B89\u5168\u6B65\u9AA4\u7528\u539F\u751F\u4E8B\u52A1\u63D0\u4EA4\u3002\u4E0D\u4F1A\u7B49\u5F85\u6458\u8981\u624D\u7EE7\u7EED\u5F53\u524D\u5DE5\u4F5C\uFF1B\u5FC5\u8981\u65F6\u4ECD\u4F7F\u7528\u539F\u751F\u538B\u529B\u538B\u7F29\u3002" }),
+    /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { children: "\u5B9A\u671F\u5728\u540E\u53F0\u6574\u7406\u5DF2\u7ED3\u675F\u7684\u65E7\u6BB5\uFF0C\u4FDD\u7559\u8FD1\u671F\u539F\u6587\uFF0C\u5E76\u5728\u5B89\u5168\u6B65\u9AA4\u63D0\u4EA4\u3002\u751F\u6210\u6458\u8981\u671F\u95F4\u4E3B\u4F1A\u8BDD\u53EF\u4EE5\u7EE7\u7EED\u5DE5\u4F5C\uFF1B\u63A5\u8FD1\u5BB9\u91CF\u4E0A\u9650\u65F6\uFF0C\u4ECD\u53EF\u80FD\u7B49\u5F85\u539F\u751F\u538B\u7F29\u3002" }),
     error && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { role: "alert", children: error }),
     loadError && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { role: "alert", children: loadError }),
     view && /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)(import_jsx_runtime14.Fragment, { children: [
@@ -2867,6 +2867,7 @@ function SegmentPanel({ url, visible }) {
         " ",
         "\u540E\u53F0\u6574\u7406\u8F83\u65E9\u5BF9\u8BDD"
       ] }),
+      view.settings.inheritedNativeAutoOff && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { className: "px-muted", children: "\u539F\u751F\u81EA\u52A8\u538B\u7F29\u5DF2\u5173\u95ED\uFF0C\u56E0\u6B64\u6682\u4E0D\u81EA\u52A8\u6574\u7406\u3002\u53EF\u5355\u72EC\u4E3A\u672C\u4F1A\u8BDD\u5F00\u542F\u4E0A\u65B9\u5F00\u5173\u3002" }),
       !view.ready && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { role: "status", children: "\u540E\u53F0\u63D0\u4EA4\u670D\u52A1\u6682\u672A\u5C31\u7EEA\uFF0C\u539F\u751F\u538B\u7F29\u4ECD\u53EF\u7EE7\u7EED\u3002" }),
       view.problem && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { role: "status", children: view.problem }),
       /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("div", { className: "px-actions", children: [
@@ -2899,7 +2900,7 @@ function SegmentPanel({ url, visible }) {
         "token\u3002\u6B64\u5904\u4EC5\u5217\u540E\u53F0\u5F00\u9500\u3002"
       ] }),
       view.preparingAdmission && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { role: "status", children: "\u6B63\u5728\u68C0\u67E5\u53EF\u6574\u7406\u7684\u65E7\u6BB5\uFF0C\u4E0D\u5F71\u54CD\u5F53\u524D\u4F1A\u8BDD\u7EE7\u7EED\u3002" }),
-      !view.records.length && !view.preparingAdmission && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { children: "\u5C1A\u65E0\u9700\u8981\u6574\u7406\u7684\u65E7\u6BB5\u3002\u6D88\u606F\u8F83\u5C11\u3001\u65E7\u6BB5\u8FC7\u5927\u6216\u5305\u542B\u5C1A\u4E0D\u652F\u6301\u7684\u591A\u5A92\u4F53\u65F6\uFF0C\u4FDD\u7559\u539F\u6587\u3002" }),
+      !view.records.length && !view.preparingAdmission && /* @__PURE__ */ (0, import_jsx_runtime14.jsx)("p", { children: "\u5C1A\u65E0\u7B26\u5408\u6761\u4EF6\u7684\u65E7\u6BB5\u3002\u6D88\u606F\u8F83\u5C11\u65F6\u4FDD\u7559\u539F\u6587\uFF1B\u8FC7\u5927\u7684\u5355\u6761\u5185\u5BB9\u548C\u5A92\u4F53\u4FDD\u6301\u539F\u6837\uFF0C\u540E\u9762\u7684\u72EC\u7ACB\u6587\u672C\u4ECD\u53EF\u6574\u7406\u3002" }),
       view.records.map((row) => /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("details", { style: { marginTop: 12 }, children: [
         /* @__PURE__ */ (0, import_jsx_runtime14.jsxs)("summary", { children: [
           labels2[row.phase] ?? row.phase,

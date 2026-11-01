@@ -69,7 +69,7 @@ export function SegmentPanel({ url, visible }: { url: string; visible: boolean }
           : ''}
       </summary>
       <p>
-        定期在后台整理已结束的旧段，保留近期原文，并在安全步骤用原生事务提交。不会等待摘要才继续当前工作；必要时仍使用原生压力压缩。
+        定期在后台整理已结束的旧段，保留近期原文，并在安全步骤提交。生成摘要期间主会话可以继续工作；接近容量上限时，仍可能等待原生压缩。
       </p>
       {error && <p role="alert">{error}</p>}
       {loadError && <p role="alert">{loadError}</p>}
@@ -90,6 +90,9 @@ export function SegmentPanel({ url, visible }: { url: string; visible: boolean }
             />{' '}
             后台整理较早对话
           </label>
+          {view.settings.inheritedNativeAutoOff && (
+            <p className="px-muted">原生自动压缩已关闭，因此暂不自动整理。可单独为本会话开启上方开关。</p>
+          )}
           {!view.ready && <p role="status">后台提交服务暂未就绪，原生压缩仍可继续。</p>}
           {view.problem && <p role="status">{view.problem}</p>}
           <div className="px-actions">
@@ -117,7 +120,9 @@ export function SegmentPanel({ url, visible }: { url: string; visible: boolean }
           </p>
           {view.preparingAdmission && <p role="status">正在检查可整理的旧段，不影响当前会话继续。</p>}
           {!view.records.length && !view.preparingAdmission && (
-            <p>尚无需要整理的旧段。消息较少、旧段过大或包含尚不支持的多媒体时，保留原文。</p>
+            <p>
+              尚无符合条件的旧段。消息较少时保留原文；过大的单条内容和媒体保持原样，后面的独立文本仍可整理。
+            </p>
           )}
           {view.records.map((row: any) => (
             <details key={row.id} style={{ marginTop: 12 }}>

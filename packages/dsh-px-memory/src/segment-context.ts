@@ -30,6 +30,14 @@ export interface SegmentBudget {
   retainTokens: number
   maximumCharacters: number
 }
+/** Batch enough older material to amortize prefix-cache invalidation, while retaining a recent raw tail. */
+export function segmentBudget(capacity: number): SegmentBudget {
+  return {
+    minimumTokens: Math.max(2048, Math.min(48000, Math.floor(capacity * 0.15))),
+    retainTokens: Math.max(4096, Math.min(24000, Math.floor(capacity * 0.2))),
+    maximumCharacters: Math.min(300000, capacity * 2)
+  }
+}
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const checkpoint = (event: any) =>
   event.type === 'user/message' && event.data?.source?.kind === 'compact-checkpoint'
@@ -95,27 +103,38 @@ export async function captureSegment(
       eventHashes: string[] = [],
       tokens = 0,
       characters = 0
+    const reset = () => {
+      seqs = []
+      messages = []
+      eventHashes = []
+      tokens = 0
+      characters = 0
+    }
     for (let at = 0; at < keepFrom && at < 512; at++) {
       signal?.throwIfAborted()
       const seq = nodes[at]
       const event = (await reader.read(seq, 1, { signal })).events[0]
       if (!event || event.seq !== seq) return // A buffered native write has not become readable yet.
       if (event.type === 'system/message' || checkpoint(event)) {
-        seqs = []
-        messages = []
-        eventHashes = []
-        tokens = 0
-        characters = 0
+        reset()
         continue
       }
       if (seq >= boundary) break
       if (!seqs.length && !toolPairingBalancedBefore(session, seq as any)) continue
       const message = session.deriveEventMessage(event)
       if (!message) return
-      // The initial background summarizer is text-only. Native pressure compaction retains its own multimodal path.
-      if (!textBlocks(message.content)) return
+      // Leave opaque media and oversized nodes intact. They must not prevent later independent text spans
+      // from being prepared; pairing checks below still exclude the remainder of an unfinished tool pair.
+      // Native pressure compaction retains its own multimodal path when those raw nodes need shrinking.
+      if (!textBlocks(message.content)) {
+        reset()
+        continue
+      }
       characters += JSON.stringify({ ...message, content: visibleBlocks(message.content) }).length
-      if (characters > budget.maximumCharacters) return
+      if (characters > budget.maximumCharacters) {
+        reset()
+        continue
+      }
       seqs.push(seq)
       messages.push(message)
       eventHashes.push(hash(event))

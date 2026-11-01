@@ -24323,6 +24323,13 @@ function registerSegmentBoundary(host) {
     apply: (state, event) => event.type === "step/end" ? { completedThrough: event.seq + 1 } : state
   });
 }
+function segmentBudget(capacity) {
+  return {
+    minimumTokens: Math.max(2048, Math.min(48e3, Math.floor(capacity * 0.15))),
+    retainTokens: Math.max(4096, Math.min(24e3, Math.floor(capacity * 0.2))),
+    maximumCharacters: Math.min(3e5, capacity * 2)
+  };
+}
 var hash5 = (value) => createHash8("sha256").update(JSON.stringify(value)).digest("hex");
 var checkpoint = (event) => event.type === "user/message" && event.data?.source?.kind === "compact-checkpoint";
 var textBlocks = (blocks) => blocks.every(
@@ -24358,26 +24365,35 @@ async function captureSegment(host, agent, budget, signal) {
   const reader = await nativeReader(host, session.id, signal);
   try {
     let seqs = [], messages = [], eventHashes = [], tokens = 0, characters = 0;
+    const reset = () => {
+      seqs = [];
+      messages = [];
+      eventHashes = [];
+      tokens = 0;
+      characters = 0;
+    };
     for (let at = 0; at < keepFrom && at < 512; at++) {
       signal?.throwIfAborted();
       const seq = nodes[at];
       const event = (await reader.read(seq, 1, { signal })).events[0];
       if (!event || event.seq !== seq) return;
       if (event.type === "system/message" || checkpoint(event)) {
-        seqs = [];
-        messages = [];
-        eventHashes = [];
-        tokens = 0;
-        characters = 0;
+        reset();
         continue;
       }
       if (seq >= boundary) break;
       if (!seqs.length && !toolPairingBalancedBefore(session, seq)) continue;
       const message = session.deriveEventMessage(event);
       if (!message) return;
-      if (!textBlocks(message.content)) return;
+      if (!textBlocks(message.content)) {
+        reset();
+        continue;
+      }
       characters += JSON.stringify({ ...message, content: visibleBlocks(message.content) }).length;
-      if (characters > budget.maximumCharacters) return;
+      if (characters > budget.maximumCharacters) {
+        reset();
+        continue;
+      }
       seqs.push(seq);
       messages.push(message);
       eventHashes.push(hash5(event));
@@ -24674,6 +24690,11 @@ var SegmentRuntime = class {
       else this.committer = committer;
     });
   }
+  settings(sessionId) {
+    const saved = this.store.settings(sessionId);
+    const inheritedNativeAutoOff = saved.revision === 0 && service(this.host, "compaction")?.config?.auto === false;
+    return { ...saved, enabled: saved.enabled && !inheritedNativeAutoOff, inheritedNativeAutoOff };
+  }
   route(agent) {
     const pending = service(this.host, "sessionProjections")?.stateOf(
       agent.session,
@@ -24711,7 +24732,7 @@ var SegmentRuntime = class {
   }
   valid(record2, agent) {
     try {
-      return !this.stopped && this.store.settings(record2.sessionId).enabled && this.identity(record2.sessionId).fingerprint === record2.identity && hash6(this.route(agent)) === hash6(record2.route);
+      return !this.stopped && this.settings(record2.sessionId).enabled && this.identity(record2.sessionId).fingerprint === record2.identity && hash6(this.route(agent)) === hash6(record2.route);
     } catch {
       return false;
     }
@@ -24775,7 +24796,7 @@ var SegmentRuntime = class {
     try {
       this.identity(agent.session.id);
       await this.reconcile(agent);
-      if (!this.store.settings(agent.session.id).enabled) return;
+      if (!this.settings(agent.session.id).enabled) return;
       const ready = this.store.unfinished(agent.session.id).find((row) => row.phase === "ready");
       if (ready && !this.commits.has(agent.session.id)) {
         const committing = this.commitReady(agent, ready, signal);
@@ -24793,7 +24814,7 @@ var SegmentRuntime = class {
   }
   schedule(agent) {
     const id = agent.session.id;
-    if (this.stopped || !this.committer || this.admissions.has(id) || this.running.size + this.admissions.size >= 2 || this.store.unfinished(id).length || !this.store.settings(id).enabled || isInternalSession(id))
+    if (this.stopped || !this.committer || this.admissions.has(id) || this.running.size + this.admissions.size >= 2 || this.store.unfinished(id).length || !this.settings(id).enabled || isInternalSession(id))
       return;
     const owner = { agent, controller: new AbortController() };
     this.admissions.set(id, owner);
@@ -24815,15 +24836,12 @@ var SegmentRuntime = class {
     const source = await captureSegment(
       { get: (name2) => service(this.host, name2) },
       agent,
-      {
-        minimumTokens: Math.max(2048, Math.min(12e3, Math.floor(capacity * 0.1))),
-        retainTokens: Math.max(4096, Math.min(24e3, Math.floor(capacity * 0.2))),
-        maximumCharacters: Math.min(1e5, capacity * 2)
-      },
+      segmentBudget(capacity),
       signal
     );
     if (!source) return;
-    if (this.store.seen(id, source.fingerprint, identity.fingerprint, route) && !this.retry.delete(id)) return;
+    const retryRequested = this.retry.delete(id);
+    if (this.store.seen(id, source.fingerprint, identity.fingerprint, route) && !retryRequested) return;
     let memoryTarget, allowedSeqs = [];
     if (identity.persona.memoryEnabled) {
       const caller = this.memoryCaller(id, agent.session.header.cwd), scope = publicSession(identity.binding) ? "project" : projectKey(agent.session.header.cwd) ? "persona-project" : "persona";
@@ -25046,7 +25064,7 @@ var SegmentRuntime = class {
     return {
       ready: !!this.committer,
       preparingAdmission: this.admissions.has(sessionId),
-      settings: this.store.settings(sessionId),
+      settings: this.settings(sessionId),
       problem: this.problem.get(sessionId),
       records: records.map((row) => ({ ...row, nativeJobPending: this.running.has(row.id) })),
       cost: {
@@ -25067,7 +25085,7 @@ var SegmentRuntime = class {
     }));
   }
   configure(sessionId, revision, enabled) {
-    const before = this.store.settings(sessionId);
+    const before = this.settings(sessionId);
     const value = this.store.configure(sessionId, revision, enabled);
     if (!enabled) this.cancel(sessionId, "\u672C\u4F1A\u8BDD\u5DF2\u5173\u95ED\u540E\u53F0\u6574\u7406");
     else if (!before.enabled) this.retry.add(sessionId);

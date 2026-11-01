@@ -112,7 +112,7 @@ async function fixture(t: any, capacity: number | null = 32768) {
   )
   let runtime = new SegmentRuntime(app, identities, bank, history, join(root, 'segments.sqlite'))
   await runtime.ready()
-  const create = (id: string, singleTurn = false, sized = false) => {
+  const create = (id: string, singleTurn = false, sized = false, enable = true) => {
     const session = host.sessions.create(id, { meta: { cwd: root } }),
       agent: any = { id, session, options: { provider: 'fixture', model: 'fixture' } }
     const scope = createScope(app, agent)
@@ -120,6 +120,7 @@ async function fixture(t: any, capacity: number | null = 32768) {
     scopes.push(scope)
     agents.set(id, agent)
     identities.bind(id, { locked: true })
+    if (enable) runtime.configure(id, 0, true)
     session.append('turn/start', { turn: 1 })
     const first = session.append(
       'user/message',
@@ -128,7 +129,11 @@ async function fixture(t: any, capacity: number | null = 32768) {
         content: [
           {
             type: 'text',
-            text: 'ORIGINAL_REQUEST_731 ' + 'old source with important fact '.repeat(sized ? 1700 : 1000)
+            text:
+              'ORIGINAL_REQUEST_731 ' +
+              'old source with important fact '.repeat(
+                sized ? Math.max(1700, Math.ceil((capacity ?? 32768) / 40)) : 1000
+              )
           }
         ]
       }),
@@ -199,6 +204,23 @@ async function fixture(t: any, capacity: number | null = 32768) {
     }
   }
 }
+
+test('explicit native auto-off is inherited until the user enables background preparation for this session', async (t) => {
+  const f = await fixture(t),
+    a = f.create('manual-only', false, false, false)
+  assert.equal(f.runtime.snapshot(a.agent.id).settings.enabled, false)
+  assert.equal(f.runtime.snapshot(a.agent.id).settings.inheritedNativeAutoOff, true)
+  await f.runtime.boundary(a.agent, new AbortController().signal)
+  assert.equal(f.runtime.snapshot(a.agent.id).preparingAdmission, false)
+  assert.equal(f.pending.length, 0)
+  f.runtime.configure(a.agent.id, 0, true)
+  await f.runtime.boundary(a.agent, new AbortController().signal)
+  await until(() => f.pending.length === 1, 'explicit opt-in works')
+  f.pending[0].release()
+  await until(() => f.runtime.snapshot(a.agent.id).records[0].phase === 'ready', 'prepared')
+  await f.restart()
+  assert.equal(f.runtime.snapshot(a.agent.id).settings.enabled, true, 'saved opt-in survives restart')
+})
 
 test(
   'native Job overlaps main progress and commits at a later boundary, with separate explicit memory adoption',

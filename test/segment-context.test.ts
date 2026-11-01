@@ -221,6 +221,83 @@ test(
               undefined,
               'newly admitted input before step/start has not been processed and cannot become an old segment'
             )
+            for (const opaque of ['image', 'large-text'] as const) {
+              const withOpaque = host.sessions.create('opaque-' + opaque)
+              withOpaque.append('turn/start', { turn: 1 })
+              const kept = withOpaque.append(
+                'user/message',
+                createUserMessage({
+                  source: { kind: 'user' },
+                  content: [
+                    opaque === 'image'
+                      ? {
+                          type: 'image',
+                          attachment: {
+                            attachmentId: 'a'.repeat(64) as any,
+                            mediaType: 'image/png',
+                            bytes: 70,
+                            width: 1,
+                            height: 1
+                          }
+                        }
+                      : { type: 'text', text: 'oversized original '.repeat(10000) }
+                  ]
+                }),
+                { surfaceOp: 'append' }
+              )
+              const later = withOpaque.append(
+                'user/message',
+                createUserMessage({
+                  source: { kind: 'user' },
+                  content: [{ type: 'text', text: 'LATER '.repeat(4000) }]
+                }),
+                { surfaceOp: 'append' }
+              )
+              withOpaque.append('step/start', { turn: 1, step: 1 })
+              withOpaque.append(
+                'assistant/message',
+                {
+                  turn: 1,
+                  step: 1,
+                  stream: [],
+                  message: createAssistantMessage({
+                    source: { provider: 'fixture', model: 'fixture' },
+                    content: [{ type: 'text', text: 'DONE' }]
+                  })
+                },
+                { surfaceOp: 'append' }
+              )
+              withOpaque.append('step/end', { turn: 1, step: 1 })
+              withOpaque.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+              withOpaque.append('turn/start', { turn: 2 })
+              withOpaque.append(
+                'user/message',
+                createUserMessage({
+                  source: { kind: 'user' },
+                  content: [{ type: 'text', text: 'TAIL '.repeat(2000) }]
+                }),
+                { surfaceOp: 'append' }
+              )
+              const opaqueAgent = { session: withOpaque, options: agent.options }
+              const segment = await captureSegment(host, opaqueAgent, {
+                minimumTokens: 2000,
+                retainTokens: 1000,
+                maximumCharacters: 100000
+              })
+              assert.ok(segment, 'later text remains eligible after ' + opaque)
+              assert.equal(segment.seqs[0], later.seq)
+              assert.ok(!segment.seqs.includes(kept.seq))
+              await committer.commit(
+                opaqueAgent,
+                segment,
+                { ...prepared, id: 'after-' + opaque },
+                new AbortController().signal
+              )
+              assert.ok(
+                withOpaque.surface.nodes.includes(kept.seq),
+                'opaque source remains in native context'
+              )
+            }
           } finally {
             await committer.dispose()
           }

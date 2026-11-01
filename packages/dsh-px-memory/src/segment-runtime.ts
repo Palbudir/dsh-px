@@ -3,6 +3,7 @@ import { MemoryError, isInternalSession, publicSession, projectKey, type MemoryS
 import { service, nativeReader, type HistoryIndex } from './history'
 import {
   captureSegment,
+  segmentBudget,
   createSegmentCommitter,
   segmentStillVisible,
   type SegmentSource
@@ -49,6 +50,12 @@ export class SegmentRuntime {
       if (this.stopped) await committer.dispose()
       else this.committer = committer
     }))
+  }
+  private settings(sessionId: string) {
+    const saved = this.store.settings(sessionId)
+    const inheritedNativeAutoOff =
+      saved.revision === 0 && service(this.host, 'compaction')?.config?.auto === false
+    return { ...saved, enabled: saved.enabled && !inheritedNativeAutoOff, inheritedNativeAutoOff }
   }
   private route(agent: any) {
     const pending = service(this.host, 'sessionProjections')?.stateOf(
@@ -104,7 +111,7 @@ export class SegmentRuntime {
     try {
       return (
         !this.stopped &&
-        this.store.settings(record.sessionId).enabled &&
+        this.settings(record.sessionId).enabled &&
         this.identity(record.sessionId).fingerprint === record.identity &&
         hash(this.route(agent)) === hash(record.route)
       )
@@ -187,7 +194,7 @@ export class SegmentRuntime {
     try {
       this.identity(agent.session.id)
       await this.reconcile(agent)
-      if (!this.store.settings(agent.session.id).enabled) return
+      if (!this.settings(agent.session.id).enabled) return
       const ready = this.store.unfinished(agent.session.id).find((row) => row.phase === 'ready')
       if (ready && !this.commits.has(agent.session.id)) {
         const committing = this.commitReady(agent, ready, signal)
@@ -211,7 +218,7 @@ export class SegmentRuntime {
       this.admissions.has(id) ||
       this.running.size + this.admissions.size >= 2 ||
       this.store.unfinished(id).length ||
-      !this.store.settings(id).enabled ||
+      !this.settings(id).enabled ||
       isInternalSession(id)
     )
       return
@@ -241,15 +248,12 @@ export class SegmentRuntime {
     const source = await captureSegment(
       { get: (name: string) => service(this.host, name) },
       agent,
-      {
-        minimumTokens: Math.max(2048, Math.min(12000, Math.floor(capacity * 0.1))),
-        retainTokens: Math.max(4096, Math.min(24000, Math.floor(capacity * 0.2))),
-        maximumCharacters: Math.min(100000, capacity * 2)
-      },
+      segmentBudget(capacity),
       signal
     )
     if (!source) return
-    if (this.store.seen(id, source.fingerprint, identity.fingerprint, route) && !this.retry.delete(id)) return
+    const retryRequested = this.retry.delete(id)
+    if (this.store.seen(id, source.fingerprint, identity.fingerprint, route) && !retryRequested) return
     let memoryTarget: SegmentRecord['memoryTarget'],
       allowedSeqs: number[] = []
     if (identity.persona.memoryEnabled) {
@@ -496,7 +500,7 @@ export class SegmentRuntime {
     return {
       ready: !!this.committer,
       preparingAdmission: this.admissions.has(sessionId),
-      settings: this.store.settings(sessionId),
+      settings: this.settings(sessionId),
       problem: this.problem.get(sessionId),
       records: records.map((row) => ({ ...row, nativeJobPending: this.running.has(row.id) })),
       cost: {
@@ -520,7 +524,7 @@ export class SegmentRuntime {
       }))
   }
   configure(sessionId: string, revision: number, enabled: boolean) {
-    const before = this.store.settings(sessionId)
+    const before = this.settings(sessionId)
     const value = this.store.configure(sessionId, revision, enabled)
     if (!enabled) this.cancel(sessionId, '本会话已关闭后台整理')
     else if (!before.enabled) this.retry.add(sessionId)
