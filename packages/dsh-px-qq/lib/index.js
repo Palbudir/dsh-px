@@ -1123,6 +1123,7 @@ var QqGroupTasks = class {
   creating = /* @__PURE__ */ new Map();
   creationControllers = /* @__PURE__ */ new Map();
   stopEpoch = /* @__PURE__ */ new Map();
+  stopping = /* @__PURE__ */ new Map();
   sends = /* @__PURE__ */ new Map();
   disposed = false;
   roots = /* @__PURE__ */ new Map();
@@ -1152,6 +1153,16 @@ var QqGroupTasks = class {
     const goal = goals?.get(agent);
     if (goal?.phase === "active") goals.pause(agent, { id: goal.id, revision: goal.revision });
     agent.cancel({ kind: "user" });
+  }
+  liveTaskAgents(chatId, rootSessionId) {
+    const agents = get2(this.host, "agents"), live = /* @__PURE__ */ new Map();
+    for (const row of this.memory().channelBindings(this.settings.accountId)) {
+      if (row.channel.conversationId !== chatId || !row.channel.task || rootSessionId && row.channel.task.rootSessionId !== rootSessionId)
+        continue;
+      const agent = agents?.get(row.sessionId);
+      if (agent) live.set(row.sessionId, agent);
+    }
+    return [...live.values()];
   }
   entries(chatId) {
     return this.memory().channelBindings(this.settings.accountId).filter(
@@ -1265,10 +1276,12 @@ var QqGroupTasks = class {
     if (!chatId.startsWith("group:") || !this.settings.authorizedUsers.includes(senderId))
       throw new QqError("\u53EA\u6709\u6388\u6743\u6210\u5458\u80FD\u65B0\u5EFA\u7FA4\u4EFB\u52A1\u4F1A\u8BDD", 403);
     const previous = this.entries(chatId).find((row) => row.channel.task.requesterId === senderId);
-    const active = previous && get2(this.host, "agents")?.get(previous.sessionId);
-    if (active && (active.status === "running" || active.inbox.nextTurn.length || active.inbox.nextStep.length))
+    const active = previous ? this.liveTaskAgents(chatId, previous.sessionId) : [];
+    if (active.some(
+      (agent2) => agent2.status === "running" || agent2.inbox.nextTurn.length || agent2.inbox.nextStep.length
+    ))
       throw new QqError("\u7FA4\u4EFB\u52A1\u5C1A\u672A\u7ED3\u675F\uFF0C\u8BF7\u5148 /stop \u518D\u65B0\u5EFA\u4EFB\u52A1\u4F1A\u8BDD", 409);
-    if (active) this.stopAgent(active);
+    await this.stopActors(active);
     const agent = await this.root(chatId, senderId, new AbortController().signal, true);
     await get2(this.host, "sessions").flush(agent.session);
     return agent.session.id;
@@ -1292,14 +1305,59 @@ var QqGroupTasks = class {
   }
   async stop(chatId) {
     this.cancelAdmissions(chatId);
-    for (const row of this.entries(chatId)) {
-      const agent = get2(this.host, "agents")?.get(row.sessionId);
-      if (!agent) continue;
-      this.stopAgent(agent);
-      await agent.whenIdle();
+    await this.stopActors(this.liveTaskAgents(chatId));
+  }
+  async stopActors(agents) {
+    const byId = new Map(agents.map((agent) => [agent.session.id, agent])), canceledWakes = /* @__PURE__ */ new Set();
+    for (const id of byId.keys()) this.stopping.set(id, (this.stopping.get(id) ?? 0) + 1);
+    const unlisten = this.host.on?.("agent/inbox/inserted", ({ agent, message }) => {
+      const target = byId.get(agent.id);
+      if (target && get2(this.host, "agents")?.get(agent.id) === target && message.source?.kind === "subagent-settled" && byId.has(message.source.senderSessionId)) {
+        if (target.inbox.remove(message.id)) canceledWakes.add(agent.id);
+      }
+    });
+    const unguard = this.host.on?.(
+      "agent/pre-step",
+      async ({ agent, messages }, next) => {
+        const target = byId.get(agent.id);
+        if (target && get2(this.host, "agents")?.get(agent.id) === target && canceledWakes.delete(agent.id) && !messages.length) {
+          target.cancel({ kind: "user" });
+          return { kind: "reject" };
+        }
+        return next();
+      },
+      { prepend: true }
+    );
+    try {
+      for (const agent of agents) this.stopAgent(agent);
+      const parents = /* @__PURE__ */ new Map(), registry = get2(this.host, "agents");
+      for (const agent of agents) {
+        const parent = agents.find((candidate) => registry?.isOwnedBy?.(agent.session.id, candidate) === true);
+        if (!parent) continue;
+        const ids = parents.get(parent) ?? [];
+        ids.push(agent.session.id);
+        parents.set(parent, ids);
+      }
+      const subagents = get2(this.host, "subagents"), draining = [];
+      if (subagents?.drainChildren) {
+        for (const [parent, ids] of parents) draining.push(subagents.drainChildren(parent, ids));
+      }
+      const settled = await Promise.allSettled(draining);
+      const idle = await Promise.allSettled(agents.map((agent) => agent.whenIdle()));
+      const failed = [...settled, ...idle].find((result) => result.status === "rejected");
+      if (failed?.status === "rejected") throw failed.reason;
+    } finally {
+      unguard?.();
+      unlisten?.();
+      for (const id of byId.keys()) {
+        const remaining = (this.stopping.get(id) ?? 1) - 1;
+        if (remaining) this.stopping.set(id, remaining);
+        else this.stopping.delete(id);
+      }
     }
   }
   event(session, event) {
+    if (this.stopping.has(session.id)) return;
     if (!this.roots.has(session.id) || !["assistant/message", "turn/end"].includes(event.type)) return;
     const channel = this.memory().inspect(session.id).binding?.channel;
     if (!channel?.task || channel.task.rootSessionId !== session.id || !this.allowed(session.id)) return;

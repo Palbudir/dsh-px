@@ -21,6 +21,7 @@ export class QqGroupTasks {
   private creating = new Map<string, Promise<any>>()
   private creationControllers = new Map<string, AbortController>()
   private stopEpoch = new Map<string, number>()
+  private stopping = new Map<string, number>()
   private sends = new Map<string, Promise<unknown>>()
   private disposed = false
   private roots = new Map<string, any>()
@@ -61,6 +62,21 @@ export class QqGroupTasks {
     const goal = goals?.get(agent)
     if (goal?.phase === 'active') goals.pause(agent, { id: goal.id, revision: goal.revision })
     agent.cancel({ kind: 'user' })
+  }
+  private liveTaskAgents(chatId: string, rootSessionId?: string): any[] {
+    const agents = get(this.host, 'agents'),
+      live = new Map<string, any>()
+    for (const row of this.memory().channelBindings(this.settings.accountId)) {
+      if (
+        row.channel.conversationId !== chatId ||
+        !row.channel.task ||
+        (rootSessionId && row.channel.task.rootSessionId !== rootSessionId)
+      )
+        continue
+      const agent = agents?.get(row.sessionId)
+      if (agent) live.set(row.sessionId, agent)
+    }
+    return [...live.values()]
   }
   entries(chatId: string) {
     return this.memory()
@@ -201,13 +217,14 @@ export class QqGroupTasks {
     if (!chatId.startsWith('group:') || !this.settings.authorizedUsers.includes(senderId))
       throw new QqError('只有授权成员能新建群任务会话', 403)
     const previous = this.entries(chatId).find((row: any) => row.channel.task.requesterId === senderId)
-    const active = previous && get(this.host, 'agents')?.get(previous.sessionId)
+    const active = previous ? this.liveTaskAgents(chatId, previous.sessionId) : []
     if (
-      active &&
-      (active.status === 'running' || active.inbox.nextTurn.length || active.inbox.nextStep.length)
+      active.some(
+        (agent) => agent.status === 'running' || agent.inbox.nextTurn.length || agent.inbox.nextStep.length
+      )
     )
       throw new QqError('群任务尚未结束，请先 /stop 再新建任务会话', 409)
-    if (active) this.stopAgent(active)
+    await this.stopActors(active)
     const agent = await this.root(chatId, senderId, new AbortController().signal, true)
     await get(this.host, 'sessions').flush(agent.session)
     return agent.session.id
@@ -240,14 +257,81 @@ export class QqGroupTasks {
   }
   async stop(chatId: string): Promise<void> {
     this.cancelAdmissions(chatId)
-    for (const row of this.entries(chatId)) {
-      const agent = get(this.host, 'agents')?.get(row.sessionId)
-      if (!agent) continue
-      this.stopAgent(agent)
-      await agent.whenIdle()
+    await this.stopActors(this.liveTaskAgents(chatId))
+  }
+  private async stopActors(agents: any[]): Promise<void> {
+    // A native Team Lead can be idle while its members are working. Cancel every owned
+    // task actor before awaiting quiescence; cancelling the Lead alone does not stop Teams.
+    const byId = new Map(agents.map((agent) => [agent.session.id, agent])),
+      canceledWakes = new Set<string>()
+    for (const id of byId.keys()) this.stopping.set(id, (this.stopping.get(id) ?? 0) + 1)
+    // Native teardown still delivers a settlement notice. Cancel only notices from the exact
+    // actors being stopped, through the native inbox; its durable splice preserves the receipt.
+    const unlisten = this.host.on?.('agent/inbox/inserted', ({ agent, message }: any) => {
+      const target = byId.get(agent.id)
+      if (
+        target &&
+        get(this.host, 'agents')?.get(agent.id) === target &&
+        message.source?.kind === 'subagent-settled' &&
+        byId.has(message.source.senderSessionId)
+      )
+        if (target.inbox.remove(message.id)) canceledWakes.add(agent.id)
+    })
+    // Native followup still wakes an idle Agent after a listener removes its message.
+    // Reject only that empty wake; an independent new user input is never consumed here.
+    const unguard = this.host.on?.(
+      'agent/pre-step',
+      async ({ agent, messages }: any, next: any) => {
+        const target = byId.get(agent.id)
+        if (
+          target &&
+          get(this.host, 'agents')?.get(agent.id) === target &&
+          canceledWakes.delete(agent.id) &&
+          !messages.length
+        ) {
+          target.cancel({ kind: 'user' })
+          return { kind: 'reject' }
+        }
+        return next()
+      },
+      { prepend: true }
+    )
+    try {
+      for (const agent of agents) this.stopAgent(agent)
+      // Selected-child teardown preserves future delegation by the same live parent.
+      const parents = new Map<any, string[]>(),
+        registry = get(this.host, 'agents')
+      for (const agent of agents) {
+        // Fresh native children need not have fork lineage; runtime ownership is authoritative.
+        const parent = agents.find((candidate) => registry?.isOwnedBy?.(agent.session.id, candidate) === true)
+        if (!parent) continue
+        const ids = parents.get(parent) ?? []
+        ids.push(agent.session.id)
+        parents.set(parent, ids)
+      }
+      const subagents = get(this.host, 'subagents'),
+        draining: Promise<unknown>[] = []
+      if (subagents?.drainChildren) {
+        for (const [parent, ids] of parents) draining.push(subagents.drainChildren(parent, ids))
+      }
+      const settled = await Promise.allSettled(draining)
+      // Native settlement may have opened an empty parent turn while children were draining.
+      // Sample whenIdle after those receipts, keeping the step fence until that wake has settled.
+      const idle = await Promise.allSettled(agents.map((agent) => agent.whenIdle()))
+      const failed = [...settled, ...idle].find((result) => result.status === 'rejected')
+      if (failed?.status === 'rejected') throw failed.reason
+    } finally {
+      unguard?.()
+      unlisten?.()
+      for (const id of byId.keys()) {
+        const remaining = (this.stopping.get(id) ?? 1) - 1
+        if (remaining) this.stopping.set(id, remaining)
+        else this.stopping.delete(id)
+      }
     }
   }
   event(session: any, event: any): void {
+    if (this.stopping.has(session.id)) return
     if (!this.roots.has(session.id) || !['assistant/message', 'turn/end'].includes(event.type)) return
     const channel = this.memory().inspect(session.id).binding?.channel
     if (!channel?.task || channel.task.rootSessionId !== session.id || !this.allowed(session.id)) return

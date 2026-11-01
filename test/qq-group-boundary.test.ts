@@ -261,7 +261,8 @@ test('stopping a group pauses its native goals before cancellation and leaves ot
   const calls: string[] = [],
     goals = new Map<string, any>([
       ['own', { id: 'goal-own', revision: 7, phase: 'active', activation: 'disarmed' }],
-      ['other', { id: 'goal-other', revision: 3, phase: 'active', activation: 'armed' }]
+      ['other', { id: 'goal-other', revision: 3, phase: 'active', activation: 'armed' }],
+      ['child', { id: 'goal-child', revision: 2, phase: 'active', activation: 'armed' }]
     ])
   const service = {
     get: (agent: any) => goals.get(agent.id),
@@ -273,11 +274,13 @@ test('stopping a group pauses its native goals before cancellation and leaves ot
     }
   }
   const agents = new Map(
-    ['own', 'other'].map((id) => [
+    ['own', 'other', 'child'].map((id) => [
       id,
       {
         id,
-        session: { id },
+        session: { id, header: {} },
+        status: id === 'child' ? 'running' : 'idle',
+        inbox: { nextTurn: [], nextStep: [] },
         ctx: { get: (name: string) => (name === 'goals' ? service : undefined) },
         cancel: () => {
           calls.push('cancel:' + id)
@@ -286,17 +289,27 @@ test('stopping a group pauses its native goals before cancellation and leaves ot
       }
     ])
   )
-  const rows = ['own', 'other'].map((id) => ({
+  const rows = ['own', 'other', 'child'].map((id) => ({
     sessionId: id,
     createdAt: '2026-10-26',
     channel: {
-      ...channelFor(settings, id === 'own' ? 'group:34007' : 'group:34008'),
-      task: { requesterId: '23007', rootSessionId: id }
+      ...channelFor(settings, id === 'other' ? 'group:34008' : 'group:34007'),
+      task: { requesterId: '23007', rootSessionId: id === 'child' ? 'own' : id }
     }
   }))
   const services: any = {
-    agents: { get: (id: string) => agents.get(id) },
-    pxMemoryChannels: { channelBindings: () => rows }
+    agents: {
+      get: (id: string) => agents.get(id),
+      isOwnedBy: (id: string, parent: any) => id === 'child' && parent === agents.get('own')
+    },
+    pxMemoryChannels: { channelBindings: () => rows },
+    subagents: {
+      drainChildren: async (parent: any, ids: string[]) => {
+        assert.equal(parent, agents.get('own'))
+        assert.deepEqual(ids, ['child'])
+        calls.push('drain:child')
+      }
+    }
   }
   const tasks = new QqGroupTasks(
     { get: (name: string) => services[name] },
@@ -306,16 +319,133 @@ test('stopping a group pauses its native goals before cancellation and leaves ot
     () => {}
   )
   try {
+    await assert.rejects(tasks.newSession('group:34007', '23007'), /群任务尚未结束/)
+    assert.deepEqual(calls, [], 'busy descendant must prevent replacement without cancelling the lead')
     await tasks.stop('group:34007')
-    assert.deepEqual(calls, ['pause:own', 'cancel:own'])
+    assert.deepEqual(calls, ['pause:own', 'cancel:own', 'pause:child', 'cancel:child', 'drain:child'])
     assert.equal(goals.get('own').phase, 'paused')
+    assert.equal(goals.get('child').phase, 'paused')
     assert.equal(goals.get('other').phase, 'active')
     await tasks.stop('group:34007')
-    assert.deepEqual(calls, ['pause:own', 'cancel:own', 'cancel:own'])
+    assert.deepEqual(calls, [
+      'pause:own',
+      'cancel:own',
+      'pause:child',
+      'cancel:child',
+      'drain:child',
+      'cancel:own',
+      'cancel:child',
+      'drain:child'
+    ])
   } finally {
     await tasks.dispose()
   }
 })
+
+for (const newUserInput of [false, true]) {
+  test(`native child settlement after stop ${newUserInput ? 'preserves independent user input' : 'cannot start an empty model turn'}`, async () => {
+    const settings = {
+        ...DEFAULT_QQ_SETTINGS,
+        accountId: '12001',
+        authorizedUsers: ['23007'],
+        personaId: 'default',
+        workspace: tmpdir()
+      },
+      hooks = new Map<string, any>(),
+      agents = new Map<string, any>()
+    let modelCalls = 0,
+      removed = 0,
+      parentWake: Promise<void> = Promise.resolve()
+    for (const id of ['root', 'child'])
+      agents.set(id, {
+        id,
+        session: { id, header: {} },
+        ctx: { get: () => undefined },
+        cancel: () => {},
+        inbox: {
+          nextTurn: [],
+          nextStep: [],
+          remove: (messageId: string) => {
+            assert.equal(id, 'root')
+            assert.equal(messageId, 'cancelled-child-notice')
+            removed++
+            return true
+          }
+        },
+        whenIdle: () => (id === 'root' ? parentWake : Promise.resolve())
+      })
+    const rows = ['root', 'child'].map((sessionId) => ({
+      sessionId,
+      createdAt: '2026-10-26',
+      channel: {
+        ...channelFor(settings, 'group:34007'),
+        task: { requesterId: '23007', rootSessionId: 'root' }
+      }
+    }))
+    const services: any = {
+      agents: {
+        get: (id: string) => agents.get(id),
+        isOwnedBy: (id: string, owner: any) => id === 'child' && owner === agents.get('root')
+      },
+      pxMemoryChannels: { channelBindings: () => rows },
+      subagents: {
+        drainChildren: async () => {
+          await new Promise<void>((done) => setImmediate(done))
+          hooks.get('agent/inbox/inserted')({
+            agent: agents.get('root'),
+            message: {
+              id: 'cancelled-child-notice',
+              source: { kind: 'subagent-settled', senderSessionId: 'child' }
+            }
+          })
+          // Native teardown returns after delivering the notice, before the parent's pre-step.
+          parentWake = new Promise<void>((done, reject) =>
+            setTimeout(() => {
+              const next = async () => {
+                modelCalls++
+                return { kind: 'enter', messages: [] }
+              }
+              const gate = hooks.get('agent/pre-step')
+              Promise.resolve(
+                gate
+                  ? gate(
+                      {
+                        agent: agents.get('root'),
+                        messages: newUserInput ? [{ id: 'new-user', source: { kind: 'user' } }] : []
+                      },
+                      next
+                    )
+                  : next()
+              ).then(() => done(), reject)
+            }, 5)
+          )
+        }
+      }
+    }
+    const tasks = new QqGroupTasks(
+      {
+        get: (name: string) => services[name],
+        on: (name: string, handler: any) => {
+          hooks.set(name, handler)
+          return () => hooks.delete(name)
+        }
+      },
+      settings,
+      () => ({}),
+      () => true,
+      () => {}
+    )
+    try {
+      await tasks.stop('group:34007')
+      await parentWake
+      assert.equal(removed, 1)
+      assert.equal(modelCalls, newUserInput ? 1 : 0)
+      assert.equal(hooks.size, 0, 'temporary stop fences must be removed after settlement')
+    } finally {
+      await tasks.dispose()
+    }
+  })
+}
 
 test('explicit group continuation becomes a new channel task root and delivers to the same group', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'px-qq-handoff-'))
