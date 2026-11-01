@@ -197,6 +197,28 @@ export function KnowledgePanel({
     )
     setEditing(false)
   }
+  const cancelEditing = () =>
+    run(async () => {
+      // Restored drafts deliberately omit the original body. Discard the draft
+      // immediately, then read current native data instead of displaying that metadata as content.
+      const documentId = selected?.id,
+        name = skill?.skill.name
+      draft?.clear()
+      setEditing(false)
+      setBody('')
+      setSelected(null)
+      setSkill(null)
+      setNotice('')
+      if (tab === 'skills') {
+        const value = await call('skills', { action: 'list' })
+        setSkills(value.skills)
+        setSkillDirectories(value.directories)
+        if (name) await readSkill(name)
+      } else {
+        await refresh()
+        if (documentId) await read(documentId)
+      }
+    })
   const handledSkill = useRef<number | undefined>(undefined)
   useEffect(() => {
     if (!skillRequest || skillRequest.serial === handledSkill.current || editing || busy) return
@@ -523,7 +545,7 @@ export function KnowledgePanel({
                 >
                   保存现行版本
                 </button>
-                <button disabled={busy} onClick={() => setEditing(false)}>
+                <button disabled={busy} onClick={() => void cancelEditing()}>
                   取消编辑
                 </button>
               </div>
@@ -695,7 +717,7 @@ export function KnowledgePanel({
                 >
                   保存技能
                 </button>
-                <button disabled={busy} onClick={() => setEditing(false)}>
+                <button disabled={busy} onClick={() => void cancelEditing()}>
                   取消编辑
                 </button>
               </div>

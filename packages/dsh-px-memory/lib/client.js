@@ -1146,6 +1146,24 @@ function KnowledgePanel({
     );
     setEditing(false);
   };
+  const cancelEditing = () => run(async () => {
+    const documentId = selected?.id, name = skill?.skill.name;
+    draft?.clear();
+    setEditing(false);
+    setBody("");
+    setSelected(null);
+    setSkill(null);
+    setNotice("");
+    if (tab === "skills") {
+      const value = await call("skills", { action: "list" });
+      setSkills(value.skills);
+      setSkillDirectories(value.directories);
+      if (name) await readSkill(name);
+    } else {
+      await refresh();
+      if (documentId) await read(documentId);
+    }
+  });
   const handledSkill = (0, import_react5.useRef)(void 0);
   (0, import_react5.useEffect)(() => {
     if (!skillRequest || skillRequest.serial === handledSkill.current || editing || busy) return;
@@ -1442,7 +1460,7 @@ function KnowledgePanel({
               children: "\u4FDD\u5B58\u73B0\u884C\u7248\u672C"
             }
           ),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => setEditing(false), children: "\u53D6\u6D88\u7F16\u8F91" })
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => void cancelEditing(), children: "\u53D6\u6D88\u7F16\u8F91" })
         ] })
       ] })
     ] }) : /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(import_jsx_runtime6.Fragment, { children: [
@@ -1616,7 +1634,7 @@ function KnowledgePanel({
               children: "\u4FDD\u5B58\u6280\u80FD"
             }
           ),
-          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => setEditing(false), children: "\u53D6\u6D88\u7F16\u8F91" })
+          /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => void cancelEditing(), children: "\u53D6\u6D88\u7F16\u8F91" })
         ] })
       ] })
     ] })
