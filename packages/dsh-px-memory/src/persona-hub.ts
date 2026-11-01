@@ -1,9 +1,10 @@
-import { MemoryError, isInternalSession, validId, projectKey, type MemoryStore } from './store'
+import { MemoryError, isInternalSession, validId, type MemoryStore } from './store'
 import { service } from './history'
 import { continuationRequests } from './continuation'
 import { rejectUnauthenticatedRequest } from '../../shared/request-trust'
 import { resourceToolCatalog } from './persona-resources'
 import type { PersonaNavigation } from './persona-navigation'
+import { creationSessionId, ownedCreationRequest, createOwnedNativeSession } from './owned-session'
 
 export interface PersonaHubView {
   nativeNavigation: boolean
@@ -87,11 +88,12 @@ export async function personaHubView(
 
 /** A new ordinary session gets identity before native creation. Retrying the same request is safe. */
 export async function createHubSession(host: any, store: MemoryStore, args: any): Promise<string> {
-  if (
-    typeof args.requestId !== 'string' ||
-    !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(args.requestId)
+  const id = creationSessionId(args.requestId)
+  return ownedCreationRequest(store, id, JSON.stringify(['hub', args.personaId, args.workspaceId]), () =>
+    createHubAttempt(host, store, args, id)
   )
-    throw new MemoryError('新会话请求标识无效')
+}
+async function createHubAttempt(host: any, store: MemoryStore, args: any, id: string): Promise<string> {
   const personaId = validId(args.personaId),
     workspaceId = validId(args.workspaceId)
   const state = store.read(),
@@ -101,8 +103,7 @@ export async function createHubSession(host: any, store: MemoryStore, args: any)
     ?.list?.()
     .find((w: any) => w.id === workspaceId)
   if (!workspace) throw new MemoryError('请先添加或选择有效工作区')
-  const id = 'session-' + args.requestId,
-    existing = state.bindings[id]
+  const existing = state.bindings[id]
   if (
     existing &&
     (existing.personaId !== personaId ||
@@ -114,16 +115,10 @@ export async function createHubSession(host: any, store: MemoryStore, args: any)
     throw new MemoryError('此请求已经用于另一项会话创建', 409)
   const controller = service(host, 'sessionController')
   if (!controller?.create) throw new MemoryError('原生会话创建服务不可用', 503)
-  if (existing && !existing.pending) {
-    const current = await controller.inspect(id)
-    if (projectKey(current.meta.cwd) !== projectKey(workspace.path))
-      throw new MemoryError('原生会话的工作区已经改变，请重新创建', 409)
-    return id
-  }
-  store.bind(id, { personaId, pending: true, creationWorkspaceId: workspaceId })
-  await controller.create({ sessionId: id, workspaceId })
-  store.bind(id, { personaId })
-  return id
+  return createOwnedNativeSession(host, store, id, {
+    creation: { kind: 'hub', cwd: workspace.path, workspaceId, complete: false },
+    binding: { personaId, creationWorkspaceId: workspaceId }
+  })
 }
 
 export function registerPersonaHub(ctx: any, store: MemoryStore, navigation?: PersonaNavigation): () => void {

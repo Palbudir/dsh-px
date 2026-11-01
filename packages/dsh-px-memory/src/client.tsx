@@ -37,6 +37,7 @@ export function MemoryPanel({
   visible,
   openKnowledge,
   openSession,
+  prepareCreatedSession,
   openSettings,
   openTasks,
   skillRequest
@@ -45,6 +46,7 @@ export function MemoryPanel({
   visible: boolean
   openKnowledge: () => void
   openSession: (id: string) => void
+  prepareCreatedSession: (id: string) => Promise<void>
   openSettings: () => void
   openTasks: () => void
   skillRequest?: SkillPageRequest
@@ -317,6 +319,7 @@ export function MemoryPanel({
     setError('')
     const key = `${sessionId}:${targetPersona}:${handoff}`
     if (newRequest.current?.key !== key) newRequest.current = { key, id: crypto.randomUUID() }
+    const requestId = newRequest.current.id
     try {
       const data = await requestJson<{ createdSessionId: string }>(url, {
         method: 'POST',
@@ -325,9 +328,13 @@ export function MemoryPanel({
           type: 'new-session',
           personaId: targetPersona,
           handoff,
-          requestId: newRequest.current.id
+          requestId
         })
+      }).catch((error) => {
+        if (error.status === 409 && newRequest.current?.id === requestId) newRequest.current = null
+        throw error
       })
+      await prepareCreatedSession(data.createdSessionId)
       if (alive.current && isVisible.current) openSession(data.createdSessionId)
       newRequest.current = null
     } catch (e: any) {

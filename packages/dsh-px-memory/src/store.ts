@@ -73,9 +73,18 @@ export interface SessionBinding {
   createdFrom?: string
   /** Native workspace chosen by a new persona-hub session; retained for idempotent retries. */
   creationWorkspaceId?: string
+  /** Explicit creation acknowledgement is independent of runtime identity locking/pending state. */
+  creation?: SessionCreation
   /** Internal analysis remains auditable in native storage, outside conversational recall. */
   purpose?: 'experience'
   channel?: SessionChannel
+}
+export interface SessionCreation {
+  kind: 'hub' | 'continuation'
+  cwd: string
+  workspaceId?: string
+  agentPreset?: string
+  complete: boolean
 }
 export const publicSession = (binding?: Pick<SessionBinding, 'channel'>): boolean =>
   audienceOf(binding).kind === 'conversation'
@@ -259,6 +268,24 @@ function validate(s: MemoryState): void {
   for (const [id, b] of Object.entries(s.bindings)) {
     validId(id)
     if (b.creationWorkspaceId !== undefined) validId(b.creationWorkspaceId)
+    if (b.creation !== undefined) {
+      const c = b.creation
+      if (!c || !['hub', 'continuation'].includes(c.kind) || typeof c.complete !== 'boolean')
+        throw new MemoryError('会话创建回执无效', 503)
+      text(c.cwd, 4096, true)
+      if (c.workspaceId !== undefined) validId(c.workspaceId)
+      if (c.agentPreset !== undefined) validId(c.agentPreset)
+      if (
+        (c.kind === 'hub' &&
+          (!c.workspaceId ||
+            c.workspaceId !== b.creationWorkspaceId ||
+            b.createdFrom ||
+            b.channel ||
+            b.handoff)) ||
+        (c.kind === 'continuation' && !b.createdFrom)
+      )
+        throw new MemoryError('会话创建回执与归属不一致', 503)
+    }
     if (b.channel) {
       try {
         validateSessionChannel(b.channel)
@@ -406,6 +433,7 @@ export class MemoryStore {
       pending?: boolean
       createdFrom?: string
       creationWorkspaceId?: string
+      creation?: SessionCreation
       purpose?: 'experience'
       channel?: SessionChannel
     } = {}
@@ -447,6 +475,7 @@ export class MemoryStore {
         ...(options.pending ? { pending: true } : {}),
         ...(options.createdFrom ? { createdFrom: options.createdFrom } : {}),
         ...(options.creationWorkspaceId ? { creationWorkspaceId: options.creationWorkspaceId } : {}),
+        ...(options.creation ? { creation: structuredClone(options.creation) } : {}),
         ...(channel ? { channel: structuredClone(channel) } : {}),
         ...(purpose ? { purpose } : {}),
         ...(options.handoff ? { handoff: options.handoff } : {})

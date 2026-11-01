@@ -56,11 +56,14 @@ function fixture(t: any) {
   }
   host.sessionController = {
     inspect: async (id: string) => {
-      if (!histories.has(id)) throw Error('missing native session')
+      if (!histories.has(id))
+        throw Object.assign(Error('missing native session'), { code: 'session/not-found' })
       return { meta: agent(id).session.header, events: histories.get(id) }
     },
-    create: async ({ sessionId }: any) => {
+    create: async ({ sessionId, workspaceId }: any) => {
       if (!histories.has(sessionId)) histories.set(sessionId, [])
+      const workspace = host.workspaceRegistry?.list?.().find((w: any) => w.id === workspaceId)
+      if (workspace && !workspace.sessionIds.includes(sessionId)) workspace.sessionIds.push(sessionId)
       return { sessionId }
     }
   }
@@ -347,7 +350,8 @@ test('continuation uses a new native session and finite shared history, with ide
     event(5, 'goal/change', { phase: 'paused' })
   ])
   const args = { requestId: randomUUID(), personaId: p, handoff: true }
-  f.host.workspaceRegistry = { list: () => [{ id: 'native-workspace', sessionIds: ['source'] }] }
+  const workspace = { id: 'native-workspace', path: 'C:/project', sessionIds: ['source'] }
+  f.host.workspaceRegistry = { list: () => [workspace] }
   const create = f.host.sessionController.create
   f.host.sessionController.create = async (request: any) => {
     assert.equal(request.workspaceId, 'native-workspace')

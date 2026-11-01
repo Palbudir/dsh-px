@@ -2,6 +2,7 @@ import { useState, useSyncExternalStore } from 'react'
 import { selectedSession } from '../../shared/native-navigation'
 import { memoryNavigation, skillAnchorName, type SkillPageRequest } from './workspace-navigation'
 import { PersonaHubPanel } from './persona-hub-panel'
+import { catalogueCreatedSession } from './created-session-client'
 
 export function registerMemoryWorkspace(host: any, Panel: any) {
   let stopped = false
@@ -64,6 +65,7 @@ export function registerMemoryWorkspace(host: any, Panel: any) {
         </div>
         {directory ? (
           <PersonaHubPanel
+            prepareCreatedSession={(target: string) => catalogueCreatedSession(host.sessions, target)}
             nativeNavigation={
               host.sessions.pxPersonaTransportVersion === 1 &&
               host.uiWorkspace.pxPersonaNavigationVersion === 1
@@ -77,6 +79,7 @@ export function registerMemoryWorkspace(host: any, Panel: any) {
           />
         ) : id ? (
           <Panel
+            prepareCreatedSession={(target: string) => catalogueCreatedSession(host.sessions, target)}
             key={id}
             sessionId={id}
             skillRequest={skillRequest?.sessionId === id ? skillRequest : undefined}

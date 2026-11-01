@@ -2165,6 +2165,7 @@ function PersonaHubPanel({
   openSession,
   titles,
   currentSessionId,
+  prepareCreatedSession,
   nativeNavigation = false
 }) {
   const [personaId, setPersonaId] = (0, import_react9.useState)(savedPersona), [workspaceId, setWorkspaceId] = (0, import_react9.useState)("");
@@ -2310,15 +2311,20 @@ function PersonaHubPanel({
             onClick: () => void run(async () => {
               const key = JSON.stringify([selectedId, workspaceId]);
               if (request.current?.key !== key) request.current = { key, id: crypto.randomUUID() };
+              const requestId = request.current.id;
               const created = await post({
                 type: "create-session",
                 personaId: selectedId,
                 workspaceId,
-                requestId: request.current.id
+                requestId
+              }).catch((error2) => {
+                if (error2.status === 409 && request.current?.id === requestId) request.current = null;
+                throw error2;
               });
+              await prepareCreatedSession(created.createdSessionId);
               if (alive.current) {
-                request.current = null;
                 openSession(created.createdSessionId);
+                request.current = null;
               }
             }),
             children: "\u7528\u6B64\u4EBA\u683C\u65B0\u5EFA\u4F1A\u8BDD"
@@ -2384,6 +2390,19 @@ function PersonaHubPanel({
       }
     )
   ] });
+}
+
+// packages/dsh-px-memory/src/created-session-client.ts
+async function catalogueCreatedSession(sessions, id) {
+  if (typeof id !== "string" || !id.trim() || id.length > 200 || /[\r\n\0]/.test(id))
+    throw new Error("\u670D\u52A1\u672A\u8FD4\u56DE\u6709\u6548\u4F1A\u8BDD\u7F16\u53F7");
+  if (sessions.pxPersonaTransportVersion === 1) {
+    await sessions.create({}, async () => ({ ok: true, value: { sessionId: id } }));
+    return;
+  }
+  const known = () => Object.hasOwn(sessions.list.getSnapshot().byId, id);
+  for (let attempt = 0; attempt < 2 && !known(); attempt++) await sessions.refresh();
+  if (!known()) throw new Error("\u4F1A\u8BDD\u5DF2\u521B\u5EFA\uFF0C\u4F46\u539F\u751F\u76EE\u5F55\u5C1A\u672A\u663E\u793A\u5B83\uFF1B\u8BF7\u5237\u65B0\u76EE\u5F55\u540E\u6253\u5F00\uFF0C\u672A\u91CD\u590D\u521B\u5EFA\u3002");
 }
 
 // packages/dsh-px-memory/src/memory-workspace.tsx
@@ -2452,6 +2471,7 @@ function registerMemoryWorkspace(host, Panel) {
           directory ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
             PersonaHubPanel,
             {
+              prepareCreatedSession: (target) => catalogueCreatedSession(host.sessions, target),
               nativeNavigation: host.sessions.pxPersonaTransportVersion === 1 && host.uiWorkspace.pxPersonaNavigationVersion === 1,
               currentSessionId: id ?? void 0,
               titles: sessions.byId,
@@ -2463,6 +2483,7 @@ function registerMemoryWorkspace(host, Panel) {
           ) : id ? /* @__PURE__ */ (0, import_jsx_runtime11.jsx)(
             Panel,
             {
+              prepareCreatedSession: (target) => catalogueCreatedSession(host.sessions, target),
               sessionId: id,
               skillRequest: skillRequest?.sessionId === id ? skillRequest : void 0,
               visible: true,
@@ -3300,6 +3321,7 @@ function MemoryPanel({
   visible,
   openKnowledge,
   openSession,
+  prepareCreatedSession,
   openSettings,
   openTasks,
   skillRequest
@@ -3540,6 +3562,7 @@ function MemoryPanel({
     setError("");
     const key = `${sessionId}:${targetPersona}:${handoff}`;
     if (newRequest.current?.key !== key) newRequest.current = { key, id: crypto.randomUUID() };
+    const requestId = newRequest.current.id;
     try {
       const data = await requestJson(url, {
         method: "POST",
@@ -3548,9 +3571,13 @@ function MemoryPanel({
           type: "new-session",
           personaId: targetPersona,
           handoff,
-          requestId: newRequest.current.id
+          requestId
         })
+      }).catch((error2) => {
+        if (error2.status === 409 && newRequest.current?.id === requestId) newRequest.current = null;
+        throw error2;
       });
+      await prepareCreatedSession(data.createdSessionId);
       if (alive.current && isVisible.current) openSession(data.createdSessionId);
       newRequest.current = null;
     } catch (e) {

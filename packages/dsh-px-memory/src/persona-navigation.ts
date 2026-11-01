@@ -237,6 +237,8 @@ export class PersonaNavigation {
       !isInternalSession(id) &&
       !b?.channel &&
       !b?.purpose &&
+      !b?.handoff &&
+      b?.creation?.complete !== false &&
       (pending || !b?.pending) &&
       (b?.personaId ?? 'default') === personaId
     )

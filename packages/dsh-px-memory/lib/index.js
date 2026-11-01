@@ -300,6 +300,16 @@ function validate(s) {
   for (const [id, b] of Object.entries(s.bindings)) {
     validId(id);
     if (b.creationWorkspaceId !== void 0) validId(b.creationWorkspaceId);
+    if (b.creation !== void 0) {
+      const c = b.creation;
+      if (!c || !["hub", "continuation"].includes(c.kind) || typeof c.complete !== "boolean")
+        throw new MemoryError("\u4F1A\u8BDD\u521B\u5EFA\u56DE\u6267\u65E0\u6548", 503);
+      text(c.cwd, 4096, true);
+      if (c.workspaceId !== void 0) validId(c.workspaceId);
+      if (c.agentPreset !== void 0) validId(c.agentPreset);
+      if (c.kind === "hub" && (!c.workspaceId || c.workspaceId !== b.creationWorkspaceId || b.createdFrom || b.channel || b.handoff) || c.kind === "continuation" && !b.createdFrom)
+        throw new MemoryError("\u4F1A\u8BDD\u521B\u5EFA\u56DE\u6267\u4E0E\u5F52\u5C5E\u4E0D\u4E00\u81F4", 503);
+    }
     if (b.channel) {
       try {
         validateSessionChannel(b.channel);
@@ -457,6 +467,7 @@ var MemoryStore = class {
         ...options.pending ? { pending: true } : {},
         ...options.createdFrom ? { createdFrom: options.createdFrom } : {},
         ...options.creationWorkspaceId ? { creationWorkspaceId: options.creationWorkspaceId } : {},
+        ...options.creation ? { creation: structuredClone(options.creation) } : {},
         ...channel ? { channel: structuredClone(channel) } : {},
         ...purpose ? { purpose } : {},
         ...options.handoff ? { handoff: options.handoff } : {}
@@ -1328,6 +1339,133 @@ var HistoryIndex = class {
   }
 };
 
+// packages/dsh-px-memory/src/owned-session.ts
+var requests = /* @__PURE__ */ new WeakMap();
+function creationSessionId(requestId) {
+  if (typeof requestId !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(requestId))
+    throw new MemoryError("\u65B0\u4F1A\u8BDD\u8BF7\u6C42\u6807\u8BC6\u65E0\u6548");
+  return "session-" + requestId;
+}
+function ownedCreationRequest(store, id, fingerprint, run) {
+  let map2 = requests.get(store);
+  if (!map2) requests.set(store, map2 = /* @__PURE__ */ new Map());
+  const previous = map2.get(id);
+  if (previous) {
+    if (previous.fingerprint !== fingerprint)
+      return Promise.reject(new MemoryError("\u6B64\u8BF7\u6C42\u6B63\u5728\u7528\u4E8E\u53E6\u4E00\u9879\u4F1A\u8BDD\u521B\u5EFA", 409));
+    return previous.promise;
+  }
+  const promise2 = Promise.resolve().then(run);
+  map2.set(id, { fingerprint, promise: promise2 });
+  void promise2.finally(() => map2.delete(id)).catch(() => {
+  });
+  return promise2;
+}
+async function observe(host, id) {
+  const query = service(host, "sessionQuery");
+  if (query?.observeSession) {
+    try {
+      const observation = await query.observeSession(id, { projectionMode: "none" });
+      try {
+        return { meta: observation.header, events: [...observation.events] };
+      } finally {
+        observation[Symbol.dispose]();
+      }
+    } catch (error62) {
+      if (error62?.code === "SESSION_QUERY_SESSION_NOT_FOUND") return;
+      throw error62;
+    }
+  }
+  try {
+    return await service(host, "sessionController").inspect(id);
+  } catch (error62) {
+    if (error62?.code === "session/not-found" || error62?.constructor?.name === "ApiSessionNotFound") return;
+    throw error62;
+  }
+}
+async function createOwnedNativeSession(host, store, id, options) {
+  const { creation, binding, signal } = options, controller = service(host, "sessionController"), registry2 = service(host, "workspaceRegistry");
+  const workspace = creation.workspaceId === void 0 ? void 0 : registry2?.get?.(creation.workspaceId) ?? registry2?.list?.().find((w) => w.id === creation.workspaceId);
+  if (creation.workspaceId && !workspace)
+    throw new MemoryError("\u539F\u8BF7\u6C42\u7684\u5DE5\u4F5C\u533A\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u4ECE\u4EBA\u683C\u76EE\u5F55\u786E\u8BA4", 409);
+  if (workspace?.path && projectKey(workspace.path) !== projectKey(creation.cwd))
+    throw new MemoryError("\u5DE5\u4F5C\u533A\u8DEF\u5F84\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u521B\u5EFA", 409);
+  const old = store.read().bindings[id];
+  if (old?.creation && (old.creation.kind !== creation.kind || projectKey(old.creation.cwd) !== projectKey(creation.cwd) || old.creation.workspaceId !== creation.workspaceId || old.creation.agentPreset !== creation.agentPreset))
+    throw new MemoryError("\u539F\u521B\u5EFA\u8BF7\u6C42\u7684\u76EE\u6807\u5DF2\u53D8\u5316\uFF0C\u8BF7\u4ECE\u4EBA\u683C\u76EE\u5F55\u6253\u5F00\u539F\u4F1A\u8BDD", 409);
+  const assertOwner = () => {
+    const b = store.read().bindings[id];
+    if (!b || b.personaId !== binding.personaId || b.createdFrom !== binding.createdFrom || b.creationWorkspaceId !== binding.creationWorkspaceId || JSON.stringify(b.channel) !== JSON.stringify(binding.channel))
+      throw new MemoryError("\u521B\u5EFA\u8BF7\u6C42\u7684\u8EAB\u4EFD\u6216\u53D7\u4F17\u5DF2\u53D8\u5316\uFF0C\u672A\u91CD\u65B0\u7ED1\u5B9A", 409);
+    return b;
+  };
+  const verify = (record2) => {
+    const b = assertOwner();
+    if (record2.meta.id !== void 0 && record2.meta.id !== id || projectKey(record2.meta.cwd) !== projectKey(creation.cwd) || record2.meta.origin === "subagent")
+      throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u7684\u76EE\u5F55\u6216\u5F52\u5C5E\u5DF2\u53D8\u5316\uFF0C\u672A\u91CD\u5EFA", 409);
+    if (!b.creation?.complete && creation.agentPreset !== void 0) {
+      const preset = [...record2.events ?? []].reverse().find((e) => e.type === "agent-preset/selected")?.data?.agentPreset ?? record2.meta.agentPreset;
+      if (preset !== creation.agentPreset)
+        throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u9884\u8BBE\u4E0E\u539F\u8BF7\u6C42\u4E0D\u540C\uFF0C\u8BF7\u5728\u76EE\u5F55\u4E2D\u68C0\u67E5", 409);
+    }
+  };
+  const existing = await observe(host, id);
+  signal?.throwIfAborted();
+  if (existing && !old) throw new MemoryError("\u6B64\u6807\u8BC6\u5DF2\u6709\u539F\u751F\u4F1A\u8BDD\uFF0C\u8BF7\u91CD\u65B0\u65B0\u5EFA\uFF1B\u672A\u6539\u53D8\u539F\u4EBA\u683C", 409);
+  if (old?.creation?.complete && !existing) throw new MemoryError("\u539F\u4F1A\u8BDD\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u91CD\u65B0\u65B0\u5EFA", 409);
+  if (existing) {
+    verify(existing);
+    if (workspace && !workspace.sessionIds?.includes(id)) {
+      if (old?.creation?.complete !== false)
+        throw new MemoryError("\u539F\u4F1A\u8BDD\u4E0D\u5728\u6B64\u5DE5\u4F5C\u533A\uFF0C\u8BF7\u4ECE\u76EE\u5F55\u786E\u8BA4\uFF1B\u672A\u81EA\u52A8\u79FB\u56DE", 409);
+      if (typeof workspace.attachSession !== "function") throw new MemoryError("\u539F\u751F\u5DE5\u4F5C\u533A\u6302\u63A5\u4E0D\u53EF\u7528", 503);
+      await workspace.attachSession(id);
+    }
+  } else {
+    if (old && !old.creation) {
+      if (!old.pending) throw new MemoryError("\u65E0\u6CD5\u786E\u8BA4\u65E7\u521B\u5EFA\u8BF7\u6C42\u7684\u7ED3\u679C\uFF0C\u8BF7\u4ECE\u76EE\u5F55\u786E\u8BA4\u540E\u91CD\u65B0\u65B0\u5EFA", 409);
+      const state2 = store.read();
+      store.change(state2.revision, (next) => {
+        next.bindings[id].creation = { ...creation };
+      });
+    }
+    store.bind(id, { ...binding, locked: true, pending: true, creation });
+    const request = {
+      sessionId: id,
+      ...workspace ? { workspaceId: workspace.id } : { cwd: creation.cwd },
+      ...creation.agentPreset === void 0 ? {} : { agentPreset: creation.agentPreset }
+    };
+    if (controller.pxPersonaCreationVersion === 1 && controller.createForPersona) {
+      const result = await controller.createForPersona(request, {
+        reusable: (target) => target === id && assertOwner().personaId === binding.personaId,
+        beforeReuse: ({ sessionId }) => sessionId === id && !!assertOwner(),
+        beforeCreate: ({ sessionId }) => {
+          if (sessionId !== id) throw new MemoryError("\u539F\u751F\u521B\u5EFA\u6539\u7528\u4E86\u5176\u4ED6\u6807\u8BC6\uFF0C\u8BF7\u91CD\u8BD5\u539F\u8BF7\u6C42\u4EE5\u6838\u5BF9\u7ED3\u679C", 409);
+          assertOwner();
+        },
+        resolved: ({ sessionId }) => {
+          if (sessionId !== id) throw new MemoryError("\u539F\u751F\u8FD4\u56DE\u4E86\u4E0D\u540C\u7684\u4F1A\u8BDD\u6807\u8BC6", 409);
+        }
+      });
+      if (!result.ok) throw new MemoryError(result.error.message, 503);
+      if (result.value.sessionId !== id) throw new MemoryError("\u539F\u751F\u8FD4\u56DE\u4E86\u4E0D\u540C\u7684\u4F1A\u8BDD\u6807\u8BC6", 409);
+    } else {
+      const result = await controller.create(request);
+      if (result?.sessionId !== id)
+        throw new MemoryError("\u539F\u751F\u8FD4\u56DE\u4E86\u4E0D\u540C\u7684\u4F1A\u8BDD\u6807\u8BC6\uFF0C\u672A\u5C06\u5176\u5F53\u4F5C\u672C\u8BF7\u6C42\u7ED3\u679C", 409);
+    }
+  }
+  const state = store.read();
+  const acknowledged = assertOwner();
+  if (acknowledged.creation?.complete && acknowledged.locked && !acknowledged.pending) return id;
+  store.change(state.revision, (next) => {
+    next.bindings[id].pending = false;
+    next.bindings[id].locked = true;
+    next.bindings[id].creation = { ...creation, complete: true };
+  });
+  return id;
+}
+
 // packages/dsh-px-memory/src/continuation.ts
 function continuationRequests() {
   const pending = /* @__PURE__ */ new Map();
@@ -1394,15 +1532,22 @@ function handoffFrom(events, sessionId) {
   return { sessionId, throughSeq: cut, summary, createdAt: (/* @__PURE__ */ new Date()).toISOString() };
 }
 async function createPersonaSession(host, store, sourceId, args, signal) {
-  if (typeof args.requestId !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(args.requestId))
-    throw new MemoryError("\u7F3A\u5C11\u6709\u6548\u7684\u65B0\u4F1A\u8BDD\u8BF7\u6C42\u6807\u8BC6");
+  signal?.throwIfAborted();
+  const id = creationSessionId(args.requestId);
+  return ownedCreationRequest(
+    store,
+    id,
+    JSON.stringify(["continuation", sourceId, args.personaId, args.handoff]),
+    () => createPersonaAttempt(host, store, sourceId, args, id, signal)
+  );
+}
+async function createPersonaAttempt(host, store, sourceId, args, id, signal) {
   if (typeof args.personaId !== "string") throw new MemoryError("\u8BF7\u9009\u62E9\u4EBA\u683C");
   if (typeof args.handoff !== "boolean") throw new MemoryError("\u8BF7\u9009\u62E9\u65B0\u5EFA\u6216\u63A5\u7EED\u65B9\u5F0F");
   const controller = service(host, "sessionController");
   if (!controller?.create || !controller?.inspect) throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u521B\u5EFA\u63A5\u53E3\u4E0D\u53EF\u7528", 503);
   const state = store.read(), persona = state.personas.find((p) => p.id === args.personaId && !p.archived);
   if (!persona) throw new MemoryError("\u4EBA\u683C\u4E0D\u5B58\u5728\u6216\u5DF2\u5F52\u6863");
-  const id = "session-" + args.requestId;
   const existing = state.bindings[id];
   if (existing && (existing.personaId !== persona.id || existing.createdFrom !== sourceId || Boolean(existing.handoff) !== Boolean(args.handoff) || existing.handoff && existing.handoff.sessionId !== sourceId))
     throw new MemoryError("\u65B0\u4F1A\u8BDD\u8BF7\u6C42\u5DF2\u7ECF\u7528\u4E8E\u5176\u4ED6\u64CD\u4F5C", 409);
@@ -1419,22 +1564,18 @@ async function createPersonaSession(host, store, sourceId, args, signal) {
     ...sourceChannel,
     task: { ...sourceChannel.task, rootSessionId: id }
   } : sourceChannel;
-  store.bind(id, {
-    personaId: persona.id,
-    locked: !!handoff2,
-    handoff: handoff2,
-    pending: true,
-    createdFrom: sourceId,
-    channel
-  });
   const workspace = service(host, "workspaceRegistry")?.list?.().find((w) => w.sessionIds?.includes(sourceId));
-  await controller.create({
-    sessionId: id,
-    ...workspace ? { workspaceId: workspace.id } : { cwd: source.meta.cwd },
-    agentPreset: source.meta.agentPreset
+  return createOwnedNativeSession(host, store, id, {
+    creation: {
+      kind: "continuation",
+      cwd: source.meta.cwd,
+      workspaceId: workspace?.id,
+      agentPreset: source.meta.agentPreset,
+      complete: false
+    },
+    binding: { personaId: persona.id, locked: true, handoff: handoff2, createdFrom: sourceId, channel },
+    signal
   });
-  store.bind(id, { personaId: persona.id, locked: !!handoff2 });
-  return id;
 }
 
 // packages/dsh-px-memory/src/knowledge.ts
@@ -23466,7 +23607,7 @@ async function runAnalysisTask(host, parent, prompt, schema2, signal, options = 
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1e3 || timeoutMs > 6e5 || !Number.isSafeInteger(maxRequests) || maxRequests < 1 || maxRequests > 5)
     throw new MemoryError("\u7ECF\u9A8C\u4EFB\u52A1\u9884\u7B97\u65E0\u6548");
   const combined = AbortSignal.any([signal, controller.signal]), disposers = [];
-  let activation, composed = false, requests = 0, failure2 = "";
+  let activation, composed = false, requests2 = 0, failure2 = "";
   const timer = setTimeout(() => controller.abort(new Error("\u7ECF\u9A8C\u6574\u7406\u8D85\u65F6\uFF1B\u672A\u81EA\u52A8\u91CD\u8BD5")), timeoutMs);
   const stop = () => {
     void activation?.dispose().catch(() => {
@@ -23512,7 +23653,7 @@ async function runAnalysisTask(host, parent, prompt, schema2, signal, options = 
     );
     disposers.push(
       host.on("agent/assistant-stream", ({ agent, frame }) => {
-        if (agent.id === id && frame?.type === "start" && ++requests > maxRequests)
+        if (agent.id === id && frame?.type === "start" && ++requests2 > maxRequests)
           controller.abort(new Error("\u7ECF\u9A8C\u6574\u7406\u8FBE\u5230\u8BF7\u6C42\u6B21\u6570\u9650\u5236\uFF1B\u672A\u81EA\u52A8\u91CD\u8BD5"));
       })
     );
@@ -24154,28 +24295,29 @@ async function personaHubView(host, store, personaId, offset = 0, currentSession
   };
 }
 async function createHubSession(host, store, args) {
-  if (typeof args.requestId !== "string" || !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(args.requestId))
-    throw new MemoryError("\u65B0\u4F1A\u8BDD\u8BF7\u6C42\u6807\u8BC6\u65E0\u6548");
+  const id = creationSessionId(args.requestId);
+  return ownedCreationRequest(
+    store,
+    id,
+    JSON.stringify(["hub", args.personaId, args.workspaceId]),
+    () => createHubAttempt(host, store, args, id)
+  );
+}
+async function createHubAttempt(host, store, args, id) {
   const personaId = validId(args.personaId), workspaceId = validId(args.workspaceId);
   const state = store.read(), persona = state.personas.find((p) => p.id === personaId && !p.archived);
   if (!persona) throw new MemoryError("\u4EBA\u683C\u4E0D\u5B58\u5728\u6216\u5DF2\u5F52\u6863");
   const workspace = service(host, "workspaceRegistry")?.list?.().find((w) => w.id === workspaceId);
   if (!workspace) throw new MemoryError("\u8BF7\u5148\u6DFB\u52A0\u6216\u9009\u62E9\u6709\u6548\u5DE5\u4F5C\u533A");
-  const id = "session-" + args.requestId, existing = state.bindings[id];
+  const existing = state.bindings[id];
   if (existing && (existing.personaId !== personaId || existing.creationWorkspaceId !== workspaceId || existing.createdFrom || existing.handoff || existing.channel))
     throw new MemoryError("\u6B64\u8BF7\u6C42\u5DF2\u7ECF\u7528\u4E8E\u53E6\u4E00\u9879\u4F1A\u8BDD\u521B\u5EFA", 409);
   const controller = service(host, "sessionController");
   if (!controller?.create) throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u521B\u5EFA\u670D\u52A1\u4E0D\u53EF\u7528", 503);
-  if (existing && !existing.pending) {
-    const current = await controller.inspect(id);
-    if (projectKey(current.meta.cwd) !== projectKey(workspace.path))
-      throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u7684\u5DE5\u4F5C\u533A\u5DF2\u7ECF\u6539\u53D8\uFF0C\u8BF7\u91CD\u65B0\u521B\u5EFA", 409);
-    return id;
-  }
-  store.bind(id, { personaId, pending: true, creationWorkspaceId: workspaceId });
-  await controller.create({ sessionId: id, workspaceId });
-  store.bind(id, { personaId });
-  return id;
+  return createOwnedNativeSession(host, store, id, {
+    creation: { kind: "hub", cwd: workspace.path, workspaceId, complete: false },
+    binding: { personaId, creationWorkspaceId: workspaceId }
+  });
 }
 function registerPersonaHub(ctx, store, navigation) {
   const once = continuationRequests();
@@ -24431,7 +24573,7 @@ var PersonaNavigation = class {
   }
   owned(id, personaId, pending = false, bindings) {
     const b = (bindings ?? this.store.read().bindings)[id];
-    return !isInternalSession(id) && !b?.channel && !b?.purpose && (pending || !b?.pending) && (b?.personaId ?? "default") === personaId;
+    return !isInternalSession(id) && !b?.channel && !b?.purpose && !b?.handoff && b?.creation?.complete !== false && (pending || !b?.pending) && (b?.personaId ?? "default") === personaId;
   }
   attachmentFailure(sessionId, workspaceId, error62) {
     return {

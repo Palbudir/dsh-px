@@ -78,20 +78,27 @@ test('persona hub creation binds before the native factory and retry cannot chan
     requestId = randomUUID(),
     created: string[] = []
   let fail = true
+  const workspaces = [
+    { id: 'workspace-a', path: '/project', sessionIds: [] as string[] },
+    { id: 'workspace-b', path: '/other', sessionIds: [] as string[] }
+  ]
   const host = {
     workspaceRegistry: {
-      list: () => [
-        { id: 'workspace-a', path: '/project' },
-        { id: 'workspace-b', path: '/other' }
-      ]
+      list: () => workspaces
     },
     sessionController: {
-      inspect: async () => ({ meta: { cwd: '/project' } }),
+      inspect: async (id: string) => {
+        if (!created.includes(id))
+          throw Object.assign(Error('missing native session'), { code: 'session/not-found' })
+        return { meta: { cwd: '/project' }, events: [] }
+      },
       create: async ({ sessionId, workspaceId }: any) => {
         assert.equal(store.read().bindings[sessionId].personaId, a.id)
         assert.equal(store.read().bindings[sessionId].creationWorkspaceId, workspaceId)
         if (fail) throw Error('native create failed')
         if (!created.includes(sessionId)) created.push(sessionId)
+        workspaces.find((w) => w.id === workspaceId)!.sessionIds.push(sessionId)
+        return { sessionId }
       }
     }
   }

@@ -279,10 +279,21 @@ test('explicit group continuation becomes a new channel task root and delivers t
     },
     { seq: 2, time: 3, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } }
   ]
+  const created = new Map<string, any>()
   const host: any = {
     sessionController: {
-      inspect: async () => ({ meta: { cwd: dir, agentPreset: 'standard' }, events }),
-      create: async () => {}
+      inspect: async (id: string) => {
+        if (id === 'source') return { meta: { id, cwd: dir, agentPreset: 'standard' }, events }
+        if (created.has(id)) return created.get(id)
+        throw Object.assign(Error('missing native session'), { code: 'session/not-found' })
+      },
+      create: async (request: any) => {
+        created.set(request.sessionId, {
+          meta: { id: request.sessionId, cwd: request.cwd, agentPreset: request.agentPreset },
+          events: []
+        })
+        return { sessionId: request.sessionId }
+      }
     }
   }
   const id = await createPersonaSession(host, store, 'source', {

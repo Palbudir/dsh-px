@@ -9,11 +9,13 @@ export function PersonaHubPanel({
   openSession,
   titles,
   currentSessionId,
+  prepareCreatedSession,
   nativeNavigation = false
 }: {
   openSession: (id: string) => void
   titles: Record<string, any>
   currentSessionId?: string
+  prepareCreatedSession: (id: string) => Promise<void>
   nativeNavigation?: boolean
 }) {
   const [personaId, setPersonaId] = useState<string | undefined>(savedPersona),
@@ -166,15 +168,20 @@ export function PersonaHubPanel({
                 void run(async () => {
                   const key = JSON.stringify([selectedId, workspaceId])
                   if (request.current?.key !== key) request.current = { key, id: crypto.randomUUID() }
+                  const requestId = request.current.id
                   const created = await post<{ createdSessionId: string }>({
                     type: 'create-session',
                     personaId: selectedId,
                     workspaceId,
-                    requestId: request.current.id
+                    requestId
+                  }).catch((error) => {
+                    if (error.status === 409 && request.current?.id === requestId) request.current = null
+                    throw error
                   })
+                  await prepareCreatedSession(created.createdSessionId)
                   if (alive.current) {
-                    request.current = null
                     openSession(created.createdSessionId)
+                    request.current = null
                   }
                 })
               }

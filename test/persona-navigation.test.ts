@@ -339,6 +339,31 @@ test('persona changes before native admission cannot rebind the old blank', asyn
   assert.equal(f.calls[0].binding.personaId, f.a.id)
 })
 
+test('native New does not recycle a blank carrying an explicit handoff or unfinished creation acknowledgement', async (t) => {
+  const f = fixture(t),
+    handed = f.add('with-handoff', f.a.id),
+    pending = f.add('incomplete-create', f.a.id)
+  f.store.change(f.store.read().revision, (s) => {
+    s.bindings[handed.id].handoff = {
+      sessionId: 'source',
+      throughSeq: 0,
+      summary: 'finite source',
+      createdAt: new Date().toISOString()
+    }
+    s.bindings[pending.id].creationWorkspaceId = f.workspace.id
+    s.bindings[pending.id].creation = {
+      kind: 'hub',
+      cwd: f.workspace.path,
+      workspaceId: f.workspace.id,
+      complete: false
+    }
+  })
+  const result = await f.create({ personaId: f.a.id })
+  assert.notEqual(result.value.sessionId, handed.id)
+  assert.notEqual(result.value.sessionId, pending.id)
+  assert.equal(f.store.read().bindings[handed.id].handoff?.summary, 'finite source')
+})
+
 test('window selection is captured before asynchronous work; lost transport keeps a retry id across remount', async () => {
   let personaId = 'A',
     stored: Record<string, string> = {},
