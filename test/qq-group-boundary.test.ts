@@ -250,6 +250,73 @@ test('stopping a group during cold resume cancels admission even when the factor
   await tasks.dispose()
 })
 
+test('stopping a group pauses its native goals before cancellation and leaves other chats unchanged', async () => {
+  const settings = {
+    ...DEFAULT_QQ_SETTINGS,
+    accountId: '12001',
+    authorizedUsers: ['23007'],
+    personaId: 'default',
+    workspace: tmpdir()
+  }
+  const calls: string[] = [],
+    goals = new Map<string, any>([
+      ['own', { id: 'goal-own', revision: 7, phase: 'active', activation: 'disarmed' }],
+      ['other', { id: 'goal-other', revision: 3, phase: 'active', activation: 'armed' }]
+    ])
+  const service = {
+    get: (agent: any) => goals.get(agent.id),
+    pause: (agent: any, ref: any) => {
+      const goal = goals.get(agent.id)
+      assert.deepEqual(ref, { id: goal.id, revision: goal.revision })
+      calls.push('pause:' + agent.id)
+      goals.set(agent.id, { ...goal, phase: 'paused', activation: 'disarmed', revision: goal.revision + 1 })
+    }
+  }
+  const agents = new Map(
+    ['own', 'other'].map((id) => [
+      id,
+      {
+        id,
+        session: { id },
+        ctx: { get: (name: string) => (name === 'goals' ? service : undefined) },
+        cancel: () => {
+          calls.push('cancel:' + id)
+        },
+        whenIdle: async () => {}
+      }
+    ])
+  )
+  const rows = ['own', 'other'].map((id) => ({
+    sessionId: id,
+    createdAt: '2026-10-26',
+    channel: {
+      ...channelFor(settings, id === 'own' ? 'group:34007' : 'group:34008'),
+      task: { requesterId: '23007', rootSessionId: id }
+    }
+  }))
+  const services: any = {
+    agents: { get: (id: string) => agents.get(id) },
+    pxMemoryChannels: { channelBindings: () => rows }
+  }
+  const tasks = new QqGroupTasks(
+    { get: (name: string) => services[name] },
+    settings,
+    () => ({}),
+    () => true,
+    () => {}
+  )
+  try {
+    await tasks.stop('group:34007')
+    assert.deepEqual(calls, ['pause:own', 'cancel:own'])
+    assert.equal(goals.get('own').phase, 'paused')
+    assert.equal(goals.get('other').phase, 'active')
+    await tasks.stop('group:34007')
+    assert.deepEqual(calls, ['pause:own', 'cancel:own', 'cancel:own'])
+  } finally {
+    await tasks.dispose()
+  }
+})
+
 test('explicit group continuation becomes a new channel task root and delivers to the same group', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'px-qq-handoff-'))
   t.after(() => {

@@ -1148,7 +1148,7 @@ var QqGroupTasks = class {
     }
   }
   stopAgent(agent) {
-    const goals = get2(agent.ctx, "goal");
+    const goals = get2(agent.ctx, "goals");
     const goal = goals?.get(agent);
     if (goal?.phase === "active") goals.pause(agent, { id: goal.id, revision: goal.revision });
     agent.cancel({ kind: "user" });
@@ -2902,7 +2902,7 @@ var QqSessionPolicy = class {
       if (!agent) continue;
       if (agent.status === "running" || agent.inbox.nextTurn.length || agent.inbox.nextStep.length)
         reasons.push("\u4F1A\u8BDD\u6216\u6392\u961F\u8F93\u5165\u5C1A\u672A\u7ED3\u675F");
-      const goal = get4(agent.ctx, "goal")?.get?.(agent);
+      const goal = get4(agent.ctx, "goals")?.get?.(agent);
       if (goal?.phase === "active") reasons.push("\u6301\u7EED\u76EE\u6807\u4ECD\u5904\u4E8E\u6D3B\u52A8\u72B6\u6001");
       if (get4(agent.ctx, "jobs")?.list?.(agent.id)?.some((job) => ["running", "stopping"].includes(job.status)))
         reasons.push("\u540E\u53F0\u4F5C\u4E1A\u5C1A\u672A\u7ED3\u675F");

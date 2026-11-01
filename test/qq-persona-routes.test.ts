@@ -198,10 +198,15 @@ test('routing does not commit when the native flush reports failure through its 
     channel = channelFor(settings, chatId)
   const bindings: Record<string, any> = { 'session-a': { personaId: 'a', channel } },
     agents = new Map<string, any>()
+  let activeGoal = false
+  const goals = {
+    get: () =>
+      activeGoal ? { id: 'goal-a', revision: 1, phase: 'active', activation: 'disarmed' } : undefined
+  }
   const agent = (id: string) => ({
     id,
     session: { id, header: { cwd: channel.workspace } },
-    ctx: { get: () => undefined },
+    ctx: { get: (name: string) => (name === 'goals' ? goals : undefined) },
     status: 'idle',
     inbox: { nextTurn: [], nextStep: [] }
   })
@@ -267,6 +272,22 @@ test('routing does not commit when the native flush reports failure through its 
     message_id: 1,
     message: [{ type: 'text', data: { text: 'hello' } }]
   })
+  activeGoal = true
+  assert.ok(policy.personaRouteStatus(chatId).busy.includes('持续目标仍处于活动状态'))
+  await assert.rejects(
+    policy.changePersonaRoute({
+      operation: 'change',
+      accountId: '12001',
+      chatId,
+      personaId: 'b',
+      revision: 0,
+      stopPending: true
+    }),
+    /持续目标/
+  )
+  assert.equal(created, 0, 'an idle but unfinished native goal must keep its current owner')
+  assert.equal(policy.personaRouteStatus(chatId).route, null)
+  activeGoal = false
   await assert.rejects(
     policy.changePersonaRoute({
       operation: 'change',

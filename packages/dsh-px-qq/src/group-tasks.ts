@@ -57,7 +57,7 @@ export class QqGroupTasks {
     }
   }
   private stopAgent(agent: any): void {
-    const goals = get(agent.ctx, 'goal')
+    const goals = get(agent.ctx, 'goals')
     const goal = goals?.get(agent)
     if (goal?.phase === 'active') goals.pause(agent, { id: goal.id, revision: goal.revision })
     agent.cancel({ kind: 'user' })

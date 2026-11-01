@@ -421,7 +421,7 @@ export class QqSessionPolicy {
       if (!agent) continue
       if (agent.status === 'running' || agent.inbox.nextTurn.length || agent.inbox.nextStep.length)
         reasons.push('会话或排队输入尚未结束')
-      const goal = get(agent.ctx, 'goal')?.get?.(agent)
+      const goal = get(agent.ctx, 'goals')?.get?.(agent)
       if (goal?.phase === 'active') reasons.push('持续目标仍处于活动状态')
       if (
         get(agent.ctx, 'jobs')
