@@ -14,10 +14,45 @@ export class TurnIdentity {
     AgentIdentity,
     { turnSeq: number; persona: Persona; interaction: PersonaInteraction }
   >()
+  private claimed = new WeakMap<
+    AgentIdentity,
+    { turn: number; accountId: string; conversationId: string; participants: Set<string> }
+  >()
   constructor(
     private store: MemoryStore,
     private boundary?: (agent: AgentIdentity) => { lastTurn: number } | undefined
   ) {}
+  /** Native inbox claims precede prompt assembly; user/message persistence happens only afterwards. */
+  claim(agent: AgentIdentity, message: { source?: unknown }, turn: number): void {
+    if (!Number.isSafeInteger(turn) || turn < 1) return
+    const origin = qqMessageOrigin(message.source)
+    if (!origin) return
+    const channel = this.store.read().bindings[agent.session.id]?.channel
+    if (
+      channel?.provider !== 'qq' ||
+      origin.accountId !== channel.accountId ||
+      origin.conversationId !== channel.conversationId
+    )
+      return
+    // Do not change an already assembled turn when later steering is claimed.
+    if (this.boundary?.(agent)?.lastTurn === turn && this.active.get(agent)?.turnSeq === turn - 1) return
+    let pending = this.claimed.get(agent)
+    if (
+      !pending ||
+      pending.turn !== turn ||
+      pending.accountId !== origin.accountId ||
+      pending.conversationId !== origin.conversationId
+    ) {
+      pending = {
+        turn,
+        accountId: origin.accountId,
+        conversationId: origin.conversationId,
+        participants: new Set()
+      }
+      this.claimed.set(agent, pending)
+    }
+    pending.participants.add(origin.senderId)
+  }
   current(agent: AgentIdentity): Persona {
     const boundary = this.boundary?.(agent)
     let turnSeq = boundary ? boundary.lastTurn - 1 : -1
@@ -41,6 +76,13 @@ export class TurnIdentity {
     const participants = new Set<string>()
     if (channel?.task) participants.add(channel.task.requesterId)
     if (channel?.provider === 'qq' && persona.expression?.scenes?.some((rule) => rule.participantId)) {
+      const claimed = this.claimed.get(agent)
+      if (
+        claimed?.turn === boundary?.lastTurn &&
+        claimed?.accountId === channel.accountId &&
+        claimed?.conversationId === channel.conversationId
+      )
+        for (const id of claimed.participants) participants.add(id)
       const events = agent.session.snapshotEvents?.() ?? []
       for (let i = events.length - 1; i >= 0; i--) {
         if (events[i].type === 'turn/start') break

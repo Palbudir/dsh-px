@@ -133,4 +133,38 @@ test('first-turn scene context uses transport sender IDs and freezes with the pe
     renderPersonaExpression(second.expression, identity.interaction(agent)).includes('KNOWN_MEMBER_STYLE')
   )
   assert.ok(!second.instructions.includes('PRIVATE_INSTRUCTIONS'))
+  let nativeTurn = 1
+  const nativeIdentity = new TurnIdentity(store, () => ({ lastTurn: nativeTurn }))
+  const nativeAgent = {
+    session: { id: 's', header: { id: 's' }, snapshotEvents: () => [{ seq: 0, type: 'turn/start' }] }
+  }
+  // Native inputs have been claimed, but have not yet been persisted as user/message at assembly time.
+  nativeIdentity.claim(nativeAgent, { source: origin('23007') }, 1)
+  nativeIdentity.claim(
+    nativeAgent,
+    { source: { ...origin('99999'), pxQq: { ...origin('99999').pxQq, conversationId: 'group:other' } } },
+    1
+  )
+  assert.deepEqual(nativeIdentity.interaction(nativeAgent).participants, ['23007'])
+  nativeIdentity.claim(nativeAgent, { source: origin('45009') }, 1)
+  assert.deepEqual(
+    nativeIdentity.interaction(nativeAgent).participants,
+    ['23007'],
+    'later steering does not rewrite the turn expression'
+  )
+  nativeTurn = 2
+  assert.deepEqual(
+    nativeIdentity.interaction(nativeAgent).participants,
+    [],
+    'a previous claim cannot supply the next turn identity'
+  )
+  nativeTurn = 3
+  nativeIdentity.claim(nativeAgent, { source: origin('45009') }, 3)
+  assert.deepEqual(nativeIdentity.interaction(nativeAgent).participants, ['45009'])
+  assert.ok(
+    !renderPersonaExpression(
+      nativeIdentity.current(nativeAgent).expression,
+      nativeIdentity.interaction(nativeAgent)
+    ).includes('KNOWN_MEMBER_STYLE')
+  )
 })

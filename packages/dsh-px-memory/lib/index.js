@@ -906,6 +906,28 @@ var TurnIdentity = class {
     this.boundary = boundary;
   }
   active = /* @__PURE__ */ new WeakMap();
+  claimed = /* @__PURE__ */ new WeakMap();
+  /** Native inbox claims precede prompt assembly; user/message persistence happens only afterwards. */
+  claim(agent, message, turn) {
+    if (!Number.isSafeInteger(turn) || turn < 1) return;
+    const origin = qqMessageOrigin(message.source);
+    if (!origin) return;
+    const channel = this.store.read().bindings[agent.session.id]?.channel;
+    if (channel?.provider !== "qq" || origin.accountId !== channel.accountId || origin.conversationId !== channel.conversationId)
+      return;
+    if (this.boundary?.(agent)?.lastTurn === turn && this.active.get(agent)?.turnSeq === turn - 1) return;
+    let pending = this.claimed.get(agent);
+    if (!pending || pending.turn !== turn || pending.accountId !== origin.accountId || pending.conversationId !== origin.conversationId) {
+      pending = {
+        turn,
+        accountId: origin.accountId,
+        conversationId: origin.conversationId,
+        participants: /* @__PURE__ */ new Set()
+      };
+      this.claimed.set(agent, pending);
+    }
+    pending.participants.add(origin.senderId);
+  }
   current(agent) {
     const boundary = this.boundary?.(agent);
     let turnSeq = boundary ? boundary.lastTurn - 1 : -1;
@@ -929,6 +951,9 @@ var TurnIdentity = class {
     const participants = /* @__PURE__ */ new Set();
     if (channel?.task) participants.add(channel.task.requesterId);
     if (channel?.provider === "qq" && persona.expression?.scenes?.some((rule) => rule.participantId)) {
+      const claimed = this.claimed.get(agent);
+      if (claimed?.turn === boundary?.lastTurn && claimed?.accountId === channel.accountId && claimed?.conversationId === channel.conversationId)
+        for (const id of claimed.participants) participants.add(id);
       const events = agent.session.snapshotEvents?.() ?? [];
       for (let i = events.length - 1; i >= 0; i--) {
         if (events[i].type === "turn/start") break;
@@ -25417,6 +25442,7 @@ function apply(ctx) {
     store,
     (agent) => service(ctx, "sessionProjections")?.stateOf?.(agent.session, "turnBoundary")
   );
+  ctx.on("agent/inbox/claimed", ({ agent, message, turn }) => identity.claim(agent, message, turn));
   const resourceAccess = new PersonaResourceAccess(
     store,
     identity,

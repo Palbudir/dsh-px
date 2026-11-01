@@ -101,6 +101,7 @@ export function apply(ctx: any): void {
   const identity = new TurnIdentity(store, (agent) =>
     service(ctx, 'sessionProjections')?.stateOf?.(agent.session, 'turnBoundary')
   )
+  ctx.on('agent/inbox/claimed', ({ agent, message, turn }: any) => identity.claim(agent, message, turn))
   const resourceAccess = new PersonaResourceAccess(
     store,
     identity,
