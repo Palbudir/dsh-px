@@ -240,7 +240,14 @@ export function apply(ctx: any): void {
     continue: (sessionId: string, args: any, signal?: AbortSignal) =>
       createPersonaSession(ctx, store, sessionId, args, signal)
   })
-  ctx.effect(() => () => knowledge.dispose(), 'memory: knowledge sources')
+  let settleSegments = (): Promise<void> => Promise.resolve()
+  ctx.effect(
+    () => async () => {
+      await settleSegments()
+      await knowledge.dispose()
+    },
+    'memory: knowledge sources'
+  )
   ctx.inject(['mnemonMemory', 'tools', 'agents'], (host: any) =>
     host.effect(() => installKnowledgeToolRouting(host), 'memory: native knowledge tool routing')
   )
@@ -346,7 +353,13 @@ export function apply(ctx: any): void {
     )
   )
   const history = new HistoryIndex(join(root, 'storages', name, 'history.sqlite'), store)
-  ctx.effect(() => () => history.close(), 'memory: history index')
+  ctx.effect(
+    () => async () => {
+      await settleSegments()
+      await history.close()
+    },
+    'memory: history index'
+  )
   const hot = new HotMemory(
     store,
     join(root, 'storages', name, 'hot-feedback.sqlite'),
@@ -360,6 +373,7 @@ export function apply(ctx: any): void {
     history,
     join(root, 'storages', name, 'segments.sqlite')
   )
+  settleSegments = () => segments.dispose()
   ctx.effect(() => () => segments.dispose(), 'memory: background segments')
   ctx.effect(() => store.subscribe(() => segments.changed()), 'memory: segment identity invalidation')
   ctx.provide('pxContextSegments', {

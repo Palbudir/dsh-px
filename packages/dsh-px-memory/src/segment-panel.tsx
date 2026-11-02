@@ -189,7 +189,7 @@ export function SegmentPanel({ url, visible }: { url: string; visible: boolean }
                       ? '已采纳'
                       : row.memoryDecisions?.[index]?.status === 'dismissed'
                         ? '已忽略'
-                        : '尚未保存'}
+                        : '尚未确认采纳'}
                   </p>
                   <button
                     disabled={

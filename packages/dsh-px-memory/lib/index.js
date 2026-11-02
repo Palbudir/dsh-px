@@ -25033,11 +25033,13 @@ var SegmentRuntime = class {
   epoch = randomUUID5();
   store;
   stopped = false;
+  disposing;
   committer;
   starting;
   running = /* @__PURE__ */ new Map();
   admissions = /* @__PURE__ */ new Map();
   commits = /* @__PURE__ */ new Map();
+  memoryDecisions = /* @__PURE__ */ new Map();
   shutdown = new AbortController();
   retry = /* @__PURE__ */ new Set();
   problem = /* @__PURE__ */ new Map();
@@ -25465,7 +25467,19 @@ var SegmentRuntime = class {
     return publicSession(binding) ? this.knowledge.conversationCaller({ sessionId, project: binding.channel.workspace, actor }) : { sessionId, project, actor };
   }
   async decideMemory(sessionId, id, index, action, project) {
+    if (this.stopped) throw new MemoryError("\u540E\u53F0\u6574\u7406\u670D\u52A1\u5DF2\u505C\u6B62\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u5BA2\u6237\u7AEF\u540E\u6838\u5BF9\u8BB0\u5FC6", 503);
     if (!["accept", "dismiss"].includes(action)) throw new MemoryError("\u8BB0\u5FC6\u5EFA\u8BAE\u64CD\u4F5C\u65E0\u6548");
+    const request = hash6([sessionId, index, action, project, this.identity(sessionId).fingerprint]), pending = this.memoryDecisions.get(id);
+    if (pending) {
+      if (pending.request !== request)
+        throw new MemoryError("\u672C\u7247\u6BB5\u7684\u8BB0\u5FC6\u5EFA\u8BAE\u6B63\u5728\u5904\u7406\uFF0C\u8BF7\u7B49\u5F85\u7ED3\u679C\u540E\u518D\u64CD\u4F5C", 409);
+      return pending.settled;
+    }
+    const settled = Promise.resolve().then(() => this.applyMemoryDecision(sessionId, id, index, action, project)).finally(() => this.memoryDecisions.delete(id));
+    this.memoryDecisions.set(id, { request, settled });
+    return settled;
+  }
+  async applyMemoryDecision(sessionId, id, index, action, project) {
     const record2 = this.store.get(id);
     if (this.running.has(id)) throw new MemoryError("\u539F\u751F\u540E\u53F0\u4F5C\u4E1A\u5C1A\u672A\u7ED3\u7B97\uFF0C\u8BF7\u7A0D\u540E\u91C7\u7EB3", 409);
     if (!record2 || record2.sessionId !== sessionId || record2.identity !== this.identity(sessionId).fingerprint || !record2.memoryTarget || !["ready", "committed"].includes(record2.phase) || !Number.isSafeInteger(index) || !record2.prepared?.memories[index])
@@ -25492,32 +25506,53 @@ var SegmentRuntime = class {
         excerpt: event.text.slice(0, 1500)
       });
     }
-    const result = await this.knowledge.write(caller, record2.memoryTarget.scope, {
-      key: record2.memoryTarget.conversation ? `QQ \u7ECF\u5386 / ${record2.personaId} / ${memory.key}` : memory.key,
-      body: record2.memoryTarget.conversation ? JSON.stringify({
-        kind: "conversation-observation",
-        version: 1,
-        observation: memory.body,
-        evidence,
-        meaning: "\u6765\u81EA\u540E\u53F0\u6574\u7406\uFF0C\u7ECF\u7528\u6237\u91C7\u7EB3\uFF1B\u5386\u53F2\u8D44\u6599\u4E0D\u6388\u4E88\u6743\u9650\u3002"
-      }) : memory.body,
-      revision: record2.memoryTarget.revision,
-      sourceEvents: memory.seqs.map((seq) => ({ sessionId, seq }))
-    });
-    this.store.change(id, ["ready", "committed"], (row) => {
-      ;
-      (row.memoryDecisions ??= {})[index] = { status: "accepted", documentId: result.document.id };
-      row.memoryTarget.revision = result.revision;
-    });
+    let result;
+    try {
+      result = await this.knowledge.write(caller, record2.memoryTarget.scope, {
+        key: record2.memoryTarget.conversation ? `QQ \u7ECF\u5386 / ${record2.personaId} / ${memory.key}` : memory.key,
+        body: record2.memoryTarget.conversation ? JSON.stringify({
+          kind: "conversation-observation",
+          version: 1,
+          observation: memory.body,
+          evidence,
+          meaning: "\u6765\u81EA\u540E\u53F0\u6574\u7406\uFF0C\u7ECF\u7528\u6237\u91C7\u7EB3\uFF1B\u5386\u53F2\u8D44\u6599\u4E0D\u6388\u4E88\u6743\u9650\u3002"
+        }) : memory.body,
+        revision: record2.memoryTarget.revision,
+        sourceEvents: memory.seqs.map((seq) => ({ sessionId, seq }))
+      });
+    } catch (error62) {
+      throw new MemoryError(
+        `\u77E5\u8BC6\u4FDD\u5B58\u7ED3\u679C\u5C1A\u672A\u786E\u8BA4\uFF0C\u8BF7\u5148\u5728\u201C\u8BB0\u5FC6\u4E0E\u77E5\u8BC6\u201D\u6838\u5BF9\u4E3B\u9898\u201C${memory.key}\u201D\uFF0C\u4E0D\u8981\u76F4\u63A5\u91CD\u590D\u91C7\u7EB3\u3002${error62 instanceof Error ? error62.message : String(error62)}`,
+        error62 instanceof MemoryError ? error62.status : 503
+      );
+    }
+    try {
+      const current = this.store.get(id);
+      if (!current || !this.store.change(id, [current.phase], (row) => {
+        ;
+        (row.memoryDecisions ??= {})[index] = { status: "accepted", documentId: result.document.id };
+        row.memoryTarget.revision = result.revision;
+      }))
+        throw new MemoryError("\u7247\u6BB5\u8BB0\u5F55\u5DF2\u4E0D\u53EF\u7528", 409);
+    } catch (error62) {
+      throw new MemoryError(
+        `\u77E5\u8BC6\u5DF2\u5199\u5165\uFF0C\u4F46\u91C7\u7EB3\u72B6\u6001\u672A\u80FD\u8BB0\u5F55\u3002\u8BF7\u5148\u5728\u201C\u8BB0\u5FC6\u4E0E\u77E5\u8BC6\u201D\u6838\u5BF9\u4E3B\u9898\u201C${memory.key}\u201D\uFF0C\u4E0D\u8981\u91CD\u590D\u91C7\u7EB3\u3002${error62 instanceof Error ? error62.message : String(error62)}`,
+        503
+      );
+    }
     return { status: "accepted", documentId: result.document.id };
   }
-  async dispose() {
+  dispose() {
+    return this.disposing ??= this.disposeWork();
+  }
+  async disposeWork() {
     this.stopped = true;
     this.shutdown.abort(new Error("\u540E\u53F0\u6574\u7406\u670D\u52A1\u5DF2\u505C\u6B62"));
     await Promise.allSettled(
       [...this.admissions.values(), ...this.running.values()].map((run) => run.settled)
     );
     await Promise.allSettled([...this.commits.values()]);
+    await Promise.allSettled([...this.memoryDecisions.values()].map((run) => run.settled));
     await this.starting?.catch(() => {
     });
     await this.committer?.dispose();
@@ -25877,7 +25912,14 @@ function apply(ctx) {
     },
     continue: (sessionId, args, signal) => createPersonaSession(ctx, store, sessionId, args, signal)
   });
-  ctx.effect(() => () => knowledge.dispose(), "memory: knowledge sources");
+  let settleSegments = () => Promise.resolve();
+  ctx.effect(
+    () => async () => {
+      await settleSegments();
+      await knowledge.dispose();
+    },
+    "memory: knowledge sources"
+  );
   ctx.inject(
     ["mnemonMemory", "tools", "agents"],
     (host) => host.effect(() => installKnowledgeToolRouting(host), "memory: native knowledge tool routing")
@@ -25979,7 +26021,13 @@ function apply(ctx) {
     )
   );
   const history = new HistoryIndex(join5(root, "storages", name, "history.sqlite"), store);
-  ctx.effect(() => () => history.close(), "memory: history index");
+  ctx.effect(
+    () => async () => {
+      await settleSegments();
+      await history.close();
+    },
+    "memory: history index"
+  );
   const hot = new HotMemory(
     store,
     join5(root, "storages", name, "hot-feedback.sqlite"),
@@ -25993,6 +26041,7 @@ function apply(ctx) {
     history,
     join5(root, "storages", name, "segments.sqlite")
   );
+  settleSegments = () => segments.dispose();
   ctx.effect(() => () => segments.dispose(), "memory: background segments");
   ctx.effect(() => store.subscribe(() => segments.changed()), "memory: segment identity invalidation");
   ctx.provide("pxContextSegments", {

@@ -3257,7 +3257,7 @@ function SegmentPanel({ url, visible }) {
             "\u4F9D\u636E\u4E8B\u4EF6\uFF1A",
             memory.seqs.join(", "),
             "\u3002",
-            row.memoryDecisions?.[index]?.status === "accepted" ? "\u5DF2\u91C7\u7EB3" : row.memoryDecisions?.[index]?.status === "dismissed" ? "\u5DF2\u5FFD\u7565" : "\u5C1A\u672A\u4FDD\u5B58"
+            row.memoryDecisions?.[index]?.status === "accepted" ? "\u5DF2\u91C7\u7EB3" : row.memoryDecisions?.[index]?.status === "dismissed" ? "\u5DF2\u5FFD\u7565" : "\u5C1A\u672A\u786E\u8BA4\u91C7\u7EB3"
           ] }),
           /* @__PURE__ */ (0, import_jsx_runtime15.jsx)(
             "button",

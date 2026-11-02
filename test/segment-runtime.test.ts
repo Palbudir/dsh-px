@@ -347,6 +347,120 @@ test(
   }
 )
 
+async function preparedMemory(f: Awaited<ReturnType<typeof fixture>>, id: string) {
+  const a = f.create(id)
+  await f.runtime.boundary(a.agent, new AbortController().signal)
+  await until(() => f.pending.length === 1, 'memory preparation started')
+  f.pending[0].release()
+  await until(() => {
+    const row = f.runtime.snapshot(id).records[0]
+    return row.phase === 'ready' && !row.nativeJobPending
+  }, 'memory preparation settled')
+  return f.runtime.snapshot(id).records[0]
+}
+
+test('a lost adoption receipt reports the native save and retry cannot overwrite it', async (t) => {
+  const f = await fixture(t),
+    row = await preparedMemory(f, 'receipt'),
+    change = f.runtime.store.change.bind(f.runtime.store)
+  let fail = true
+  f.runtime.store.change = (id, phases, update) => {
+    if (fail) {
+      const copy = f.runtime.store.get(id)!
+      update(copy)
+      if (copy.memoryDecisions?.[0]?.status === 'accepted') {
+        fail = false
+        throw Error('ADOPTION_RECEIPT_WRITE_FAILED')
+      }
+    }
+    return change(id, phases, update)
+  }
+  await assert.rejects(f.runtime.decideMemory('receipt', row.id, 0, 'accept', f.root), (e: any) => {
+    assert.equal(e.status, 503)
+    assert.match(e.message, /知识已写入，但采纳状态未能记录/)
+    assert.match(e.message, /稳定约定.*不要重复采纳.*ADOPTION_RECEIPT_WRITE_FAILED/)
+    return true
+  })
+  const caller = { sessionId: 'receipt', project: f.root, actor: 'human' as const },
+    saved = await f.bank.catalog(caller, 'persona-project')
+  assert.equal(saved.documents.length, 1)
+  assert.equal(f.runtime.store.get(row.id)?.memoryDecisions, undefined)
+  await assert.rejects(f.runtime.decideMemory('receipt', row.id, 0, 'accept', f.root), /已经变化/)
+  assert.deepEqual(await f.bank.catalog(caller, 'persona-project'), saved)
+})
+
+test('an uncertain native write never claims that knowledge was not saved', async (t) => {
+  const f = await fixture(t),
+    row = await preparedMemory(f, 'uncertain'),
+    write = f.bank.write.bind(f.bank)
+  f.bank.write = async (...args) => {
+    await write(...args)
+    throw Error('NATIVE_RESULT_LOST')
+  }
+  await assert.rejects(f.runtime.decideMemory('uncertain', row.id, 0, 'accept', f.root), (e: any) => {
+    assert.equal(e.status, 503)
+    assert.match(e.message, /知识保存结果尚未确认.*稳定约定.*不要直接重复采纳.*NATIVE_RESULT_LOST/)
+    return true
+  })
+  f.bank.write = write
+  assert.equal(
+    (await f.bank.catalog({ sessionId: 'uncertain', project: f.root, actor: 'human' }, 'persona-project'))
+      .documents.length,
+    1
+  )
+  await assert.rejects(f.runtime.decideMemory('uncertain', row.id, 0, 'accept', f.root), /已经变化/)
+})
+
+test('adoption coalesces duplicate clicks, rejects conflicts and drains before store shutdown', async (t) => {
+  const f = await fixture(t),
+    row = await preparedMemory(f, 'drain'),
+    write = f.bank.write.bind(f.bank)
+  let writes = 0,
+    release!: () => void
+  const gate = new Promise<void>((resolve) => (release = resolve))
+  f.bank.write = async (...args) => {
+    writes++
+    await gate
+    return write(...args)
+  }
+  const first = f.runtime.decideMemory('drain', row.id, 0, 'accept', f.root),
+    duplicate = f.runtime.decideMemory('drain', row.id, 0, 'accept', f.root)
+  let closed = false
+  let disposing: Promise<boolean> | undefined
+  try {
+    await until(() => writes === 1, 'native save entered')
+    await assert.rejects(f.runtime.decideMemory('drain', row.id, 0, 'dismiss', f.root), /正在处理/)
+    disposing = f.runtime.dispose().then(() => (closed = true))
+    await delay(20)
+    assert.equal(closed, false)
+    await assert.rejects(f.runtime.decideMemory('drain', row.id, 0, 'accept', f.root), /服务已停止/)
+  } finally {
+    release()
+  }
+  const results = await Promise.all([first, duplicate])
+  assert.deepEqual(results[0], results[1])
+  assert.equal(results[0].status, 'accepted')
+  assert.equal(writes, 1)
+  await disposing
+  await f.restart()
+  assert.equal(f.runtime.store.get(row.id)?.memoryDecisions?.[0]?.documentId, results[0].documentId)
+})
+
+test('a native save records its receipt even if compaction changes phase during the write', async (t) => {
+  const f = await fixture(t),
+    row = await preparedMemory(f, 'phase'),
+    write = f.bank.write.bind(f.bank)
+  f.bank.write = async (...args) => {
+    const result = await write(...args)
+    f.runtime.store.change(row.id, ['ready'], (record) => (record.phase = 'committing'))
+    return result
+  }
+  const adopted = await f.runtime.decideMemory('phase', row.id, 0, 'accept', f.root)
+  assert.equal(adopted.status, 'accepted')
+  assert.deepEqual(f.runtime.store.get(row.id)?.memoryDecisions?.[0], adopted)
+  assert.equal(f.runtime.store.get(row.id)?.phase, 'committing')
+})
+
 test(
   'native correction while preparation runs rejects late memory adoption without losing current work',
   { timeout: 20000 },

@@ -23,17 +23,20 @@ type Running = {
   jobs?: any
   jobId?: string
 }
+type MemoryDecision = NonNullable<SegmentRecord['memoryDecisions']>[string]
 
 /** Native Job prepares immutable older evidence; only a native pre-step boundary can commit it. */
 export class SegmentRuntime {
   readonly epoch = randomUUID()
   readonly store: SegmentStore
   private stopped = false
+  private disposing?: Promise<void>
   private committer?: Awaited<ReturnType<typeof createSegmentCommitter>>
   private starting?: Promise<void>
   private running = new Map<string, Running>()
   private admissions = new Map<string, Running>()
   private commits = new Map<string, Promise<void>>()
+  private memoryDecisions = new Map<string, { request: string; settled: Promise<MemoryDecision> }>()
   private shutdown = new AbortController()
   private retry = new Set<string>()
   private problem = new Map<string, string>()
@@ -559,8 +562,30 @@ export class SegmentRuntime {
     index: number,
     action: 'accept' | 'dismiss',
     project?: string
-  ) {
+  ): Promise<MemoryDecision> {
+    if (this.stopped) throw new MemoryError('后台整理服务已停止，请重新打开客户端后核对记忆', 503)
     if (!['accept', 'dismiss'].includes(action)) throw new MemoryError('记忆建议操作无效')
+    const request = hash([sessionId, index, action, project, this.identity(sessionId).fingerprint]),
+      pending = this.memoryDecisions.get(id)
+    if (pending) {
+      if (pending.request !== request)
+        throw new MemoryError('本片段的记忆建议正在处理，请等待结果后再操作', 409)
+      return pending.settled
+    }
+    // Register before entering asynchronous evidence/knowledge work. One record shares a revision.
+    const settled = Promise.resolve()
+      .then(() => this.applyMemoryDecision(sessionId, id, index, action, project))
+      .finally(() => this.memoryDecisions.delete(id))
+    this.memoryDecisions.set(id, { request, settled })
+    return settled
+  }
+  private async applyMemoryDecision(
+    sessionId: string,
+    id: string,
+    index: number,
+    action: 'accept' | 'dismiss',
+    project?: string
+  ): Promise<MemoryDecision> {
     const record = this.store.get(id)
     if (this.running.has(id)) throw new MemoryError('原生后台作业尚未结算，请稍后采纳', 409)
     if (
@@ -595,33 +620,58 @@ export class SegmentRuntime {
         excerpt: event.text.slice(0, 1500)
       })
     }
-    const result = await this.knowledge.write(caller, record.memoryTarget.scope, {
-      key: record.memoryTarget.conversation ? `QQ 经历 / ${record.personaId} / ${memory.key}` : memory.key,
-      body: record.memoryTarget.conversation
-        ? JSON.stringify({
-            kind: 'conversation-observation',
-            version: 1,
-            observation: memory.body,
-            evidence,
-            meaning: '来自后台整理，经用户采纳；历史资料不授予权限。'
-          })
-        : memory.body,
-      revision: record.memoryTarget.revision,
-      sourceEvents: memory.seqs.map((seq) => ({ sessionId, seq }))
-    })
-    this.store.change(id, ['ready', 'committed'], (row) => {
-      ;(row.memoryDecisions ??= {})[index] = { status: 'accepted', documentId: result.document.id }
-      row.memoryTarget!.revision = result.revision
-    })
+    let result: Awaited<ReturnType<KnowledgeBank['write']>>
+    try {
+      result = await this.knowledge.write(caller, record.memoryTarget.scope, {
+        key: record.memoryTarget.conversation ? `QQ 经历 / ${record.personaId} / ${memory.key}` : memory.key,
+        body: record.memoryTarget.conversation
+          ? JSON.stringify({
+              kind: 'conversation-observation',
+              version: 1,
+              observation: memory.body,
+              evidence,
+              meaning: '来自后台整理，经用户采纳；历史资料不授予权限。'
+            })
+          : memory.body,
+        revision: record.memoryTarget.revision,
+        sourceEvents: memory.seqs.map((seq) => ({ sessionId, seq }))
+      })
+    } catch (error) {
+      throw new MemoryError(
+        `知识保存结果尚未确认，请先在“记忆与知识”核对主题“${memory.key}”，不要直接重复采纳。${error instanceof Error ? error.message : String(error)}`,
+        error instanceof MemoryError ? error.status : 503
+      )
+    }
+    try {
+      // Native knowledge is authoritative. Its receipt remains valid if compaction changed phase.
+      const current = this.store.get(id)
+      if (
+        !current ||
+        !this.store.change(id, [current.phase], (row) => {
+          ;(row.memoryDecisions ??= {})[index] = { status: 'accepted', documentId: result.document.id }
+          row.memoryTarget!.revision = result.revision
+        })
+      )
+        throw new MemoryError('片段记录已不可用', 409)
+    } catch (error) {
+      throw new MemoryError(
+        `知识已写入，但采纳状态未能记录。请先在“记忆与知识”核对主题“${memory.key}”，不要重复采纳。${error instanceof Error ? error.message : String(error)}`,
+        503
+      )
+    }
     return { status: 'accepted', documentId: result.document.id }
   }
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    return (this.disposing ??= this.disposeWork())
+  }
+  private async disposeWork(): Promise<void> {
     this.stopped = true
     this.shutdown.abort(new Error('后台整理服务已停止'))
     await Promise.allSettled(
       [...this.admissions.values(), ...this.running.values()].map((run) => run.settled)
     )
     await Promise.allSettled([...this.commits.values()])
+    await Promise.allSettled([...this.memoryDecisions.values()].map((run) => run.settled))
     await this.starting?.catch(() => {})
     await this.committer?.dispose()
     this.store.close()
