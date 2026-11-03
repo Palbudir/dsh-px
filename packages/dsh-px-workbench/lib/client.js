@@ -5566,6 +5566,7 @@ function ChannelsPanel({ navigation }) {
     notice && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "status", children: notice }),
     !view ? /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "status", children: "\u6B63\u5728\u8BFB\u53D6\u6E20\u9053\u72B6\u6001\u2026" }) : /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)(import_jsx_runtime4.Fragment, { children: [
       !view.available && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "status", children: "\u539F\u751F\u6E20\u9053\u670D\u52A1\u5C1A\u672A\u5C31\u7EEA\u3002\u5DF2\u4FDD\u5B58\u7684\u914D\u7F6E\u4FDD\u7559\uFF1B\u8BF7\u68C0\u67E5 IM \u4E0E\u4EBA\u683C\u63D2\u4EF6\u662F\u5426\u5DF2\u542F\u7528\u3002" }),
+      !view.componentEnabled && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "status", children: "\u6E20\u9053\u914D\u7F6E\u9879\u5DF2\u5728\u5185\u7F6E\u63D2\u4EF6\u4E2D\u505C\u7528\uFF0C\u5DF2\u4FDD\u5B58\u7684\u8D26\u53F7\u8BBE\u7F6E\u4ECD\u7136\u4FDD\u7559\u3002" }),
       view.discoveryError && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)("p", { role: "alert", children: view.discoveryError }),
       view.failures.map((row) => /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("p", { role: "alert", children: [
         row.id,
@@ -5674,7 +5675,7 @@ function ChannelsPanel({ navigation }) {
                 modes[account.attention.mode],
                 " \xB7",
                 " ",
-                runtime?.accepting ? "\u63A5\u6536\u65B9\u5DF2\u6CE8\u518C" : account.enabled ? "\u63A5\u6536\u65B9\u672A\u8FD0\u884C" : "\u5DF2\u505C\u7528"
+                runtime?.accepting ? "\u63A5\u6536\u65B9\u5DF2\u6CE8\u518C" : runtime?.leaseHeld ? "\u6B63\u5728\u7ED3\u675F\u5904\u7406" : account.enabled ? "\u63A5\u6536\u65B9\u672A\u8FD0\u884C" : "\u5DF2\u505C\u7528"
               ] }),
               /* @__PURE__ */ (0, import_jsx_runtime4.jsxs)("div", { className: "px-actions", children: [
                 /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
@@ -5699,13 +5700,13 @@ function ChannelsPanel({ navigation }) {
                         "\u672C\u6B21\u63A5\u6536\u4E0E\u5904\u7406\u5DF2\u505C\u6B62\u3002\u53EF\u91CD\u65B0\u5F00\u59CB\u63A5\u6536\uFF1B\u82E5\u9700\u91CD\u542F\u540E\u4E5F\u4FDD\u6301\u505C\u7528\uFF0C\u8BF7\u7F16\u8F91\u8BBE\u7F6E\u5E76\u5173\u95ED\u63A5\u6536\u3002"
                       );
                     }),
-                    children: "\u505C\u6B62\u63A5\u6536\u4E0E\u5904\u7406"
+                    children: runtime.accepting ? "\u505C\u6B62\u63A5\u6536\u4E0E\u5904\u7406" : "\u91CD\u8BD5\u505C\u6B62"
                   }
                 ),
                 account.enabled && !runtime?.accepting && /* @__PURE__ */ (0, import_jsx_runtime4.jsx)(
                   "button",
                   {
-                    disabled: busy || !view.available || !view.componentEnabled,
+                    disabled: busy || !!runtime?.leaseHeld || !view.available || !view.componentEnabled,
                     onClick: () => void run(() => command({ type: "retry-account", accountId: account.accountId })),
                     children: "\u5F00\u59CB\u6216\u91CD\u8BD5\u63A5\u6536"
                   }

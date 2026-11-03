@@ -322,6 +322,9 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
           {!view.available && (
             <p role="status">原生渠道服务尚未就绪。已保存的配置保留；请检查 IM 与人格插件是否已启用。</p>
           )}
+          {!view.componentEnabled && (
+            <p role="status">渠道配置项已在内置插件中停用，已保存的账号设置仍然保留。</p>
+          )}
           {view.discoveryError && <p role="alert">{view.discoveryError}</p>}
           {view.failures.map((row) => (
             <p key={row.id} role="alert">
@@ -425,7 +428,13 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
                 <p>
                   人格：{view.personas.find((p) => p.id === account.personaId)?.name ?? account.personaId} ·{' '}
                   {modes[account.attention.mode]} ·{' '}
-                  {runtime?.accepting ? '接收方已注册' : account.enabled ? '接收方未运行' : '已停用'}
+                  {runtime?.accepting
+                    ? '接收方已注册'
+                    : runtime?.leaseHeld
+                      ? '正在结束处理'
+                      : account.enabled
+                        ? '接收方未运行'
+                        : '已停用'}
                 </p>
                 <div className="px-actions">
                   <button
@@ -452,12 +461,12 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
                         })
                       }
                     >
-                      停止接收与处理
+                      {runtime.accepting ? '停止接收与处理' : '重试停止'}
                     </button>
                   )}
                   {account.enabled && !runtime?.accepting && (
                     <button
-                      disabled={busy || !view.available || !view.componentEnabled}
+                      disabled={busy || !!runtime?.leaseHeld || !view.available || !view.componentEnabled}
                       onClick={() =>
                         void run(() => command({ type: 'retry-account', accountId: account.accountId }))
                       }
