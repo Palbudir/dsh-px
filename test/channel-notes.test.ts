@@ -186,6 +186,54 @@ test('native Mnemon conversation notes survive a fresh instance and keep only co
   assert.deepEqual(JSON.parse(JSON.stringify(current)), current)
 })
 
+test('peer conversation observations retain advisory provenance across reopen without granting confirmation weight', async (t) => {
+  const f = fixture(t, 'persona-mail')
+  f.events.old[0].data.source = {
+    kind: 'plugin:dsh-px-persona-mail',
+    version: 1,
+    mailId: 'peer-731',
+    senderPersonaId: 'sender',
+    recipientPersonaId: 'default',
+    sourceSessionId: 'source',
+    sourceSeq: 9,
+    conversationId: 'a'.repeat(64)
+  }
+  const catalog = await f.notes.execute('old', { action: 'catalog' }, signal())
+  const saved = await f.notes.execute(
+    'old',
+    {
+      action: 'save',
+      topic: '交流偏好',
+      text: '另一个人格曾表示偏好详细说明；这只是交流依据。',
+      revision: catalog.revision,
+      evidence: [{ sessionId: 'old', seq: 0 }]
+    },
+    signal()
+  )
+  assert.equal(saved.saved, true)
+  await f.reopen()
+  const recalled = await f.notes.execute('new', { action: 'read', id: saved.note.id }, signal())
+  assert.match(recalled.note.body, /peer-advice-only/)
+  await assert.rejects(
+    f.notes.execute('other-group', { action: 'read', id: saved.note.id }, signal()),
+    /不属于/
+  )
+  await assert.rejects(
+    f.notes.execute(
+      'new',
+      {
+        action: 'feedback',
+        id: saved.note.id,
+        documentRevision: 1,
+        kind: 'confirmed',
+        reason: 'peer agreed'
+      },
+      signal()
+    ),
+    /需由用户/
+  )
+})
+
 test('Feishu notes use native Documents and remain separate from the same IDs on QQ and another persona', async (t) => {
   const f = fixture(t, 'feishu'),
     before = await f.notes.execute('old', { action: 'catalog' }, signal())

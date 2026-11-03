@@ -136,9 +136,9 @@ function renderPersonaExpression(expression, context) {
 function parsePersonaResources(value) {
   if (value === void 0) return;
   const v = value;
-  const id = (s, max) => typeof s === "string" && s.trim() === s && !!s && s.length <= max && !/[\r\n\0]/.test(s);
-  if (!v || typeof v !== "object" || Array.isArray(v) || !Number.isSafeInteger(v.revision) || v.revision < 1 || !v.tools || !["native", "selected"].includes(v.tools.mode) || !Array.isArray(v.tools.names) || v.tools.names.length > 400 || v.tools.names.some((name2) => !id(name2, 160) || !/^[a-zA-Z0-9_.-]+$/.test(name2)) || new Set(v.tools.names).size !== v.tools.names.length || !v.channels || !["native", "selected"].includes(v.channels.mode) || !Array.isArray(v.channels.accounts) || v.channels.accounts.length > 100 || v.channels.accounts.some(
-    (row) => !row || !id(row.provider, 80) || !/^[a-z0-9-]+$/.test(row.provider) || !id(row.accountId, 200)
+  const id2 = (s, max) => typeof s === "string" && s.trim() === s && !!s && s.length <= max && !/[\r\n\0]/.test(s);
+  if (!v || typeof v !== "object" || Array.isArray(v) || !Number.isSafeInteger(v.revision) || v.revision < 1 || !v.tools || !["native", "selected"].includes(v.tools.mode) || !Array.isArray(v.tools.names) || v.tools.names.length > 400 || v.tools.names.some((name2) => !id2(name2, 160) || !/^[a-zA-Z0-9_.-]+$/.test(name2)) || new Set(v.tools.names).size !== v.tools.names.length || !v.channels || !["native", "selected"].includes(v.channels.mode) || !Array.isArray(v.channels.accounts) || v.channels.accounts.length > 100 || v.channels.accounts.some(
+    (row) => !row || !id2(row.provider, 80) || !/^[a-z0-9-]+$/.test(row.provider) || !id2(row.accountId, 200)
   ) || new Set(v.channels.accounts.map((row) => JSON.stringify([row.provider, row.accountId]))).size !== v.channels.accounts.length || v.expiresAt !== void 0 && (typeof v.expiresAt !== "string" || !Number.isFinite(Date.parse(v.expiresAt))))
     throw new Error("\u4EBA\u683C\u8D44\u6E90\u89C4\u5219\u65E0\u6548");
   return structuredClone(v);
@@ -190,9 +190,9 @@ var publicSession = (binding) => audienceOf(binding).kind === "conversation";
 function samePublicConversation(a, b) {
   return sameConversationAudience(a, b);
 }
-var isExperienceSession = (id) => /^px-experience-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id);
-var isAttentionSession = (id) => /^px-qq-attention-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id);
-var isInternalSession = (id) => isExperienceSession(id) || isAttentionSession(id);
+var isExperienceSession = (id2) => /^px-experience-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id2);
+var isAttentionSession = (id2) => /^px-qq-attention-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id2);
+var isInternalSession = (id2) => isExperienceSession(id2) || isAttentionSession(id2);
 var MemoryError = class extends Error {
   constructor(message, status = 400) {
     super(message);
@@ -298,8 +298,8 @@ function validate(s) {
   }
   if (!ids.has("default") || Object.keys(s.bindings).length > 2e4)
     throw new MemoryError("\u4EBA\u683C\u6216\u4F1A\u8BDD\u7ED1\u5B9A\u65E0\u6548", 503);
-  for (const [id, b] of Object.entries(s.bindings)) {
-    validId(id);
+  for (const [id2, b] of Object.entries(s.bindings)) {
+    validId(id2);
     if (b.creationWorkspaceId !== void 0) validId(b.creationWorkspaceId);
     if (b.creation !== void 0) {
       const c = b.creation;
@@ -321,7 +321,7 @@ function validate(s) {
     if (b.purpose !== void 0 && b.purpose !== "experience") throw new MemoryError("\u4F1A\u8BDD\u7528\u9014\u65E0\u6548", 503);
     if (b.createdFrom !== void 0) {
       validId(b.createdFrom);
-      if (b.createdFrom === id) throw new MemoryError("\u4F1A\u8BDD\u521B\u5EFA\u6765\u6E90\u65E0\u6548", 503);
+      if (b.createdFrom === id2) throw new MemoryError("\u4F1A\u8BDD\u521B\u5EFA\u6765\u6E90\u65E0\u6548", 503);
     }
     const p = s.personas.find((p2) => p2.id === b.personaId);
     if (!p?.versions.some((v) => v.revision === b.personaRevision) || typeof b.locked !== "boolean" || b.pending !== void 0 && typeof b.pending !== "boolean" || !Number.isFinite(Date.parse(b.createdAt)))
@@ -329,7 +329,7 @@ function validate(s) {
     if (b.handoff) {
       validId(b.handoff.sessionId);
       text(b.handoff.summary, 12e3);
-      if (b.handoff.sessionId === id || !Number.isSafeInteger(b.handoff.throughSeq) || b.handoff.throughSeq < 0 || !Number.isFinite(Date.parse(b.handoff.createdAt)))
+      if (b.handoff.sessionId === id2 || !Number.isSafeInteger(b.handoff.throughSeq) || b.handoff.throughSeq < 0 || !Number.isFinite(Date.parse(b.handoff.createdAt)))
         throw new MemoryError("\u4EA4\u63A5\u8303\u56F4\u65E0\u6548", 503);
     }
   }
@@ -377,11 +377,11 @@ var MemoryStore = class {
     const label = text(name2, 60, true), state = this.read();
     if (state.personas.some((p) => p.name === label && !p.archived))
       throw new MemoryError("\u5DF2\u6709\u540C\u540D\u4EBA\u683C\uFF0C\u8BF7\u76F4\u63A5\u9009\u62E9\u6216\u4F7F\u7528\u5176\u4ED6\u540D\u5B57", 409);
-    const id = randomUUID();
+    const id2 = randomUUID();
     this.change(
       state.revision,
       (next) => next.personas.push({
-        id,
+        id: id2,
         name: label,
         instructions: "",
         memoryEnabled: true,
@@ -390,7 +390,7 @@ var MemoryStore = class {
         versions: [{ revision: 1, name: label, instructions: "" }]
       })
     );
-    return { id, name: label };
+    return { id: id2, name: label };
   }
   read() {
     if (!existsSync(this.path)) return initial();
@@ -407,8 +407,8 @@ var MemoryStore = class {
           versions: [{ revision: 1, name: p.name, instructions: p.instructions }]
         })),
         bindings: Object.fromEntries(
-          Object.entries(s.sessions).map(([id, personaId]) => [
-            id,
+          Object.entries(s.sessions).map(([id2, personaId]) => [
+            id2,
             { personaId, personaRevision: 1, locked: true, createdAt: (/* @__PURE__ */ new Date(0)).toISOString() }
           ])
         )
@@ -509,10 +509,10 @@ var MemoryStore = class {
     this.releaseInternalBindings(ids.filter(isExperienceSession));
   }
   releaseInternalBindings(ids) {
-    const state = this.read(), removable = ids.filter((id) => isInternalSession(id) && !!state.bindings[id]?.purpose);
+    const state = this.read(), removable = ids.filter((id2) => isInternalSession(id2) && !!state.bindings[id2]?.purpose);
     if (!removable.length) return;
     this.change(state.revision, (next) => {
-      for (const id of removable) delete next.bindings[id];
+      for (const id2 of removable) delete next.bindings[id2];
     });
   }
   action(revision, action, sessionId, project, provenance) {
@@ -528,9 +528,9 @@ var MemoryStore = class {
       };
       switch (action.type) {
         case "create": {
-          const id = randomUUID(), name2 = text(action.name, 60, true);
+          const id2 = randomUUID(), name2 = text(action.name, 60, true);
           s.personas.push({
-            id,
+            id: id2,
             name: name2,
             instructions: "",
             memoryEnabled: true,
@@ -538,7 +538,7 @@ var MemoryStore = class {
             revision: 1,
             versions: [{ revision: 1, name: name2, instructions: "" }]
           });
-          if (!binding().locked) s.bindings[sessionId] = { ...binding(), personaId: id, personaRevision: 1 };
+          if (!binding().locked) s.bindings[sessionId] = { ...binding(), personaId: id2, personaRevision: 1 };
           break;
         }
         case "select": {
@@ -858,7 +858,7 @@ async function prepareFeedback(input2, actor, read, signal) {
       sessionId: ref.sessionId,
       seq: ref.seq,
       kind: record2.kind,
-      hash: feedbackHash([record2.kind, record2.tool ?? null, record2.text.trim()])
+      hash: record2.nativeJob?.source === "native-job-events" ? feedbackHash(["native-job", record2.nativeJob.owner, record2.nativeJob.jobId]) : feedbackHash([record2.kind, record2.tool ?? null, record2.text.trim()])
     };
   } else if (actor === "model")
     throw new MemoryError("\u6A21\u578B\u5E94\u7528\u53CD\u9988\u5FC5\u987B\u5F15\u7528\u539F\u59CB\u4E8B\u4EF6\uFF0C\u4E0D\u80FD\u901A\u8FC7\u91CD\u590D\u68C0\u7D22\u81EA\u6211\u52A0\u6743", 403);
@@ -1015,8 +1015,8 @@ var KnowledgeBank = class {
     ]);
   }
   async feedback(caller, scope, input2, signal) {
-    const ns = this.namespace(caller, scope), id = bounded(input2.id, "\u77E5\u8BC6\u7F16\u53F7", 300), actor = caller.actor === "human" ? "human" : "model";
-    const before = (await this.call(ns, "document", { id })).value;
+    const ns = this.namespace(caller, scope), id2 = bounded(input2.id, "\u77E5\u8BC6\u7F16\u53F7", 300), actor = caller.actor === "human" ? "human" : "model";
+    const before = (await this.call(ns, "document", { id: id2 })).value;
     this.assertReadableDocument(ns, before);
     if (before.status !== "active" || before.revision !== input2.documentRevision)
       throw new MemoryError("\u77E5\u8BC6\u5DF2\u53D8\u5316\u6216\u5F52\u6863\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6\u540E\u53CD\u9988", 409);
@@ -1029,14 +1029,14 @@ var KnowledgeBank = class {
       signal
     );
     signal?.throwIfAborted();
-    const now = (await this.call(ns, "document", { id })).value;
+    const now = (await this.call(ns, "document", { id: id2 })).value;
     if (now.status !== "active" || now.revision !== before.revision || now.contentHash !== before.contentHash || this.feedbackTarget(caller, this.namespace(caller, scope), now) !== target)
       throw new MemoryError("\u77E5\u8BC6\u6216\u53CD\u9988\u53D7\u4F17\u5DF2\u53D8\u5316\uFF0C\u672A\u91C7\u7EB3\u8FDF\u5230\u53CD\u9988", 409);
     const result = this.feedbackStore.record(target, feedback.origin, feedback.entry);
     return {
       ...result,
       feedback: presentFeedback(result.feedback, caller.actor),
-      ...await this.read(caller, scope, id, true)
+      ...await this.read(caller, scope, id2, true)
     };
   }
   namespace(caller, scope) {
@@ -1170,26 +1170,26 @@ var KnowledgeBank = class {
   }
   async invalidateMigratedSource(origin) {
     if (!origin) return;
-    const { id, revision, contentHash, ...ns } = origin;
-    const source = await this.call(ns, "snapshot"), row = source.value.documents.find((item) => item.id === id);
+    const { id: id2, revision, contentHash, ...ns } = origin;
+    const source = await this.call(ns, "snapshot"), row = source.value.documents.find((item) => item.id === id2);
     if (!row || row.status !== "active") return;
     if (row.revision !== revision || row.contentHash !== contentHash)
       throw new MemoryError("\u8FC1\u79FB\u6765\u6E90\u5DF2\u6709\u5176\u4ED6\u4FEE\u6539\uFF0C\u8BF7\u6838\u5BF9\u540E\u518D\u7EA0\u6B63\uFF1B\u539F\u4EF6\u4FDD\u7559", 409);
     await this.call(
       ns,
       "archive",
-      { id, documentRevision: revision, summary: "\u4EBA\u683C\u4EA4\u6D41\u8BB0\u5FC6\u5DF2\u6709\u66F4\u65B0\uFF0C\u65E7\u5171\u4EAB\u4F9D\u636E\u4E0D\u518D\u4F5C\u4E3A\u5F53\u524D\u7ED3\u8BBA\u3002" },
+      { id: id2, documentRevision: revision, summary: "\u4EBA\u683C\u4EA4\u6D41\u8BB0\u5FC6\u5DF2\u6709\u66F4\u65B0\uFF0C\u65E7\u5171\u4EAB\u4F9D\u636E\u4E0D\u518D\u4F5C\u4E3A\u5F53\u524D\u7ED3\u8BBA\u3002" },
       source.revision
     );
   }
-  async conversationAlias(caller, id) {
-    bounded(id, "\u4EA4\u6D41\u8BB0\u5FC6\u7F16\u53F7", 300);
+  async conversationAlias(caller, id2) {
+    bounded(id2, "\u4EA4\u6D41\u8BB0\u5FC6\u7F16\u53F7", 300);
     const ns = this.namespace(caller, "project");
     if (!ns.conversation) throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u8303\u56F4\u65E0\u6548", 403);
     const snapshot = await this.call(ns, "snapshot");
     for (const row of snapshot.value.documents) {
       const migrated = unwrap((await this.call(ns, "document", { id: row.id })).value).metadata.migration;
-      if (migrated?.id === id) return row.id;
+      if (migrated?.id === id2) return row.id;
     }
   }
   async runtime(ns) {
@@ -1259,9 +1259,9 @@ var KnowledgeBank = class {
     const feedback = this.feedbackStore.view(this.feedbackTarget(caller, ns, document));
     let stale = false, sourceState = "original";
     if (metadata.origin) {
-      const { id, revision, contentHash, ...originNs } = metadata.origin;
+      const { id: id2, revision, contentHash, ...originNs } = metadata.origin;
       try {
-        const original = (await this.call(originNs, "document", { id })).value;
+        const original = (await this.call(originNs, "document", { id: id2 })).value;
         stale = original.status !== "active" || original.revision !== revision || original.contentHash !== contentHash;
         sourceState = stale ? "shared-source-changed" : "shared-snapshot";
       } catch {
@@ -1302,14 +1302,14 @@ var KnowledgeBank = class {
       sharedFrom: metadata.origin ? { scope: metadata.origin.scope, revision: metadata.origin.revision } : void 0
     };
   }
-  async read(caller, scope, id, includeHistorical = false) {
+  async read(caller, scope, id2, includeHistorical = false) {
     const ns = this.namespace(caller, scope);
-    bounded(id, "\u6761\u76EE\u7F16\u53F7", 300);
+    bounded(id2, "\u6761\u76EE\u7F16\u53F7", 300);
     let result;
     try {
-      result = await this.call(ns, "document", { id });
+      result = await this.call(ns, "document", { id: id2 });
     } catch (error62) {
-      if (error62 instanceof Error && error62.message === `document not found: ${id}`)
+      if (error62 instanceof Error && error62.message === `document not found: ${id2}`)
         throw new MemoryError("\u6B64\u77E5\u8BC6\u6761\u76EE\u4E0D\u5728\u5F53\u524D\u53EF\u89C1\u8303\u56F4\u5185\uFF0C\u6216\u5DF2\u4E0D\u5B58\u5728", 404);
       throw error62;
     }
@@ -1487,9 +1487,9 @@ var KnowledgeBank = class {
       document: await this.present(ns, result.value.document, caller)
     };
   }
-  async share(caller, from, id, to, revision, expectedSourceRevision) {
+  async share(caller, from, id2, to, revision, expectedSourceRevision) {
     if (from === to) throw new MemoryError("\u6765\u6E90\u4E0E\u76EE\u6807\u8303\u56F4\u76F8\u540C");
-    const ns = this.namespace(caller, from), document = (await this.call(ns, "document", { id })).value;
+    const ns = this.namespace(caller, from), document = (await this.call(ns, "document", { id: id2 })).value;
     this.assertReadableDocument(ns, document);
     if (document.revision !== expectedSourceRevision || document.status !== "active")
       throw new MemoryError("\u6765\u6E90\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u9884\u89C8\u540E\u5206\u4EAB", 409);
@@ -1500,24 +1500,24 @@ var KnowledgeBank = class {
       caller,
       to,
       { key: document.title, body, revision, sources: metadata.sources },
-      metadata.origin ?? { ...ns, id, revision: document.revision, contentHash: document.contentHash },
+      metadata.origin ?? { ...ns, id: id2, revision: document.revision, contentHash: document.contentHash },
       metadata.author
     );
   }
-  async archive(caller, scope, id, revision, documentRevision) {
+  async archive(caller, scope, id2, revision, documentRevision) {
     const ns = this.namespace(caller, scope), current = await this.call(ns, "snapshot");
     if (contentRevision(current.value) !== revision)
       throw new MemoryError("\u77E5\u8BC6\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u518D\u5F52\u6863", 409);
-    const target = current.value.documents.find((row) => row.id === id);
+    const target = current.value.documents.find((row) => row.id === id2);
     if (target) {
-      const document = (await this.call(ns, "document", { id })).value;
+      const document = (await this.call(ns, "document", { id: id2 })).value;
       this.assertReadableDocument(ns, document);
       if (ns.conversation) await this.invalidateMigratedSource(unwrap(document).metadata.migration);
     }
     const result = await this.call(
       ns,
       "archive",
-      { id, documentRevision, summary: "\u7531\u7528\u6237\u5F52\u6863\uFF0C\u4E0D\u518D\u7528\u4E8E\u5F53\u524D\u7ED3\u8BBA\u3002" },
+      { id: id2, documentRevision, summary: "\u7531\u7528\u6237\u5F52\u6863\uFF0C\u4E0D\u518D\u7528\u4E8E\u5F53\u524D\u7ED3\u8BBA\u3002" },
       current.revision
     );
     return {
@@ -1617,18 +1617,18 @@ var ChannelNotes = class {
         nextOffset: offset + 100 < notes.length ? offset + 100 : null
       };
     if (["read", "feedback", "correct", "archive"].includes(input2.action)) {
-      const id = notes.some((d) => d.id === input2.id) ? input2.id : await this.bank.conversationAlias(scope.caller, input2.id);
-      if (!id || !notes.some((d) => d.id === id))
+      const id2 = notes.some((d) => d.id === input2.id) ? input2.id : await this.bank.conversationAlias(scope.caller, input2.id);
+      if (!id2 || !notes.some((d) => d.id === id2))
         throw new MemoryError("\u6761\u76EE\u4E0D\u5C5E\u4E8E\u672C\u7FA4\u5F53\u524D\u4EBA\u683C\u7684\u4EA4\u6D41\u8BB0\u5FC6", 403);
       if (input2.action === "correct" || input2.action === "archive") {
         if (actor !== "human")
           throw new MemoryError("\u8BF7\u7531\u7528\u6237\u5728\u672C\u804A\u5929\u8BB0\u5FC6\u9875\u9762\u7EA0\u6B63\u6216\u5F52\u6863\uFF1B\u6A21\u578B\u4FEE\u8BA2\u4ECD\u987B\u63D0\u4F9B\u539F\u59CB\u4F9D\u636E", 403);
-        const original = await this.bank.read(scope.caller, "project", id, true);
+        const original = await this.bank.read(scope.caller, "project", id2, true);
         if (original.document.revision !== input2.documentRevision || original.revision !== input2.revision)
           throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6\u540E\u4FEE\u6539", 409);
         signal.throwIfAborted();
         const body = JSON.parse(original.document.body);
-        const result3 = input2.action === "archive" ? await this.bank.archive(scope.caller, "project", id, original.revision, input2.documentRevision) : await this.bank.write(scope.caller, "project", {
+        const result3 = input2.action === "archive" ? await this.bank.archive(scope.caller, "project", id2, original.revision, input2.documentRevision) : await this.bank.write(scope.caller, "project", {
           key: original.document.key,
           revision: original.revision,
           body: JSON.stringify(
@@ -1647,14 +1647,14 @@ var ChannelNotes = class {
         scope.caller,
         "project",
         {
-          id,
+          id: id2,
           documentRevision: input2.documentRevision,
           kind: input2.kind,
           reason: input2.reason,
           evidence: input2.evidence?.[0]
         },
         signal
-      ) : await this.bank.read(scope.caller, "project", id, actor === "human");
+      ) : await this.bank.read(scope.caller, "project", id2, actor === "human");
       signal.throwIfAborted();
       return {
         revision: result2.revision,
@@ -1700,12 +1700,18 @@ var ChannelNotes = class {
       if (!ref || typeof ref.sessionId !== "string" || !Number.isSafeInteger(ref.seq) || ref.seq < 0)
         throw new MemoryError("\u539F\u59CB\u4F9D\u636E\u7684\u4F1A\u8BDD\u6216\u4E8B\u4EF6\u7F16\u53F7\u65E0\u6548");
       const record2 = await this.readEvidence(sessionId, ref.sessionId, ref.seq, signal);
-      if (!["user", "assistant", "tool-result"].includes(record2.kind) || record2.kind === "tool-result" && (scope.provider !== "qq" || record2.tool !== "qq_context"))
+      if (![
+        "user",
+        "assistant",
+        "tool-result",
+        ...scope.provider === "persona-mail" ? ["peer", "peer-reply"] : []
+      ].includes(record2.kind) || record2.kind === "tool-result" && (scope.provider !== "qq" || record2.tool !== "qq_context"))
         throw new MemoryError("\u8BF7\u5F15\u7528\u539F\u59CB\u4EA4\u6D41\u6216\u672C\u6E20\u9053\u5DF2\u9A8C\u8BC1\u7684\u5386\u53F2\uFF0C\u4E0D\u80FD\u628A\u8BB0\u5FC6\u526F\u672C\u4F5C\u4E3A\u65B0\u4F9D\u636E", 403);
       evidence.push({
         sessionId: ref.sessionId,
         seq: ref.seq,
         kind: record2.kind,
+        ...["peer", "peer-reply"].includes(record2.kind) ? { authority: "peer-advice-only" } : {},
         time: Number.isFinite(record2.time) ? record2.time : null,
         excerpt: String(record2.text).slice(0, 1500)
       });
@@ -1888,7 +1894,7 @@ var TurnIdentity = class {
     if (channel && persona.expression?.scenes?.some((rule) => rule.participantId)) {
       const claimed = this.claimed.get(agent);
       if (claimed?.turn === boundary?.lastTurn && claimed?.provider === channel.provider && claimed?.accountId === channel.accountId && claimed?.conversationId === channel.conversationId)
-        for (const id of claimed.participants) participants.add(id);
+        for (const id2 of claimed.participants) participants.add(id2);
       const events = agent.session.snapshotEvents?.() ?? [];
       for (let i = events.length - 1; i >= 0; i--) {
         if (events[i].type === "turn/start") break;
@@ -1924,13 +1930,79 @@ import { DatabaseSync as DatabaseSync2 } from "node:sqlite";
 import { createHash as createHash3 } from "node:crypto";
 import { mkdirSync as mkdirSync4, existsSync as existsSync2, renameSync as renameSync2 } from "node:fs";
 import { dirname as dirname3 } from "node:path";
-var privateTools = /^(persona_(memory|history)|qq_memory$|channel_memory$|mnemon_|memory_|skill$)/;
+
+// packages/shared/persona-mail-policy.ts
+var id = (value) => typeof value === "string" && !!value && value.trim() === value && value.length <= 200 && !/[\r\n\0]/.test(value);
+function personaMailOrigin(value) {
+  if (value?.kind !== "plugin:dsh-px-persona-mail" || value.version !== 1 || ![value.mailId, value.senderPersonaId, value.recipientPersonaId, value.sourceSessionId].every(id) || !/^[a-f0-9]{64}$/.test(value.conversationId ?? "") || !Number.isSafeInteger(value.sourceSeq) || value.sourceSeq < 0)
+    return;
+  return {
+    kind: value.kind,
+    version: 1,
+    mailId: value.mailId,
+    senderPersonaId: value.senderPersonaId,
+    recipientPersonaId: value.recipientPersonaId,
+    sourceSessionId: value.sourceSessionId,
+    sourceSeq: value.sourceSeq,
+    conversationId: value.conversationId
+  };
+}
+
+// packages/dsh-px-memory/src/native-job-evidence.ts
+async function nativeJobEvidence(reader, owner, beforeSeq, jobId, candidates = [], signal) {
+  if (typeof jobId !== "string" || !jobId || jobId.length > 200 || /[\r\n\0]/.test(jobId)) return;
+  let registered, settled;
+  const observe2 = (event) => {
+    if (!event || event.seq > beforeSeq || event.data?.jobId !== jobId || event.data.owner !== owner) return;
+    if (event.type === "job/registered" && (!registered || event.seq > registered.seq)) registered = event;
+    if (event.type === "job/settled" && (!settled || event.seq > settled.seq)) settled = event;
+  };
+  for (const seq of candidates.slice(0, 32)) {
+    signal?.throwIfAborted();
+    if (Number.isSafeInteger(seq) && seq >= 0 && seq <= beforeSeq)
+      observe2((await reader.read(seq, 1, { signal })).events[0]);
+  }
+  for (let cursor = beforeSeq, pages = 0; (!registered || !settled) && cursor >= 0 && pages < 64; pages++) {
+    signal?.throwIfAborted();
+    const start = Math.max(0, cursor - 255);
+    for (const event of (await reader.read(start, cursor - start + 1, { signal })).events) observe2(event);
+    cursor = start - 1;
+  }
+  if (!registered || !settled || registered.seq >= settled.seq || !Number.isSafeInteger(registered.data.startedAt) || registered.data.startedAt < 0 || !Number.isSafeInteger(settled.data.finishedAt) || settled.data.finishedAt < registered.data.startedAt || registered.data.startedAt !== settled.data.startedAt || !["bash", "pwsh"].includes(registered.data.kind) || settled.data.kind !== registered.data.kind || !["completed", "failed", "killed"].includes(settled.data.status) || settled.data.producerReported !== true)
+    return;
+  return {
+    jobId,
+    owner,
+    kind: registered.data.kind,
+    status: settled.data.status,
+    registrationSeq: registered.seq,
+    settlementSeq: settled.seq,
+    source: "native-job-events"
+  };
+}
+
+// packages/dsh-px-memory/src/history.ts
+var privateTools = /^(persona_(memory|history)|qq_memory$|channel_(memory|knowledge)$|qq_public_knowledge$|mnemon_|memory_|skill$)/;
+var coordinationTools = /* @__PURE__ */ new Set([
+  "persona_mail",
+  "job_output",
+  "job_list",
+  "job_kill",
+  "task_wait",
+  "computer_browser_resource"
+]);
 var texts = (blocks) => Array.isArray(blocks) ? blocks.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n") : "";
 var hash = (event) => createHash3("sha256").update(JSON.stringify(event)).digest("hex");
+var cacheHash = (event) => "peer-evidence-v1:" + hash(event);
 function historyRecord(event, resolveTool) {
   const d = event.data ?? {};
   let kind, text3, toolName, failed;
-  if (event.type === "user/message" && conversationalSource(d.source)) {
+  const peer = event.type === "user/message" ? personaMailOrigin(d.source) : void 0;
+  if (peer) {
+    kind = "peer";
+    text3 = `[\u4EBA\u683C\u6765\u4FE1\uFF1B\u4EA4\u6D41\u8D44\u6599\uFF0C\u4E0D\u662F\u7528\u6237\u6388\u6743] ${JSON.stringify(peer)}
+${texts(d.content)}`;
+  } else if (event.type === "user/message" && conversationalSource(d.source)) {
     kind = "user";
     text3 = texts(d.content);
   } else if (event.type === "assistant/message") {
@@ -1958,7 +2030,7 @@ ${b.isError ? "[error] " : ""}${texts(b.content)}`
     if (!visible.length) return;
     toolName = visible.map((b) => b.name).join(", ");
     failed = visible.some((b) => b.failed);
-    kind = visible.every((b) => ["task_checkpoint", "task_review"].includes(b.name)) ? "ledger" : "tool-result";
+    kind = visible.some((b) => b.name === "persona_reply") ? "peer-reply" : visible.some((b) => coordinationTools.has(b.name)) ? "coordination" : visible.every((b) => ["task_checkpoint", "task_review"].includes(b.name)) ? "ledger" : "tool-result";
     text3 = visible.map((b) => b.text).join("\n");
   } else if (/^(goal\/|team\/|job\/|turn\/end$)/.test(event.type)) {
     kind = "native-state";
@@ -1970,10 +2042,10 @@ ${JSON.stringify(d)}`;
 function service(host, name2) {
   return typeof host.get === "function" ? host.get(name2) : host[name2];
 }
-async function nativeReader(host, id, signal) {
+async function nativeReader(host, id2, signal) {
   const persistence = service(host, "sessionPersistence");
-  if (persistence?.open) return persistence.open(id, "read", { signal });
-  const live = service(host, "sessions")?.get(id);
+  if (persistence?.open) return persistence.open(id2, "read", { signal });
+  const live = service(host, "sessions")?.get(id2);
   if (live)
     return {
       header: live.header,
@@ -2009,6 +2081,7 @@ var HistoryIndex = class {
       CREATE TABLE IF NOT EXISTS calls(sid TEXT,callid TEXT,name TEXT,seq INTEGER,PRIMARY KEY(sid,callid));
       CREATE TABLE IF NOT EXISTS records(sid TEXT,seq INTEGER,time INTEGER,kind TEXT,part INTEGER,body TEXT,PRIMARY KEY(sid,seq,part));
       CREATE INDEX IF NOT EXISTS records_session_time ON records(sid,time);
+      CREATE INDEX IF NOT EXISTS records_native_lookup ON records(sid,kind,part,seq);
       CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(sid UNINDEXED,seq UNINDEXED,part UNINDEXED,body,tokenize='trigram');`);
     const version2 = this.db.prepare("PRAGMA user_version").get()?.user_version;
     if (version2 > 1) {
@@ -2034,8 +2107,8 @@ var HistoryIndex = class {
     if (b.purpose || isInternalSession(sessionId)) return /* @__PURE__ */ Object.create(null);
     const allowed = Object.fromEntries(
       Object.entries(s.bindings).filter(
-        ([id, v]) => v.personaId === b.personaId && (!publicSession(b) || samePublicConversation(b, v)) && !v.pending && !v.purpose && !isInternalSession(id)
-      ).map(([id]) => [id, Number.MAX_SAFE_INTEGER])
+        ([id2, v]) => v.personaId === b.personaId && (!publicSession(b) || samePublicConversation(b, v)) && !v.pending && !v.purpose && !isInternalSession(id2)
+      ).map(([id2]) => [id2, Number.MAX_SAFE_INTEGER])
     );
     Object.setPrototypeOf(allowed, null);
     if (b.handoff && (!publicSession(b) || samePublicConversation(b, s.bindings[b.handoff.sessionId])) && !isInternalSession(b.handoff.sessionId) && !s.bindings[b.handoff.sessionId]?.purpose && !Object.hasOwn(allowed, b.handoff.sessionId))
@@ -2052,29 +2125,29 @@ var HistoryIndex = class {
     if (this.disposed) throw new MemoryError("\u5386\u53F2\u7D22\u5F15\u6B63\u5728\u5173\u95ED", 503);
     const allowed = this.allowed(sessionId), ids = Object.keys(allowed);
     const order = ids.sort((a, b) => {
-      const row = (id) => this.db.prepare("SELECT complete,updated FROM sessions WHERE id=?").get(id);
+      const row = (id2) => this.db.prepare("SELECT complete,updated FROM sessions WHERE id=?").get(id2);
       const x = row(a), y = row(b);
       return (x?.complete ?? 0) - (y?.complete ?? 0) || (x?.updated ?? 0) - (y?.updated ?? 0);
     });
     const errors = [];
     let processed = 0, pages = 0;
-    for (const id of order.slice(0, 20)) {
+    for (const id2 of order.slice(0, 20)) {
       signal?.throwIfAborted();
       if (pages >= 40) break;
       let reader;
       try {
-        reader = await nativeReader(host, id, signal);
-        this.db.prepare("INSERT OR IGNORE INTO sessions(id,cwd,title) VALUES(?,?,?)").run(id, projectKey(reader.header.cwd) ?? "", "");
-        const saved = this.db.prepare("SELECT * FROM sessions WHERE id=?").get(id);
+        reader = await nativeReader(host, id2, signal);
+        this.db.prepare("INSERT OR IGNORE INTO sessions(id,cwd,title) VALUES(?,?,?)").run(id2, projectKey(reader.header.cwd) ?? "", "");
+        const saved = this.db.prepare("SELECT * FROM sessions WHERE id=?").get(id2);
         if (saved.lastseq >= 0) {
           const at = (await reader.read(saved.lastseq, 1, { signal })).events[0];
-          if (!at || hash(at) !== saved.lasthash) {
+          if (!at || cacheHash(at) !== saved.lasthash) {
             this.db.exec("BEGIN");
             try {
-              this.db.prepare("DELETE FROM records WHERE sid=?").run(id);
-              this.db.prepare("DELETE FROM search WHERE sid=?").run(id);
-              this.db.prepare("DELETE FROM calls WHERE sid=?").run(id);
-              this.db.prepare("UPDATE sessions SET lastseq=-1,lasthash=NULL,complete=0,title=? WHERE id=?").run("", id);
+              this.db.prepare("DELETE FROM records WHERE sid=?").run(id2);
+              this.db.prepare("DELETE FROM search WHERE sid=?").run(id2);
+              this.db.prepare("DELETE FROM calls WHERE sid=?").run(id2);
+              this.db.prepare("UPDATE sessions SET lastseq=-1,lasthash=NULL,complete=0,title=? WHERE id=?").run("", id2);
               this.db.exec("COMMIT");
             } catch (e) {
               this.db.exec("ROLLBACK");
@@ -2091,20 +2164,20 @@ var HistoryIndex = class {
             complete2 = true;
             break;
           }
-          this.append(id, events);
+          this.append(id2, events);
           cursor = events.at(-1).seq + 1;
           if (events.length < 256) {
             complete2 = true;
             break;
           }
         }
-        this.db.prepare("UPDATE sessions SET complete=?,error=NULL,updated=? WHERE id=?").run(complete2 ? 1 : 0, Date.now(), id);
+        this.db.prepare("UPDATE sessions SET complete=?,error=NULL,updated=? WHERE id=?").run(complete2 ? 1 : 0, Date.now(), id2);
         processed++;
       } catch (e) {
         signal?.throwIfAborted();
         const message = e instanceof Error ? e.message : String(e);
-        errors.push({ sessionId: id, message });
-        this.db.prepare("UPDATE sessions SET complete=0,error=? WHERE id=?").run(message.slice(0, 500), id);
+        errors.push({ sessionId: id2, message });
+        this.db.prepare("UPDATE sessions SET complete=0,error=? WHERE id=?").run(message.slice(0, 500), id2);
       } finally {
         await reader?.close();
       }
@@ -2118,31 +2191,31 @@ var HistoryIndex = class {
       errors
     };
   }
-  append(id, events) {
+  append(id2, events) {
     this.db.exec("BEGIN");
     try {
       for (const e of events) {
         const d = e.data ?? {};
         if (["tool/call", "tool/ptc-dispatch-start"].includes(e.type) && typeof d.name === "string")
-          this.db.prepare("INSERT OR REPLACE INTO calls VALUES(?,?,?,?)").run(id, d.callId ?? d.subCallId ?? "", d.name, e.seq);
+          this.db.prepare("INSERT OR REPLACE INTO calls VALUES(?,?,?,?)").run(id2, d.callId ?? d.subCallId ?? "", d.name, e.seq);
         const row = historyRecord(
           e,
-          (callId) => this.db.prepare("SELECT name FROM calls WHERE sid=? AND callid=?").get(id, callId)?.name
+          (callId) => this.db.prepare("SELECT name FROM calls WHERE sid=? AND callid=?").get(id2, callId)?.name
         );
         if (row) {
           for (let offset = 0, part = 0; offset < row.text.length; offset += 4e3, part++) {
             const body = row.text.slice(offset, offset + 4128);
-            this.db.prepare("INSERT OR REPLACE INTO records VALUES(?,?,?,?,?,?)").run(id, e.seq, e.time, row.kind, part, body);
-            this.db.prepare("INSERT INTO search(sid,seq,part,body) VALUES(?,?,?,?)").run(id, e.seq, part, body);
+            this.db.prepare("INSERT OR REPLACE INTO records VALUES(?,?,?,?,?,?)").run(id2, e.seq, e.time, row.kind, part, body);
+            this.db.prepare("INSERT INTO search(sid,seq,part,body) VALUES(?,?,?,?)").run(id2, e.seq, part, body);
           }
           if (row.kind === "user")
-            this.db.prepare("UPDATE sessions SET title=CASE WHEN title='' THEN ? ELSE title END WHERE id=?").run(row.text.slice(0, 100), id);
+            this.db.prepare("UPDATE sessions SET title=CASE WHEN title='' THEN ? ELSE title END WHERE id=?").run(row.text.slice(0, 100), id2);
         }
         if (e.type === "session/title" && typeof d.title === "string")
-          this.db.prepare("UPDATE sessions SET title=? WHERE id=?").run(d.title.slice(0, 200), id);
+          this.db.prepare("UPDATE sessions SET title=? WHERE id=?").run(d.title.slice(0, 200), id2);
       }
       const last = events.at(-1);
-      this.db.prepare("UPDATE sessions SET lastseq=?,lasthash=? WHERE id=?").run(last.seq, hash(last), id);
+      this.db.prepare("UPDATE sessions SET lastseq=?,lasthash=? WHERE id=?").run(last.seq, cacheHash(last), id2);
       this.db.exec("COMMIT");
     } catch (e) {
       this.db.exec("ROLLBACK");
@@ -2185,6 +2258,7 @@ var HistoryIndex = class {
       const start = Math.max(0, at - 100);
       return {
         ...r,
+        ...["peer", "peer-reply"].includes(r.kind) ? { authority: "peer-advice-only" } : r.kind === "coordination" ? { authority: "coordination-receipt-only" } : {},
         snippet: body.slice(start, start + 700),
         source: "native-session-event",
         historical: true,
@@ -2212,43 +2286,75 @@ var HistoryIndex = class {
     try {
       const event = (await reader.read(seq, 1, { signal })).events[0];
       if (!event) throw new MemoryError("\u539F\u59CB\u4E8B\u4EF6\u4E0D\u5B58\u5728", 404);
-      const d = event.data ?? {}, blocks = event.type === "tool/ptc-dispatch" ? [d] : d.message?.role === "tool" ? [d.message] : (d.message?.content ?? []).filter((b) => b.type === "tool-result"), names = /* @__PURE__ */ new Map();
+      const d = event.data ?? {}, blocks = event.type === "tool/ptc-dispatch" ? [d] : d.message?.role === "tool" ? [d.message] : (d.message?.content ?? []).filter((b) => b.type === "tool-result"), names = /* @__PURE__ */ new Map(), argumentsByCall = /* @__PURE__ */ new Map();
       for (const block of blocks) {
         const callId = block.toolCallId ?? d.subCallId;
         if (typeof callId !== "string") continue;
         const cached2 = this.db.prepare("SELECT seq FROM calls WHERE sid=? AND callid=?").get(target, callId);
         if (cached2 && cached2.seq <= seq) {
           const source = (await reader.read(cached2.seq, 1, { signal })).events[0];
-          if (source && ["tool/call", "tool/ptc-dispatch-start"].includes(source.type) && (source.data.callId ?? source.data.subCallId) === callId)
+          if (source && ["tool/call", "tool/ptc-dispatch-start"].includes(source.type) && (source.data.callId ?? source.data.subCallId) === callId) {
             names.set(callId, source.data.name);
+            argumentsByCall.set(callId, source.data.arguments);
+          }
         }
       }
       const wanted = new Set(
-        blocks.map((b) => b.toolCallId ?? d.subCallId).filter((id) => typeof id === "string" && !names.has(id))
+        blocks.map((b) => b.toolCallId ?? d.subCallId).filter((id2) => typeof id2 === "string" && !names.has(id2))
       );
       for (let cursor = seq - 1, pages = 0; wanted.size && cursor >= 0 && pages < 256; pages++) {
         signal?.throwIfAborted();
         const start = Math.max(0, cursor - 255), earlier = (await reader.read(start, cursor - start + 1, { signal })).events;
         for (let i = earlier.length - 1; i >= 0; i--) {
-          const e = earlier[i], id = e.data?.callId ?? e.data?.subCallId;
-          if (["tool/call", "tool/ptc-dispatch-start"].includes(e.type) && wanted.has(id)) {
-            names.set(id, e.data.name);
-            wanted.delete(id);
+          const e = earlier[i], id2 = e.data?.callId ?? e.data?.subCallId;
+          if (["tool/call", "tool/ptc-dispatch-start"].includes(e.type) && wanted.has(id2)) {
+            names.set(id2, e.data.name);
+            argumentsByCall.set(id2, e.data.arguments);
+            wanted.delete(id2);
           }
         }
         cursor = start - 1;
       }
       if (wanted.size) throw new MemoryError("\u5C1A\u672A\u5B9A\u4F4D\u539F\u5DE5\u5177\u8C03\u7528\uFF0C\u8BF7\u7EE7\u7EED\u66F4\u65B0\u5386\u53F2\u7D22\u5F15\u540E\u8BFB\u53D6", 409);
-      const row = historyRecord(event, (id) => names.get(id));
+      const row = historyRecord(event, (id2) => names.get(id2));
       if (!row) throw new MemoryError("\u8BE5\u4E8B\u4EF6\u4E0D\u662F\u53EF\u5171\u4EAB\u7684\u5BF9\u8BDD\u3001\u6267\u884C\u7ED3\u679C\u6216\u539F\u751F\u72B6\u6001", 403);
+      let job;
+      if (row.tool === "job_output" && blocks.length === 1 && row.failed === false) {
+        const raw = argumentsByCall.get(blocks[0].toolCallId ?? d.subCallId);
+        let args;
+        try {
+          args = typeof raw === "string" ? JSON.parse(raw) : raw;
+        } catch {
+        }
+        if (typeof args?.job_id === "string") {
+          const pattern = '%"jobId":' + JSON.stringify(args.job_id).replace(/[\\%_]/g, "\\$&") + "%";
+          const cached2 = this.db.prepare(
+            "SELECT seq FROM records WHERE sid=? AND kind='native-state' AND part=0 AND seq<=? AND body LIKE ? ESCAPE '\\' ORDER BY seq DESC LIMIT 32"
+          ).all(target, seq, pattern);
+          job = await nativeJobEvidence(
+            reader,
+            target,
+            seq,
+            args.job_id,
+            cached2.map((r) => Number(r.seq)),
+            signal
+          );
+          if (job) {
+            row.kind = "tool-result";
+            row.failed = job.status !== "completed";
+          }
+        }
+      }
       return {
         sessionId: target,
         eventHash: hash(event),
         seq,
         time: row.time,
         kind: row.kind,
+        ...["peer", "peer-reply"].includes(row.kind) ? { authority: "peer-advice-only" } : row.kind === "coordination" ? { authority: "coordination-receipt-only" } : {},
         tool: row.tool,
         failed: row.failed,
+        ...job ? { nativeJob: job, authority: "native-execution-receipt" } : {},
         text: row.text.slice(offset, offset + 12e3),
         offset,
         nextOffset: offset + 12e3 < row.text.length ? offset + 12e3 : null,
@@ -2270,26 +2376,26 @@ function creationSessionId(requestId) {
     throw new MemoryError("\u65B0\u4F1A\u8BDD\u8BF7\u6C42\u6807\u8BC6\u65E0\u6548");
   return "session-" + requestId;
 }
-function ownedCreationRequest(store, id, fingerprint, run) {
+function ownedCreationRequest(store, id2, fingerprint, run) {
   let map2 = requests.get(store);
   if (!map2) requests.set(store, map2 = /* @__PURE__ */ new Map());
-  const previous = map2.get(id);
+  const previous = map2.get(id2);
   if (previous) {
     if (previous.fingerprint !== fingerprint)
       return Promise.reject(new MemoryError("\u6B64\u8BF7\u6C42\u6B63\u5728\u7528\u4E8E\u53E6\u4E00\u9879\u4F1A\u8BDD\u521B\u5EFA", 409));
     return previous.promise;
   }
   const promise2 = Promise.resolve().then(run);
-  map2.set(id, { fingerprint, promise: promise2 });
-  void promise2.finally(() => map2.delete(id)).catch(() => {
+  map2.set(id2, { fingerprint, promise: promise2 });
+  void promise2.finally(() => map2.delete(id2)).catch(() => {
   });
   return promise2;
 }
-async function observe(host, id) {
+async function observe(host, id2) {
   const query = service(host, "sessionQuery");
   if (query?.observeSession) {
     try {
-      const observation = await query.observeSession(id, { projectionMode: "none" });
+      const observation = await query.observeSession(id2, { projectionMode: "none" });
       try {
         return { meta: observation.header, events: [...observation.events] };
       } finally {
@@ -2301,31 +2407,31 @@ async function observe(host, id) {
     }
   }
   try {
-    return await service(host, "sessionController").inspect(id);
+    return await service(host, "sessionController").inspect(id2);
   } catch (error62) {
     if (error62?.code === "session/not-found" || error62?.constructor?.name === "ApiSessionNotFound") return;
     throw error62;
   }
 }
-async function createOwnedNativeSession(host, store, id, options) {
+async function createOwnedNativeSession(host, store, id2, options) {
   const { creation, binding, signal } = options, controller = service(host, "sessionController"), registry2 = service(host, "workspaceRegistry");
   const workspace = creation.workspaceId === void 0 ? void 0 : registry2?.get?.(creation.workspaceId) ?? registry2?.list?.().find((w) => w.id === creation.workspaceId);
   if (creation.workspaceId && !workspace)
     throw new MemoryError("\u539F\u8BF7\u6C42\u7684\u5DE5\u4F5C\u533A\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u4ECE\u4EBA\u683C\u76EE\u5F55\u786E\u8BA4", 409);
   if (workspace?.path && projectKey(workspace.path) !== projectKey(creation.cwd))
     throw new MemoryError("\u5DE5\u4F5C\u533A\u8DEF\u5F84\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u521B\u5EFA", 409);
-  const old = store.read().bindings[id];
+  const old = store.read().bindings[id2];
   if (old?.creation && (old.creation.kind !== creation.kind || projectKey(old.creation.cwd) !== projectKey(creation.cwd) || old.creation.workspaceId !== creation.workspaceId || old.creation.agentPreset !== creation.agentPreset))
     throw new MemoryError("\u539F\u521B\u5EFA\u8BF7\u6C42\u7684\u76EE\u6807\u5DF2\u53D8\u5316\uFF0C\u8BF7\u4ECE\u4EBA\u683C\u76EE\u5F55\u6253\u5F00\u539F\u4F1A\u8BDD", 409);
   const assertOwner = () => {
-    const b = store.read().bindings[id];
+    const b = store.read().bindings[id2];
     if (!b || b.personaId !== binding.personaId || b.createdFrom !== binding.createdFrom || b.creationWorkspaceId !== binding.creationWorkspaceId || JSON.stringify(b.channel) !== JSON.stringify(binding.channel))
       throw new MemoryError("\u521B\u5EFA\u8BF7\u6C42\u7684\u8EAB\u4EFD\u6216\u53D7\u4F17\u5DF2\u53D8\u5316\uFF0C\u672A\u91CD\u65B0\u7ED1\u5B9A", 409);
     return b;
   };
   const verify = (record2) => {
     const b = assertOwner();
-    if (record2.meta.id !== void 0 && record2.meta.id !== id || projectKey(record2.meta.cwd) !== projectKey(creation.cwd) || record2.meta.origin === "subagent")
+    if (record2.meta.id !== void 0 && record2.meta.id !== id2 || projectKey(record2.meta.cwd) !== projectKey(creation.cwd) || record2.meta.origin === "subagent")
       throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u7684\u76EE\u5F55\u6216\u5F52\u5C5E\u5DF2\u53D8\u5316\uFF0C\u672A\u91CD\u5EFA", 409);
     if (!b.creation?.complete && creation.agentPreset !== void 0) {
       const preset = [...record2.events ?? []].reverse().find((e) => e.type === "agent-preset/selected")?.data?.agentPreset ?? record2.meta.agentPreset;
@@ -2333,78 +2439,78 @@ async function createOwnedNativeSession(host, store, id, options) {
         throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u9884\u8BBE\u4E0E\u539F\u8BF7\u6C42\u4E0D\u540C\uFF0C\u8BF7\u5728\u76EE\u5F55\u4E2D\u68C0\u67E5", 409);
     }
   };
-  const existing = await observe(host, id);
+  const existing = await observe(host, id2);
   signal?.throwIfAborted();
   if (existing && !old) throw new MemoryError("\u6B64\u6807\u8BC6\u5DF2\u6709\u539F\u751F\u4F1A\u8BDD\uFF0C\u8BF7\u91CD\u65B0\u65B0\u5EFA\uFF1B\u672A\u6539\u53D8\u539F\u4EBA\u683C", 409);
   if (old?.creation?.complete && !existing) throw new MemoryError("\u539F\u4F1A\u8BDD\u5DF2\u4E0D\u5B58\u5728\uFF0C\u8BF7\u91CD\u65B0\u65B0\u5EFA", 409);
   if (existing) {
     verify(existing);
-    if (workspace && !workspace.sessionIds?.includes(id)) {
+    if (workspace && !workspace.sessionIds?.includes(id2)) {
       if (old?.creation?.complete !== false)
         throw new MemoryError("\u539F\u4F1A\u8BDD\u4E0D\u5728\u6B64\u5DE5\u4F5C\u533A\uFF0C\u8BF7\u4ECE\u76EE\u5F55\u786E\u8BA4\uFF1B\u672A\u81EA\u52A8\u79FB\u56DE", 409);
       if (typeof workspace.attachSession !== "function") throw new MemoryError("\u539F\u751F\u5DE5\u4F5C\u533A\u6302\u63A5\u4E0D\u53EF\u7528", 503);
-      await workspace.attachSession(id);
+      await workspace.attachSession(id2);
     }
   } else {
     if (old && !old.creation) {
       if (!old.pending) throw new MemoryError("\u65E0\u6CD5\u786E\u8BA4\u65E7\u521B\u5EFA\u8BF7\u6C42\u7684\u7ED3\u679C\uFF0C\u8BF7\u4ECE\u76EE\u5F55\u786E\u8BA4\u540E\u91CD\u65B0\u65B0\u5EFA", 409);
       const state2 = store.read();
       store.change(state2.revision, (next) => {
-        next.bindings[id].creation = { ...creation };
+        next.bindings[id2].creation = { ...creation };
       });
     }
-    store.bind(id, { ...binding, locked: true, pending: true, creation });
+    store.bind(id2, { ...binding, locked: true, pending: true, creation });
     const request = {
-      sessionId: id,
+      sessionId: id2,
       ...workspace ? { workspaceId: workspace.id } : { cwd: creation.cwd },
       ...creation.agentPreset === void 0 ? {} : { agentPreset: creation.agentPreset }
     };
     if (controller.pxPersonaCreationVersion === 1 && controller.createForPersona) {
       const result = await controller.createForPersona(request, {
-        reusable: (target) => target === id && assertOwner().personaId === binding.personaId,
-        beforeReuse: ({ sessionId }) => sessionId === id && !!assertOwner(),
+        reusable: (target) => target === id2 && assertOwner().personaId === binding.personaId,
+        beforeReuse: ({ sessionId }) => sessionId === id2 && !!assertOwner(),
         beforeCreate: ({ sessionId }) => {
-          if (sessionId !== id) throw new MemoryError("\u539F\u751F\u521B\u5EFA\u6539\u7528\u4E86\u5176\u4ED6\u6807\u8BC6\uFF0C\u8BF7\u91CD\u8BD5\u539F\u8BF7\u6C42\u4EE5\u6838\u5BF9\u7ED3\u679C", 409);
+          if (sessionId !== id2) throw new MemoryError("\u539F\u751F\u521B\u5EFA\u6539\u7528\u4E86\u5176\u4ED6\u6807\u8BC6\uFF0C\u8BF7\u91CD\u8BD5\u539F\u8BF7\u6C42\u4EE5\u6838\u5BF9\u7ED3\u679C", 409);
           assertOwner();
         },
         resolved: ({ sessionId }) => {
-          if (sessionId !== id) throw new MemoryError("\u539F\u751F\u8FD4\u56DE\u4E86\u4E0D\u540C\u7684\u4F1A\u8BDD\u6807\u8BC6", 409);
+          if (sessionId !== id2) throw new MemoryError("\u539F\u751F\u8FD4\u56DE\u4E86\u4E0D\u540C\u7684\u4F1A\u8BDD\u6807\u8BC6", 409);
         }
       });
       if (!result.ok) throw new MemoryError(result.error.message, 503);
-      if (result.value.sessionId !== id) throw new MemoryError("\u539F\u751F\u8FD4\u56DE\u4E86\u4E0D\u540C\u7684\u4F1A\u8BDD\u6807\u8BC6", 409);
+      if (result.value.sessionId !== id2) throw new MemoryError("\u539F\u751F\u8FD4\u56DE\u4E86\u4E0D\u540C\u7684\u4F1A\u8BDD\u6807\u8BC6", 409);
     } else {
       const result = await controller.create(request);
-      if (result?.sessionId !== id)
+      if (result?.sessionId !== id2)
         throw new MemoryError("\u539F\u751F\u8FD4\u56DE\u4E86\u4E0D\u540C\u7684\u4F1A\u8BDD\u6807\u8BC6\uFF0C\u672A\u5C06\u5176\u5F53\u4F5C\u672C\u8BF7\u6C42\u7ED3\u679C", 409);
     }
   }
   const state = store.read();
   const acknowledged = assertOwner();
-  if (acknowledged.creation?.complete && acknowledged.locked && !acknowledged.pending) return id;
+  if (acknowledged.creation?.complete && acknowledged.locked && !acknowledged.pending) return id2;
   store.change(state.revision, (next) => {
-    next.bindings[id].pending = false;
-    next.bindings[id].locked = true;
-    next.bindings[id].creation = { ...creation, complete: true };
+    next.bindings[id2].pending = false;
+    next.bindings[id2].locked = true;
+    next.bindings[id2].creation = { ...creation, complete: true };
   });
-  return id;
+  return id2;
 }
 
 // packages/dsh-px-memory/src/continuation.ts
 function continuationRequests() {
   const pending = /* @__PURE__ */ new Map();
-  return async (id, fingerprint, run) => {
-    const active = pending.get(id);
+  return async (id2, fingerprint, run) => {
+    const active = pending.get(id2);
     if (active) {
       if (active.fingerprint !== fingerprint) throw new MemoryError("\u63A5\u7EED\u8BF7\u6C42\u6B63\u5728\u7528\u4E8E\u53E6\u4E00\u9879\u64CD\u4F5C", 409);
       return active.promise;
     }
     const promise2 = Promise.resolve().then(run);
-    pending.set(id, { fingerprint, promise: promise2 });
+    pending.set(id2, { fingerprint, promise: promise2 });
     try {
       return await promise2;
     } finally {
-      pending.delete(id);
+      pending.delete(id2);
     }
   };
 }
@@ -2423,8 +2529,9 @@ function handoffFrom(events, sessionId) {
     const d = e.data ?? {};
     if (["tool/call", "tool/ptc-dispatch-start"].includes(e.type) && typeof d.name === "string")
       calls.set(d.callId ?? d.subCallId, d.name);
-    const row = historyRecord(e, (id) => calls.get(id));
-    if (row && ["user", "assistant", "ledger", "native-state"].includes(row.kind)) rows.push(row);
+    const row = historyRecord(e, (id2) => calls.get(id2));
+    if (row && ["user", "assistant", "ledger", "native-state", "peer", "peer-reply", "coordination"].includes(row.kind))
+      rows.push(row);
   }
   const last = (kind, n) => rows.filter((r) => r.kind === kind).slice(-n).map((r) => ({
     seq: r.seq,
@@ -2439,7 +2546,9 @@ function handoffFrom(events, sessionId) {
     latestNativeStates: last("native-state", 3),
     ledger: last("ledger", 1),
     requests: last("user", 2),
-    reply: last("assistant", 1)
+    reply: last("assistant", 1),
+    peerAdvice: [...last("peer", 1), ...last("peer-reply", 1)],
+    coordinationReceipts: last("coordination", 2)
   };
   let summary = JSON.stringify(excerpt);
   while (summary.length > 12e3) {
@@ -2447,7 +2556,9 @@ function handoffFrom(events, sessionId) {
       ...excerpt.latestNativeStates,
       ...excerpt.ledger,
       ...excerpt.requests,
-      ...excerpt.reply
+      ...excerpt.reply,
+      ...excerpt.peerAdvice,
+      ...excerpt.coordinationReceipts
     ].sort((a, b) => b.text.length - a.text.length)[0];
     largest.text = largest.text.slice(0, Math.floor(largest.text.length / 2));
     largest.truncated = true;
@@ -2457,22 +2568,22 @@ function handoffFrom(events, sessionId) {
 }
 async function createPersonaSession(host, store, sourceId, args, signal) {
   signal?.throwIfAborted();
-  const id = creationSessionId(args.requestId);
+  const id2 = creationSessionId(args.requestId);
   return ownedCreationRequest(
     store,
-    id,
+    id2,
     JSON.stringify(["continuation", sourceId, args.personaId, args.handoff]),
-    () => createPersonaAttempt(host, store, sourceId, args, id, signal)
+    () => createPersonaAttempt(host, store, sourceId, args, id2, signal)
   );
 }
-async function createPersonaAttempt(host, store, sourceId, args, id, signal) {
+async function createPersonaAttempt(host, store, sourceId, args, id2, signal) {
   if (typeof args.personaId !== "string") throw new MemoryError("\u8BF7\u9009\u62E9\u4EBA\u683C");
   if (typeof args.handoff !== "boolean") throw new MemoryError("\u8BF7\u9009\u62E9\u65B0\u5EFA\u6216\u63A5\u7EED\u65B9\u5F0F");
   const controller = service(host, "sessionController");
   if (!controller?.create || !controller?.inspect) throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u521B\u5EFA\u63A5\u53E3\u4E0D\u53EF\u7528", 503);
   const state = store.read(), persona = state.personas.find((p) => p.id === args.personaId && !p.archived);
   if (!persona) throw new MemoryError("\u4EBA\u683C\u4E0D\u5B58\u5728\u6216\u5DF2\u5F52\u6863");
-  const existing = state.bindings[id];
+  const existing = state.bindings[id2];
   if (existing && (existing.personaId !== persona.id || existing.createdFrom !== sourceId || Boolean(existing.handoff) !== Boolean(args.handoff) || existing.handoff && existing.handoff.sessionId !== sourceId))
     throw new MemoryError("\u65B0\u4F1A\u8BDD\u8BF7\u6C42\u5DF2\u7ECF\u7528\u4E8E\u5176\u4ED6\u64CD\u4F5C", 409);
   const source = await controller.inspect(sourceId, signal);
@@ -2486,10 +2597,10 @@ async function createPersonaAttempt(host, store, sourceId, args, id, signal) {
   const sourceChannel = state.bindings[sourceId]?.channel;
   const channel = sourceChannel?.task ? {
     ...sourceChannel,
-    task: { ...sourceChannel.task, rootSessionId: id }
+    task: { ...sourceChannel.task, rootSessionId: id2 }
   } : sourceChannel;
   const workspace = service(host, "workspaceRegistry")?.list?.().find((w) => w.sessionIds?.includes(sourceId));
-  return createOwnedNativeSession(host, store, id, {
+  return createOwnedNativeSession(host, store, id2, {
     creation: {
       kind: "continuation",
       cwd: source.meta.cwd,
@@ -2980,25 +3091,25 @@ function personaSkillProvider(files, owner, control) {
     list: async ({ signal }) => {
       control.signal.throwIfAborted();
       signal?.throwIfAborted();
-      const id = owner();
-      const candidates = id ? (await files.list(id)).map(({ content: _content, version: version2, ...skill }) => ({
+      const id2 = owner();
+      const candidates = id2 ? (await files.list(id2)).map(({ content: _content, version: version2, ...skill }) => ({
         ...skill,
         rank: 300,
-        locator: { personaId: id, name: skill.name, version: version2 }
+        locator: { personaId: id2, name: skill.name, version: version2 }
       })) : [];
       control.signal.throwIfAborted();
       signal?.throwIfAborted();
-      return { candidates: owner() === id ? candidates : [], complete: true };
+      return { candidates: owner() === id2 ? candidates : [], complete: true };
     },
     get: async (candidate, { signal }) => {
       control.signal.throwIfAborted();
       signal?.throwIfAborted();
-      const id = owner(), locator = candidate.locator;
-      if (!id || locator?.personaId !== id || locator?.name !== candidate.name) return;
-      const skill = await files.read(id, candidate.name);
+      const id2 = owner(), locator = candidate.locator;
+      if (!id2 || locator?.personaId !== id2 || locator?.name !== candidate.name) return;
+      const skill = await files.read(id2, candidate.name);
       control.signal.throwIfAborted();
       signal?.throwIfAborted();
-      if (owner() !== id) return;
+      if (owner() !== id2) return;
       if (!skill || skill.version !== locator.version) return;
       const { version: _version, ...definition } = skill;
       return definition;
@@ -3613,7 +3724,7 @@ function experienceWindow(events, sessionId, project) {
     if (!["user/message", "assistant/message", "tool/result", "tool/ptc-dispatch"].includes(event.type))
       continue;
     if (rows.length >= 80 && event.type !== "user/message") continue;
-    const record2 = historyRecord(event, (id) => names.get(id));
+    const record2 = historyRecord(event, (id2) => names.get(id2));
     if (!record2 || !(["user", "assistant", "tool-result"].includes(record2.kind) || record2.kind === "ledger" && record2.tool === "task_checkpoint"))
       continue;
     const raw = redactExperienceText(record2.text);
@@ -3687,8 +3798,8 @@ async function createExperienceParent(host, store, caller, model, signal) {
   const llm = service(host, "llm");
   const info = await llm?.resolveModelInfo?.(model.provider, model.model, signal);
   const route = experienceModel(model, info?.reasoning);
-  const id = "px-experience-root-" + randomUUID3();
-  store.bind(id, {
+  const id2 = "px-experience-root-" + randomUUID3();
+  store.bind(id2, {
     parent: caller.sessionId,
     locked: true,
     purpose: "experience",
@@ -3696,7 +3807,7 @@ async function createExperienceParent(host, store, caller, model, signal) {
   });
   const release = () => {
     try {
-      store.releaseExperienceBindings([id]);
+      store.releaseExperienceBindings([id2]);
     } catch (error62) {
       host.logger?.warn?.("\u5185\u90E8\u7ECF\u9A8C\u8EAB\u4EFD\u6682\u672A\u56DE\u6536\uFF0C\u5C06\u5728\u540E\u7EED\u542F\u52A8\u65F6\u91CD\u8BD5\uFF1A%s", String(error62));
     }
@@ -3704,7 +3815,7 @@ async function createExperienceParent(host, store, caller, model, signal) {
   try {
     signal.throwIfAborted();
     const owned = await agents.create({
-      sessionId: id,
+      sessionId: id2,
       // Analysis has no interactive preset. Children inherit this native preset-free composition,
       // not a user preset's scoped delegation tools, terminal services or persona prompt.
       meta: { cwd: caller.project, origin: "subagent" },
@@ -7546,15 +7657,15 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
     const syms = normalized.symbolKeys;
     const doc = new Doc(["payload", "ctx"], { shape, inst, memo: memo2, syms });
     const parseStr = (k) => `shape[${k}]._zod.run({ value: input[${k}], issues: [] }, ctx)`;
-    const prefixStr = (id, k) => `
-          let ${id}_ab = false;
-          for (let i = 0; i < ${id}.issues.length; i++) {
-            const iss = ${id}.issues[i];
+    const prefixStr = (id2, k) => `
+          let ${id2}_ab = false;
+          for (let i = 0; i < ${id2}.issues.length; i++) {
+            const iss = ${id2}.issues[i];
             iss.path = iss.path ? [${k}, ...iss.path] : [${k}];
             payload.issues.push(iss);
-            if (iss.continue !== true) ${id}_ab = true;
+            if (iss.continue !== true) ${id2}_ab = true;
           }
-          if (${id}_ab && ctx && ctx.abortEarly) {
+          if (${id2}_ab && ctx && ctx.abortEarly) {
             payload.value = newResult;
             return payload;
           }`;
@@ -7568,34 +7679,34 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
     for (const key of normalized.allKeys) {
       if (key === "__proto__")
         continue;
-      const id = ids[key];
+      const id2 = ids[key];
       const k = typeof key === "symbol" ? `syms[${syms.indexOf(key)}]` : esc(key);
       const isPresent = `${k} in input`;
       const schema2 = shape[key];
       const optin = schema2?._zod?.optin;
       const isOptionalIn = optin !== void 0;
       const isOptionalOut = schema2?._zod?.optout === "optional";
-      doc.write(`const ${id} = ${parseStr(k)};`);
+      doc.write(`const ${id2} = ${parseStr(k)};`);
       if (isOptionalIn && isOptionalOut) {
-        const assign = optin === "optional" ? `${id}_present` : `${id}.value !== undefined || ${id}_present`;
+        const assign = optin === "optional" ? `${id2}_present` : `${id2}.value !== undefined || ${id2}_present`;
         doc.write(`
-        const ${id}_present = ${isPresent};
-        if (!${id}.issues.length || ${id}_present) {
-          if (${id}.issues.length) {${prefixStr(id, k)}
+        const ${id2}_present = ${isPresent};
+        if (!${id2}.issues.length || ${id2}_present) {
+          if (${id2}.issues.length) {${prefixStr(id2, k)}
           }
 
           if (${assign}) {
-            newResult[${k}] = ${id}.value;
+            newResult[${k}] = ${id2}.value;
           }
         }
 
       `);
       } else if (!isOptionalIn) {
         doc.write(`
-        const ${id}_present = ${isPresent};
-        if (${id}.issues.length) {${prefixStr(id, k)}
+        const ${id2}_present = ${isPresent};
+        if (${id2}.issues.length) {${prefixStr(id2, k)}
         }
-        if (!${id}_present && !${id}.issues.length) {
+        if (!${id2}_present && !${id2}.issues.length) {
           payload.issues.push({
             code: "invalid_type",
             expected: "nonoptional",
@@ -7608,22 +7719,22 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
           }
         }
 
-        if (${id}_present) {
-          newResult[${k}] = ${id}.value;
+        if (${id2}_present) {
+          newResult[${k}] = ${id2}.value;
         }
 
       `);
       } else {
         doc.write(`
-        if (${id}.issues.length) {${prefixStr(id, k)}
+        if (${id2}.issues.length) {${prefixStr(id2, k)}
         }
       `);
         if (optin === "defaulted") {
-          doc.write(`newResult[${k}] = ${id}.value;`);
+          doc.write(`newResult[${k}] = ${id2}.value;`);
         } else {
           doc.write(`
-        if (${id}.value !== undefined || ${isPresent}) {
-          newResult[${k}] = ${id}.value;
+        if (${id2}.value !== undefined || ${isPresent}) {
+          newResult[${k}] = ${id2}.value;
         }
       `);
         }
@@ -19651,26 +19762,26 @@ function extractDefs(ctx, schema2) {
     return;
   const idToSchema = /* @__PURE__ */ new Map();
   for (const entry of ctx.seen.entries()) {
-    const id = ctx.metadataRegistry.get(entry[0])?.id;
-    if (id) {
-      const existing = idToSchema.get(id);
+    const id2 = ctx.metadataRegistry.get(entry[0])?.id;
+    if (id2) {
+      const existing = idToSchema.get(id2);
       if (existing && existing !== entry[0]) {
-        throw new Error(`Duplicate schema id "${id}" detected during JSON Schema conversion. Two different schemas cannot share the same id when converted together.`);
+        throw new Error(`Duplicate schema id "${id2}" detected during JSON Schema conversion. Two different schemas cannot share the same id when converted together.`);
       }
-      idToSchema.set(id, entry[0]);
+      idToSchema.set(id2, entry[0]);
     }
   }
   const makeURI = (entry) => {
     const defsSegment = ctx.target === "draft-2020-12" ? "$defs" : "definitions";
     if (ctx.external) {
       const externalId = ctx.external.registry.get(entry[0])?.id;
-      const uriGenerator = ctx.external.uri ?? ((id2) => id2);
+      const uriGenerator = ctx.external.uri ?? ((id3) => id3);
       if (externalId) {
         return { ref: uriGenerator(externalId) };
       }
-      const id = entry[1].defId ?? entry[1].schema.id ?? `schema${ctx.counter++}`;
-      entry[1].defId = id;
-      return { defId: id, ref: `${uriGenerator("__shared")}#/${defsSegment}/${encodeJSONPointerSegment(id)}` };
+      const id2 = entry[1].defId ?? entry[1].schema.id ?? `schema${ctx.counter++}`;
+      entry[1].defId = id2;
+      return { defId: id2, ref: `${uriGenerator("__shared")}#/${defsSegment}/${encodeJSONPointerSegment(id2)}` };
     }
     const uriPrefix = `#`;
     const defUriPrefix = `${uriPrefix}/${defsSegment}/`;
@@ -19718,8 +19829,8 @@ Set the \`cycles\` parameter to \`"ref"\` to resolve cyclical schemas with defs.
         continue;
       }
     }
-    const id = ctx.metadataRegistry.get(entry[0])?.id;
-    if (id) {
+    const id2 = ctx.metadataRegistry.get(entry[0])?.id;
+    if (id2) {
       extractToDef(entry);
       continue;
     }
@@ -19952,10 +20063,10 @@ function finalize(ctx, schema2) {
   } else {
   }
   if (ctx.external?.uri) {
-    const id = ctx.external.registry.get(schema2)?.id;
-    if (!id)
+    const id2 = ctx.external.registry.get(schema2)?.id;
+    if (!id2)
       throw new Error("Schema is missing an `id` property");
-    result.$id = ctx.external.uri(id);
+    result.$id = ctx.external.uri(id2);
   }
   assignProps(result, root.defId ? root.schema : root.def ?? root.schema);
   const rootMetaId = ctx.metadataRegistry.get(schema2)?.id;
@@ -20561,7 +20672,7 @@ function stringifyKeyNames(bySchema, json2, visited) {
   const values = json2.enum ?? (json2.const !== void 0 ? [json2.const] : void 0);
   if (!numericType && !values?.some((v) => typeof v === "number"))
     return json2;
-  const { minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf, format, id, ...rest } = json2;
+  const { minimum, maximum, exclusiveMinimum, exclusiveMaximum, multipleOf, format, id: id2, ...rest } = json2;
   if (rest.enum)
     rest.enum = rest.enum.map((v) => typeof v === "number" ? String(v) : v);
   else if (typeof rest.const === "number")
@@ -23687,7 +23798,7 @@ async function runAnalysisTask(host, parent, prompt, schema2, signal, options = 
     throw new MemoryError("\u7ECF\u9A8C\u4EFB\u52A1\u7684\u6765\u6E90\u6216\u5185\u5BB9\u65E0\u6548");
   signal.throwIfAborted();
   const output2 = experienceOutput(schema2);
-  const id = (options.kind === "attention" ? "px-qq-attention-" : "px-experience-") + randomUUID4(), controller = new AbortController();
+  const id2 = (options.kind === "attention" ? "px-qq-attention-" : "px-experience-") + randomUUID4(), controller = new AbortController();
   const timeoutMs = options.timeoutMs ?? 18e4, maxRequests = options.maxRequests ?? 3;
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1e3 || timeoutMs > 6e5 || !Number.isSafeInteger(maxRequests) || maxRequests < 1 || maxRequests > 5)
     throw new MemoryError("\u7ECF\u9A8C\u4EFB\u52A1\u9884\u7B97\u65E0\u6548");
@@ -23702,11 +23813,11 @@ async function runAnalysisTask(host, parent, prompt, schema2, signal, options = 
     const llm = host.get?.("llm") ?? host.llm;
     const info = options.fast ? await llm?.resolveModelInfo?.(parent.options.provider, parent.options.model, combined) : void 0;
     const fastEffort = ["off", "none"].find(
-      (id2) => info?.reasoning?.efforts?.some((effort) => effort.id === id2)
+      (id3) => info?.reasoning?.efforts?.some((effort) => effort.id === id3)
     );
     disposers.push(
       host.on("agent/error", ({ agent, error: error62 }) => {
-        if (agent.id === id)
+        if (agent.id === id2)
           failure2 = redactExperienceText(error62 instanceof Error ? error62.message : String(error62)).slice(0, 400);
       })
     );
@@ -23714,7 +23825,7 @@ async function runAnalysisTask(host, parent, prompt, schema2, signal, options = 
       host.on(
         "agent/created",
         ({ agent }) => {
-          if (agent.id !== id) return;
+          if (agent.id !== id2) return;
           if (!agents.isOwnedBy(agent.id, parent)) throw new MemoryError("\u7ECF\u9A8C\u4EFB\u52A1\u7684\u539F\u751F\u5F52\u5C5E\u6821\u9A8C\u5931\u8D25", 409);
           const tools = agent.ctx.get?.("tools") ?? agent.ctx.tools, systemPrompt = agent.ctx.get?.("systemPrompt") ?? agent.ctx.systemPrompt;
           if (!tools?.restrict || !tools.guard || !tools.presentAs || !tools.get(RESULT_TOOL, agent) || !systemPrompt?.section)
@@ -23738,12 +23849,12 @@ async function runAnalysisTask(host, parent, prompt, schema2, signal, options = 
     );
     disposers.push(
       host.on("agent/assistant-stream", ({ agent, frame }) => {
-        if (agent.id === id && frame?.type === "start" && ++requests2 > maxRequests)
+        if (agent.id === id2 && frame?.type === "start" && ++requests2 > maxRequests)
           controller.abort(new Error("\u7ECF\u9A8C\u6574\u7406\u8FBE\u5230\u8BF7\u6C42\u6B21\u6570\u9650\u5236\uFF1B\u672A\u81EA\u52A8\u91CD\u8BD5"));
       })
     );
     activation = await subagents.startActivation({
-      childId: id,
+      childId: id2,
       provider: "spawn",
       label: options.label ?? "\u6574\u7406\u5DE5\u4F5C\u7ECF\u5386",
       request: {
@@ -23760,12 +23871,12 @@ async function runAnalysisTask(host, parent, prompt, schema2, signal, options = 
     });
     combined.addEventListener("abort", stop, { once: true });
     if (combined.aborted) stop();
-    if (!composed || activation.childId !== id) throw new MemoryError("\u7ECF\u9A8C\u4EFB\u52A1\u6CA1\u6709\u5B8C\u6210\u53D7\u9650\u521D\u59CB\u5316", 503);
+    if (!composed || activation.childId !== id2) throw new MemoryError("\u7ECF\u9A8C\u4EFB\u52A1\u6CA1\u6709\u5B8C\u6210\u53D7\u9650\u521D\u59CB\u5316", 503);
     const result = await activation.result;
     combined.throwIfAborted();
     if (result.stopReason !== "completed" || result.structured === void 0)
       throw new MemoryError("\u7ECF\u9A8C\u4EFB\u52A1\u672A\u751F\u6210\u6709\u6548\u7ED3\u679C\uFF1A" + (failure2 || String(result.stopReason)), 422);
-    return { childId: id, value: output2.parse(result.structured) };
+    return { childId: id2, value: output2.parse(result.structured) };
   } finally {
     clearTimeout(timer);
     combined.removeEventListener("abort", stop);
@@ -23789,11 +23900,11 @@ async function skillDraftContent(name2, value, previousFrontmatter) {
 }
 
 // packages/dsh-px-memory/src/session-context.ts
-async function inspectMemorySession(host, identities, id, needEvents = false) {
-  if (needEvents || !identities.read().bindings[id]?.locked) return host.sessionController.inspect(id);
-  const live = service(host, "sessions")?.get(id);
+async function inspectMemorySession(host, identities, id2, needEvents = false) {
+  if (needEvents || !identities.read().bindings[id2]?.locked) return host.sessionController.inspect(id2);
+  const live = service(host, "sessions")?.get(id2);
   if (live) return { meta: live.header, events: [] };
-  const reader = await nativeReader(host, id);
+  const reader = await nativeReader(host, id2);
   try {
     return { meta: reader.header, events: [] };
   } finally {
@@ -23860,7 +23971,7 @@ var ExperienceService = class {
         overview: overview.value,
         suggestions: newest(suggestions.value),
         drafts: newest(drafts.value.filter((d) => d.status === "ready")).map(
-          ({ id, skillName: skillName3, suggestionId, status }) => ({ id, skillName: skillName3, suggestionId, status })
+          ({ id: id2, skillName: skillName3, suggestionId, status }) => ({ id: id2, skillName: skillName3, suggestionId, status })
         ),
         runs: newest(runs.value).map(({ results, ...summary }) => experienceRunView(summary, this.startedAt)),
         tasks: this.jobs.list(caller)
@@ -23911,19 +24022,19 @@ var ExperienceService = class {
     if (input2.action === "backtest") return this.backtest(caller, input2.requestId, input2.id);
     throw new MemoryError("\u4E0D\u652F\u6301\u7684\u7ECF\u9A8C\u64CD\u4F5C");
   }
-  async source(caller, id = caller.sessionId) {
-    if (isInternalSession(id) || this.store.read().bindings[id]?.purpose)
+  async source(caller, id2 = caller.sessionId) {
+    if (isInternalSession(id2) || this.store.read().bindings[id2]?.purpose)
       throw new MemoryError("\u5185\u90E8\u6574\u7406\u8BB0\u5F55\u4E0D\u4F5C\u4E3A\u65B0\u7684\u5DE5\u4F5C\u7ECF\u5386\u63D0\u70BC", 409);
-    const inspected = await this.host.sessionController.inspect(id);
+    const inspected = await this.host.sessionController.inspect(id2);
     const identity = this.bank.identity(caller), original = this.bank.identity({
       ...caller,
-      sessionId: id,
+      sessionId: id2,
       project: inspected.meta.cwd,
       personaId: void 0
     });
     if (identity.personaId !== original.personaId || identity.project !== original.project)
       throw new MemoryError("\u6765\u6E90\u4E0D\u5C5E\u4E8E\u5F53\u524D\u4EBA\u683C\u4E0E\u9879\u76EE", 403);
-    return experienceWindow(inspected.events, id, inspected.meta.cwd);
+    return experienceWindow(inspected.events, id2, inspected.meta.cwd);
   }
   scopedHost(parent) {
     return {
@@ -23931,19 +24042,19 @@ var ExperienceService = class {
       get: (name2) => parent.ctx.get?.(name2) ?? this.host.get?.(name2) ?? this.host[name2]
     };
   }
-  async sourceModel(caller, id = caller.sessionId) {
-    if (isInternalSession(id) || this.store.read().bindings[id]?.purpose)
+  async sourceModel(caller, id2 = caller.sessionId) {
+    if (isInternalSession(id2) || this.store.read().bindings[id2]?.purpose)
       throw new MemoryError("\u5185\u90E8\u6574\u7406\u8BB0\u5F55\u4E0D\u4F5C\u4E3A\u65B0\u7684\u5DE5\u4F5C\u7ECF\u5386\u63D0\u70BC", 409);
-    const { meta: meta3 } = await inspectMemorySession(this.host, this.store, id);
+    const { meta: meta3 } = await inspectMemorySession(this.host, this.store, id2);
     const current = this.bank.identity(caller), original = this.bank.identity({
       ...caller,
-      sessionId: id,
+      sessionId: id2,
       project: meta3.cwd,
       personaId: void 0
     });
     if (current.personaId !== original.personaId || current.project !== original.project)
       throw new MemoryError("\u6765\u6E90\u4E0D\u5C5E\u4E8E\u5F53\u524D\u4EBA\u683C\u4E0E\u9879\u76EE", 403);
-    return experienceSessionModel(this.host, id);
+    return experienceSessionModel(this.host, id2);
   }
   async review(caller, requestId) {
     const fingerprint = hash4(["review", caller.sessionId]), prior = this.jobs.reuse(caller, requestId, fingerprint);
@@ -24380,26 +24491,26 @@ async function personaHubView(host, store, personaId, offset = 0, currentSession
   };
 }
 async function createHubSession(host, store, args) {
-  const id = creationSessionId(args.requestId);
+  const id2 = creationSessionId(args.requestId);
   return ownedCreationRequest(
     store,
-    id,
+    id2,
     JSON.stringify(["hub", args.personaId, args.workspaceId]),
-    () => createHubAttempt(host, store, args, id)
+    () => createHubAttempt(host, store, args, id2)
   );
 }
-async function createHubAttempt(host, store, args, id) {
+async function createHubAttempt(host, store, args, id2) {
   const personaId = validId(args.personaId), workspaceId = validId(args.workspaceId);
   const state = store.read(), persona = state.personas.find((p) => p.id === personaId && !p.archived);
   if (!persona) throw new MemoryError("\u4EBA\u683C\u4E0D\u5B58\u5728\u6216\u5DF2\u5F52\u6863");
   const workspace = service(host, "workspaceRegistry")?.list?.().find((w) => w.id === workspaceId);
   if (!workspace) throw new MemoryError("\u8BF7\u5148\u6DFB\u52A0\u6216\u9009\u62E9\u6709\u6548\u5DE5\u4F5C\u533A");
-  const existing = state.bindings[id];
+  const existing = state.bindings[id2];
   if (existing && (existing.personaId !== personaId || existing.creationWorkspaceId !== workspaceId || existing.createdFrom || existing.handoff || existing.channel))
     throw new MemoryError("\u6B64\u8BF7\u6C42\u5DF2\u7ECF\u7528\u4E8E\u53E6\u4E00\u9879\u4F1A\u8BDD\u521B\u5EFA", 409);
   const controller = service(host, "sessionController");
   if (!controller?.create) throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u521B\u5EFA\u670D\u52A1\u4E0D\u53EF\u7528", 503);
-  return createOwnedNativeSession(host, store, id, {
+  return createOwnedNativeSession(host, store, id2, {
     creation: { kind: "hub", cwd: workspace.path, workspaceId, complete: false },
     binding: { personaId, creationWorkspaceId: workspaceId }
   });
@@ -24514,12 +24625,12 @@ var PersonaNavigation = class {
   close() {
     this.db.close();
   }
-  read(id) {
-    const row = this.db.prepare("SELECT body FROM requests WHERE id=?").get(id);
+  read(id2) {
+    const row = this.db.prepare("SELECT body FROM requests WHERE id=?").get(id2);
     return row ? JSON.parse(String(row.body)) : void 0;
   }
-  save(id, receipt) {
-    this.db.prepare("INSERT INTO requests(id,body) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body").run(id, JSON.stringify(receipt));
+  save(id2, receipt) {
+    this.db.prepare("INSERT INTO requests(id,body) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET body=excluded.body").run(id2, JSON.stringify(receipt));
   }
   create(host, args) {
     const requestId = args.requestId;
@@ -24632,7 +24743,7 @@ var PersonaNavigation = class {
         ...receipt.requestedPreset === void 0 ? {} : { agentPreset: receipt.requestedPreset }
       },
       {
-        reusable: (id) => this.owned(id, receipt.personaId),
+        reusable: (id2) => this.owned(id2, receipt.personaId),
         beforeReuse: (value) => attempt("reuse", value),
         beforeCreate: (value) => {
           attempt("create", value);
@@ -24652,13 +24763,13 @@ var PersonaNavigation = class {
     }
     return result;
   }
-  assertPersona(id) {
-    if (!this.store.read().personas.some((p) => p.id === id && !p.archived))
+  assertPersona(id2) {
+    if (!this.store.read().personas.some((p) => p.id === id2 && !p.archived))
       throw new MemoryError("\u4EBA\u683C\u4E0D\u5B58\u5728\u6216\u5DF2\u5F52\u6863\uFF0C\u8BF7\u91CD\u65B0\u9009\u62E9", 409);
   }
-  owned(id, personaId, pending = false, bindings) {
-    const b = (bindings ?? this.store.read().bindings)[id];
-    return !isInternalSession(id) && !b?.channel && !b?.purpose && !b?.handoff && b?.creation?.complete !== false && (pending || !b?.pending) && (b?.personaId ?? "default") === personaId;
+  owned(id2, personaId, pending = false, bindings) {
+    const b = (bindings ?? this.store.read().bindings)[id2];
+    return !isInternalSession(id2) && !b?.channel && !b?.purpose && !b?.handoff && b?.creation?.complete !== false && (pending || !b?.pending) && (b?.personaId ?? "default") === personaId;
   }
   attachmentFailure(sessionId, workspaceId, error62) {
     return {
@@ -24785,6 +24896,7 @@ function segmentEvidence(source) {
     seq: source.seqs[i],
     role: message.role,
     source: message.source,
+    authority: personaMailOrigin(message.source) ? "peer-advice-only" : message.role === "assistant" ? "assistant-statement" : message.role === "user" ? conversationalSource(message.source) ? message.source?.kind === "user" ? "human-message" : "channel-participant-message" : "runtime-context-not-user-authorization" : message.role === "tool" ? "tool-return-requires-source-verification" : "context",
     content: visibleBlocks(message.content)
   }));
 }
@@ -25046,8 +25158,8 @@ var SegmentStore = class {
       throw error62;
     }
   }
-  get(id) {
-    const row = this.db.prepare("SELECT body FROM segments WHERE id=?").get(id);
+  get(id2) {
+    const row = this.db.prepare("SELECT body FROM segments WHERE id=?").get(id2);
     return row ? JSON.parse(String(row.body)) : void 0;
   }
   list(sessionId, limit = 100) {
@@ -25071,15 +25183,15 @@ var SegmentStore = class {
     if (body.length > 25e4) throw new MemoryError("\u540E\u53F0\u7247\u6BB5\u8BB0\u5F55\u8D85\u8FC7\u5927\u5C0F\u9650\u5236");
     this.db.prepare("INSERT INTO segments VALUES(?,?,?,?,?)").run(record2.id, record2.sessionId, record2.source.fingerprint, record2.phase, body);
   }
-  change(id, expected, update) {
-    const before = this.get(id);
+  change(id2, expected, update) {
+    const before = this.get(id2);
     if (!before || !expected.includes(before.phase)) return;
     const prior = JSON.stringify(before);
     update(before);
     before.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
     const body = JSON.stringify(before);
     if (body.length > 25e4) throw new MemoryError("\u540E\u53F0\u7247\u6BB5\u8BB0\u5F55\u8D85\u8FC7\u5927\u5C0F\u9650\u5236");
-    const result = this.db.prepare("UPDATE segments SET phase=?,body=? WHERE id=? AND body=?").run(before.phase, body, id, prior);
+    const result = this.db.prepare("UPDATE segments SET phase=?,body=? WHERE id=? AND body=?").run(before.phase, body, id2, prior);
     if (!result.changes) throw new MemoryError("\u7247\u6BB5\u8BB0\u5F55\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u91CD\u8BD5", 409);
     return before;
   }
@@ -25263,15 +25375,15 @@ var SegmentRuntime = class {
     }
   }
   schedule(agent) {
-    const id = agent.session.id;
-    if (this.stopped || !this.committer || this.admissions.has(id) || this.running.size + this.admissions.size >= 2 || this.store.unfinished(id).length || !this.settings(id).enabled || isInternalSession(id))
+    const id2 = agent.session.id;
+    if (this.stopped || !this.committer || this.admissions.has(id2) || this.running.size + this.admissions.size >= 2 || this.store.unfinished(id2).length || !this.settings(id2).enabled || isInternalSession(id2))
       return;
     const owner = { agent, controller: new AbortController() };
-    this.admissions.set(id, owner);
+    this.admissions.set(id2, owner);
     owner.settled = this.prepare(agent, owner).catch((error62) => {
-      if (!this.stopped) this.problem.set(id, error62 instanceof Error ? error62.message : "\u540E\u53F0\u6574\u7406\u672A\u542F\u52A8");
+      if (!this.stopped) this.problem.set(id2, error62 instanceof Error ? error62.message : "\u540E\u53F0\u6574\u7406\u672A\u542F\u52A8");
     }).finally(() => {
-      if (this.admissions.get(id) === owner) this.admissions.delete(id);
+      if (this.admissions.get(id2) === owner) this.admissions.delete(id2);
     });
   }
   async prepare(agent, owner) {
@@ -25280,7 +25392,7 @@ var SegmentRuntime = class {
       this.shutdown.signal,
       AbortSignal.timeout(15e3)
     ]);
-    const id = agent.session.id, identity = this.identity(id), route = this.route(agent), scoped = this.scoped(agent);
+    const id2 = agent.session.id, identity = this.identity(id2), route = this.route(agent), scoped = this.scoped(agent);
     const description = await service(this.host, "pxContextPolicy")?.describe(agent, route, signal);
     const capacity = Number.isSafeInteger(description?.capacity) && description.capacity > 0 ? description.capacity : 32768;
     const source = await captureSegment(
@@ -25290,11 +25402,11 @@ var SegmentRuntime = class {
       signal
     );
     if (!source) return;
-    const retryRequested = this.retry.delete(id);
-    if (this.store.seen(id, source.fingerprint, identity.fingerprint, route) && !retryRequested) return;
+    const retryRequested = this.retry.delete(id2);
+    if (this.store.seen(id2, source.fingerprint, identity.fingerprint, route) && !retryRequested) return;
     let memoryTarget, allowedSeqs = [];
     if (identity.persona.memoryEnabled) {
-      const caller = this.memoryCaller(id, agent.session.header.cwd), scope = publicSession(identity.binding) ? "project" : projectKey(agent.session.header.cwd) ? "persona-project" : "persona";
+      const caller = this.memoryCaller(id2, agent.session.header.cwd), scope = publicSession(identity.binding) ? "project" : projectKey(agent.session.header.cwd) ? "persona-project" : "persona";
       memoryTarget = {
         scope,
         conversation: publicSession(identity.binding),
@@ -25304,7 +25416,7 @@ var SegmentRuntime = class {
     source.readableSeqs = [];
     for (const seq of source.seqs) {
       try {
-        const event = await this.history.read(this.host, id, id, seq, 0, signal);
+        const event = await this.history.read(this.host, id2, id2, seq, 0, signal);
         source.readableSeqs.push(seq);
         if (identity.persona.memoryEnabled && ["user", "tool-result", "native-state", "ledger"].includes(event.kind))
           allowedSeqs.push(seq);
@@ -25313,7 +25425,7 @@ var SegmentRuntime = class {
       }
     }
     signal.throwIfAborted();
-    if (this.identity(id).fingerprint !== identity.fingerprint || hash6(this.route(agent)) !== hash6(route) || !segmentStillVisible(agent.session, source))
+    if (this.identity(id2).fingerprint !== identity.fingerprint || hash6(this.route(agent)) !== hash6(route) || !segmentStillVisible(agent.session, source))
       return;
     const jobs = scoped.get("jobs");
     if (!jobs?.start || !jobs.wait || !jobs.read || !jobs.attachController)
@@ -25321,7 +25433,7 @@ var SegmentRuntime = class {
     const now = (/* @__PURE__ */ new Date()).toISOString(), { messages: _, ...sourceMetadata } = source;
     const record2 = {
       id: randomUUID5(),
-      sessionId: id,
+      sessionId: id2,
       personaId: identity.persona.id,
       identity: identity.fingerprint,
       epoch: this.epoch,
@@ -25334,7 +25446,7 @@ var SegmentRuntime = class {
       ...memoryTarget ? { memoryTarget } : {}
     };
     this.store.create(record2);
-    this.problem.delete(id);
+    this.problem.delete(id2);
     const running = { agent, controller: new AbortController(), jobs };
     this.running.set(record2.id, running);
     const timer = setTimeout(() => running.controller.abort(new Error("\u540E\u53F0\u6574\u7406\u8D85\u65F6\uFF0C\u672A\u81EA\u52A8\u91CD\u8BD5")), 18e4);
@@ -25412,7 +25524,7 @@ var SegmentRuntime = class {
           this.running.delete(record2.id);
         }
       })();
-      void running.settled.catch((error62) => this.problem.set(id, String(error62).slice(0, 400)));
+      void running.settled.catch((error62) => this.problem.set(id2, String(error62).slice(0, 400)));
     } catch (error62) {
       clearTimeout(timer);
       running.controller.abort(error62);
@@ -25485,15 +25597,15 @@ var SegmentRuntime = class {
     }
   }
   changed() {
-    for (const [id, run] of this.admissions) {
+    for (const [id2, run] of this.admissions) {
       try {
-        this.identity(id);
+        this.identity(id2);
       } catch {
         run.controller.abort(new Error("\u4EBA\u683C\u72B6\u6001\u5DF2\u53D8\u5316"));
       }
     }
-    for (const [id, run] of this.running) {
-      const record2 = this.store.get(id);
+    for (const [id2, run] of this.running) {
+      const record2 = this.store.get(id2);
       if (record2 && !this.valid(record2, run.agent)) this.cancel(record2.sessionId, "\u4EBA\u683C\u3001\u6A21\u578B\u6216\u53D7\u4F17\u5DF2\u53D8\u5316");
     }
   }
@@ -25551,27 +25663,27 @@ var SegmentRuntime = class {
     const binding = this.identity(sessionId).binding;
     return publicSession(binding) ? this.knowledge.conversationCaller({ sessionId, project: binding.channel.workspace, actor }) : { sessionId, project, actor };
   }
-  async decideMemory(sessionId, id, index, action, project) {
+  async decideMemory(sessionId, id2, index, action, project) {
     if (this.stopped) throw new MemoryError("\u540E\u53F0\u6574\u7406\u670D\u52A1\u5DF2\u505C\u6B62\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u5BA2\u6237\u7AEF\u540E\u6838\u5BF9\u8BB0\u5FC6", 503);
     if (!["accept", "dismiss"].includes(action)) throw new MemoryError("\u8BB0\u5FC6\u5EFA\u8BAE\u64CD\u4F5C\u65E0\u6548");
-    const request = hash6([sessionId, index, action, project, this.identity(sessionId).fingerprint]), pending = this.memoryDecisions.get(id);
+    const request = hash6([sessionId, index, action, project, this.identity(sessionId).fingerprint]), pending = this.memoryDecisions.get(id2);
     if (pending) {
       if (pending.request !== request)
         throw new MemoryError("\u672C\u7247\u6BB5\u7684\u8BB0\u5FC6\u5EFA\u8BAE\u6B63\u5728\u5904\u7406\uFF0C\u8BF7\u7B49\u5F85\u7ED3\u679C\u540E\u518D\u64CD\u4F5C", 409);
       return pending.settled;
     }
-    const settled = Promise.resolve().then(() => this.applyMemoryDecision(sessionId, id, index, action, project)).finally(() => this.memoryDecisions.delete(id));
-    this.memoryDecisions.set(id, { request, settled });
+    const settled = Promise.resolve().then(() => this.applyMemoryDecision(sessionId, id2, index, action, project)).finally(() => this.memoryDecisions.delete(id2));
+    this.memoryDecisions.set(id2, { request, settled });
     return settled;
   }
-  async applyMemoryDecision(sessionId, id, index, action, project) {
-    const record2 = this.store.get(id);
-    if (this.running.has(id)) throw new MemoryError("\u539F\u751F\u540E\u53F0\u4F5C\u4E1A\u5C1A\u672A\u7ED3\u7B97\uFF0C\u8BF7\u7A0D\u540E\u91C7\u7EB3", 409);
+  async applyMemoryDecision(sessionId, id2, index, action, project) {
+    const record2 = this.store.get(id2);
+    if (this.running.has(id2)) throw new MemoryError("\u539F\u751F\u540E\u53F0\u4F5C\u4E1A\u5C1A\u672A\u7ED3\u7B97\uFF0C\u8BF7\u7A0D\u540E\u91C7\u7EB3", 409);
     if (!record2 || record2.sessionId !== sessionId || record2.identity !== this.identity(sessionId).fingerprint || !record2.memoryTarget || !["ready", "committed"].includes(record2.phase) || !Number.isSafeInteger(index) || !record2.prepared?.memories[index])
       throw new MemoryError("\u8BB0\u5FC6\u5EFA\u8BAE\u5DF2\u5931\u6548\u6216\u4E0D\u5C5E\u4E8E\u5F53\u524D\u4F1A\u8BDD", 409);
     if (record2.memoryDecisions?.[index]) return record2.memoryDecisions[index];
     if (action === "dismiss") {
-      this.store.change(id, [record2.phase], (row) => {
+      this.store.change(id2, [record2.phase], (row) => {
         ;
         (row.memoryDecisions ??= {})[index] = { status: "dismissed" };
       });
@@ -25615,8 +25727,8 @@ var SegmentRuntime = class {
       );
     }
     try {
-      const current = this.store.get(id);
-      if (!current || !this.store.change(id, [current.phase], (row) => {
+      const current = this.store.get(id2);
+      if (!current || !this.store.change(id2, [current.phase], (row) => {
         ;
         (row.memoryDecisions ??= {})[index] = { status: "accepted", documentId: result.document.id };
         row.memoryTarget.revision = result.revision;
@@ -25650,26 +25762,26 @@ var SegmentRuntime = class {
 
 // packages/dsh-px-memory/src/native-history-policy.ts
 function nativeHistoryScope(store, agent, tool) {
-  const id = agent?.session?.id;
-  if (typeof id !== "string" || !NATIVE_HISTORY_TOOLS.has(tool)) throw new Error("\u539F\u751F\u5386\u53F2\u7F3A\u5C11\u5408\u6CD5\u8C03\u7528\u4E3B\u4F53");
-  const initial2 = store.bind(id, { parent: agent.session.header.parentSession, locked: true }), caller = initial2.bindings[id];
+  const id2 = agent?.session?.id;
+  if (typeof id2 !== "string" || !NATIVE_HISTORY_TOOLS.has(tool)) throw new Error("\u539F\u751F\u5386\u53F2\u7F3A\u5C11\u5408\u6CD5\u8C03\u7528\u4E3B\u4F53");
+  const initial2 = store.bind(id2, { parent: agent.session.header.parentSession, locked: true }), caller = initial2.bindings[id2];
   const owner = initial2.personas.find((p) => p.id === caller.personaId);
-  if (!owner || owner.archived || caller.purpose || isInternalSession(id))
+  if (!owner || owner.archived || caller.purpose || isInternalSession(id2))
     throw new Error("\u539F\u751F\u5386\u53F2\u4E3B\u4F53\u4E0D\u53EF\u7528");
   const permits = (state, target) => {
-    const current = state.bindings[id], persona = state.personas.find((p) => p.id === current?.personaId), binding = state.bindings[target];
-    return !!current && !!persona && !persona.archived && current.personaId === caller.personaId && personaToolAllowed(owner.resources, tool) && personaToolAllowed(persona.resources, tool) && (!current.channel || personaChannelAllowed(persona.resources, current.channel.provider, current.channel.accountId)) && !!binding && !binding.pending && !binding.purpose && !isInternalSession(target) && (binding.locked || target === id) && binding.personaId === caller.personaId && (target === id || persona.memoryEnabled) && (!publicSession(current) || samePublicConversation(current, binding));
+    const current = state.bindings[id2], persona = state.personas.find((p) => p.id === current?.personaId), binding = state.bindings[target];
+    return !!current && !!persona && !persona.archived && current.personaId === caller.personaId && personaToolAllowed(owner.resources, tool) && personaToolAllowed(persona.resources, tool) && (!current.channel || personaChannelAllowed(persona.resources, current.channel.provider, current.channel.accountId)) && !!binding && !binding.pending && !binding.purpose && !isInternalSession(target) && (binding.locked || target === id2) && binding.personaId === caller.personaId && (target === id2 || persona.memoryEnabled) && (!publicSession(current) || samePublicConversation(current, binding));
   };
   const ids = Object.keys(initial2.bindings).filter((target) => permits(initial2, target)).sort(), captured = new Set(ids);
   const shared = caller.handoff && !captured.has(caller.handoff.sessionId) ? Object.freeze({ ...caller.handoff }) : void 0;
   const bounded2 = (state, target) => {
     if (!shared || target !== shared.sessionId) return;
-    const current = state.bindings[id], persona = state.personas.find((p) => p.id === current?.personaId), source = state.bindings[target], grant = current?.handoff;
+    const current = state.bindings[id2], persona = state.personas.find((p) => p.id === current?.personaId), source = state.bindings[target], grant = current?.handoff;
     if (!current || current.pending || current.purpose || !persona || persona.archived || !persona.memoryEnabled || current.personaId !== caller.personaId || !personaToolAllowed(owner.resources, tool) || !personaToolAllowed(persona.resources, tool) || current.channel && !personaChannelAllowed(persona.resources, current.channel.provider, current.channel.accountId) || !source || source.pending || source.purpose || !source.locked || isInternalSession(target) || publicSession(current) && !samePublicConversation(current, source) || !grant || grant.sessionId !== shared.sessionId || grant.throughSeq !== shared.throughSeq || grant.createdAt !== shared.createdAt || grant.summary !== shared.summary)
       return;
     return shared;
   };
-  if (!captured.has(id)) throw new Error("\u5F53\u524D\u539F\u751F\u5386\u53F2\u64CD\u4F5C\u672A\u83B7\u51C6");
+  if (!captured.has(id2)) throw new Error("\u5F53\u524D\u539F\u751F\u5386\u53F2\u64CD\u4F5C\u672A\u83B7\u51C6");
   return Object.freeze({
     ids: Object.freeze(ids),
     boundedIds: Object.freeze(shared ? [shared.sessionId] : []),
@@ -25717,15 +25829,15 @@ function nativeHistoryGuard(store, exec, adapted = false) {
     nativeHistoryScope(store, exec.agent, exec.name);
     return;
   }
-  const id = exec.agent.session.id;
-  const state = store.bind(id, { parent: exec.agent.session.header.parentSession, locked: true });
-  const caller = state.bindings[id], persona = state.personas.find((p) => p.id === caller.personaId);
-  if (!persona || persona.archived || caller.purpose || isInternalSession(id))
+  const id2 = exec.agent.session.id;
+  const state = store.bind(id2, { parent: exec.agent.session.header.parentSession, locked: true });
+  const caller = state.bindings[id2], persona = state.personas.find((p) => p.id === caller.personaId);
+  if (!persona || persona.archived || caller.purpose || isInternalSession(id2))
     return "\u5F53\u524D\u4EBA\u683C\u4E0D\u80FD\u8BFB\u53D6\u539F\u751F\u5386\u53F2";
   const allowed = (target) => {
     if (typeof target !== "string" || isInternalSession(target)) return false;
     const binding = state.bindings[target];
-    return !!binding && !binding.pending && !binding.purpose && (binding.locked || target === id) && binding.personaId === caller.personaId && (target === id || persona.memoryEnabled) && (!publicSession(caller) || samePublicConversation(caller, binding));
+    return !!binding && !binding.pending && !binding.purpose && (binding.locked || target === id2) && binding.personaId === caller.personaId && (target === id2 || persona.memoryEnabled) && (!publicSession(caller) || samePublicConversation(caller, binding));
   };
   if (exec.name === "session_query" || exec.name === "session_trace")
     return "\u6B64\u539F\u751F\u5165\u53E3\u5C1A\u672A\u5B8C\u6210\u6309\u4EBA\u683C\u8FC7\u6EE4\uFF1B\u8BF7\u4F7F\u7528 persona_history \u83B7\u53D6\u53D7\u9650\u5386\u53F2\u3002";
@@ -25737,7 +25849,7 @@ function nativeHistoryGuard(store, exec, adapted = false) {
       return "\u4E0D\u80FD\u4EE5\u5176\u4ED6\u4EBA\u683C\u7684\u4F1A\u8BDD\u4F5C\u4E3A\u5386\u53F2\u7B5B\u9009\u6765\u6E90";
     return;
   }
-  if (!allowed(args.session_id ?? id))
+  if (!allowed(args.session_id ?? id2))
     return "\u76EE\u6807\u5386\u53F2\u4E0D\u5C5E\u4E8E\u672C\u4EBA\u683C\u7684\u53EF\u89C1\u4F1A\u8BDD\uFF0C\u6216\u5C1A\u672A\u56FA\u5B9A\u4EBA\u683C\uFF1B\u672A\u8BFB\u53D6\u3002\u660E\u786E\u4EA4\u63A5\u7684\u5185\u5BB9\u8BF7\u4F7F\u7528 persona_history\u3002";
 }
 
@@ -25891,12 +26003,12 @@ async function searchNativeHandoff(host, history, scope, caller, target, query, 
 }
 async function appendNativeHandoffs(host, history, scope, caller, args, query, sessionFilters, eventFilters, own2, maxResults, signal) {
   const sources = scope.boundedIds.filter(
-    (id) => args.session_ids === void 0 || args.session_ids.includes(id)
+    (id2) => args.session_ids === void 0 || args.session_ids.includes(id2)
   );
   if (!sources.length) return own2;
   const check2 = () => {
     signal.throwIfAborted();
-    if (!scope.allows(caller) || sources.some((id) => !scope.bounded(id)))
+    if (!scope.allows(caller) || sources.some((id2) => !scope.bounded(id2)))
       throw new MemoryError("\u4EA4\u63A5\u641C\u7D22\u6388\u6743\u5DF2\u53D8\u5316", 403);
   };
   check2();
@@ -25909,12 +26021,12 @@ async function appendNativeHandoffs(host, history, scope, caller, args, query, s
   const native = service(host, "sessionQuery");
   if (!native?.filterSessions) throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u7B5B\u9009\u670D\u52A1\u4E0D\u53EF\u7528", 503);
   const matches = [];
-  for (const id of sources) {
-    const records = await native.filterSessions([...sessionFilters, { kind: "id", values: [id] }], signal);
+  for (const id2 of sources) {
+    const records = await native.filterSessions([...sessionFilters, { kind: "id", values: [id2] }], signal);
     check2();
-    if (!records.some((record2) => record2.header.id === id)) continue;
+    if (!records.some((record2) => record2.header.id === id2)) continue;
     const result = JSON.parse(
-      await searchNativeHandoff(host, history, scope, caller, id, query, eventFilters, maxResults, signal)
+      await searchNativeHandoff(host, history, scope, caller, id2, query, eventFilters, maxResults, signal)
     );
     check2();
     if (result.items.length || result.partial) matches.push(result);
@@ -26036,8 +26148,8 @@ var HotMemory = class {
     );
     return { ...persona, memories };
   }
-  entry(caller, id) {
-    const { state, persona } = this.identity(caller), entry = persona.memories.find((row) => row.id === validId(id));
+  entry(caller, id2) {
+    const { state, persona } = this.identity(caller), entry = persona.memories.find((row) => row.id === validId(id2));
     if (!entry || entry.project !== null && entry.project !== caller.project)
       throw new MemoryError("\u6761\u76EE\u4E0D\u5C5E\u4E8E\u5F53\u524D\u4EBA\u683C\u4E0E\u9879\u76EE\u7684\u53EF\u89C1\u7EA6\u5B9A", 403);
     return { state, persona, entry, target: this.target(persona.id, entry) };
@@ -26219,7 +26331,7 @@ function apply(ctx) {
   const resourceAccess = new PersonaResourceAccess(
     store,
     identity,
-    (id) => service(ctx, "agents")?.get(id),
+    (id2) => service(ctx, "agents")?.get(id2),
     (child, parent) => service(ctx, "agents")?.isOwnedBy?.(child.session.id, parent) === true
   );
   ctx.effect(() => installPersonaResourceAccess(ctx, resourceAccess), "memory: persona resource access");
@@ -26387,7 +26499,7 @@ function apply(ctx) {
                 return delegatedKnowledgeCaller(
                   caller,
                   agents?.currentInitiator?.(),
-                  (id) => agents?.get(id),
+                  (id2) => agents?.get(id2),
                   store
                 );
               }
@@ -26411,10 +26523,10 @@ function apply(ctx) {
           const agents = service(ctx, "agents");
           const instance = delegatedContract(
             agent,
-            (id) => agents?.get(id),
-            (id) => {
-              const binding = contracts.get(id);
-              return binding && (id !== agent.session.id || binding.turn === currentTurn(agent)) ? binding.instance : void 0;
+            (id2) => agents?.get(id2),
+            (id2) => {
+              const binding = contracts.get(id2);
+              return binding && (id2 !== agent.session.id || binding.turn === currentTurn(agent)) ? binding.instance : void 0;
             },
             store
           );
@@ -26450,8 +26562,8 @@ function apply(ctx) {
   ctx.effect(() => () => segments.dispose(), "memory: background segments");
   ctx.effect(() => store.subscribe(() => segments.changed()), "memory: segment identity invalidation");
   ctx.provide("pxContextSegments", {
-    snapshot: (id) => segments.snapshot(id),
-    cancel: (id) => segments.cancel(id)
+    snapshot: (id2) => segments.snapshot(id2),
+    cancel: (id2) => segments.cancel(id2)
   });
   ctx.inject(
     ["jobs"],
@@ -26484,7 +26596,7 @@ function apply(ctx) {
   ctx.inject(["agents"], (host) => {
     try {
       const live = new Set(host.agents.list().map((agent) => agent.id));
-      store.releaseInternalBindings(Object.keys(store.read().bindings).filter((id) => !live.has(id)));
+      store.releaseInternalBindings(Object.keys(store.read().bindings).filter((id2) => !live.has(id2)));
     } catch (error62) {
       ctx.logger?.warn("\u5185\u90E8\u7ECF\u9A8C\u8EAB\u4EFD\u6682\u672A\u56DE\u6536\uFF1A%s", String(error62));
     }
@@ -26591,8 +26703,8 @@ ${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
             sessionId: run.agent.session.id,
             segments: segments.modelSnapshot(run.agent.session.id)
           });
-        const id = run.agent.session.id, coverage = localContext ? { currentSessionOnly: true } : await history.refresh(ctx, id, run.signal);
-        const result = args.action === "read" ? await history.read(ctx, id, validId(args.sessionId), args.seq, args.offset ?? 0, run.signal) : args.action === "sessions" ? history.list(id, args.projectOnly ? run.agent.session.header.cwd : void 0) : args.action === "search" ? history.search(id, args.query ?? "", {
+        const id2 = run.agent.session.id, coverage = localContext ? { currentSessionOnly: true } : await history.refresh(ctx, id2, run.signal);
+        const result = args.action === "read" ? await history.read(ctx, id2, validId(args.sessionId), args.seq, args.offset ?? 0, run.signal) : args.action === "sessions" ? history.list(id2, args.projectOnly ? run.agent.session.header.cwd : void 0) : args.action === "search" ? history.search(id2, args.query ?? "", {
           project: args.projectOnly ? run.agent.session.header.cwd : void 0,
           targetSessionId: args.sessionId
         }) : null;
@@ -26692,11 +26804,11 @@ ${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
           try {
             if (req.method !== "GET" && req.method !== "POST")
               return send(405, { error: "\u8BF7\u4F7F\u7528 GET \u6216 POST" });
-            const id = validId(new URL(req.url, "http://127.0.0.1").searchParams.get("sessionId"));
-            if (isInternalSession(id)) throw new MemoryError("\u5185\u90E8\u540E\u53F0\u8BB0\u5F55\u8BF7\u4ECE\u5BF9\u5E94\u529F\u80FD\u9875\u67E5\u770B", 409);
-            const { meta: meta3, events = [] } = await inspectMemorySession(host, store, id);
+            const id2 = validId(new URL(req.url, "http://127.0.0.1").searchParams.get("sessionId"));
+            if (isInternalSession(id2)) throw new MemoryError("\u5185\u90E8\u540E\u53F0\u8BB0\u5F55\u8BF7\u4ECE\u5BF9\u5E94\u529F\u80FD\u9875\u67E5\u770B", 409);
+            const { meta: meta3, events = [] } = await inspectMemorySession(host, store, id2);
             const project = projectKey(meta3.cwd);
-            store.bind(id, {
+            store.bind(id2, {
               parent: meta3.parentSession,
               locked: !!meta3.parentSession || hasStarted(events)
             });
@@ -26719,7 +26831,7 @@ ${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
               if (!args || typeof args !== "object" || Array.isArray(args))
                 throw new MemoryError("\u64CD\u4F5C\u5185\u5BB9\u65E0\u6548");
               if (args.type === "new-session") {
-                const createdSessionId = await createPersonaSession(host, store, id, args);
+                const createdSessionId = await createPersonaSession(host, store, id2, args);
                 return send(200, { createdSessionId });
               }
               if (args.type === "new-model-session") {
@@ -26732,11 +26844,11 @@ ${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
                 };
                 const createdSessionId = await modelContinuation(
                   args.requestId,
-                  JSON.stringify([id, route]),
+                  JSON.stringify([id2, route]),
                   async () => {
                     await host.get("llm").resolveCallConfig(route);
-                    const persona2 = store.persona(store.read(), id);
-                    const createdSessionId2 = await createPersonaSession(host, store, id, {
+                    const persona2 = store.persona(store.read(), id2);
+                    const createdSessionId2 = await createPersonaSession(host, store, id2, {
                       ...args,
                       personaId: persona2.id,
                       handoff: true
@@ -26746,7 +26858,7 @@ ${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
                     if (!contextState) throw new MemoryError("\u6A21\u578B\u6863\u4F4D\u670D\u52A1\u672A\u5C31\u7EEA", 503);
                     const marker = await contextState.continuation(createdSessionId2);
                     if (marker) {
-                      if (marker.provider !== route.provider || marker.model !== route.model || marker.reasoningEffort !== route.reasoningEffort || marker.sourceSessionId !== id)
+                      if (marker.provider !== route.provider || marker.model !== route.model || marker.reasoningEffort !== route.reasoningEffort || marker.sourceSessionId !== id2)
                         throw new MemoryError("\u8BE5\u63A5\u7EED\u8BF7\u6C42\u5DF2\u7528\u4E8E\u5176\u4ED6\u6A21\u578B", 409);
                       return createdSessionId2;
                     }
@@ -26754,7 +26866,7 @@ ${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
                       throw new MemoryError("\u63A5\u7EED\u4F1A\u8BDD\u5DF2\u7ECF\u5F00\u59CB\uFF0C\u8BF7\u5728\u65B0\u4F1A\u8BDD\u4E2D\u9009\u62E9\u6A21\u578B", 409);
                     await host.sessionController.selectModel({ sessionId: createdSessionId2, ...route });
                     await contextState.rememberContinuation(createdSessionId2, {
-                      sourceSessionId: id,
+                      sourceSessionId: id2,
                       ...route
                     });
                     return createdSessionId2;
@@ -26765,7 +26877,7 @@ ${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
               if (args.type === "knowledge") {
                 const result = await knowledgeAction(
                   knowledge,
-                  { sessionId: id, project: meta3.cwd, actor: "human" },
+                  { sessionId: id2, project: meta3.cwd, actor: "human" },
                   args.input
                 );
                 return send(200, result);
@@ -26774,12 +26886,12 @@ ${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
                 const input2 = args.input;
                 if (!input2 || !["status", "configure", "stop", "retry", "accept", "dismiss"].includes(input2.action))
                   throw new MemoryError("\u540E\u53F0\u6574\u7406\u64CD\u4F5C\u65E0\u6548");
-                if (input2.action === "configure") segments.configure(id, input2.revision, input2.enabled);
-                if (input2.action === "stop") segments.cancel(id);
-                if (input2.action === "retry") segments.requestRetry(id);
+                if (input2.action === "configure") segments.configure(id2, input2.revision, input2.enabled);
+                if (input2.action === "stop") segments.cancel(id2);
+                if (input2.action === "retry") segments.requestRetry(id2);
                 if (input2.action === "accept" || input2.action === "dismiss")
-                  await segments.decideMemory(id, validId(input2.id), input2.index, input2.action, meta3.cwd);
-                return send(200, segments.snapshot(id));
+                  await segments.decideMemory(id2, validId(input2.id), input2.index, input2.action, meta3.cwd);
+                return send(200, segments.snapshot(id2));
               }
               if (args.type === "conversation-memory") {
                 if (!["catalog", "search", "read", "feedback", "correct", "archive"].includes(
@@ -26788,7 +26900,7 @@ ${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
                   throw new MemoryError("\u8BF7\u4F7F\u7528\u804A\u5929\u8BB0\u5FC6\u7684\u53EA\u8BFB\u64CD\u4F5C");
                 return send(
                   200,
-                  await channelNotes.execute(id, args.input, new AbortController().signal, "human")
+                  await channelNotes.execute(id2, args.input, new AbortController().signal, "human")
                 );
               }
               if (args.type === "skills")
@@ -26796,7 +26908,7 @@ ${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
                   200,
                   await skillAction(
                     host,
-                    { sessionId: id, project: meta3.cwd, actor: "human" },
+                    { sessionId: id2, project: meta3.cwd, actor: "human" },
                     root,
                     args.input
                   )
@@ -26804,7 +26916,7 @@ ${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
               if (args.type === "experience")
                 return send(
                   200,
-                  await experience.request({ sessionId: id, project: meta3.cwd, actor: "human" }, args.input)
+                  await experience.request({ sessionId: id2, project: meta3.cwd, actor: "human" }, args.input)
                 );
               if (args.type === "search-history" || args.type === "read-history") {
                 if (args.projectOnly !== void 0 && typeof args.projectOnly !== "boolean")
@@ -26813,34 +26925,34 @@ ${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
                   throw new MemoryError("\u641C\u7D22\u5185\u5BB9\u5FC5\u987B\u662F\u6587\u5B57");
                 if (args.projectOnly && !meta3.cwd)
                   throw new MemoryError("\u5F53\u524D\u4F1A\u8BDD\u6CA1\u6709\u9879\u76EE\u76EE\u5F55\uFF0C\u8BF7\u53D6\u6D88\u672C\u9879\u76EE\u9650\u5236");
-                const coverage = await history.refresh(host, id);
+                const coverage = await history.refresh(host, id2);
                 const result = args.type === "read-history" ? await history.read(
                   host,
-                  id,
+                  id2,
                   validId(args.targetSessionId),
                   args.seq,
                   args.offset ?? 0
-                ) : args.query?.trim() || args.targetSessionId ? history.search(id, args.query ?? "", {
+                ) : args.query?.trim() || args.targetSessionId ? history.search(id2, args.query ?? "", {
                   project: args.projectOnly ? meta3.cwd : void 0,
                   targetSessionId: args.targetSessionId
-                }) : history.list(id, args.projectOnly ? meta3.cwd : void 0);
+                }) : history.list(id2, args.projectOnly ? meta3.cwd : void 0);
                 return send(200, { coverage, result });
               }
-              if (["select", "adopt-version"].includes(args.type) && service(host, "agents")?.get(id)?.status === "running")
+              if (["select", "adopt-version"].includes(args.type) && service(host, "agents")?.get(id2)?.status === "running")
                 throw new MemoryError("\u8BF7\u7B49\u5F53\u524D\u8F6E\u7ED3\u675F\u518D\u66F4\u6539\u914D\u7F6E", 409);
               if (args.type === "memory-feedback")
-                await hot.judge({ sessionId: id, project, actor: "human" }, args);
+                await hot.judge({ sessionId: id2, project, actor: "human" }, args);
               else if (args.type === "save")
-                await hot.save({ sessionId: id, project, actor: "human" }, args.revision, args);
-              else store.action(args.revision, args, id, project);
+                await hot.save({ sessionId: id2, project, actor: "human" }, args.revision, args);
+              else store.action(args.revision, args, id2, project);
             }
-            const state = store.read(), persona = hot.project(store.persona(state, id), "human");
+            const state = store.read(), persona = hot.project(store.persona(state, id2), "human");
             send(200, {
               revision: state.revision,
               personas: state.personas.map((p) => ({ id: p.id, name: p.name, archived: p.archived })),
               persona,
               template: state.personas.find((p) => p.id === persona.id),
-              binding: state.bindings[id],
+              binding: state.bindings[id2],
               project
             });
           } catch (error62) {

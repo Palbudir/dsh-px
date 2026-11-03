@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto'
 import { nativeReader } from './history'
 import { MemoryError } from './store'
 import * as z from 'zod/mini'
+import { conversationalSource } from '../../shared/channel-source'
+import { personaMailOrigin } from '../../shared/persona-mail-policy'
 
 /** The native generic turn fold forgets the previous step end once a new step starts. Keep that exact stable cursor. */
 export function registerSegmentBoundary(host: any): () => void {
@@ -60,6 +62,19 @@ export function segmentEvidence(source: SegmentSource): unknown[] {
     seq: source.seqs[i],
     role: message.role,
     source: message.source,
+    authority: personaMailOrigin(message.source)
+      ? 'peer-advice-only'
+      : message.role === 'assistant'
+        ? 'assistant-statement'
+        : message.role === 'user'
+          ? conversationalSource(message.source)
+            ? message.source?.kind === 'user'
+              ? 'human-message'
+              : 'channel-participant-message'
+            : 'runtime-context-not-user-authorization'
+          : message.role === 'tool'
+            ? 'tool-return-requires-source-verification'
+            : 'context',
     content: visibleBlocks(message.content)
   }))
 }

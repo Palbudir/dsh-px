@@ -3,7 +3,7 @@ import { NativePersonaMail } from './persona-mail'
 import { NativeChannelSettings, ChannelError } from './channel-settings'
 import { readJsonBody } from './http'
 import { rejectUnauthenticatedRequest } from '../../shared/request-trust'
-import { parseMailRelations } from '../../shared/persona-mail-policy'
+import { parseMailRelations, PERSONA_MAIL_TOOLS } from '../../shared/persona-mail-policy'
 
 /** Human settings and model messaging are distinct entry points; no tool can grant a relationship. */
 export function registerPersonaMail(ctx: any): void {
@@ -44,7 +44,7 @@ export function registerPersonaMail(ctx: any): void {
           host.pxAudiencePolicies.register('persona-mail', {
             section: 'px-persona-mail',
             check: (exec: any) =>
-              exec.name === 'persona_reply' ? undefined : '人格来信不授予本机执行或私有信息权限'
+              PERSONA_MAIL_TOOLS.includes(exec.name) ? undefined : '人格来信不授予本机执行或私有信息权限'
           }),
         'persona-mail: receiver execution boundary'
       )

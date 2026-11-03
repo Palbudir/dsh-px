@@ -4,6 +4,9 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
+import { createHash } from 'node:crypto'
+import { DatabaseSync } from 'node:sqlite'
+import { prepareFeedback } from '../packages/dsh-px-memory/src/memory-feedback'
 import { MemoryStore } from '../packages/dsh-px-memory/src/store'
 import { TurnIdentity } from '../packages/dsh-px-memory/src/identity'
 import { HistoryIndex, historyRecord, type HistoryEvent } from '../packages/dsh-px-memory/src/history'
@@ -81,6 +84,173 @@ const user = (seq: number, text: string) =>
   event(seq, 'user/message', { source: { kind: 'user' }, content: [{ type: 'text', text }] })
 const reply = (seq: number, text: string) =>
   event(seq, 'assistant/message', { message: { content: [{ type: 'text', text }] } })
+
+test('peer history is searchable only in its audience and cache upgrades preserve native evidence hashes', async (t) => {
+  const f = fixture(t),
+    channel = {
+      provider: 'persona-mail',
+      accountId: 'sender',
+      conversationId: 'a'.repeat(64),
+      access: 'public' as const,
+      publicInstructions: '',
+      workspace: 'C:/project'
+    }
+  for (const id of ['old-peer', 'new-peer']) f.store.bind(id, { channel, locked: true })
+  f.store.bind('other-audience', { channel: { ...channel, conversationId: 'b'.repeat(64) }, locked: true })
+  f.store.bind('private', { locked: true })
+  const source = {
+    kind: 'plugin:dsh-px-persona-mail',
+    version: 1,
+    mailId: 'mail-test',
+    senderPersonaId: 'sender',
+    recipientPersonaId: 'default',
+    sourceSessionId: 'private',
+    sourceSeq: 3,
+    conversationId: channel.conversationId
+  }
+  const original = event(0, 'user/message', { source, content: [{ type: 'text', text: 'PEER_RECALL_731' }] })
+  f.histories.set('old-peer', [original])
+  f.histories.set('new-peer', [])
+  f.histories.set('private', [user(0, 'PRIVATE_NEVER_SHARED_831')])
+  f.histories.set('other-audience', [user(0, 'OTHER_AUDIENCE_931')])
+  const index = f.index()
+  await index.refresh(f.host, 'new-peer')
+  const row: any = await index.read(f.host, 'new-peer', 'old-peer', 0)
+  assert.equal(row.kind, 'peer')
+  assert.equal(row.authority, 'peer-advice-only')
+  assert.equal(row.eventHash, createHash('sha256').update(JSON.stringify(original)).digest('hex'))
+  await assert.rejects(
+    prepareFeedback(
+      { kind: 'useful', reason: 'peer said success', evidence: { sessionId: 'old-peer', seq: 0 } },
+      'model',
+      async () => row
+    ),
+    /不是独立反馈/
+  )
+  assert.equal((index.search('new-peer', 'PRIVATE_NEVER_SHARED_831') as any[]).length, 0)
+  await assert.rejects(index.read(f.host, 'new-peer', 'private', 0), /范围/)
+  await assert.rejects(index.read(f.host, 'new-peer', 'other-audience', 0), /范围/)
+  const cache = new DatabaseSync(join(f.dir, 'history-0.sqlite'))
+  cache.prepare('DELETE FROM records WHERE sid=?').run('old-peer')
+  cache.prepare('DELETE FROM search WHERE sid=?').run('old-peer')
+  cache.prepare('UPDATE sessions SET lasthash=? WHERE id=?').run(row.eventHash, 'old-peer')
+  cache.close()
+  await index.refresh(f.host, 'new-peer')
+  const found = index.search('new-peer', 'PEER_RECALL_731') as any[]
+  assert.equal(found.length, 1)
+  assert.equal(found[0].kind, 'peer')
+})
+
+test('peer replies and coordination outputs cannot strengthen memory as successful independent work', async () => {
+  for (const tool of [
+    'persona_reply',
+    'persona_mail',
+    'job_output',
+    'job_list',
+    'task_wait',
+    'computer_browser_resource'
+  ]) {
+    const row = historyRecord(
+      event(1, 'tool/result', {
+        message: {
+          role: 'tool',
+          toolCallId: 'call1',
+          isError: false,
+          content: [{ type: 'text', text: 'success' }]
+        }
+      }),
+      tool
+    )!
+    assert.ok(['peer-reply', 'coordination'].includes(row.kind), tool)
+    await assert.rejects(
+      prepareFeedback(
+        { kind: 'useful', reason: 'returned success', evidence: { sessionId: 's', seq: 1 } },
+        'model',
+        async () => row
+      ),
+      /不是独立反馈/
+    )
+  }
+})
+
+test('verified native execution output remains feedback evidence but repeated reads count only once', async (t) => {
+  const f = fixture(t)
+  f.store.bind('s', { locked: true })
+  const registration = {
+    jobId: 'pwsh-job1',
+    owner: 's',
+    kind: 'pwsh',
+    label: 'real verification',
+    startedAt: 1
+  }
+  f.histories.set('s', [
+    event(0, 'job/registered', registration),
+    event(1, 'job/settled', { ...registration, status: 'completed', producerReported: true, finishedAt: 2 }),
+    event(2, 'tool/call', {
+      callId: 'read1',
+      name: 'job_output',
+      arguments: JSON.stringify({ job_id: registration.jobId })
+    }),
+    event(3, 'tool/result', {
+      message: {
+        role: 'tool',
+        toolCallId: 'read1',
+        isError: false,
+        content: [{ type: 'text', text: 'TEST PASSED' }]
+      }
+    }),
+    event(4, 'tool/call', {
+      callId: 'read2',
+      name: 'job_output',
+      arguments: JSON.stringify({ job_id: registration.jobId })
+    }),
+    event(5, 'tool/result', {
+      message: {
+        role: 'tool',
+        toolCallId: 'read2',
+        isError: false,
+        content: [{ type: 'text', text: 'No new output. [completed]' }]
+      }
+    })
+  ])
+  const index = f.index()
+  await index.refresh(f.host, 's')
+  const read = (_: string, seq: number) => index.read(f.host, 's', 's', seq)
+  const original: any = await read('s', 3)
+  assert.equal(original.kind, 'tool-result')
+  assert.equal(original.failed, false)
+  assert.equal(original.nativeJob.registrationSeq, 0)
+  assert.equal(original.nativeJob.settlementSeq, 1)
+  const first = await prepareFeedback(
+    { kind: 'useful', reason: 'applied and verified', evidence: { sessionId: 's', seq: 3 } },
+    'model',
+    read
+  )
+  const second = await prepareFeedback(
+    { kind: 'useful', reason: 'read again', evidence: { sessionId: 's', seq: 5 } },
+    'model',
+    read
+  )
+  assert.equal(first.origin, second.origin)
+  f.histories.get('s')![1].data.status = 'failed'
+  const failed: any = await read('s', 3)
+  assert.equal(failed.failed, true)
+  await assert.rejects(
+    prepareFeedback(
+      { kind: 'useful', reason: 'false success', evidence: { sessionId: 's', seq: 3 } },
+      'model',
+      read
+    ),
+    /成功回执/
+  )
+  f.histories.get('s')![0].data.kind = 'px-persona-mail'
+  f.histories.get('s')![1].data.kind = 'px-persona-mail'
+  assert.equal(((await read('s', 3)) as any).kind, 'coordination')
+  f.histories.get('s')![0].data.kind = 'pwsh'
+  f.histories.get('s')![1].data.kind = 'pwsh'
+  f.histories.get('s')![0].data.owner = 'someone-else'
+  assert.equal(((await read('s', 3)) as any).kind, 'coordination')
+})
 
 test('experience task descendants retain source identity but do not pollute human history retrieval', async (t) => {
   const f = fixture(t)

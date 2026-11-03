@@ -62,7 +62,10 @@ export async function prepareFeedback(
       sessionId: ref.sessionId,
       seq: ref.seq,
       kind: record.kind,
-      hash: feedbackHash([record.kind, record.tool ?? null, record.text.trim()])
+      hash:
+        record.nativeJob?.source === 'native-job-events'
+          ? feedbackHash(['native-job', record.nativeJob.owner, record.nativeJob.jobId])
+          : feedbackHash([record.kind, record.tool ?? null, record.text.trim()])
     }
   } else if (actor === 'model')
     throw new MemoryError('模型应用反馈必须引用原始事件，不能通过重复检索自我加权', 403)

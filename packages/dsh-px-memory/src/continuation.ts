@@ -44,7 +44,11 @@ export function handoffFrom(events: readonly HistoryEvent[], sessionId: string):
     if (['tool/call', 'tool/ptc-dispatch-start'].includes(e.type) && typeof d.name === 'string')
       calls.set(d.callId ?? d.subCallId, d.name)
     const row = historyRecord(e, (id: string) => calls.get(id))
-    if (row && ['user', 'assistant', 'ledger', 'native-state'].includes(row.kind)) rows.push(row)
+    if (
+      row &&
+      ['user', 'assistant', 'ledger', 'native-state', 'peer', 'peer-reply', 'coordination'].includes(row.kind)
+    )
+      rows.push(row)
   }
   const last = (kind: string, n: number) =>
     rows
@@ -63,7 +67,9 @@ export function handoffFrom(events: readonly HistoryEvent[], sessionId: string):
     latestNativeStates: last('native-state', 3),
     ledger: last('ledger', 1),
     requests: last('user', 2),
-    reply: last('assistant', 1)
+    reply: last('assistant', 1),
+    peerAdvice: [...last('peer', 1), ...last('peer-reply', 1)],
+    coordinationReceipts: last('coordination', 2)
   }
   let summary = JSON.stringify(excerpt)
   while (summary.length > 12000) {
@@ -71,7 +77,9 @@ export function handoffFrom(events: readonly HistoryEvent[], sessionId: string):
       ...excerpt.latestNativeStates,
       ...excerpt.ledger,
       ...excerpt.requests,
-      ...excerpt.reply
+      ...excerpt.reply,
+      ...excerpt.peerAdvice,
+      ...excerpt.coordinationReceipts
     ].sort((a, b) => b.text.length - a.text.length)[0]
     largest.text = largest.text.slice(0, Math.floor(largest.text.length / 2))
     largest.truncated = true

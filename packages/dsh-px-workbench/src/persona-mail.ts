@@ -7,12 +7,14 @@ import {
   mailDigest,
   selectMailRelation,
   PERSONA_MAIL_INSTRUCTIONS,
+  PERSONA_MAIL_TOOLS,
   type PersonaMailRelation,
   type PersonaMailSender
 } from '../../shared/persona-mail-policy'
 import { renderPersonaExpression } from '../../shared/persona-expression'
 import { publicInputBoundary } from '../../shared/public-input'
 import { nativeModelSelection } from '../../shared/native-model-selection'
+import { CONVERSATION_MEMORY_DEFINITIONS } from './conversation-memory-tools'
 
 const get = (ctx: any, key: string) => (ctx.get ? ctx.get(key) : ctx[key])
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error))
@@ -275,8 +277,11 @@ export class NativePersonaMail {
             ctx.tools.guard((exec: any) => {
               try {
                 check()
-                if (exec.agent.session.id !== envelope.receiverSessionId || exec.name !== 'persona_reply')
-                  return '本次人格交流只允许提交回复'
+                if (
+                  exec.agent.session.id !== envelope.receiverSessionId ||
+                  !PERSONA_MAIL_TOOLS.includes(exec.name)
+                )
+                  return '本次人格交流只允许当前范围的历史、交流记忆、共享知识与回复'
               } catch (error) {
                 return message(error)
               }
@@ -305,13 +310,13 @@ export class NativePersonaMail {
               'system-prompt/assemble',
               async (_: any, context: any, next: any) => {
                 check()
-                if (++requests > 4) throw Error('人格通信达到请求次数限制')
+                if (++requests > 8) throw Error('人格通信达到请求次数限制')
                 const assembly = await next()
                 boundary(context.agent.ctx, context.agent)
                 return {
                   ...assembly,
                   contexts: [],
-                  tools: assembly.tools.filter((tool: any) => tool.name === 'persona_reply')
+                  tools: assembly.tools.filter((tool: any) => PERSONA_MAIL_TOOLS.includes(tool.name))
                 }
               },
               { prepend: true }
@@ -340,9 +345,42 @@ export class NativePersonaMail {
                 )
                   throw Error('人格回复来源或内容无效')
                 this.journal.reply(envelope.id, args.text)
-                return '回复已记录，请结束本次交流。'
+                return JSON.stringify({
+                  mailId: envelope.id,
+                  reply: args.text,
+                  authority: 'peer-advice-only',
+                  instruction: '回复已记录，请结束本次交流。'
+                })
               }
             })
+            for (const definition of CONVERSATION_MEMORY_DEFINITIONS)
+              ctx.tools.register({
+                ...definition,
+                parameters: {
+                  type: 'object',
+                  additionalProperties: false,
+                  properties: definition.properties,
+                  required: definition.required
+                },
+                output: {
+                  schema: { type: 'string' },
+                  render: (_: unknown, value: string) => [{ type: 'text', text: value }]
+                },
+                execute: async (args: any, exec: any) => {
+                  check()
+                  exec.signal.throwIfAborted()
+                  if (exec.agent.session.id !== envelope.receiverSessionId)
+                    throw Error('人格通信的接收会话已变化')
+                  const signal = AbortSignal.any([exec.signal, stop.signal])
+                  const result =
+                    definition.name === 'channel_memory'
+                      ? await memory.conversationNotes(envelope.receiverSessionId, args, signal)
+                      : await memory.sharedKnowledge(envelope.receiverSessionId, cwd, args)
+                  check()
+                  signal.throwIfAborted()
+                  return JSON.stringify(result)
+                }
+              })
             return { commit: check }
           }
         })

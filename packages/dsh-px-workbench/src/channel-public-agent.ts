@@ -1,3 +1,4 @@
+import { CONVERSATION_MEMORY_DEFINITIONS } from './conversation-memory-tools'
 import { CHANNEL_CONVERSATION_TOOLS } from '../../shared/channel-source'
 import { renderPersonaExpression } from '../../shared/persona-expression'
 import { publicInputBoundary } from '../../shared/public-input'
@@ -83,47 +84,7 @@ export function installPublicChannelAgent(ctx: any): void {
         },
         required: ['scope']
       },
-      {
-        name: 'channel_memory',
-        description: '读取和保存当前人格在本聊天的有来源经历；不读取其他人格或其他聊天。',
-        properties: {
-          action: { type: 'string', enum: ['catalog', 'search', 'read', 'save', 'feedback'] },
-          query: { type: 'string', maxLength: 256 },
-          id: { type: 'string', maxLength: 300 },
-          topic: { type: 'string', maxLength: 90 },
-          text: { type: 'string', maxLength: 4000 },
-          revision: { type: 'string', maxLength: 128 },
-          offset: { type: 'integer', minimum: 0 },
-          cursor: { type: 'string', maxLength: 4096 },
-          documentRevision: { type: 'integer' },
-          kind: { type: 'string', enum: ['confirmed', 'useful', 'not-applicable', 'disputed'] },
-          reason: { type: 'string', maxLength: 1000 },
-          evidence: {
-            type: 'array',
-            maxItems: 6,
-            items: {
-              type: 'object',
-              additionalProperties: false,
-              required: ['sessionId', 'seq'],
-              properties: {
-                sessionId: { type: 'string', maxLength: 200 },
-                seq: { type: 'integer', minimum: 0 }
-              }
-            }
-          }
-        },
-        required: ['action']
-      },
-      {
-        name: 'channel_knowledge',
-        description: '只读本聊天项目或全局共享知识。',
-        properties: {
-          scope: { type: 'string', enum: ['project', 'global'] },
-          query: { type: 'string', maxLength: 256 },
-          id: { type: 'string', maxLength: 300 }
-        },
-        required: ['scope']
-      }
+      ...CONVERSATION_MEMORY_DEFINITIONS
     ])
       yield ctx.tools.register({
         ...definition,

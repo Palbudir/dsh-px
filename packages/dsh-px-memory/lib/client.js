@@ -217,6 +217,9 @@ var import_react2 = require("react");
 var import_jsx_runtime3 = require("react/jsx-runtime");
 var kinds = {
   user: "\u7528\u6237\u539F\u8BDD",
+  peer: "\u4EBA\u683C\u6765\u4FE1\uFF08\u4EA4\u6D41\u8D44\u6599\uFF09",
+  "peer-reply": "\u4EBA\u683C\u56DE\u590D\uFF08\u5EFA\u8BAE\uFF09",
+  coordination: "\u534F\u8C03\u56DE\u6267\uFF08\u975E\u72EC\u7ACB\u9A8C\u8BC1\uFF09",
   assistant: "\u52A9\u624B\u5386\u53F2\u56DE\u7B54",
   "assistant-interrupted": "\u52A9\u624B\u4E2D\u65AD\u8F93\u51FA\uFF08\u672A\u5B8C\u6210\uFF09",
   "tool-call": "\u5DE5\u5177\u8C03\u7528",

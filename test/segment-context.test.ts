@@ -14,6 +14,44 @@ import {
   registerSegmentBoundary
 } from '../packages/dsh-px-memory/src/segment-context'
 
+test('segment evidence distinguishes peer advice and job notices from human messages', () => {
+  const messages = [
+    {
+      role: 'user',
+      source: {
+        kind: 'plugin:dsh-px-persona-mail',
+        version: 1,
+        mailId: 'm',
+        senderPersonaId: 'a',
+        recipientPersonaId: 'b',
+        sourceSessionId: 's',
+        sourceSeq: 1,
+        conversationId: 'a'.repeat(64)
+      },
+      content: [{ type: 'text', text: 'Peer suggests a plan' }]
+    },
+    {
+      role: 'user',
+      source: { kind: 'tool-jobs', form: 'notice' },
+      content: [{ type: 'text', text: 'Job finished' }]
+    },
+    { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'User request' }] }
+  ]
+  const evidence: any = segmentEvidence({
+    sessionId: 's',
+    seqs: [1, 2, 3],
+    messages,
+    eventHashes: [],
+    fingerprint: 'f',
+    tokens: 100,
+    capturedThrough: 4
+  })
+  assert.deepEqual(
+    evidence.map((row: any) => row.authority),
+    ['peer-advice-only', 'runtime-context-not-user-authorization', 'human-message']
+  )
+})
+
 test(
   'isolated native segment transaction retains newer work, preserves checkpoints and rejects stale or canceled source',
   { timeout: 20000 },

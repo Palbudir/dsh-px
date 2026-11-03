@@ -203,7 +203,12 @@ export class ChannelNotes {
       const record = await this.readEvidence(sessionId, ref.sessionId, ref.seq, signal)
       // Recalled notes are not independent corroboration. Keep links to the actual native event.
       if (
-        !['user', 'assistant', 'tool-result'].includes(record.kind) ||
+        ![
+          'user',
+          'assistant',
+          'tool-result',
+          ...(scope.provider === 'persona-mail' ? ['peer', 'peer-reply'] : [])
+        ].includes(record.kind) ||
         (record.kind === 'tool-result' && (scope.provider !== 'qq' || record.tool !== 'qq_context'))
       )
         throw new MemoryError('请引用原始交流或本渠道已验证的历史，不能把记忆副本作为新依据', 403)
@@ -211,6 +216,7 @@ export class ChannelNotes {
         sessionId: ref.sessionId,
         seq: ref.seq,
         kind: record.kind,
+        ...(['peer', 'peer-reply'].includes(record.kind) ? { authority: 'peer-advice-only' } : {}),
         time: Number.isFinite(record.time) ? record.time : null,
         excerpt: String(record.text).slice(0, 1500)
       })
