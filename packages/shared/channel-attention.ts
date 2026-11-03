@@ -31,7 +31,7 @@ export function decideChannelAttention(
     !['direct', 'group'].includes(message.kind) ||
     typeof message.conversationId !== 'string' ||
     !message.conversationId.trim() ||
-    message.conversationId.length > 200 ||
+    message.conversationId.length > 512 ||
     /[\r\n\0]/.test(message.conversationId)
   )
     throw new Error('渠道消息模式或聊天标识无效')

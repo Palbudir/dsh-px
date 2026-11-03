@@ -200,7 +200,7 @@ import { isAbsolute } from "node:path";
 
 // packages/shared/channel-attention.ts
 function decideChannelAttention(settings, message) {
-  if (!["focus", "normal", "notifications"].includes(settings.mode) || !["direct", "group"].includes(message.kind) || typeof message.conversationId !== "string" || !message.conversationId.trim() || message.conversationId.length > 200 || /[\r\n\0]/.test(message.conversationId))
+  if (!["focus", "normal", "notifications"].includes(settings.mode) || !["direct", "group"].includes(message.kind) || typeof message.conversationId !== "string" || !message.conversationId.trim() || message.conversationId.length > 512 || /[\r\n\0]/.test(message.conversationId))
     throw new Error("\u6E20\u9053\u6D88\u606F\u6A21\u5F0F\u6216\u804A\u5929\u6807\u8BC6\u65E0\u6548");
   if (message.self) return { content: "ignore", notify: false, reason: "self" };
   const direct = message.kind === "direct", muted = settings.mutedChats.includes(message.conversationId) && !(message.mentioned && settings.mentionOverridesMute), notify = !muted && (direct ? settings.notifyDirect : message.mentioned ? settings.notifyMentions : settings.notifyGroups);
