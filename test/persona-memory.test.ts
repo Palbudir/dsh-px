@@ -184,8 +184,9 @@ test('native prompt context fixes identity before first request and refreshes pr
     }
   })
   const publicAgent = { session: { id: 'public-channel' } }
-  assert.match(guards[0]({ agent: publicAgent, name: 'write' }), /没有本机执行/)
-  assert.match(guards[0]({ agent: publicAgent, name: 'qq_task' }), /没有私有任务授权/)
+  // This fixture loads memory alone: no channel producer has registered its execution policy.
+  assert.match(guards[0]({ agent: publicAgent, name: 'write' }), /执行策略未就绪/)
+  assert.match(guards[0]({ agent: publicAgent, name: 'qq_task' }), /执行策略未就绪/)
   const assemble = hooks.get('system-prompt/assemble')![0]
   await assert.rejects(
     assemble({}, { agent: publicAgent }, async () => ({ sections: [] })),

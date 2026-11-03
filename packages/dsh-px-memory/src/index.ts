@@ -1,10 +1,6 @@
 import { join } from 'node:path'
 import { ChannelNotes, type ChannelNoteInput } from './channel-notes'
-import {
-  QQ_CONVERSATION_TOOLS,
-  CHANNEL_CONVERSATION_TOOLS,
-  channelMessageOrigin
-} from '../../shared/channel-source'
+import { channelMessageOrigin } from '../../shared/channel-source'
 import {
   MemoryStore,
   MemoryError,
@@ -31,6 +27,7 @@ import { installKnowledgeToolRouting } from './knowledge-tools'
 import { delegatedContract, delegatedKnowledgeCaller } from './knowledge-delegation'
 import { ExperienceService } from './experience-service'
 import { runAnalysisTask } from './experience-task'
+import { audienceOf } from '../../shared/subject-context'
 import { inspectMemorySession } from './session-context'
 import { installPersonaSkillProviders } from './persona-skills'
 import { registerPersonaHub } from './persona-hub'
@@ -150,17 +147,11 @@ export function apply(ctx: any): void {
     async (_assembly: any, context: any, next: () => Promise<any>) => {
       const assembly = await next()
       const channel = bindingFor(context.agent)?.channel
+      const policies = service(ctx, 'pxAudiencePolicies'),
+        required = policies?.version === 1 && channel ? policies.section(channel.provider) : undefined
       if (
         publicSession(bindingFor(context.agent)) &&
-        !assembly.sections.some(
-          (section: any) =>
-            section.name ===
-            (channel?.provider === 'qq'
-              ? 'px-qq-public-persona'
-              : channel?.provider === 'feishu'
-                ? 'px-channel-public-persona'
-                : null)
-        )
+        (!required || !assembly.sections.some((section: any) => section.name === required))
       )
         throw new MemoryError('公共渠道会话的权限预设未就绪，请启用配套能力或新建普通会话', 409)
       return assembly
@@ -176,22 +167,9 @@ export function apply(ctx: any): void {
           if (historyDenial) return historyDenial
           const binding = bindingFor(exec.agent)
           if (!publicSession(binding)) return
-          if (binding!.channel?.provider === 'feishu') {
-            if (binding!.channel.task) return '此渠道的任务授权尚未就绪，未执行本机操作'
-            if (!CHANNEL_CONVERSATION_TOOLS.includes(exec.name))
-              return '公共渠道会话没有本机执行或私有信息权限'
-            return
-          }
-          if (binding!.channel?.provider !== 'qq') return '该公共渠道尚未提供经过验证的工具边界'
-          if (binding!.channel?.task) {
-            if (!service(host, 'pxQq')?.canRunGroupTask(exec.agent?.session.id))
-              return '群任务授权不可用，请检查 QQ 接入与授权成员'
-            return
-          }
-          if (!['qq_public_knowledge', 'qq_task', ...QQ_CONVERSATION_TOOLS].includes(exec.name))
-            return '公共 QQ 会话没有本机执行或私有信息权限'
-          if (exec.name === 'qq_task' && !service(host, 'pxQq')?.canDelegate(exec, binding!.channel))
-            return '当前 QQ 请求没有私有任务授权'
+          const policies = service(host, 'pxAudiencePolicies')
+          if (policies?.version !== 1) return '公共会话执行策略未就绪，未授予工具权限'
+          return policies.check(exec, binding)
         }),
       'memory: durable public channel boundary'
     )
@@ -290,6 +268,16 @@ export function apply(ctx: any): void {
         .read()
         .personas.filter((p) => !p.archived)
         .map((p) => ({ id: p.id, name: p.name, revision: p.revision, expression: p.expression })),
+    communicationAudiences: () => {
+      const entries = new Map<string, ReturnType<typeof audienceOf>>()
+      entries.set(JSON.stringify({ kind: 'personal' }), { kind: 'personal' })
+      for (const binding of Object.values(store.read().bindings)) {
+        if (binding.pending || binding.channel?.provider === 'persona-mail') continue
+        const audience = audienceOf(binding)
+        entries.set(JSON.stringify(audience), audience)
+      }
+      return [...entries.values()]
+    },
     channelBindings: (accountId: string, provider = 'qq') =>
       Object.entries(store.read().bindings)
         .filter(

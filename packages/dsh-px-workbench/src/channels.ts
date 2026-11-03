@@ -4,9 +4,24 @@ import { rejectUnauthenticatedRequest } from '../../shared/request-trust'
 import { readJsonBody } from './http'
 import { NativeChannelSettings, ChannelError, type ChannelAccount } from './channel-settings'
 import { FeishuChannel } from './feishu-channel'
+import { CHANNEL_CONVERSATION_TOOLS } from '../../shared/channel-source'
 
 /** Optional channel services never prevent the workbench's file/context/diagnostic services from loading. */
 export function registerChannels(ctx: any): void {
+  ctx.inject(['pxAudiencePolicies'], (host: any) =>
+    host.effect(
+      () =>
+        host.pxAudiencePolicies.register('feishu', {
+          section: 'px-channel-public-persona',
+          check: (exec: any, binding: any) => {
+            if (binding.channel.task) return '此渠道的任务授权尚未就绪，未执行本机操作'
+            if (!CHANNEL_CONVERSATION_TOOLS.includes(exec.name))
+              return '公共渠道会话没有本机执行或私有信息权限'
+          }
+        }),
+      'channels: public execution policy'
+    )
+  )
   const runtimes = new Map<string, FeishuChannel>(),
     failures = new Map<string, string>()
   let settings: NativeChannelSettings | undefined,
@@ -74,6 +89,7 @@ export function registerChannels(ctx: any): void {
               config: { prefix: 'Follow the configured persona and current conversation context.' }
             },
             { id: 'time-context', name: '@deepseek-ai/dsh-time-context' },
+            { id: 'persona-mail-jobs', name: '@deepseek-ai/dsh-tool-jobs' },
             {
               id: 'compaction',
               name: 'cordis:group',

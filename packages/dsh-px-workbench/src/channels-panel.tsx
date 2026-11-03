@@ -4,6 +4,7 @@ import { defaultChannelAttention } from '../../shared/channel-attention'
 import type { ChannelAccount, ChannelConfiguration } from './channel-settings'
 import type { FeishuChannel } from './feishu-channel'
 import type { createCapabilities } from '../../shared/client-capabilities'
+import { PersonaMailPanel } from './persona-mail-panel'
 
 export interface ChannelNavigation {
   openSession?: (id: string) => void | Promise<void>
@@ -303,6 +304,7 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
     <div className="px-ui" style={{ padding: 20, maxWidth: 1100, margin: 'auto' }}>
       <h2>渠道与活动</h2>
       <p>连接账号、选择接收人格，并核对消息与回复。账号凭据仍在原生插件中管理。</p>
+      <PersonaMailPanel />
       <div className="px-actions">
         <button disabled={busy} onClick={() => void run(() => refresh())}>
           刷新状态

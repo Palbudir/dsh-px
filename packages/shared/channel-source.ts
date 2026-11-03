@@ -79,6 +79,9 @@ export function channelMessageOrigin(source: any): ChannelMessageOrigin | undefi
   }
 }
 export const QQ_CONVERSATION_TOOLS: readonly string[] = [
+  'persona_mail',
+  'job_output',
+  'job_kill',
   'qq_context',
   'qq_expression',
   'qq_document',
@@ -87,6 +90,9 @@ export const QQ_CONVERSATION_TOOLS: readonly string[] = [
   'persona_history'
 ]
 export const CHANNEL_CONVERSATION_TOOLS: readonly string[] = [
+  'persona_mail',
+  'job_output',
+  'job_kill',
   'channel_reply',
   'channel_history',
   'channel_memory',

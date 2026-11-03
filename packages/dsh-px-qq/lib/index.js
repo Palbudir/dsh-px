@@ -91,6 +91,9 @@ function qqMessageOrigin(source) {
   } : void 0;
 }
 var QQ_CONVERSATION_TOOLS = [
+  "persona_mail",
+  "job_output",
+  "job_kill",
   "qq_context",
   "qq_expression",
   "qq_document",
@@ -4157,7 +4160,8 @@ async function apply(ctx, config = {}) {
       "connection",
       "webServer",
       "pxMemoryChannels",
-      "pxContextPolicy"
+      "pxContextPolicy",
+      "pxAudiencePolicies"
     ],
     (host) => activateHost(host)
   );
@@ -4168,6 +4172,23 @@ async function activateHost(ctx) {
   const settings = new NativeQqSettings(ctx.configEditor);
   const receipts = new QqReceipts(join2(home, "storages", name, "receipts.json"));
   let current;
+  ctx.effect(
+    () => ctx.pxAudiencePolicies.register("qq", {
+      section: "px-qq-public-persona",
+      check: (exec, binding) => {
+        if (binding.channel.task) {
+          if (!current?.canRunGroupTask(exec.agent?.session.id))
+            return "\u7FA4\u4EFB\u52A1\u6388\u6743\u4E0D\u53EF\u7528\uFF0C\u8BF7\u68C0\u67E5 QQ \u63A5\u5165\u4E0E\u6388\u6743\u6210\u5458";
+          return;
+        }
+        if (!["qq_public_knowledge", "qq_task", ...QQ_CONVERSATION_TOOLS].includes(exec.name))
+          return "\u516C\u5171 QQ \u4F1A\u8BDD\u6CA1\u6709\u672C\u673A\u6267\u884C\u6216\u79C1\u6709\u4FE1\u606F\u6743\u9650";
+        if (exec.name === "qq_task" && !current?.canDelegate(exec, binding.channel))
+          return "\u5F53\u524D QQ \u8BF7\u6C42\u6CA1\u6709\u79C1\u6709\u4EFB\u52A1\u6388\u6743";
+      }
+    }),
+    "qq: public execution policy"
+  );
   ctx.on("agent/created", ({ agent }) => {
     current?.created(agent);
   });
@@ -4214,6 +4235,7 @@ async function activateHost(ctx) {
           config: { prefix: "Follow the configured persona and the current conversation context." }
         },
         { id: "time-context", name: "@deepseek-ai/dsh-time-context" },
+        { id: "persona-mail-jobs", name: "@deepseek-ai/dsh-tool-jobs" },
         {
           id: "compaction",
           name: "cordis:group",

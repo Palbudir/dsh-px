@@ -10,6 +10,8 @@ import { installFileEditing } from './file-edit'
 import { installContextPolicy, modelCapacity, ownRequestContext } from './context-policy'
 import { installPublicChannelAgent } from './channel-public-agent'
 import { registerChannels } from './channels'
+import { AudiencePolicies } from '../../shared/audience-policy'
+import { registerPersonaMail } from './persona-mail-service'
 
 export const name = 'dsh-px-workbench'
 export const inject: string[] = []
@@ -38,7 +40,9 @@ export async function apply(
     return
   }
   installFileEditing(ctx)
+  ;(ctx as any).provide('pxAudiencePolicies', new AudiencePolicies())
   registerChannels(ctx)
+  registerPersonaMail(ctx)
   installContextPolicy(ctx)
   const activity = registerActivity(ctx)
   // dsh profile launchers provide `profileContext` (name, dir); it names the profile whose manifest we report.

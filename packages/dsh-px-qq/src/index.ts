@@ -11,6 +11,7 @@ import { installPublicQqAgent } from './public-agent'
 import { QqReceipts } from './receipts'
 import qqCommunity from '../../../config/qq-community.json'
 import { QqAttentionInbox } from './attention-inbox'
+import { QQ_CONVERSATION_TOOLS } from '../../shared/channel-source'
 
 export const name = 'dsh-px-qq'
 export const inject: string[] = []
@@ -27,7 +28,8 @@ export async function apply(ctx: any, config: { publicAgent?: boolean } = {}): P
       'connection',
       'webServer',
       'pxMemoryChannels',
-      'pxContextPolicy'
+      'pxContextPolicy',
+      'pxAudiencePolicies'
     ],
     (host: any) => activateHost(host)
   )
@@ -38,6 +40,24 @@ async function activateHost(ctx: any): Promise<void> {
   const settings = new NativeQqSettings(ctx.configEditor)
   const receipts = new QqReceipts(join(home, 'storages', name, 'receipts.json'))
   let current: QqSessionPolicy | undefined
+  ctx.effect(
+    () =>
+      ctx.pxAudiencePolicies.register('qq', {
+        section: 'px-qq-public-persona',
+        check: (exec: any, binding: any) => {
+          if (binding.channel.task) {
+            if (!current?.canRunGroupTask(exec.agent?.session.id))
+              return '群任务授权不可用，请检查 QQ 接入与授权成员'
+            return
+          }
+          if (!['qq_public_knowledge', 'qq_task', ...QQ_CONVERSATION_TOOLS].includes(exec.name))
+            return '公共 QQ 会话没有本机执行或私有信息权限'
+          if (exec.name === 'qq_task' && !current?.canDelegate(exec, binding.channel))
+            return '当前 QQ 请求没有私有任务授权'
+        }
+      }),
+    'qq: public execution policy'
+  )
   ctx.on('agent/created', ({ agent }: any) => {
     current?.created(agent)
   })
@@ -93,6 +113,7 @@ async function activateHost(ctx: any): Promise<void> {
             config: { prefix: 'Follow the configured persona and the current conversation context.' }
           },
           { id: 'time-context', name: '@deepseek-ai/dsh-time-context' },
+          { id: 'persona-mail-jobs', name: '@deepseek-ai/dsh-tool-jobs' },
           {
             id: 'compaction',
             name: 'cordis:group',

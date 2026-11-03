@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { isAbsolute } from 'node:path'
 import type { ChannelAttentionRouting } from '../../shared/channel-attention'
+import { parseMailRelations } from '../../shared/persona-mail-policy'
 
 export interface ChannelAccount {
   provider: 'feishu'
@@ -138,6 +139,26 @@ export class NativeChannelSettings {
       configuration: parseChannelConfiguration(config.pxChannels),
       componentEnabled: this.entry().options.disabled !== true
     }
+  }
+  readMail() {
+    const entry = this.entry(),
+      config = entry.options.config ?? {}
+    return {
+      revision: digest(config),
+      relations: parseMailRelations(config.pxPersonaMail ?? []),
+      componentEnabled: entry.options.disabled !== true
+    }
+  }
+  async saveMail(revision: unknown, relations: unknown) {
+    const entry = this.entry(),
+      next = parseMailRelations(relations)
+    if (revision !== this.readMail().revision)
+      throw new ChannelError('通信设置已变化，请刷新；未覆盖其他修改', 409)
+    await this.editor.edit(entry, (fresh: any) => {
+      if (digest(fresh) !== revision) throw new ChannelError('其他窗口已修改原生配置，未覆盖其修改', 409)
+      return { ...fresh, pxPersonaMail: next }
+    })
+    return this.readMail()
   }
   async save(revision: unknown, proposed: unknown) {
     const entry = this.entry(),

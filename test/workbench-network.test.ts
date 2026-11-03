@@ -62,7 +62,8 @@ test('网页检查路由拒绝外部简单 POST 和自定目标；并发点击�
   await apply({
     provide: () => {},
     on: () => {},
-    inject: (services: string[], fn: any) => !services.includes('configEditor') && fn(host)
+    inject: (services: string[], fn: any) =>
+      !services.includes('configEditor') && !services.includes('pxAudiencePolicies') && fn(host)
   })
   const handler = routes.get('/dsh-px-workbench/network-check')
   async function request(

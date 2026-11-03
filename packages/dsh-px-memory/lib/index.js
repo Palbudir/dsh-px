@@ -1779,21 +1779,6 @@ function channelMessageOrigin(source) {
     ...source.delivery === "context" ? { delivery: "context" } : {}
   };
 }
-var QQ_CONVERSATION_TOOLS = [
-  "qq_context",
-  "qq_expression",
-  "qq_document",
-  "qq_memory",
-  "qq_reply",
-  "persona_history"
-];
-var CHANNEL_CONVERSATION_TOOLS = [
-  "channel_reply",
-  "channel_history",
-  "channel_memory",
-  "channel_knowledge",
-  "persona_history"
-];
 
 // packages/shared/request-trust.ts
 function rejectUnauthenticatedRequest(req, res, connection) {
@@ -26202,9 +26187,8 @@ function apply(ctx) {
     async (_assembly, context, next) => {
       const assembly = await next();
       const channel = bindingFor(context.agent)?.channel;
-      if (publicSession(bindingFor(context.agent)) && !assembly.sections.some(
-        (section) => section.name === (channel?.provider === "qq" ? "px-qq-public-persona" : channel?.provider === "feishu" ? "px-channel-public-persona" : null)
-      ))
+      const policies = service(ctx, "pxAudiencePolicies"), required2 = policies?.version === 1 && channel ? policies.section(channel.provider) : void 0;
+      if (publicSession(bindingFor(context.agent)) && (!required2 || !assembly.sections.some((section) => section.name === required2)))
         throw new MemoryError("\u516C\u5171\u6E20\u9053\u4F1A\u8BDD\u7684\u6743\u9650\u9884\u8BBE\u672A\u5C31\u7EEA\uFF0C\u8BF7\u542F\u7528\u914D\u5957\u80FD\u529B\u6216\u65B0\u5EFA\u666E\u901A\u4F1A\u8BDD", 409);
       return assembly;
     },
@@ -26219,22 +26203,9 @@ function apply(ctx) {
         if (historyDenial) return historyDenial;
         const binding = bindingFor(exec.agent);
         if (!publicSession(binding)) return;
-        if (binding.channel?.provider === "feishu") {
-          if (binding.channel.task) return "\u6B64\u6E20\u9053\u7684\u4EFB\u52A1\u6388\u6743\u5C1A\u672A\u5C31\u7EEA\uFF0C\u672A\u6267\u884C\u672C\u673A\u64CD\u4F5C";
-          if (!CHANNEL_CONVERSATION_TOOLS.includes(exec.name))
-            return "\u516C\u5171\u6E20\u9053\u4F1A\u8BDD\u6CA1\u6709\u672C\u673A\u6267\u884C\u6216\u79C1\u6709\u4FE1\u606F\u6743\u9650";
-          return;
-        }
-        if (binding.channel?.provider !== "qq") return "\u8BE5\u516C\u5171\u6E20\u9053\u5C1A\u672A\u63D0\u4F9B\u7ECF\u8FC7\u9A8C\u8BC1\u7684\u5DE5\u5177\u8FB9\u754C";
-        if (binding.channel?.task) {
-          if (!service(host, "pxQq")?.canRunGroupTask(exec.agent?.session.id))
-            return "\u7FA4\u4EFB\u52A1\u6388\u6743\u4E0D\u53EF\u7528\uFF0C\u8BF7\u68C0\u67E5 QQ \u63A5\u5165\u4E0E\u6388\u6743\u6210\u5458";
-          return;
-        }
-        if (!["qq_public_knowledge", "qq_task", ...QQ_CONVERSATION_TOOLS].includes(exec.name))
-          return "\u516C\u5171 QQ \u4F1A\u8BDD\u6CA1\u6709\u672C\u673A\u6267\u884C\u6216\u79C1\u6709\u4FE1\u606F\u6743\u9650";
-        if (exec.name === "qq_task" && !service(host, "pxQq")?.canDelegate(exec, binding.channel))
-          return "\u5F53\u524D QQ \u8BF7\u6C42\u6CA1\u6709\u79C1\u6709\u4EFB\u52A1\u6388\u6743";
+        const policies = service(host, "pxAudiencePolicies");
+        if (policies?.version !== 1) return "\u516C\u5171\u4F1A\u8BDD\u6267\u884C\u7B56\u7565\u672A\u5C31\u7EEA\uFF0C\u672A\u6388\u4E88\u5DE5\u5177\u6743\u9650";
+        return policies.check(exec, binding);
       }),
       "memory: durable public channel boundary"
     )
@@ -26304,6 +26275,16 @@ function apply(ctx) {
       );
     },
     personas: () => store.read().personas.filter((p) => !p.archived).map((p) => ({ id: p.id, name: p.name, revision: p.revision, expression: p.expression })),
+    communicationAudiences: () => {
+      const entries = /* @__PURE__ */ new Map();
+      entries.set(JSON.stringify({ kind: "personal" }), { kind: "personal" });
+      for (const binding of Object.values(store.read().bindings)) {
+        if (binding.pending || binding.channel?.provider === "persona-mail") continue;
+        const audience = audienceOf(binding);
+        entries.set(JSON.stringify(audience), audience);
+      }
+      return [...entries.values()];
+    },
     channelBindings: (accountId, provider = "qq") => Object.entries(store.read().bindings).filter(
       ([, binding]) => binding.channel?.provider === provider && binding.channel.accountId === accountId
     ).map(([sessionId, binding]) => ({
