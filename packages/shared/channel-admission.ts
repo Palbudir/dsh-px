@@ -1,6 +1,7 @@
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionStore } from '@deepseek-ai/dsh-session'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ChannelInbox, IngressClaim, PendingChannelMessage } from './channel-inbox'
 
 interface ChannelMessageSource {
@@ -68,6 +69,11 @@ export async function admitChannelMessage(
     source: { ...sourceFor(row, claim), ...(wake ? {} : { delivery: 'context' as const }) },
     content: [{ type: 'text', text: row.event.text }]
   })
+  claim = {
+    ...claim,
+    nativeMessageId: message.id,
+    ...(Number.isSafeInteger(native.agent.session.seq) ? { fromSeq: native.agent.session.seq } : {})
+  }
   signal.throwIfAborted()
   if (!inbox.claim(row.id, claim)) return false
   try {
@@ -93,8 +99,31 @@ export async function reconcileChannelAdmission(
   signal.throwIfAborted()
   const receipt = inbox.receipt(key)
   if (!receipt?.claim || !['dispatching', 'uncertain'].includes(receipt.phase)) return false
-  const { claim, source: event } = receipt
+  const { claim } = receipt
   if (native.agent.session.id !== claim.sessionId) throw Error('原生收件核对会话不匹配')
+  const found = matchingNativeAdmissions(
+    key,
+    receipt,
+    native.agent.session.snapshotEvents(),
+    native.agent.session.inheritedEventCount
+  )
+  signal.throwIfAborted()
+  if (!found.size) return false
+  if (found.size !== 1) throw Error('原生收件存在多个不同回执，需要人工核对')
+  if (!(await native.sessions.flush(native.agent.session))) throw Error('原生会话未提供持久写入回执')
+  signal.throwIfAborted()
+  return inbox.admit(key, claim, [...found][0])
+}
+
+/** Match immutable native IDs and complete transport provenance, never prose or a copied inherited prefix. */
+export function matchingNativeAdmissions(
+  key: string,
+  receipt: NonNullable<ReturnType<ChannelInbox['receipt']>>,
+  events: readonly SessionEvent[],
+  inheritedEventCount = 0
+): Set<string> {
+  const { claim, source: event } = receipt
+  if (!claim) throw Error('收件缺少原生投递归属')
   const expected = sourceFor(
     { id: key, seq: 0, event: { ...event, text: '' }, recipient: receipt.recipient },
     claim
@@ -102,6 +131,7 @@ export async function reconcileChannelAdmission(
   const found = new Set<string>()
   const check = (message: UserMessage) => {
     if (message.source.kind !== expected.kind) return
+    if (claim.nativeMessageId !== undefined && message.id !== claim.nativeMessageId) return
     if (
       Object.entries(expected).every(
         ([key, value]) => (message.source as unknown as Record<string, unknown>)[key] === value
@@ -109,13 +139,10 @@ export async function reconcileChannelAdmission(
     )
       found.add(message.id)
   }
-  for (const entry of native.agent.session.snapshotEvents()) {
+  for (const entry of events) {
+    if (entry.seq < Math.max(inheritedEventCount, claim.fromSeq ?? 0)) continue
     if (entry.type === 'user/message') check(entry.data)
     else if (entry.type === 'agent/inbox/spliced') entry.data.inserted.forEach(check)
   }
-  signal.throwIfAborted()
-  if (!found.size) return false
-  if (found.size !== 1) throw Error('原生收件存在多个不同回执，需要人工核对')
-  if (!(await native.sessions.flush(native.agent.session))) throw Error('原生会话未提供持久写入回执')
-  return inbox.admit(key, claim, [...found][0])
+  return found
 }

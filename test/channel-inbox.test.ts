@@ -177,3 +177,30 @@ test('reply intents survive restart, deduplicate exact native calls and block an
   f.reopen()
   assert.throws(() => f.inbox.beginReply('third-call', a.id, 'session', 'another'), /尚未确认/)
 })
+
+test('human reply resolution is versioned, labels its evidence, and never replays the old call', (t) => {
+  const f = fixture(t),
+    source = f.inbox.accept(message(), recipient),
+    claim = { ...recipient, epoch: 'run1', sessionId: 'native', requestId: 'request' }
+  f.inbox.claim(source.id, claim)
+  f.inbox.admit(source.id, claim, 'native-message')
+  const sending = f.inbox.beginReply('call', source.id, 'native', 'pending text', 'run1'),
+    old = f.inbox.pendingReplies()[0]
+  assert.equal(old.draft, 'pending text')
+  f.reopen()
+  f.inbox.recoverInterrupted('run2')
+  const uncertain = f.inbox.pendingReplies()[0]
+  assert.equal(uncertain.phase, 'uncertain')
+  assert.throws(() => f.inbox.resolveReply(sending.id, old.revision, 'sent'), /已变化/)
+  f.inbox.resolveReply(sending.id, uncertain.revision, 'release')
+  assert.equal(f.inbox.pendingReplies().length, 0)
+  assert.equal(f.inbox.beginReply('call', source.id, 'native', 'pending text', 'run2').phase, 'released')
+  const next = f.inbox.beginReply('new-call', source.id, 'native', 'next text', 'run2')
+  f.inbox.finishReply(next.id, 'uncertain', { code: 'unknown' })
+  const pending = f.inbox.pendingReplies()[0]
+  f.inbox.resolveReply(next.id, pending.revision, 'sent')
+  assert.deepEqual(f.inbox.beginReply('new-call', source.id, 'native', 'next text', 'run2').result, {
+    sent: true,
+    confirmedBy: 'human'
+  })
+})

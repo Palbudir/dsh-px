@@ -20,7 +20,19 @@ function json(res: HostResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
-export async function apply(ctx: HostPluginContext, config: { publicChannel?: boolean } = {}): Promise<void> {
+export async function apply(
+  ctx: HostPluginContext,
+  config: { publicChannel?: boolean; channelSettings?: boolean } = {}
+): Promise<void> {
+  if (config.channelSettings === true) {
+    const owner = (ctx as any).root ?? ctx
+    const notify = () => {
+      owner.emit('px/channels-settings')
+    }
+    notify()
+    ctx.effect?.(() => notify, 'channels: configuration change signal')
+    return
+  }
   if (config.publicChannel === true) {
     await ctx.inject(['tools', 'systemPrompt'], (host: any) => installPublicChannelAgent(host))
     return

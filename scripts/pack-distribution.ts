@@ -87,7 +87,13 @@ export function buildDistribution(
         join(pkgDir, 'cordis.patch.yml'),
         '- insert:\n' +
           members
-            .map((m) => `    - id: ${m === 'dsh-better-sidebar' ? 'better-sidebar' : m}\n      name: ${m}\n`)
+            .map(
+              (m) =>
+                `    - id: ${m === 'dsh-better-sidebar' ? 'better-sidebar' : m}\n      name: ${m}\n` +
+                (m === 'dsh-px-workbench'
+                  ? '    - id: dsh-px-channel-settings\n      name: dsh-px-workbench\n      config:\n        channelSettings: true\n'
+                  : '')
+            )
             .join('')
       )
       mkdirSync(join(pkgDir, 'locale'))

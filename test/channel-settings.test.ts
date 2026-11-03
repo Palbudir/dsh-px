@@ -8,7 +8,7 @@ import {
 } from '../packages/dsh-px-workbench/src/channel-settings'
 
 test('native channel settings retain unrelated configuration, reject races and version only routing changes', async () => {
-  const entry = { options: { id: 'dsh-px-workbench', config: { external: { keep: true } } as any } }
+  const entry = { options: { id: 'dsh-px-channel-settings', config: { external: { keep: true } } as any } }
   let intervene = false
   const editor = {
     configuration: () => [{ entry }],

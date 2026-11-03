@@ -1,3 +1,7 @@
 - insert:
     - id: dsh-px-workbench
       name: dsh-px-workbench
+    - id: dsh-px-channel-settings
+      name: dsh-px-workbench
+      config:
+        channelSettings: true

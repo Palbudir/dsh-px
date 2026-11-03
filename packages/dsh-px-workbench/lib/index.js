@@ -1934,6 +1934,27 @@ function publicInputBoundary(ctx, authority, channel = {
 // packages/dsh-px-workbench/src/channel-settings.ts
 import { createHash as createHash2 } from "node:crypto";
 import { isAbsolute as isAbsolute2 } from "node:path";
+
+// packages/shared/channel-attention.ts
+function decideChannelAttention(settings, message) {
+  if (!["focus", "normal", "notifications"].includes(settings.mode) || !["direct", "group"].includes(message.kind) || typeof message.conversationId !== "string" || !message.conversationId.trim() || message.conversationId.length > 512 || /[\r\n\0]/.test(message.conversationId))
+    throw new Error("\u6E20\u9053\u6D88\u606F\u6A21\u5F0F\u6216\u804A\u5929\u6807\u8BC6\u65E0\u6548");
+  if (message.self) return { content: "ignore", notify: false, reason: "self" };
+  const direct = message.kind === "direct", muted = settings.mutedChats.includes(message.conversationId) && !(message.mentioned && settings.mentionOverridesMute), notify = !muted && (direct ? settings.notifyDirect : message.mentioned ? settings.notifyMentions : settings.notifyGroups);
+  if (settings.mode === "focus") return { content: "full", notify: false, reason: "focus" };
+  if (settings.openedChats?.includes(message.conversationId))
+    return { content: "full", notify: false, reason: "watched" };
+  if (settings.mode === "notifications")
+    return { content: "preview", notify, reason: muted ? "muted" : "notification" };
+  if (settings.focusedChats.includes(message.conversationId))
+    return { content: "full", notify: false, reason: "watched" };
+  if (muted) return { content: "preview", notify: false, reason: "muted" };
+  if (direct) return { content: "full", notify: false, reason: "direct" };
+  if (message.mentioned) return { content: "full", notify: false, reason: "mention" };
+  return { content: "preview", notify, reason: "unfocused" };
+}
+
+// packages/dsh-px-workbench/src/channel-settings.ts
 var ChannelError = class extends Error {
   constructor(message, status = 400) {
     super(message);
@@ -1988,13 +2009,17 @@ var NativeChannelSettings = class {
     this.editor = editor;
   }
   entry() {
-    const rows = this.editor.configuration().filter((row) => row.entry?.options?.id === "dsh-px-workbench");
-    if (rows.length !== 1) throw new ChannelError("PX \u5DE5\u4F5C\u53F0\u914D\u7F6E\u5165\u53E3\u4E0D\u552F\u4E00\u6216\u5C1A\u672A\u5C31\u7EEA", 503);
+    const rows = this.editor.configuration().filter((row) => row.entry?.options?.id === "dsh-px-channel-settings");
+    if (rows.length !== 1) throw new ChannelError("PX \u6E20\u9053\u914D\u7F6E\u5165\u53E3\u4E0D\u552F\u4E00\u6216\u5C1A\u672A\u5C31\u7EEA", 503);
     return rows[0].entry;
   }
   read() {
     const config2 = this.entry().options.config ?? {};
-    return { revision: digest(config2), configuration: parseChannelConfiguration(config2.pxChannels) };
+    return {
+      revision: digest(config2),
+      configuration: parseChannelConfiguration(config2.pxChannels),
+      componentEnabled: this.entry().options.disabled !== true
+    };
   }
   async save(revision, proposed) {
     const entry = this.entry(), before = this.read(), next = parseChannelConfiguration(proposed);
@@ -2157,6 +2182,129 @@ ${binding2.channel.publicInstructions}
   }, "channels: native public preset");
 }
 
+// packages/shared/channel-supervisor.ts
+var ChannelSupervisor = class {
+  constructor(runtimes, create, failed, settled = () => {
+  }) {
+    this.runtimes = runtimes;
+    this.create = create;
+    this.failed = failed;
+    this.settled = settled;
+  }
+  desired = /* @__PURE__ */ new Map();
+  workers = /* @__PURE__ */ new Map();
+  attempted = /* @__PURE__ */ new Map();
+  paused = /* @__PURE__ */ new Set();
+  closing = false;
+  update(configs) {
+    if (this.closing) return;
+    this.desired = new Map(
+      configs.filter((row) => row.enabled).map((row) => [row.accountId, structuredClone(row)])
+    );
+    for (const id2 of /* @__PURE__ */ new Set([...this.runtimes.keys(), ...this.desired.keys()])) {
+      const current = this.runtimes.get(id2), wanted = this.target(id2);
+      if (current && (!wanted || !current.matches(wanted))) current.requestStop();
+      this.schedule(id2);
+    }
+  }
+  retry(id2) {
+    this.paused.delete(id2);
+    this.attempted.delete(id2);
+    this.schedule(id2);
+  }
+  async pause(id2) {
+    this.paused.add(id2);
+    this.runtimes.get(id2)?.requestStop();
+    this.schedule(id2);
+    let pending = this.workers.get(id2);
+    while (pending) {
+      await pending;
+      if (!this.paused.has(id2)) throw Error("\u505C\u6B62\u8BF7\u6C42\u5DF2\u88AB\u540E\u7EED\u63A5\u6536\u64CD\u4F5C\u53D6\u4EE3\uFF0C\u8BF7\u5237\u65B0\u72B6\u6001");
+      pending = this.workers.get(id2);
+    }
+    if (this.runtimes.has(id2)) throw Error("\u6E20\u9053\u5C1A\u672A\u5B8C\u6210\u505C\u6B62\uFF0C\u8BF7\u6838\u5BF9\u539F\u751F\u72B6\u6001\u540E\u91CD\u8BD5");
+  }
+  target(id2) {
+    return this.closing || this.paused.has(id2) ? void 0 : this.desired.get(id2);
+  }
+  schedule(id2) {
+    if (this.workers.has(id2)) return;
+    let failed = false;
+    const work = this.apply(id2).catch((error) => {
+      failed = true;
+      this.report(id2, error);
+    }).finally(() => {
+      this.workers.delete(id2);
+      const wanted = this.target(id2), current = this.runtimes.get(id2);
+      if (!failed && !this.closing && (wanted && this.attempted.get(id2) !== JSON.stringify(wanted) || !wanted && current)) {
+        this.schedule(id2);
+      }
+    });
+    this.workers.set(id2, work);
+  }
+  report(id2, error) {
+    try {
+      this.failed(id2, error);
+    } catch {
+    }
+  }
+  async apply(id2) {
+    for (; ; ) {
+      const wanted = this.target(id2), current = this.runtimes.get(id2), signature = JSON.stringify(wanted);
+      if (current && wanted && current.matches(wanted)) {
+        current.refreshAttention();
+        this.attempted.set(id2, signature);
+        return;
+      }
+      if (current) {
+        current.requestStop();
+        await current.dispose();
+        if (this.runtimes.get(id2) === current) this.runtimes.delete(id2);
+      }
+      if (!wanted) return;
+      if (this.target(id2) !== wanted) continue;
+      if (this.attempted.get(id2) === signature) return;
+      this.attempted.set(id2, signature);
+      let runtime;
+      try {
+        runtime = this.create(wanted);
+        this.runtimes.set(id2, runtime);
+        await runtime.start();
+        try {
+          this.settled(id2);
+        } catch {
+        }
+      } catch (error) {
+        if (runtime) {
+          try {
+            await runtime.dispose();
+            if (this.runtimes.get(id2) === runtime) this.runtimes.delete(id2);
+          } catch (stopError) {
+            this.report(id2, stopError);
+          }
+        }
+        this.report(id2, error);
+      }
+      if (this.target(id2) === wanted) return;
+    }
+  }
+  async close() {
+    this.closing = true;
+    for (const [id2, current] of this.runtimes) {
+      current.requestStop();
+      this.schedule(id2);
+    }
+    await Promise.allSettled([...this.workers.values()]);
+    const remaining = await Promise.allSettled(
+      [...this.runtimes].map(async ([id2, current]) => {
+        await current.dispose();
+        if (this.runtimes.get(id2) === current) this.runtimes.delete(id2);
+      })
+    );
+    if (remaining.some((result) => result.status === "rejected")) throw Error("\u90E8\u5206\u6E20\u9053\u5C1A\u672A\u5B8C\u6210\u505C\u6B62");
+  }
+};
+
 // packages/dsh-px-workbench/src/channels.ts
 import { join as join3 } from "node:path";
 
@@ -2181,12 +2329,17 @@ var claimJson = (claim2) => {
   if (![claim2.epoch, claim2.personaId, claim2.sessionId, claim2.requestId].every(id))
     throw Error("\u6536\u4EF6\u6295\u9012\u5F52\u5C5E\u65E0\u6548");
   recipientJson(claim2);
+  if (claim2.fromSeq !== void 0 && (!Number.isSafeInteger(claim2.fromSeq) || claim2.fromSeq < 0))
+    throw Error("\u539F\u751F\u6536\u4EF6\u8D77\u70B9\u65E0\u6548");
+  if (claim2.nativeMessageId !== void 0 && !id(claim2.nativeMessageId)) throw Error("\u539F\u751F\u6D88\u606F\u6807\u8BC6\u65E0\u6548");
   return JSON.stringify({
     epoch: claim2.epoch,
     personaId: claim2.personaId,
     routeRevision: claim2.routeRevision,
     sessionId: claim2.sessionId,
-    requestId: claim2.requestId
+    requestId: claim2.requestId,
+    ...claim2.fromSeq === void 0 ? {} : { fromSeq: claim2.fromSeq },
+    ...claim2.nativeMessageId === void 0 ? {} : { nativeMessageId: claim2.nativeMessageId }
   });
 };
 var ChannelInbox = class {
@@ -2215,6 +2368,15 @@ var ChannelInbox = class {
       db.exec(
         "CREATE TABLE IF NOT EXISTS channel_replies(id TEXT PRIMARY KEY,chat TEXT NOT NULL,source TEXT NOT NULL,session TEXT NOT NULL,digest TEXT NOT NULL,phase TEXT NOT NULL,result TEXT); CREATE INDEX IF NOT EXISTS channel_reply_pending ON channel_replies(chat,phase)"
       );
+      db.exec("CREATE INDEX IF NOT EXISTS channel_reply_phase ON channel_replies(phase)");
+      const columns = (table) => new Set(
+        db.prepare("PRAGMA table_info(" + table + ")").all().map((row) => String(row.name))
+      );
+      if (!columns("channel_messages").has("recovery_seq"))
+        db.exec("ALTER TABLE channel_messages ADD COLUMN recovery_seq INTEGER NOT NULL DEFAULT 0");
+      const replyColumns = columns("channel_replies");
+      if (!replyColumns.has("draft")) db.exec("ALTER TABLE channel_replies ADD COLUMN draft TEXT");
+      if (!replyColumns.has("epoch")) db.exec("ALTER TABLE channel_replies ADD COLUMN epoch TEXT");
       const identity = JSON.stringify(this.owner), existing = db.prepare("SELECT value FROM channel_meta WHERE key='owner'").get()?.value, schema = db.prepare("SELECT value FROM channel_meta WHERE key='schema'").get()?.value;
       if (existing !== void 0 && existing !== identity || schema !== void 0 && schema !== "2")
         throw Error("\u6E20\u9053\u6536\u4EF6\u8D26\u53F7\u6216\u683C\u5F0F\u4E0D\u5339\u914D\uFF0C\u539F\u6570\u636E\u4FDD\u7559");
@@ -2311,14 +2473,17 @@ var ChannelInbox = class {
   }
   claim(key, claim2) {
     return this.db.prepare(
-      "UPDATE channel_messages SET phase='dispatching',claim=? WHERE id=? AND phase='received' AND recipient=?"
-    ).run(claimJson(claim2), key, recipientJson(claim2)).changes === 1;
+      "UPDATE channel_messages SET phase='dispatching',claim=?,recovery_seq=? WHERE id=? AND phase='received' AND recipient=?"
+    ).run(claimJson(claim2), claim2.fromSeq ?? 0, key, recipientJson(claim2)).changes === 1;
   }
   admit(key, claim2, nativeMessageId) {
     if (!id(nativeMessageId)) throw Error("\u539F\u751F\u6536\u4EF6\u56DE\u6267\u65E0\u6548");
-    return this.db.prepare(
+    const changed = this.db.prepare(
       "UPDATE channel_messages SET phase='admitted',native_message=?,event=NULL,bytes=0 WHERE id=? AND phase IN ('dispatching','uncertain') AND claim=?"
     ).run(nativeMessageId, key, claimJson(claim2)).changes === 1;
+    if (changed) return true;
+    const previous = this.db.prepare("SELECT claim,native_message FROM channel_messages WHERE id=? AND phase='admitted'").get(key);
+    return previous?.claim === claimJson(claim2) && previous?.native_message === nativeMessageId;
   }
   uncertain(key, claim2) {
     return this.db.prepare(
@@ -2328,11 +2493,34 @@ var ChannelInbox = class {
   /** Call only after obtaining exclusive native consumer ownership; opening a DB never mutates in-flight work. */
   recoverInterrupted(epoch) {
     if (!id(epoch)) throw Error("\u63A5\u6536\u751F\u547D\u5468\u671F\u6807\u8BC6\u65E0\u6548");
+    this.db.prepare(
+      "UPDATE channel_replies SET phase='uncertain' WHERE phase='sending' AND (epoch IS NULL OR epoch<>?)"
+    ).run(epoch);
     return Number(
       this.db.prepare(
         "UPDATE channel_messages SET phase='uncertain' WHERE phase='dispatching' AND json_extract(claim,'$.epoch')<>?"
       ).run(epoch).changes
     );
+  }
+  uncertainInputs(limit = 20, afterSequence = 0) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(afterSequence) || afterSequence < 0)
+      throw Error("\u6838\u5BF9\u5206\u9875\u65E0\u6548");
+    return this.db.prepare(
+      "SELECT id,seq,recovery_seq,event FROM channel_messages WHERE phase='uncertain' AND seq>? ORDER BY seq LIMIT ?"
+    ).all(afterSequence, limit).map((row) => ({
+      id: String(row.id),
+      seq: Number(row.seq),
+      cursor: Number(row.recovery_seq),
+      preview: JSON.parse(String(row.event)).text.slice(0, 160),
+      receipt: this.receipt(String(row.id))
+    }));
+  }
+  advanceRecovery(key, claim2, previous, next) {
+    if (!Number.isSafeInteger(previous) || !Number.isSafeInteger(next) || previous < 0 || next < previous)
+      throw Error("\u6838\u5BF9\u8FDB\u5EA6\u65E0\u6548");
+    return this.db.prepare(
+      "UPDATE channel_messages SET recovery_seq=? WHERE id=? AND phase='uncertain' AND claim=? AND recovery_seq=?"
+    ).run(next, key, claimJson(claim2), previous).changes === 1;
   }
   receipt(key) {
     const r = this.db.prepare("SELECT phase,claim,native_message,metadata,recipient FROM channel_messages WHERE id=?").get(key);
@@ -2349,9 +2537,10 @@ var ChannelInbox = class {
       "UPDATE channel_messages SET phase='cancelled',event=NULL,bytes=0 WHERE id=? AND phase='received'"
     ).run(key).changes === 1;
   }
-  beginReply(callId, sourceId, sessionId, text) {
+  beginReply(callId, sourceId, sessionId, text, epoch) {
     if (!id(callId) || !id(sessionId) || typeof text !== "string" || !text.trim() || text.length > 4e3)
       throw Error("\u6E20\u9053\u56DE\u590D\u53C2\u6570\u65E0\u6548");
+    if (epoch !== void 0 && !id(epoch)) throw Error("\u56DE\u590D\u751F\u547D\u5468\u671F\u65E0\u6548");
     const source = this.receipt(sourceId);
     if (source?.phase !== "admitted" || source.claim?.sessionId !== sessionId)
       throw Error("\u56DE\u590D\u7F3A\u5C11\u5DF2\u6301\u4E45\u63A5\u6536\u7684\u539F\u751F\u6765\u6E90");
@@ -2373,8 +2562,8 @@ var ChannelInbox = class {
       if (Number(this.db.prepare("SELECT count(*) n FROM channel_replies").get().n) >= this.bounds.records)
         throw Error("\u56DE\u590D\u51ED\u636E\u5BB9\u91CF\u5DF2\u6EE1\uFF0C\u672A\u4E22\u5F03\u539F\u8BB0\u5F55");
       this.db.prepare(
-        "INSERT INTO channel_replies(id,chat,source,session,digest,phase) VALUES(?,?,?,?,?,'sending')"
-      ).run(key, source.source.conversationId, sourceId, sessionId, digest2);
+        "INSERT INTO channel_replies(id,chat,source,session,digest,phase,draft,epoch) VALUES(?,?,?,?,?,'sending',?,?)"
+      ).run(key, source.source.conversationId, sourceId, sessionId, digest2, text, epoch ?? null);
       this.db.exec("COMMIT");
       return { id: key, phase: "new" };
     } catch (error) {
@@ -2385,8 +2574,65 @@ var ChannelInbox = class {
   finishReply(key, phase, result) {
     const data = JSON.stringify(result);
     if (typeof data !== "string" || Buffer.byteLength(data) > 8192) throw Error("\u56DE\u590D\u56DE\u6267\u8D85\u51FA\u5BB9\u91CF");
-    if (this.db.prepare("UPDATE channel_replies SET phase=?,result=? WHERE id=? AND phase='sending'").run(phase, data, key).changes !== 1)
+    if (this.db.prepare(
+      "UPDATE channel_replies SET phase=?,result=?,draft=CASE WHEN ?='uncertain' THEN draft ELSE NULL END WHERE id=? AND phase='sending'"
+    ).run(phase, data, phase, key).changes !== 1)
       throw Error("\u56DE\u590D\u72B6\u6001\u5DF2\u53D8\u5316\uFF0C\u672A\u8986\u76D6\u65E7\u56DE\u6267");
+  }
+  pendingReplies(limit = 20, afterSequence = 0) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(afterSequence) || afterSequence < 0)
+      throw Error("\u56DE\u590D\u5206\u9875\u65E0\u6548");
+    return this.db.prepare(
+      "SELECT rowid AS seq,* FROM channel_replies WHERE phase IN ('sending','uncertain') AND rowid>? ORDER BY rowid LIMIT ?"
+    ).all(afterSequence, limit).map((row) => this.replyView(row));
+  }
+  pendingReply(key) {
+    const row = this.db.prepare("SELECT rowid AS seq,* FROM channel_replies WHERE id=? AND phase IN ('sending','uncertain')").get(key);
+    return row ? this.replyView(row) : void 0;
+  }
+  counts() {
+    const inputs = {
+      received: 0,
+      dispatching: 0,
+      uncertain: 0,
+      admitted: 0,
+      cancelled: 0
+    };
+    for (const row of this.db.prepare("SELECT phase,count(*) n FROM channel_messages GROUP BY phase").all())
+      inputs[String(row.phase)] = Number(row.n);
+    return {
+      inputs,
+      replies: Number(
+        this.db.prepare("SELECT count(*) n FROM channel_replies WHERE phase IN ('sending','uncertain')").get().n
+      )
+    };
+  }
+  replyView(row) {
+    return {
+      id: String(row.id),
+      seq: Number(row.seq),
+      conversationId: String(row.chat),
+      sourceId: String(row.source),
+      sessionId: String(row.session),
+      phase: String(row.phase),
+      draft: row.draft === null ? null : String(row.draft),
+      revision: hash(row),
+      result: row.result ? JSON.parse(String(row.result)) : null
+    };
+  }
+  resolveReply(key, revision, decision) {
+    if (!["sent", "release"].includes(decision)) throw Error("\u56DE\u590D\u6838\u5BF9\u51B3\u5B9A\u65E0\u6548");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const row = this.db.prepare("SELECT rowid AS seq,* FROM channel_replies WHERE id=? AND phase IN ('sending','uncertain')").get(key);
+      if (!row || hash(row) !== revision) throw Error("\u56DE\u590D\u72B6\u6001\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u6838\u5BF9");
+      const result = decision === "sent" ? { sent: true, confirmedBy: "human" } : { outcome: "unverified", newReplyAllowed: true, confirmedBy: "human" };
+      this.db.prepare("UPDATE channel_replies SET phase=?,result=?,draft=NULL WHERE id=?").run(decision === "sent" ? "sent" : "released", JSON.stringify(result), key);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
   hasPendingMention(conversationId) {
     return !!this.db.prepare(
@@ -2428,6 +2674,11 @@ async function admitChannelMessage(inbox, row, claim2, native, signal, wake = tr
     source: { ...sourceFor(row, claim2), ...wake ? {} : { delivery: "context" } },
     content: [{ type: "text", text: row.event.text }]
   });
+  claim2 = {
+    ...claim2,
+    nativeMessageId: message.id,
+    ...Number.isSafeInteger(native.agent.session.seq) ? { fromSeq: native.agent.session.seq } : {}
+  };
   signal.throwIfAborted();
   if (!inbox.claim(row.id, claim2)) return false;
   try {
@@ -2440,6 +2691,29 @@ async function admitChannelMessage(inbox, row, claim2, native, signal, wake = tr
     inbox.uncertain(row.id, claim2);
     throw error;
   }
+}
+function matchingNativeAdmissions(key, receipt, events, inheritedEventCount = 0) {
+  const { claim: claim2, source: event } = receipt;
+  if (!claim2) throw Error("\u6536\u4EF6\u7F3A\u5C11\u539F\u751F\u6295\u9012\u5F52\u5C5E");
+  const expected = sourceFor(
+    { id: key, seq: 0, event: { ...event, text: "" }, recipient: receipt.recipient },
+    claim2
+  );
+  const found = /* @__PURE__ */ new Set();
+  const check = (message) => {
+    if (message.source.kind !== expected.kind) return;
+    if (claim2.nativeMessageId !== void 0 && message.id !== claim2.nativeMessageId) return;
+    if (Object.entries(expected).every(
+      ([key2, value]) => message.source[key2] === value
+    ))
+      found.add(message.id);
+  };
+  for (const entry of events) {
+    if (entry.seq < Math.max(inheritedEventCount, claim2.fromSeq ?? 0)) continue;
+    if (entry.type === "user/message") check(entry.data);
+    else if (entry.type === "agent/inbox/spliced") entry.data.inserted.forEach(check);
+  }
+  return found;
 }
 
 // packages/shared/channel-dispatch.ts
@@ -2625,10 +2899,10 @@ async function startFeishuConsumer(native, account, inbox, options) {
   signal.throwIfAborted();
   const description = await native.describeBot(account.botId);
   signal.throwIfAborted();
-  if (description.version !== 1 || description.channel !== "feishu" || description.botId !== account.botId || description.account?.fingerprint !== account.fingerprint || description.connected !== true || !["exclusive-text-consumer", "reply-text-checked", "consumer-mode-control-px1"].every(
+  if (description.version !== 1 || description.channel !== "feishu" || description.botId !== account.botId || description.account?.fingerprint !== account.fingerprint || typeof description.connected !== "boolean" || !["exclusive-text-consumer", "reply-text-checked", "consumer-mode-control-px1"].every(
     (cap) => description.capabilities?.includes(cap)
   ) || description.reception?.version !== 1 || !["standalone", "external-consumer"].includes(description.reception.mode) || !/^[a-f0-9-]{36}$/.test(description.reception.revision) || description.reception.active !== false || description.reception.stopUncertain !== false)
-    throw Error("\u98DE\u4E66\u8D26\u53F7\u8EAB\u4EFD\u3001\u8FDE\u63A5\u6216\u63A5\u6536\u80FD\u529B\u5C1A\u672A\u5C31\u7EEA");
+    throw Error("\u98DE\u4E66\u8D26\u53F7\u8EAB\u4EFD\u3001\u63A5\u6536\u80FD\u529B\u6216\u72EC\u5360\u72B6\u6001\u5C1A\u672A\u5C31\u7EEA");
   let active = false, release;
   const report = (error) => {
     try {
@@ -2701,25 +2975,6 @@ async function startFeishuConsumer(native, account, inbox, options) {
   }
 }
 
-// packages/shared/channel-attention.ts
-function decideChannelAttention(settings, message) {
-  if (!["focus", "normal", "notifications"].includes(settings.mode) || !["direct", "group"].includes(message.kind) || typeof message.conversationId !== "string" || !message.conversationId.trim() || message.conversationId.length > 512 || /[\r\n\0]/.test(message.conversationId))
-    throw new Error("\u6E20\u9053\u6D88\u606F\u6A21\u5F0F\u6216\u804A\u5929\u6807\u8BC6\u65E0\u6548");
-  if (message.self) return { content: "ignore", notify: false, reason: "self" };
-  const direct = message.kind === "direct", muted = settings.mutedChats.includes(message.conversationId) && !(message.mentioned && settings.mentionOverridesMute), notify = !muted && (direct ? settings.notifyDirect : message.mentioned ? settings.notifyMentions : settings.notifyGroups);
-  if (settings.mode === "focus") return { content: "full", notify: false, reason: "focus" };
-  if (settings.openedChats?.includes(message.conversationId))
-    return { content: "full", notify: false, reason: "watched" };
-  if (settings.mode === "notifications")
-    return { content: "preview", notify, reason: muted ? "muted" : "notification" };
-  if (settings.focusedChats.includes(message.conversationId))
-    return { content: "full", notify: false, reason: "watched" };
-  if (muted) return { content: "preview", notify: false, reason: "muted" };
-  if (direct) return { content: "full", notify: false, reason: "direct" };
-  if (message.mentioned) return { content: "full", notify: false, reason: "mention" };
-  return { content: "preview", notify, reason: "unfocused" };
-}
-
 // packages/shared/native-model-selection.ts
 function nativeModelSelection(host, sessionId, fallback) {
   const get4 = (name2) => host.get ? host.get(name2) : host[name2];
@@ -2741,6 +2996,41 @@ function nativeModelSelection(host, sessionId, fallback) {
       fallback = value;
     }
   };
+}
+
+// packages/shared/channel-recovery.ts
+async function recoverStoredAdmission(host, inbox, row, signal) {
+  const get4 = (name2) => host.get ? host.get(name2) : host[name2], receipt = inbox.receipt(row.id), claim2 = receipt?.claim;
+  signal.throwIfAborted();
+  if (!receipt || !claim2 || receipt.phase !== "uncertain") return "changed";
+  const persistence = get4("sessionPersistence");
+  if (!persistence?.open || !persistence.flush) throw Error("\u539F\u751F\u6301\u4E45\u5386\u53F2\u8BFB\u53D6\u670D\u52A1\u672A\u5C31\u7EEA");
+  const reader = await persistence.open(claim2.sessionId, "read", { signal });
+  try {
+    if (reader.header.id !== claim2.sessionId || reader.access !== "read") throw Error("\u539F\u751F\u6838\u5BF9\u6765\u6E90\u4E0D\u5339\u914D");
+    let cursor = Math.max(row.cursor, claim2.fromSeq ?? 0, reader.inheritedEventCount ?? 0);
+    for (let page = 0; page < 4; page++) {
+      signal.throwIfAborted();
+      const { events } = await reader.read(cursor, 256, { signal }), found = matchingNativeAdmissions(row.id, receipt, events, reader.inheritedEventCount ?? 0);
+      if (found.size > 1) throw Error("\u539F\u751F\u6536\u4EF6\u5B58\u5728\u591A\u4E2A\u56DE\u6267\uFF0C\u9700\u8981\u4EBA\u5DE5\u6838\u5BF9");
+      if (found.size === 1) {
+        const live = get4("sessions")?.get(claim2.sessionId);
+        if (live) {
+          if (!await get4("sessions").flush(live)) throw Error("\u539F\u751F\u4F1A\u8BDD\u672A\u63D0\u4F9B\u6301\u4E45\u5199\u5165\u56DE\u6267");
+        } else await persistence.flush();
+        signal.throwIfAborted();
+        return inbox.admit(row.id, claim2, [...found][0]) ? "admitted" : "changed";
+      }
+      if (events.length) cursor = events.at(-1).seq + 1;
+      if (events.length < 256) {
+        inbox.advanceRecovery(row.id, claim2, row.cursor, cursor);
+        return "missing";
+      }
+    }
+    return inbox.advanceRecovery(row.id, claim2, row.cursor, cursor) ? "partial" : "changed";
+  } finally {
+    await reader.close();
+  }
 }
 
 // packages/dsh-px-workbench/src/feishu-channel.ts
@@ -2770,18 +3060,27 @@ var FeishuChannel = class {
   get accountId() {
     return this.account.accountId;
   }
+  matches(account) {
+    return !this.closed && !this.stop.signal.aborted && account.enabled && account.fingerprint === this.account.fingerprint && account.personaId === this.account.personaId && account.routeRevision === this.account.routeRevision;
+  }
+  refreshAttention() {
+    this.dispatch.schedule();
+  }
   inbox;
   epoch = randomUUID3();
   dispatch;
   stop = new AbortController();
   consumerStop = new AbortController();
   borrowed = /* @__PURE__ */ new Map();
-  tools = /* @__PURE__ */ new Set();
+  tools = /* @__PURE__ */ new Map();
   closed = false;
+  disposal;
   lease;
   handles = /* @__PURE__ */ new Map();
   opening = /* @__PURE__ */ new Map();
   failures = /* @__PURE__ */ new Map();
+  recovery;
+  checked = { admitted: 0, missing: 0, errors: 0 };
   memory() {
     return get3(this.host, "pxMemoryChannels");
   }
@@ -2806,9 +3105,73 @@ var FeishuChannel = class {
         }
       }
     );
+    void this.reconcile();
+  }
+  reconcile() {
+    if (this.recovery) return this.recovery;
+    if (this.closed || this.stop.signal.aborted || !this.lease) return Promise.resolve();
+    this.checked = { admitted: 0, missing: 0, errors: 0 };
+    const work = (async () => {
+      let after = 0;
+      for (; ; ) {
+        this.stop.signal.throwIfAborted();
+        const batch = this.inbox.uncertainInputs(20, after);
+        if (!batch.length) return;
+        for (const first of batch) {
+          let row = first;
+          try {
+            for (; ; ) {
+              const outcome = await recoverStoredAdmission(this.host, this.inbox, row, this.stop.signal);
+              if (outcome === "partial") {
+                const next = this.inbox.uncertainInputs(1, row.seq - 1)[0];
+                if (next?.id !== row.id) break;
+                row = next;
+                await new Promise((done) => setTimeout(done, 0));
+                continue;
+              }
+              if (outcome === "admitted") {
+                this.checked.admitted++;
+                this.failures.delete(row.id);
+                this.dispatch.schedule();
+              }
+              if (outcome === "missing") {
+                this.checked.missing++;
+                this.failures.set(row.id, "\u6CA1\u6709\u627E\u5230\u53EF\u786E\u8BA4\u7684\u539F\u751F\u6536\u4EF6\u4F9D\u636E\uFF0C\u672A\u91CD\u65B0\u6295\u9012");
+              }
+              break;
+            }
+          } catch (error) {
+            this.stop.signal.throwIfAborted();
+            this.checked.errors++;
+            this.failures.set(row.id, error instanceof Error ? error.message : "\u539F\u751F\u6536\u4EF6\u6838\u5BF9\u5931\u8D25");
+          }
+          after = first.seq;
+        }
+      }
+    })().catch((error) => {
+      if (!this.stop.signal.aborted) this.failures.set("recovery", String(error));
+    }).finally(() => {
+      if (this.recovery === work) this.recovery = void 0;
+    });
+    this.recovery = work;
+    return work;
+  }
+  resolveReply(id2, revision, decision) {
+    if (this.closed || this.stop.signal.aborted) throw new ChannelError("\u6E20\u9053\u5DF2\u505C\u6B62\uFF0C\u8BF7\u5148\u91CD\u65B0\u542F\u7528\u540E\u6838\u5BF9", 409);
+    const reply = this.inbox.pendingReply(id2);
+    if (!reply) throw new ChannelError("\u56DE\u590D\u5DF2\u7ED3\u7B97\uFF0C\u8BF7\u5237\u65B0\u67E5\u770B", 409);
+    if ([...this.tools.values()].some(
+      (tool) => tool.name === "channel_reply" && this.memory().inspect(tool.sessionId)?.binding?.channel?.conversationId === reply.conversationId
+    ))
+      throw new ChannelError("\u672C\u804A\u5929\u4ECD\u6709\u56DE\u590D\u6B63\u5728\u53D1\u9001\uFF0C\u8BF7\u7B49\u5176\u7ED3\u675F\u540E\u6838\u5BF9", 409);
+    this.inbox.resolveReply(id2, revision, decision);
+  }
+  retry(id2) {
+    this.failures.delete(id2);
+    this.dispatch.retry(id2);
   }
   selection(row) {
-    if (!this.allowed(row)) return "hold";
+    if (!this.lease || !this.allowed(row)) return "hold";
     const attention = this.current().attention, choice = decideChannelAttention(attention, {
       conversationId: row.event.conversationId,
       kind: row.event.kind,
@@ -2930,7 +3293,8 @@ var FeishuChannel = class {
     });
   }
   origin(agent) {
-    if (!this.allowed() || !this.owns(agent)) throw new ChannelError("\u6E20\u9053\u4F1A\u8BDD\u5DF2\u505C\u6B62\u6216\u5F52\u5C5E\u53D8\u5316", 403);
+    if (!this.lease || !this.allowed() || !this.owns(agent))
+      throw new ChannelError("\u6E20\u9053\u4F1A\u8BDD\u5DF2\u505C\u6B62\u6216\u5F52\u5C5E\u53D8\u5316", 403);
     const events = agent.session.snapshotEvents();
     for (let i = events.length - 1; i >= 0; i--) {
       const event = events[i];
@@ -2944,7 +3308,7 @@ var FeishuChannel = class {
   }
   tool(name2, args, exec) {
     const work = this.performTool(name2, args, exec);
-    this.tools.add(work);
+    this.tools.set(work, { sessionId: exec.agent?.session.id, name: name2 });
     void work.finally(() => this.tools.delete(work)).catch(() => {
     });
     return work;
@@ -2977,7 +3341,8 @@ var FeishuChannel = class {
       JSON.stringify([call.seq, exec.callId]),
       id2,
       exec.agent.session.id,
-      args.text
+      args.text,
+      this.epoch
     );
     if (intent.phase === "sent") return intent.result;
     if (intent.phase !== "new") throw new ChannelError("\u6B64\u524D\u56DE\u590D\u672A\u786E\u8BA4\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u91CD\u590D\u53D1\u9001", 409);
@@ -3022,19 +3387,46 @@ var FeishuChannel = class {
         preview: row.event.text.slice(0, 160)
       })),
       failures: [...this.failures].map(([id2, error]) => ({ id: id2, error })),
-      blocked: this.dispatch.blockedIds()
+      blocked: this.dispatch.blockedIds(),
+      recovering: !!this.recovery,
+      checked: { ...this.checked },
+      uncertain: this.inbox.uncertainInputs(20).map((row) => ({
+        id: row.id,
+        seq: row.seq,
+        cursor: row.cursor,
+        preview: row.preview,
+        conversationId: row.receipt.source.conversationId,
+        personaId: row.receipt.recipient.personaId,
+        sessionId: row.receipt.claim?.sessionId
+      })),
+      replies: this.inbox.pendingReplies(20),
+      counts: this.inbox.counts()
     };
   }
-  async dispose() {
-    if (this.closed) return;
+  requestStop() {
     this.stop.abort(Error("\u6E20\u9053\u63A5\u6536\u5DF2\u505C\u6B62"));
+    if (!this.lease) this.consumerStop.abort();
+  }
+  dispose() {
+    if (this.closed) return Promise.resolve();
+    if (this.disposal) return this.disposal;
+    const work = this.finishDispose().finally(() => {
+      if (this.disposal === work) this.disposal = void 0;
+    });
+    this.disposal = work;
+    return work;
+  }
+  async finishDispose() {
+    if (this.closed) return;
+    this.requestStop();
     await this.dispatch.dispose();
+    await this.recovery;
     await Promise.allSettled([...this.opening.values()]);
     for (const agent of this.borrowed.values()) agent.cancel({ kind: "user" });
     const results = await Promise.allSettled(
       [...this.handles.values()].map((handle) => handle.dispose()).concat([...this.borrowed.values()].map((agent) => agent.whenIdle()))
     );
-    await Promise.allSettled([...this.tools]);
+    await Promise.allSettled([...this.tools.keys()]);
     if (results.some((result) => result.status === "rejected"))
       throw new ChannelError("\u90E8\u5206\u539F\u751F\u6E20\u9053\u4F1A\u8BDD\u5C1A\u672A\u5B8C\u6210\u505C\u6B62\uFF0C\u8BF7\u68C0\u67E5\u5BBF\u4E3B\u72B6\u6001", 503);
     this.consumerStop.abort();
@@ -3051,6 +3443,8 @@ var FeishuChannel = class {
 function registerChannels(ctx) {
   const runtimes = /* @__PURE__ */ new Map(), failures = /* @__PURE__ */ new Map();
   let settings, available = false, im, memory;
+  let supervisor, synchronise;
+  ctx.on("px/channels-settings", () => synchronise?.());
   ctx.provide("pxChannels", {
     version: 1,
     tool: (name2, args, exec) => {
@@ -3080,90 +3474,92 @@ function registerChannels(ctx) {
       "agentDefaultModel",
       "sessionProjections",
       "sessions",
+      "sessionPersistence",
       "sessionController",
       "workspaceController",
       "workspaceRegistry"
     ],
     async (host) => {
-      const ownSettings = new NativeChannelSettings(host.configEditor), owned = [];
-      im = host.dshIm;
+      const ownSettings = new NativeChannelSettings(host.configEditor), ownIm = host.dshIm;
+      const home = process.env.DSH_HOME;
+      if (!home) {
+        failures.set("configuration", "DSH_HOME \u672A\u8BBE\u7F6E");
+        return;
+      }
+      im = ownIm;
       memory = host.pxMemoryChannels;
-      available = true;
-      const preset = await host.agentPresets.register({
-        id: "px-channel-public",
-        name: "\u516C\u5171\u6E20\u9053\u4EA4\u6D41\uFF08\u6E20\u9053\u7BA1\u7406\uFF09",
-        description: "\u7531\u6E20\u9053\u521B\u5EFA\uFF0C\u56FA\u5B9A\u4EBA\u683C\u4E0E\u804A\u5929\u53D7\u4F17\uFF0C\u666E\u901A\u65B0\u4F1A\u8BDD\u65E0\u9700\u9009\u62E9\u3002",
-        plugins: [
-          { id: "px-channel-audience", name: "dsh-px-workbench", config: { publicChannel: true } },
-          {
-            id: "persona",
-            name: "@deepseek-ai/dsh-persona",
-            config: { prefix: "Follow the configured persona and current conversation context." }
+      let preset;
+      try {
+        preset = await host.agentPresets.register({
+          id: "px-channel-public",
+          name: "\u516C\u5171\u6E20\u9053\u4EA4\u6D41\uFF08\u6E20\u9053\u7BA1\u7406\uFF09",
+          description: "\u7531\u6E20\u9053\u521B\u5EFA\uFF0C\u56FA\u5B9A\u4EBA\u683C\u4E0E\u804A\u5929\u53D7\u4F17\uFF0C\u666E\u901A\u65B0\u4F1A\u8BDD\u65E0\u9700\u9009\u62E9\u3002",
+          plugins: [
+            { id: "px-channel-audience", name: "dsh-px-workbench", config: { publicChannel: true } },
+            {
+              id: "persona",
+              name: "@deepseek-ai/dsh-persona",
+              config: { prefix: "Follow the configured persona and current conversation context." }
+            },
+            { id: "time-context", name: "@deepseek-ai/dsh-time-context" },
+            {
+              id: "compaction",
+              name: "cordis:group",
+              group: true,
+              isolate: { compaction: true },
+              config: [
+                { id: "compaction-basic", name: "@deepseek-ai/dsh-compaction-basic" },
+                { id: "command-compact", name: "@deepseek-ai/dsh-command-compact" }
+              ]
+            }
+          ]
+        });
+      } catch (error) {
+        failures.set("preset", String(error));
+        return;
+      }
+      const current = new ChannelSupervisor(
+        runtimes,
+        (account) => new FeishuChannel(
+          host,
+          account,
+          () => {
+            const latest = ownSettings.read(), value = latest.configuration.accounts.find((row) => row.accountId === account.accountId);
+            return value && latest.componentEnabled ? value : void 0;
           },
-          { id: "time-context", name: "@deepseek-ai/dsh-time-context" },
-          {
-            id: "compaction",
-            name: "cordis:group",
-            group: true,
-            isolate: { compaction: true },
-            config: [
-              { id: "compaction-basic", name: "@deepseek-ai/dsh-compaction-basic" },
-              { id: "command-compact", name: "@deepseek-ai/dsh-command-compact" }
-            ]
-          }
-        ]
-      });
+          join3(home, "storages", "dsh-px-channels")
+        ),
+        (id2, error) => failures.set(id2, error instanceof Error ? error.message : "\u6E20\u9053\u64CD\u4F5C\u672A\u5B8C\u6210"),
+        (id2) => failures.delete(id2)
+      );
+      const sync = () => {
+        try {
+          const next = ownSettings.read();
+          failures.delete("configuration");
+          current.update(next.componentEnabled ? next.configuration.accounts : []);
+        } catch (error) {
+          failures.set("configuration", String(error));
+          current.update([]);
+        }
+      };
+      supervisor = current;
+      synchronise = sync;
+      available = true;
       host.effect(
         () => async () => {
-          available = false;
-          const settled = await Promise.allSettled(
-            owned.map(async (runtime) => {
-              await runtime.dispose();
-              if (runtimes.get(runtime.accountId) === runtime) runtimes.delete(runtime.accountId);
-            })
-          );
-          if (typeof preset === "function") await preset();
-          if (im === host.dshIm) {
+          if (supervisor === current) {
+            supervisor = void 0;
+            synchronise = void 0;
+            available = false;
             im = void 0;
             memory = void 0;
           }
-          if (settled.some((row) => row.status === "rejected"))
-            throw new ChannelError("\u90E8\u5206\u6E20\u9053\u5C1A\u672A\u5B8C\u6210\u505C\u6B62", 503);
+          await current.close();
+          if (typeof preset === "function") await preset();
         },
         "channels: native consumer and Agent ownership"
       );
-      try {
-        const home = process.env.DSH_HOME;
-        if (!home) throw new ChannelError("DSH_HOME \u672A\u8BBE\u7F6E");
-        await Promise.allSettled(
-          ownSettings.read().configuration.accounts.filter((row) => row.enabled).map(async (account) => {
-            let runtime;
-            try {
-              runtime = new FeishuChannel(
-                host,
-                account,
-                () => ownSettings.read().configuration.accounts.find((row) => row.accountId === account.accountId),
-                join3(home, "storages", "dsh-px-channels")
-              );
-              owned.push(runtime);
-              runtimes.set(account.accountId, runtime);
-              await runtime.start();
-              failures.delete(account.accountId);
-            } catch (error) {
-              failures.set(account.accountId, error instanceof Error ? error.message : "\u6E20\u9053\u63A5\u6536\u672A\u542F\u52A8");
-              if (runtime) {
-                try {
-                  await runtime.dispose();
-                  runtimes.delete(account.accountId);
-                } catch {
-                }
-              }
-            }
-          })
-        );
-      } catch (error) {
-        failures.set("configuration", String(error));
-      }
+      sync();
     }
   );
   ctx.inject(["connection", "webServer"], (host) => {
@@ -3182,28 +3578,76 @@ function registerChannels(ctx) {
           if (rejectUnauthenticatedRequest(req, res, host.connection)) return;
           try {
             if (!settings) throw new ChannelError("\u539F\u751F\u6E20\u9053\u914D\u7F6E\u670D\u52A1\u5C1A\u672A\u5C31\u7EEA", 503);
-            if (req.method === "GET")
+            if (req.method === "GET" && new URL(req.url, "http://127.0.0.1").searchParams.has("describe")) {
+              const id2 = new URL(req.url, "http://127.0.0.1").searchParams.get("describe");
+              if (!id2 || !/^[A-Za-z0-9_-]{1,128}$/.test(id2)) throw new ChannelError("\u673A\u5668\u4EBA\u6807\u8BC6\u65E0\u6548");
+              if (!im) throw new ChannelError("\u539F\u751F IM \u670D\u52A1\u672A\u5C31\u7EEA", 503);
+              const description = await im.describeBot(id2);
+              if (description?.botId !== id2 || description.channel !== "feishu" || !/^[a-f0-9]{64}$/.test(description.account?.fingerprint ?? ""))
+                throw new ChannelError("\u8D26\u53F7\u8EAB\u4EFD\u65E0\u6CD5\u786E\u8BA4", 409);
+              return send(res, 200, {
+                accountId: id2,
+                name: typeof description.account.name === "string" ? description.account.name.slice(0, 200) : id2,
+                fingerprint: description.account.fingerprint,
+                connected: description.connected === true,
+                supported: im.pxModeControlVersion === 1 && description.capabilities?.includes("consumer-mode-control-px1") === true,
+                reception: description.reception ?? null
+              });
+            }
+            if (req.method === "GET") {
+              let accounts = [], discoveryError;
+              try {
+                accounts = im ? await im.listBots() : [];
+              } catch (error) {
+                discoveryError = error instanceof Error ? error.message : "\u65E0\u6CD5\u8BFB\u53D6\u539F\u751F\u8D26\u53F7\u5217\u8868";
+              }
               return send(res, 200, {
                 ...settings.read(),
                 available,
                 personas: memory?.personas() ?? [],
-                accounts: im ? await im.listBots() : [],
+                accounts,
+                discoveryError,
                 runtimes: [...runtimes.values()].map((runtime) => runtime.status()),
                 failures: [...failures].map(([id2, error]) => ({ id: id2, error }))
               });
+            }
             if (req.method !== "POST") return send(res, 405, { error: "\u8BF7\u4F7F\u7528 GET \u6216 POST" });
             if (req.headers["x-dsh-px-request"] !== "1") throw new ChannelError("\u8BF7\u4ECE\u672C\u673A\u6E20\u9053\u9875\u9762\u63D0\u4EA4", 403);
             const body = await readJsonBody(req);
-            if (body.type === "save")
-              return send(res, 200, await settings.save(body.revision, body.configuration));
+            if (body.type === "save") {
+              const saved = await settings.save(body.revision, body.configuration);
+              synchronise?.();
+              return send(res, 200, saved);
+            }
             if (body.type === "stop") {
               if (typeof body.accountId !== "string") throw new ChannelError("\u8D26\u53F7\u65E0\u6548");
-              const runtime = runtimes.get(body.accountId);
-              if (runtime) {
-                await runtime.dispose();
-                runtimes.delete(body.accountId);
-              }
+              if (supervisor) await supervisor.pause(body.accountId);
               return send(res, 200, { stopped: true, persistent: false });
+            }
+            if (body.type === "retry-account") {
+              const snapshot = settings.read();
+              if (!supervisor || !snapshot.componentEnabled || !snapshot.configuration.accounts.some(
+                (row) => row.accountId === body.accountId && row.enabled
+              ))
+                throw new ChannelError("\u8D26\u53F7\u63A5\u6536\u672A\u542F\u7528\u6216\u670D\u52A1\u672A\u5C31\u7EEA", 409);
+              supervisor.retry(body.accountId);
+              return send(res, 200, { accepted: true });
+            }
+            if (["reconcile", "resolve-reply", "retry"].includes(body.type)) {
+              const runtime = runtimes.get(body.accountId);
+              if (!runtime) throw new ChannelError("\u6B64\u8D26\u53F7\u7684\u63A5\u6536\u65B9\u672A\u8FD0\u884C", 409);
+              if (body.type === "reconcile") void runtime.reconcile();
+              else {
+                if (typeof body.id !== "string" || !body.id || body.id.length > 200)
+                  throw new ChannelError("\u8BB0\u5F55\u6807\u8BC6\u65E0\u6548");
+                if (body.type === "retry") runtime.retry(body.id);
+                else {
+                  if (typeof body.revision !== "string" || !["sent", "release"].includes(body.decision))
+                    throw new ChannelError("\u56DE\u590D\u6838\u5BF9\u53C2\u6570\u65E0\u6548");
+                  runtime.resolveReply(body.id, body.revision, body.decision);
+                }
+              }
+              return send(res, 200, { accepted: true });
             }
             throw new ChannelError("\u672A\u77E5\u6E20\u9053\u7BA1\u7406\u64CD\u4F5C");
           } catch (error) {
@@ -3227,6 +3671,15 @@ function json(res, status, body) {
   res.end(JSON.stringify(body));
 }
 async function apply(ctx, config2 = {}) {
+  if (config2.channelSettings === true) {
+    const owner = ctx.root ?? ctx;
+    const notify = () => {
+      owner.emit("px/channels-settings");
+    };
+    notify();
+    ctx.effect?.(() => notify, "channels: configuration change signal");
+    return;
+  }
   if (config2.publicChannel === true) {
     await ctx.inject(["tools", "systemPrompt"], (host) => installPublicChannelAgent(host));
     return;

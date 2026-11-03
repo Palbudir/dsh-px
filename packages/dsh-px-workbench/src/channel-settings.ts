@@ -41,15 +41,7 @@ const list = (value: unknown, max = 200): value is string[] =>
   value.length <= max &&
   value.every((x) => identifier(x, 512)) &&
   new Set(value).size === value.length
-export const defaultChannelAttention = (): ChannelAttentionRouting => ({
-  mode: 'normal',
-  focusedChats: [],
-  mutedChats: [],
-  notifyDirect: true,
-  notifyMentions: true,
-  notifyGroups: false,
-  mentionOverridesMute: true
-})
+export { defaultChannelAttention } from '../../shared/channel-attention'
 export function parseChannelConfiguration(
   value: unknown = { version: 1, accounts: [] }
 ): ChannelConfiguration {
@@ -135,13 +127,17 @@ export class NativeChannelSettings {
   private entry() {
     const rows = this.editor
       .configuration()
-      .filter((row: any) => row.entry?.options?.id === 'dsh-px-workbench')
-    if (rows.length !== 1) throw new ChannelError('PX 工作台配置入口不唯一或尚未就绪', 503)
+      .filter((row: any) => row.entry?.options?.id === 'dsh-px-channel-settings')
+    if (rows.length !== 1) throw new ChannelError('PX 渠道配置入口不唯一或尚未就绪', 503)
     return rows[0].entry
   }
-  read(): { revision: string; configuration: ChannelConfiguration } {
+  read(): { revision: string; configuration: ChannelConfiguration; componentEnabled: boolean } {
     const config = this.entry().options.config ?? {}
-    return { revision: digest(config), configuration: parseChannelConfiguration(config.pxChannels) }
+    return {
+      revision: digest(config),
+      configuration: parseChannelConfiguration(config.pxChannels),
+      componentEnabled: this.entry().options.disabled !== true
+    }
   }
   async save(revision: unknown, proposed: unknown) {
     const entry = this.entry(),

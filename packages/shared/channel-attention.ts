@@ -10,6 +10,15 @@ export interface ChannelAttentionRouting {
   notifyGroups: boolean
   mentionOverridesMute: boolean
 }
+export const defaultChannelAttention = (): ChannelAttentionRouting => ({
+  mode: 'normal',
+  focusedChats: [],
+  mutedChats: [],
+  notifyDirect: true,
+  notifyMentions: true,
+  notifyGroups: false,
+  mentionOverridesMute: true
+})
 export interface ChannelAttentionMessage {
   conversationId: string
   /** Derived from trusted transport metadata, never inferred from message prose. */

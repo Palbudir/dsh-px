@@ -65,7 +65,7 @@ export async function startFeishuConsumer(
     description.channel !== 'feishu' ||
     description.botId !== account.botId ||
     description.account?.fingerprint !== account.fingerprint ||
-    description.connected !== true ||
+    typeof description.connected !== 'boolean' ||
     !['exclusive-text-consumer', 'reply-text-checked', 'consumer-mode-control-px1'].every((cap) =>
       description.capabilities?.includes(cap)
     ) ||
@@ -75,7 +75,7 @@ export async function startFeishuConsumer(
     description.reception.active !== false ||
     description.reception.stopUncertain !== false
   )
-    throw Error('飞书账号身份、连接或接收能力尚未就绪')
+    throw Error('飞书账号身份、接收能力或独占状态尚未就绪')
   let active = false,
     release: (() => void) | undefined
   const report = (error: unknown) => {

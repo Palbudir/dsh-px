@@ -8,6 +8,7 @@ import SessionStore from '@deepseek-ai/dsh-session'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { ChannelInbox } from '../packages/shared/channel-inbox'
 import { admitChannelMessage, reconcileChannelAdmission } from '../packages/shared/channel-admission'
+import { recoverStoredAdmission } from '../packages/shared/channel-recovery'
 
 async function fixture(t: any) {
   const root = mkdtempSync(join(tmpdir(), 'px-channel-admit-')),
@@ -144,4 +145,92 @@ test('revocation and cancellation before admission do not mutate the native inbo
   await assert.rejects(admitChannelMessage(f.inbox, f.row, f.claim, f.native, f.signal), /未投递/)
   assert.equal(f.sent, 0)
   assert.equal(f.inbox.receipt(f.row.id)?.phase, 'received')
+})
+
+test('cold recovery uses the exact preallocated native ID and never resumes or resubmits an Agent', async (t) => {
+  const f = await fixture(t)
+  f.failFlush(true)
+  await assert.rejects(admitChannelMessage(f.inbox, f.row, f.claim, f.native, f.signal))
+  const row = f.inbox.uncertainInputs()[0],
+    events = f.session.snapshotEvents()
+  assert.ok(row.receipt.claim)
+  assert.equal(row.receipt.claim.nativeMessageId, events[0].data.inserted[0].id)
+  let flushed = 0,
+    closed = 0
+  const host = {
+    sessionPersistence: {
+      open: async (id: string, access: string) => {
+        assert.equal(id, f.claim.sessionId)
+        assert.equal(access, 'read')
+        return {
+          header: f.session.header,
+          access: 'read',
+          inheritedEventCount: 0,
+          read: async (offset: number, length: number) => ({ events: events.slice(offset, offset + length) }),
+          close: async () => {
+            closed++
+          }
+        }
+      },
+      flush: async () => {
+        flushed++
+      }
+    },
+    sessions: { get: () => undefined },
+    agents: new Proxy(
+      {},
+      {
+        get() {
+          assert.fail('recovery must not access Agent execution')
+        }
+      }
+    )
+  }
+  assert.equal(await recoverStoredAdmission(host, f.inbox, row, f.signal), 'admitted')
+  assert.equal(flushed, 1)
+  assert.equal(closed, 1)
+  assert.equal(f.sent, 1)
+  assert.equal(f.inbox.receipt(row.id)?.nativeMessageId, row.receipt.claim.nativeMessageId)
+})
+
+test('cold recovery checkpoints bounded scans and excludes inherited evidence', async (t) => {
+  const f = await fixture(t)
+  f.failFlush(true)
+  await assert.rejects(admitChannelMessage(f.inbox, f.row, f.claim, f.native, f.signal))
+  const original = f.session.snapshotEvents()[0],
+    events = Array.from({ length: 1100 }, (_, seq) => ({
+      seq,
+      type: 'session/title',
+      data: { title: 'fixture' }
+    })) as any[]
+  events.push({ ...original, seq: 1100 })
+  let inherited = 0,
+    flushes = 0
+  const host = {
+    sessionPersistence: {
+      open: async () => ({
+        header: f.session.header,
+        access: 'read',
+        get inheritedEventCount() {
+          return inherited
+        },
+        read: async (offset: number, length: number) => {
+          assert.ok(length <= 256)
+          return { events: events.slice(offset, offset + length) }
+        },
+        close: async () => {}
+      }),
+      flush: async () => {
+        flushes++
+      }
+    },
+    sessions: { get: () => undefined }
+  }
+  assert.equal(await recoverStoredAdmission(host, f.inbox, f.inbox.uncertainInputs()[0], f.signal), 'partial')
+  assert.equal(f.inbox.uncertainInputs()[0].cursor, 1024)
+  inherited = 1101
+  assert.equal(await recoverStoredAdmission(host, f.inbox, f.inbox.uncertainInputs()[0], f.signal), 'missing')
+  assert.equal(flushes, 0)
+  assert.equal(f.sent, 1)
+  assert.equal(f.inbox.receipt(f.row.id)?.phase, 'uncertain')
 })

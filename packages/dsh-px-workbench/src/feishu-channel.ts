@@ -7,6 +7,7 @@ import { startFeishuConsumer } from '../../shared/feishu-consumer'
 import { decideChannelAttention } from '../../shared/channel-attention'
 import { ChannelError, type ChannelAccount } from './channel-settings'
 import { nativeModelSelection } from '../../shared/native-model-selection'
+import { recoverStoredAdmission } from '../../shared/channel-recovery'
 
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const get = (ctx: any, key: string) => (ctx.get ? ctx.get(key) : ctx[key])
@@ -17,18 +18,34 @@ export class FeishuChannel {
   get accountId(): string {
     return this.account.accountId
   }
+  matches(account: ChannelAccount): boolean {
+    return (
+      !this.closed &&
+      !this.stop.signal.aborted &&
+      account.enabled &&
+      account.fingerprint === this.account.fingerprint &&
+      account.personaId === this.account.personaId &&
+      account.routeRevision === this.account.routeRevision
+    )
+  }
+  refreshAttention(): void {
+    this.dispatch.schedule()
+  }
   readonly inbox: ChannelInbox
   readonly epoch = randomUUID()
   readonly dispatch: ChannelDispatch
   private readonly stop = new AbortController()
   private readonly consumerStop = new AbortController()
   private readonly borrowed = new Map<string, any>()
-  private readonly tools = new Set<Promise<unknown>>()
+  private readonly tools = new Map<Promise<unknown>, { sessionId: string; name: string }>()
   private closed = false
+  private disposal?: Promise<void>
   private lease?: { dispose(): void }
   private readonly handles = new Map<string, any>()
   private readonly opening = new Map<string, Promise<any>>()
   private readonly failures = new Map<string, string>()
+  private recovery?: Promise<void>
+  private checked = { admitted: 0, missing: 0, errors: 0 }
   constructor(
     private readonly host: any,
     private readonly account: ChannelAccount,
@@ -86,9 +103,79 @@ export class FeishuChannel {
         }
       }
     )
+    void this.reconcile()
+  }
+  reconcile(): Promise<void> {
+    if (this.recovery) return this.recovery
+    if (this.closed || this.stop.signal.aborted || !this.lease) return Promise.resolve()
+    this.checked = { admitted: 0, missing: 0, errors: 0 }
+    const work = (async () => {
+      let after = 0
+      for (;;) {
+        this.stop.signal.throwIfAborted()
+        const batch = this.inbox.uncertainInputs(20, after)
+        if (!batch.length) return
+        for (const first of batch) {
+          let row = first
+          try {
+            for (;;) {
+              const outcome = await recoverStoredAdmission(this.host, this.inbox, row, this.stop.signal)
+              if (outcome === 'partial') {
+                const next = this.inbox.uncertainInputs(1, row.seq - 1)[0]
+                if (next?.id !== row.id) break
+                row = next
+                await new Promise((done) => setTimeout(done, 0))
+                continue
+              }
+              if (outcome === 'admitted') {
+                this.checked.admitted++
+                this.failures.delete(row.id)
+                this.dispatch.schedule()
+              }
+              if (outcome === 'missing') {
+                this.checked.missing++
+                this.failures.set(row.id, '没有找到可确认的原生收件依据，未重新投递')
+              }
+              break
+            }
+          } catch (error) {
+            this.stop.signal.throwIfAborted()
+            this.checked.errors++
+            this.failures.set(row.id, error instanceof Error ? error.message : '原生收件核对失败')
+          }
+          after = first.seq
+        }
+      }
+    })()
+      .catch((error) => {
+        if (!this.stop.signal.aborted) this.failures.set('recovery', String(error))
+      })
+      .finally(() => {
+        if (this.recovery === work) this.recovery = undefined
+      })
+    this.recovery = work
+    return work
+  }
+  resolveReply(id: string, revision: string, decision: 'sent' | 'release'): void {
+    if (this.closed || this.stop.signal.aborted) throw new ChannelError('渠道已停止，请先重新启用后核对', 409)
+    const reply = this.inbox.pendingReply(id)
+    if (!reply) throw new ChannelError('回复已结算，请刷新查看', 409)
+    if (
+      [...this.tools.values()].some(
+        (tool) =>
+          tool.name === 'channel_reply' &&
+          this.memory().inspect(tool.sessionId)?.binding?.channel?.conversationId === reply.conversationId
+      )
+    )
+      throw new ChannelError('本聊天仍有回复正在发送，请等其结束后核对', 409)
+    this.inbox.resolveReply(id, revision, decision)
+  }
+  retry(id: string): void {
+    this.failures.delete(id)
+    this.dispatch.retry(id)
   }
   private selection(row: PendingChannelMessage): 'wake' | 'context' | 'hold' {
-    if (!this.allowed(row)) return 'hold'
+    if (!this.lease || !this.allowed(row)) return 'hold'
     const attention = this.current()!.attention,
       choice = decideChannelAttention(attention, {
         conversationId: row.event.conversationId,
@@ -242,7 +329,8 @@ export class FeishuChannel {
     )
   }
   private origin(agent: any) {
-    if (!this.allowed() || !this.owns(agent)) throw new ChannelError('渠道会话已停止或归属变化', 403)
+    if (!this.lease || !this.allowed() || !this.owns(agent))
+      throw new ChannelError('渠道会话已停止或归属变化', 403)
     const events = agent.session.snapshotEvents()
     for (let i = events.length - 1; i >= 0; i--) {
       const event = events[i]
@@ -260,7 +348,7 @@ export class FeishuChannel {
   }
   tool(name: string, args: any, exec: any): Promise<unknown> {
     const work = this.performTool(name, args, exec)
-    this.tools.add(work)
+    this.tools.set(work, { sessionId: exec.agent?.session.id, name })
     void work.finally(() => this.tools.delete(work)).catch(() => {})
     return work
   }
@@ -303,7 +391,8 @@ export class FeishuChannel {
       JSON.stringify([call.seq, exec.callId]),
       id,
       exec.agent.session.id,
-      args.text
+      args.text,
+      this.epoch
     )
     if (intent.phase === 'sent') return intent.result
     if (intent.phase !== 'new') throw new ChannelError('此前回复未确认，不会自动重复发送', 409)
@@ -349,13 +438,40 @@ export class FeishuChannel {
         preview: row.event.text.slice(0, 160)
       })),
       failures: [...this.failures].map(([id, error]) => ({ id, error })),
-      blocked: this.dispatch.blockedIds()
+      blocked: this.dispatch.blockedIds(),
+      recovering: !!this.recovery,
+      checked: { ...this.checked },
+      uncertain: this.inbox.uncertainInputs(20).map((row) => ({
+        id: row.id,
+        seq: row.seq,
+        cursor: row.cursor,
+        preview: row.preview,
+        conversationId: row.receipt.source.conversationId,
+        personaId: row.receipt.recipient.personaId,
+        sessionId: row.receipt.claim?.sessionId
+      })),
+      replies: this.inbox.pendingReplies(20),
+      counts: this.inbox.counts()
     }
   }
-  async dispose(): Promise<void> {
-    if (this.closed) return
+  requestStop(): void {
     this.stop.abort(Error('渠道接收已停止'))
+    if (!this.lease) this.consumerStop.abort()
+  }
+  dispose(): Promise<void> {
+    if (this.closed) return Promise.resolve()
+    if (this.disposal) return this.disposal
+    const work = this.finishDispose().finally(() => {
+      if (this.disposal === work) this.disposal = undefined
+    })
+    this.disposal = work
+    return work
+  }
+  private async finishDispose(): Promise<void> {
+    if (this.closed) return
+    this.requestStop()
     await this.dispatch.dispose()
+    await this.recovery
     await Promise.allSettled([...this.opening.values()])
     for (const agent of this.borrowed.values()) agent.cancel({ kind: 'user' })
     const results = await Promise.allSettled(
@@ -363,7 +479,7 @@ export class FeishuChannel {
         .map((handle) => handle.dispose())
         .concat([...this.borrowed.values()].map((agent) => agent.whenIdle()))
     )
-    await Promise.allSettled([...this.tools])
+    await Promise.allSettled([...this.tools.keys()])
     if (results.some((result) => result.status === 'rejected'))
       throw new ChannelError('部分原生渠道会话尚未完成停止，请检查宿主状态', 503)
     this.consumerStop.abort()
