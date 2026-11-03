@@ -52,7 +52,7 @@ Desktop 将 updater、workbench、workspace 装配为 installation 层的 `dsh-p
 
 ## 社区能力组合
 
-自 0.5 起的发行清单 schema 2 在 PX 基础包、八个功能包之外，单独声明社区原包。当前固定来源、版本、许可与完整性见 [community-plugins.json](../config/community-plugins.json)：dsh-context 0.75.1、dsh-mnemon 0.5.34、@xmanrui/dsh-im 5.6.0。构建器保存上游原始归档，Desktop 在原生 profile 中分别安装，保留原包身份与配置页，不把它们嵌进 PX 功能包。
+自 0.5 起的发行清单 schema 2 在 PX 基础包、八个功能包之外，单独声明社区成员。当前固定来源、版本、许可与完整性见 [community-plugins.json](../config/community-plugins.json)：dsh-context 0.75.1、dsh-mnemon 0.5.34，以及基于 @xmanrui/dsh-im 5.6.0 的受管兼容版本 5.6.0-px.1。构建器保存上游原始归档，Desktop 在原生 profile 中分别安装，保留包身份与配置页，不把它们嵌进 PX 功能包。派生修改单独披露，不称为未修改的社区原包。
 
 0.6 受管组合通过 `px-knowledge-v2` 默认装配标记，一次性启用 General 策略和 PX 四范围知识 Source；原项目档案保留为手动来源，避免重复自动注入。启用原生生命周期以组装可调用 View，关闭闲时复盘；不默认启用运行时记忆、外部 Provider 或自动历史提炼。完成装配后保留用户后续设置。PX 知识当前复用公开的 Documents 引擎 0.5.11，各范围分开存于 DSH_HOME 的 `storages/dsh-px-knowledge-scopes`；原 Mnemon 存储目录保留。
 
@@ -67,6 +67,14 @@ IM 保留原生机器人配置与渠道管理入口。机器人 App ID、密钥�
 taskflow 的 `task_state` 读取原生权威状态；冷读取只使用原生投影恢复与只读存储，不唤醒 Agent。账本保存时的 Goal/Team 引用由宿主校验，并与当前状态分开。`task_wait` 只观察当前会话的原生 Job、Team 变化和插话，最长等待 60 秒；它不读取作业输出、不唤醒成员、不启动或取消工作。电脑驱动使用可取消的子进程；异常后旧观察失效，不自动重发动作。0.8 代际升级到 DSH 0.2.1-rc.3，并复验模型选择及压缩预算覆盖层；先更新 Desktop，再使用同代际 Pack 独立更新。
 
 Desktop 构建覆盖层还修复原生 Skill 菜单的永久目录缓存：查询候选和打开技能引用时重新使用原生 `skills.list`，合并同一会话正在进行的请求，只在名称变化时通知词表；不会后台轮询或改写调用权限。禁用仍由宿主检查。该修复位于 [native-skill-catalog.ts](../src/shared/native-skill-catalog.ts)，校验锁定版本的完整行为函数并更新运行时文件摘要；CSS 构建路径差异不影响行为校验。连接该宿主的 Web 页面使用相同客户端模块；仅在未修改的官方宿主安装 Pack 不会替换它的原生 UI 文件。
+
+## IM 接收模式兼容
+
+IM 兼容来源与文件摘要见 [im-community.json](../config/im-community.json)。构建校验原包完整性后，对可读源码和固定运行文件应用同一模式恢复逻辑，保留原有 SDK；原生客户端页面从随包源码重新构建。发行检查按文件重新推导并核对派生归档。
+
+飞书原生管理页的“接收模式与恢复”显示处理方式、连接状态及接收方是否仍持有租约。外部接收方退出后，可以明确恢复原生处理；此入口不依赖 PX 插件启用。恢复校验认证账号与当前状态修订，有活动接收方时拒绝抢占。失败后刷新查看实际持久模式，不自动重试或切回另一处理方式。账号、凭据和其他渠道保留；自装 IM 声明仍归用户管理。
+
+该补丁只补齐接管状态与恢复，不自动开启 PX 飞书接收，也不宣称继承独占接收模式中不可用的原生卡片、命令及媒体能力。跨渠道接收的实现与验收边界见 [持续活动规划](design/PERSISTENT-ACTIVITIES.md)。
 
 ## QQ 兼容成员
 

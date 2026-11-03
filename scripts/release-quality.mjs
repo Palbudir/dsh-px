@@ -128,7 +128,7 @@ export function verifyPackOutput(directory, { products, nativePack, communityPin
     )
       throw Error('Pack distribution does not contain the foundation and declared feature bundles')
     const community = new Map((distribution.community ?? []).map((item) => [item.name, item]))
-    let qqPin
+    const adaptedMembers = new Map()
     if (products.protocolGeneration >= 5) {
       const pins =
         communityPins ??
@@ -138,17 +138,19 @@ export function verifyPackOutput(directory, { products, nativePack, communityPin
         pins.some((pin) => {
           const included = community.get(pin.name)
           if (pin.compatibility !== undefined) {
+            const adapter =
+              pin.compatibility === 'qq-v1' ? 'qq' : pin.compatibility === 'im-mode-v1' ? 'im' : null
+            if (!adapter) return true
             const source = JSON.parse(
-              readFileSync(new URL('../config/qq-community.json', import.meta.url), 'utf8')
+              readFileSync(new URL(`../config/${adapter}-community.json`, import.meta.url), 'utf8')
             )
             if (
-              pin.compatibility !== 'qq-v1' ||
               pin.name !== source.name ||
               pin.version !== source.version ||
               pin.integrity !== source.integrity
             )
               return true
-            qqPin = source
+            adaptedMembers.set(source.name, adapter)
             return (
               !included || included.version !== source.derivedVersion || included.defaults !== pin.defaults
             )
@@ -188,9 +190,10 @@ export function verifyPackOutput(directory, { products, nativePack, communityPin
       )
       if (metadata.name !== entry.name || metadata.version !== entry.version)
         throw Error('Distribution member identity mismatch')
-      if (entry.name === qqPin?.name) {
+      if (adaptedMembers.has(entry.name)) {
+        const adapter = adaptedMembers.get(entry.name)
         const parent = realpathSync(tmpdir()),
-          check = mkdtempSync(join(parent, 'px-qq-member-'))
+          check = mkdtempSync(join(parent, `px-${adapter}-member-`))
         try {
           const path = join(check, 'member.tgz')
           writeFileSync(path, member)
@@ -198,8 +201,8 @@ export function verifyPackOutput(directory, { products, nativePack, communityPin
             process.execPath,
             [
               fileURLToPath(new URL('./run.mjs', import.meta.url)),
-              'verify-qq-community',
-              resolve(directory, 'qq-community-source/source.tgz'),
+              `verify-${adapter}-community`,
+              resolve(directory, `${adapter}-community-source/source.tgz`),
               path
             ],
             {
@@ -210,7 +213,8 @@ export function verifyPackOutput(directory, { products, nativePack, communityPin
             }
           )
         } finally {
-          if (!resolve(check).startsWith(parent + sep)) throw Error('Invalid QQ verification directory')
+          if (!resolve(check).startsWith(parent + sep))
+            throw Error('Invalid community verification directory')
           rmSync(check, { recursive: true, force: true })
         }
       }

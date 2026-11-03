@@ -4,6 +4,11 @@ import type { ChannelInbox, ChannelInboxEvent, ChannelRecipient } from './channe
 export interface NativeFeishuIntake {
   contractVersion: number
   inboundVersion: number
+  pxModeControlVersion: number
+  restoreInbound(
+    botId: string,
+    options: { expectedFingerprint: string; expectedRevision: string; signal?: AbortSignal }
+  ): Promise<unknown>
   describeBot(botId: string): Promise<{
     version: number
     botId: string
@@ -11,11 +16,13 @@ export interface NativeFeishuIntake {
     connected: boolean
     account: { fingerprint: string }
     capabilities: string[]
+    reception: { version: number; mode: string; revision: string; active: boolean; stopUncertain: boolean }
   }>
   consumeInbound(
     botId: string,
     options: {
       expectedFingerprint: string
+      expectedRevision: string
       signal: AbortSignal
       onEvent: (event: unknown, context: { signal: AbortSignal }) => Promise<{ accepted: true }>
     }
@@ -46,6 +53,8 @@ export async function startFeishuConsumer(
     throw Error('接收生命周期标识无效')
   account = Object.freeze({ botId: account.botId, fingerprint: account.fingerprint })
   if (native.contractVersion !== 1 || native.inboundVersion !== 1) throw Error('飞书原生接收接口不兼容')
+  if (native.pxModeControlVersion !== 1 || typeof native.restoreInbound !== 'function')
+    throw Error('请使用带接收模式恢复入口的配套 IM 插件，尚未接管账号')
   const controller = new AbortController(),
     signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal
   signal.throwIfAborted()
@@ -57,7 +66,14 @@ export async function startFeishuConsumer(
     description.botId !== account.botId ||
     description.account?.fingerprint !== account.fingerprint ||
     description.connected !== true ||
-    !['exclusive-text-consumer', 'reply-text-checked'].every((cap) => description.capabilities?.includes(cap))
+    !['exclusive-text-consumer', 'reply-text-checked', 'consumer-mode-control-px1'].every((cap) =>
+      description.capabilities?.includes(cap)
+    ) ||
+    description.reception?.version !== 1 ||
+    !['standalone', 'external-consumer'].includes(description.reception.mode) ||
+    !/^[a-f0-9-]{36}$/.test(description.reception.revision) ||
+    description.reception.active !== false ||
+    description.reception.stopUncertain !== false
   )
     throw Error('飞书账号身份、连接或接收能力尚未就绪')
   let active = false,
@@ -93,6 +109,7 @@ export async function startFeishuConsumer(
   try {
     release = await native.consumeInbound(account.botId, {
       expectedFingerprint: account.fingerprint,
+      expectedRevision: description.reception.revision,
       signal,
       onEvent: async (value, context) => {
         const deliverySignal = AbortSignal.any([signal, context.signal])

@@ -6,6 +6,53 @@ import { join, resolve, sep } from 'node:path'
 import { ChannelInbox } from '../packages/shared/channel-inbox'
 import { startFeishuConsumer, type NativeFeishuIntake } from '../packages/shared/feishu-consumer'
 
+test('takeover rejects an unadapted host, an active consumer, and an uncertain old connection before mutation', async () => {
+  const account = { botId: 'bot_a', fingerprint: 'a'.repeat(64) }
+  for (const condition of ['unadapted', 'active', 'uncertain'] as const) {
+    let consumed = false
+    const native: NativeFeishuIntake = {
+      contractVersion: 1,
+      inboundVersion: 1,
+      pxModeControlVersion: condition === 'unadapted' ? 0 : 1,
+      restoreInbound: async () => {},
+      describeBot: async () => ({
+        version: 1,
+        botId: account.botId,
+        channel: 'feishu',
+        connected: true,
+        account,
+        capabilities: ['exclusive-text-consumer', 'reply-text-checked', 'consumer-mode-control-px1'],
+        reception: {
+          version: 1,
+          mode: 'external-consumer',
+          revision: '11111111-1111-4111-8111-111111111111',
+          active: condition === 'active',
+          stopUncertain: condition === 'uncertain'
+        }
+      }),
+      consumeInbound: async () => {
+        consumed = true
+        return () => {}
+      }
+    }
+    const inbox = new Proxy({} as ChannelInbox, {
+      get() {
+        assert.fail('no storage mutation before takeover checks')
+      }
+    })
+    await assert.rejects(
+      startFeishuConsumer(native, account, inbox, {
+        epoch: 'epoch',
+        authorize: () => true,
+        destination: () => ({ personaId: 'persona-a', routeRevision: 1 }),
+        available: () => {},
+        failed: () => {}
+      })
+    )
+    assert.equal(consumed, false, condition)
+  }
+})
+
 test('native consumer commits before acknowledgment, wakes once and blocks callbacks after cancellation', async (t) => {
   const root = mkdtempSync(join(tmpdir(), 'px-feishu-intake-')),
     account = { botId: 'bot_a', fingerprint: 'a'.repeat(64) },
@@ -25,15 +72,25 @@ test('native consumer commits before acknowledgment, wakes once and blocks callb
   const native: NativeFeishuIntake = {
       contractVersion: 1,
       inboundVersion: 1,
+      pxModeControlVersion: 1,
+      restoreInbound: async () => {},
       describeBot: async () => ({
         version: 1,
         botId: account.botId,
         channel: 'feishu',
         connected: true,
         account: { fingerprint: account.fingerprint },
-        capabilities: ['exclusive-text-consumer', 'reply-text-checked']
+        capabilities: ['exclusive-text-consumer', 'reply-text-checked', 'consumer-mode-control-px1'],
+        reception: {
+          version: 1,
+          mode: 'standalone',
+          revision: '11111111-1111-4111-8111-111111111111',
+          active: false,
+          stopUncertain: false
+        }
       }),
       consumeInbound: async (_id, options) => {
+        assert.equal(options.expectedRevision, '11111111-1111-4111-8111-111111111111')
         callback = options.onEvent
         return () => {
           released++
@@ -112,13 +169,22 @@ test('cancelled registration releases its late native handle before exposing a l
     {
       contractVersion: 1,
       inboundVersion: 1,
+      pxModeControlVersion: 1,
+      restoreInbound: async () => {},
       describeBot: async () => ({
         version: 1,
         botId: account.botId,
         channel: 'feishu',
         connected: true,
         account: { fingerprint: account.fingerprint },
-        capabilities: ['exclusive-text-consumer', 'reply-text-checked']
+        capabilities: ['exclusive-text-consumer', 'reply-text-checked', 'consumer-mode-control-px1'],
+        reception: {
+          version: 1,
+          mode: 'standalone',
+          revision: '11111111-1111-4111-8111-111111111111',
+          active: false,
+          stopUncertain: false
+        }
       }),
       consumeInbound: async () => {
         entered()
