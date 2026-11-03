@@ -88,6 +88,7 @@ export class ChannelInbox {
       db.exec(
         'CREATE TABLE IF NOT EXISTS channel_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS channel_messages(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,chat TEXT NOT NULL,message TEXT NOT NULL,digest TEXT NOT NULL,phase TEXT NOT NULL,event TEXT,bytes INTEGER NOT NULL,metadata TEXT NOT NULL,recipient TEXT NOT NULL,claim TEXT,native_message TEXT); CREATE INDEX IF NOT EXISTS channel_pending ON channel_messages(phase,seq);'
       )
+      db.exec('CREATE INDEX IF NOT EXISTS channel_conversation_order ON channel_messages(chat,seq)')
       const identity = JSON.stringify(this.owner),
         existing = db.prepare("SELECT value FROM channel_meta WHERE key='owner'").get()?.value,
         schema = db.prepare("SELECT value FROM channel_meta WHERE key='schema'").get()?.value
@@ -198,13 +199,14 @@ export class ChannelInbox {
       }))
   }
   /** One head per conversation; an unresolved native admission blocks only its own conversation. */
-  heads(limit = 20): PendingChannelMessage[] {
+  heads(limit = 20, afterSequence = 0): PendingChannelMessage[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw Error('收件批次大小无效')
+    if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) throw Error('收件游标无效')
     return this.db
       .prepare(
-        "SELECT m.id,m.seq,m.event,m.recipient FROM channel_messages m WHERE m.phase='received' AND NOT EXISTS (SELECT 1 FROM channel_messages older WHERE older.chat=m.chat AND older.seq<m.seq AND older.phase IN ('received','dispatching','uncertain')) ORDER BY m.seq LIMIT ?"
+        "SELECT m.id,m.seq,m.event,m.recipient FROM channel_messages m WHERE m.phase='received' AND m.seq>? AND NOT EXISTS (SELECT 1 FROM channel_messages older WHERE older.chat=m.chat AND older.seq<m.seq AND older.phase IN ('received','dispatching','uncertain')) ORDER BY m.seq LIMIT ?"
       )
-      .all(limit)
+      .all(afterSequence, limit)
       .map((r) => ({
         id: String(r.id),
         seq: Number(r.seq),
