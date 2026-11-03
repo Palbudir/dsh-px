@@ -8,7 +8,8 @@ import {
   openSync,
   writeFileSync,
   fsyncSync,
-  closeSync
+  closeSync,
+  statSync
 } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -322,7 +323,35 @@ function validate(s: MemoryState): void {
 /** Native logs own conversation history; this store owns identity and explicit private memory. */
 export class MemoryStore {
   private readonly listeners = new Set<() => void>()
+  private authorizationCache?: { version: string; state: MemoryState }
   constructor(private path: string) {}
+  /** Immutable authorization reads avoid reparsing an unchanged file; ordinary editable reads stay detached. */
+  authorizationSnapshot(): MemoryState {
+    const version = (): string => {
+      try {
+        const s = statSync(this.path, { bigint: true })
+        return [s.dev, s.ino, s.size, s.mtimeNs, s.ctimeNs].join(':')
+      } catch (error: any) {
+        if (error?.code === 'ENOENT') return 'missing'
+        throw error
+      }
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const before = version()
+      if (this.authorizationCache?.version === before) return this.authorizationCache.state
+      const state = this.read()
+      if (before !== version()) continue
+      const freeze = (value: any): void => {
+        if (!value || typeof value !== 'object' || Object.isFrozen(value)) return
+        for (const child of Object.values(value)) freeze(child)
+        Object.freeze(value)
+      }
+      freeze(state)
+      this.authorizationCache = { version: before, state }
+      return state
+    }
+    throw new MemoryError('人格授权文件正在变化，请重试', 409)
+  }
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener)
     return () => {
@@ -394,6 +423,7 @@ export class MemoryStore {
         closeSync(fd)
       }
       renameSync(tmp, this.path)
+      this.authorizationCache = undefined
     } finally {
       if (existsSync(tmp)) unlinkSync(tmp)
     }

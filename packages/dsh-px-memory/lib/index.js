@@ -36,7 +36,8 @@ import {
   openSync,
   writeFileSync,
   fsyncSync,
-  closeSync
+  closeSync,
+  statSync
 } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -338,6 +339,34 @@ var MemoryStore = class {
     this.path = path;
   }
   listeners = /* @__PURE__ */ new Set();
+  authorizationCache;
+  /** Immutable authorization reads avoid reparsing an unchanged file; ordinary editable reads stay detached. */
+  authorizationSnapshot() {
+    const version2 = () => {
+      try {
+        const s = statSync(this.path, { bigint: true });
+        return [s.dev, s.ino, s.size, s.mtimeNs, s.ctimeNs].join(":");
+      } catch (error62) {
+        if (error62?.code === "ENOENT") return "missing";
+        throw error62;
+      }
+    };
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const before = version2();
+      if (this.authorizationCache?.version === before) return this.authorizationCache.state;
+      const state = this.read();
+      if (before !== version2()) continue;
+      const freeze = (value) => {
+        if (!value || typeof value !== "object" || Object.isFrozen(value)) return;
+        for (const child of Object.values(value)) freeze(child);
+        Object.freeze(value);
+      };
+      freeze(state);
+      this.authorizationCache = { version: before, state };
+      return state;
+    }
+    throw new MemoryError("\u4EBA\u683C\u6388\u6743\u6587\u4EF6\u6B63\u5728\u53D8\u5316\uFF0C\u8BF7\u91CD\u8BD5", 409);
+  }
   subscribe(listener) {
     this.listeners.add(listener);
     return () => {
@@ -409,6 +438,7 @@ var MemoryStore = class {
         closeSync(fd);
       }
       renameSync(tmp, this.path);
+      this.authorizationCache = void 0;
     } finally {
       if (existsSync(tmp)) unlinkSync(tmp);
     }
@@ -1105,7 +1135,7 @@ var HistoryIndex = class {
     await this.refreshQueue.finally(() => this.db.close());
   }
   allowed(sessionId) {
-    const s = this.store.read(), b = s.bindings[sessionId];
+    const s = this.store.authorizationSnapshot(), b = s.bindings[sessionId];
     if (!b) throw new MemoryError("\u4F1A\u8BDD\u5C1A\u672A\u7ED1\u5B9A\u4EBA\u683C", 409);
     if (b.purpose || isInternalSession(sessionId)) return /* @__PURE__ */ Object.create(null);
     const allowed = Object.fromEntries(
@@ -25610,7 +25640,6 @@ function nativeHistoryScope(store, agent, tool) {
     return shared;
   };
   if (!captured.has(id)) throw new Error("\u5F53\u524D\u539F\u751F\u5386\u53F2\u64CD\u4F5C\u672A\u83B7\u51C6");
-  let currentState;
   return Object.freeze({
     ids: Object.freeze(ids),
     boundedIds: Object.freeze(shared ? [shared.sessionId] : []),
@@ -25618,7 +25647,7 @@ function nativeHistoryScope(store, agent, tool) {
     // the entire source session, including later events and private tool copies.
     bounded(target) {
       try {
-        return bounded2(store.read(), target);
+        return bounded2(store.authorizationSnapshot(), target);
       } catch {
         return;
       }
@@ -25626,7 +25655,7 @@ function nativeHistoryScope(store, agent, tool) {
     allowsEvent(target, seq) {
       if (!Number.isSafeInteger(seq) || seq < 0) return false;
       try {
-        const current = store.read();
+        const current = store.authorizationSnapshot();
         if (captured.has(target) && permits(current, target)) return true;
         const grant = bounded2(current, target);
         return !!grant && seq <= grant.throughSeq;
@@ -25637,13 +25666,7 @@ function nativeHistoryScope(store, agent, tool) {
     allows(target) {
       if (!captured.has(target)) return false;
       try {
-        if (!currentState) {
-          currentState = store.read();
-          queueMicrotask(() => {
-            currentState = void 0;
-          });
-        }
-        return permits(currentState, target);
+        return permits(store.authorizationSnapshot(), target);
       } catch {
         return false;
       }
@@ -25698,12 +25721,12 @@ async function readNativeHandoff(host, history, scope, caller, args, signal) {
   };
   check2();
   for (const count of [args.before ?? 0, args.after ?? 0])
-    if (!Number.isSafeInteger(count) || count < 0 || count > 10)
-      throw new MemoryError("\u4EA4\u63A5\u89C6\u56FE\u6BCF\u4FA7\u6700\u591A\u8BFB\u53D6 10 \u4E2A\u76F8\u90BB\u4E8B\u4EF6");
+    if (!Number.isSafeInteger(count) || count < 0) throw new MemoryError("\u76F8\u90BB\u4E8B\u4EF6\u6570\u91CF\u5FC5\u987B\u662F\u975E\u8D1F\u5B89\u5168\u6574\u6570");
+  const before = Math.min(10, args.before ?? 0), after = Math.min(10, args.after ?? 0);
   const event = await history.read(host, caller, target, args.seq, 0, signal);
   check2();
   const neighbors = [];
-  for (let seq = Math.max(0, args.seq - (args.before ?? 0)); seq <= Math.min(grant.throughSeq, args.seq + (args.after ?? 0)); seq++) {
+  for (let seq = Math.max(0, args.seq - before); seq <= Math.min(grant.throughSeq, args.seq + after); seq++) {
     if (seq === args.seq) continue;
     check2();
     try {
@@ -25723,11 +25746,40 @@ async function readNativeHandoff(host, history, scope, caller, args, signal) {
     view: "explicit-handoff-visible-evidence",
     sessionId: target,
     throughSeq: grant.throughSeq,
+    neighborsLimited: before !== (args.before ?? 0) || after !== (args.after ?? 0) || args.seq + after > grant.throughSeq,
     note: "\u660E\u786E\u4EA4\u63A5\u7684\u53EF\u89C1\u4EA4\u6D41\u4E0E\u6267\u884C\u56DE\u6267\uFF1B\u4E0D\u662F\u5B8C\u6574\u539F\u751F\u4E8B\u4EF6\u3002\u9690\u85CF\u63A8\u7406\u3001\u7CFB\u7EDF\u4E0A\u4E0B\u6587\u3001\u79C1\u6709\u6280\u80FD\u53CA\u8BB0\u5FC6\u5DE5\u5177\u526F\u672C\u4E0D\u968F\u4EA4\u63A5\u516C\u5F00\u3002\u6B63\u6587\u6709 nextOffset \u65F6\uFF0C\u53EF\u7528 persona_history read \u7EE7\u7EED\u8BFB\u53D6\u3002",
     event,
     neighbors
   });
 }
+
+// packages/dsh-px-memory/src/native-visible-query.ts
+import { DatabaseSync as DatabaseSync5 } from "node:sqlite";
+var startMarker = "\uFDD0";
+var endMarker = "\uFDD1";
+var sanitize = (value) => value.replace(/[\0\ufdd0\ufdd1]/g, "\uFFFD");
+var NativeVisibleQuery = class {
+  db;
+  phrase;
+  constructor(query) {
+    const normalized = query.trim().replace(/\s+/gu, " ");
+    if (!normalized || normalized.includes("\0")) throw new MemoryError("\u5386\u53F2\u641C\u7D22\u5185\u5BB9\u65E0\u6548");
+    this.phrase = '"' + sanitize(normalized).replaceAll('"', '""') + '"';
+    this.db = new DatabaseSync5(":memory:");
+    this.db.exec("CREATE VIRTUAL TABLE evidence USING fts5(body, tokenize='unicode61')");
+  }
+  excerpt(text3) {
+    this.db.exec("DELETE FROM evidence");
+    this.db.prepare("INSERT INTO evidence(body) VALUES(?)").run(sanitize(text3));
+    const row = this.db.prepare("SELECT highlight(evidence,0,?,?) marked FROM evidence WHERE evidence MATCH ? LIMIT 1").get(startMarker, endMarker, this.phrase);
+    if (!row) return;
+    const marked = String(row.marked), offset = Math.max(0, marked.indexOf(startMarker) - 100), clean = marked.replaceAll(startMarker, "").replaceAll(endMarker, "");
+    return { snippet: clean.slice(offset, offset + 700), readOffset: offset };
+  }
+  close() {
+    this.db.close();
+  }
+};
 
 // packages/dsh-px-memory/src/native-handoff-search.ts
 async function searchNativeHandoff(host, history, scope, caller, target, query, filters, maxResults, signal) {
@@ -25743,66 +25795,69 @@ async function searchNativeHandoff(host, history, scope, caller, target, query, 
   if (!native?.searchEvents) throw new MemoryError("\u539F\u751F\u5386\u53F2\u641C\u7D22\u670D\u52A1\u4E0D\u53EF\u7528", 503);
   const ranges = filters.filter((filter) => filter.kind === "seq"), from = Math.max(0, ...ranges.map((filter) => filter.from ?? 0)), to = Math.min(grant.throughSeq, ...ranges.map((filter) => filter.to ?? grant.throughSeq)), constrainedFilters = [...filters.filter((filter) => filter.kind !== "seq"), { kind: "seq", from, to }];
   const items = [], seen = /* @__PURE__ */ new Set(), cursors = /* @__PURE__ */ new Set();
-  const terms = query.toLocaleLowerCase().split(/\s+/u).filter(Boolean);
+  const matcher = new NativeVisibleQuery(query);
   let cursor, partial2 = false;
-  for (let pageIndex = 0; from <= to && pageIndex < 50; pageIndex++) {
-    check2();
-    const page = await native.searchEvents(
-      {
-        sessionId: target,
-        query,
-        filters: constrainedFilters,
-        ...cursor === void 0 ? {} : { cursor }
-      },
-      { signal }
-    );
-    check2();
-    if (page.session?.id !== target) throw new MemoryError("\u539F\u751F\u641C\u7D22\u4F1A\u8BDD\u5F52\u5C5E\u4E0D\u4E00\u81F4", 403);
-    for (const hit of page.items) {
-      if (seen.has(hit.seq)) continue;
-      seen.add(hit.seq);
-      if (!scope.allowsEvent(target, hit.seq)) throw new MemoryError("\u539F\u751F\u641C\u7D22\u8FD4\u56DE\u4E86\u4EA4\u63A5\u8303\u56F4\u5916\u7684\u4E8B\u4EF6", 403);
-      let row;
-      try {
-        row = await history.read(host, caller, target, hit.seq, 0, signal);
-      } catch (error62) {
-        check2();
-        if (error62 instanceof MemoryError && [403, 404].includes(error62.status)) continue;
-        throw error62;
-      }
+  try {
+    for (let pageIndex = 0; from <= to && pageIndex < 50; pageIndex++) {
       check2();
-      if (row.nextOffset !== null) partial2 = true;
-      if (!terms.every((term) => row.text.toLocaleLowerCase().includes(term))) continue;
-      const start = Math.max(0, row.text.toLocaleLowerCase().indexOf(terms[0] ?? "") - 100);
-      items.push({
-        seq: row.seq,
-        kind: row.kind,
-        time: row.time,
-        snippet: row.text.slice(start, start + 700),
-        readOffset: start
-      });
-      if (items.length >= Math.min(100, Math.max(1, maxResults))) {
-        partial2 = true;
-        break;
+      const page = await native.searchEvents(
+        {
+          sessionId: target,
+          query,
+          filters: constrainedFilters,
+          ...cursor === void 0 ? {} : { cursor }
+        },
+        { signal }
+      );
+      check2();
+      if (page.session?.id !== target) throw new MemoryError("\u539F\u751F\u641C\u7D22\u4F1A\u8BDD\u5F52\u5C5E\u4E0D\u4E00\u81F4", 403);
+      for (const hit of page.items) {
+        if (seen.has(hit.seq)) continue;
+        seen.add(hit.seq);
+        if (!scope.allowsEvent(target, hit.seq)) throw new MemoryError("\u539F\u751F\u641C\u7D22\u8FD4\u56DE\u4E86\u4EA4\u63A5\u8303\u56F4\u5916\u7684\u4E8B\u4EF6", 403);
+        let row;
+        try {
+          row = await history.read(host, caller, target, hit.seq, 0, signal);
+        } catch (error62) {
+          check2();
+          if (error62 instanceof MemoryError && [403, 404].includes(error62.status)) continue;
+          throw error62;
+        }
+        check2();
+        if (row.nextOffset !== null) partial2 = true;
+        const excerpt = matcher.excerpt(row.text);
+        if (!excerpt) continue;
+        items.push({
+          seq: row.seq,
+          kind: row.kind,
+          time: row.time,
+          ...excerpt
+        });
+        if (items.length >= Math.min(100, Math.max(1, maxResults))) {
+          partial2 = true;
+          break;
+        }
       }
+      if (items.length >= Math.min(100, Math.max(1, maxResults))) break;
+      if (page.nextCursor === void 0) break;
+      if (typeof page.nextCursor !== "string" || cursors.has(page.nextCursor))
+        throw new MemoryError("\u539F\u751F\u5386\u53F2\u641C\u7D22\u6E38\u6807\u65E0\u6CD5\u7EE7\u7EED", 503);
+      cursors.add(page.nextCursor);
+      cursor = page.nextCursor;
+      if (pageIndex === 49) partial2 = true;
     }
-    if (items.length >= Math.min(100, Math.max(1, maxResults))) break;
-    if (page.nextCursor === void 0) break;
-    if (typeof page.nextCursor !== "string" || cursors.has(page.nextCursor))
-      throw new MemoryError("\u539F\u751F\u5386\u53F2\u641C\u7D22\u6E38\u6807\u65E0\u6CD5\u7EE7\u7EED", 503);
-    cursors.add(page.nextCursor);
-    cursor = page.nextCursor;
-    if (pageIndex === 49) partial2 = true;
+    check2();
+    return JSON.stringify({
+      view: "explicit-handoff-search",
+      sessionId: target,
+      throughSeq: grant.throughSeq,
+      items,
+      partial: partial2,
+      note: "\u53EA\u8FD4\u56DE\u660E\u786E\u4EA4\u63A5\u7684\u53EF\u89C1\u4EA4\u6D41\u53CA\u6267\u884C\u56DE\u6267\uFF1B\u4E0D\u8FD4\u56DE\u539F\u751F\u79C1\u6709\u6458\u8981\u3001\u5F53\u524D\u6807\u9898\u6216\u8303\u56F4\u5916\u8BA1\u6570\u3002partial \u8868\u793A\u8FBE\u5230\u68C0\u7D22\u6216\u6B63\u6587\u9884\u7B97\uFF0C\u8BF7\u7F29\u5C0F\u8303\u56F4\u6216\u7528 persona_history \u8BFB\u53D6\u539F\u6587\u3002"
+    });
+  } finally {
+    matcher.close();
   }
-  check2();
-  return JSON.stringify({
-    view: "explicit-handoff-search",
-    sessionId: target,
-    throughSeq: grant.throughSeq,
-    items,
-    partial: partial2,
-    note: "\u53EA\u8FD4\u56DE\u660E\u786E\u4EA4\u63A5\u7684\u53EF\u89C1\u4EA4\u6D41\u53CA\u6267\u884C\u56DE\u6267\uFF1B\u4E0D\u8FD4\u56DE\u539F\u751F\u79C1\u6709\u6458\u8981\u3001\u5F53\u524D\u6807\u9898\u6216\u8303\u56F4\u5916\u8BA1\u6570\u3002partial \u8868\u793A\u8FBE\u5230\u68C0\u7D22\u6216\u6B63\u6587\u9884\u7B97\uFF0C\u8BF7\u7F29\u5C0F\u8303\u56F4\u6216\u7528 persona_history \u8BFB\u53D6\u539F\u6587\u3002"
-  });
 }
 async function appendNativeHandoffs(host, history, scope, caller, args, query, sessionFilters, eventFilters, own2, maxResults, signal) {
   const sources = scope.boundedIds.filter(

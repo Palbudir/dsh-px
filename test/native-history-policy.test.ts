@@ -153,6 +153,16 @@ test('native handoff reads export visible evidence, clamp neighbors and recheck 
     [20, 23]
   )
   assert.ok(!observed.includes(24))
+  const wide = JSON.parse(
+    (await readNativeHandoff({}, history, scope, 'receiver', {
+      session_id: 'source',
+      seq: 22,
+      before: 50,
+      after: 50
+    }))!
+  )
+  assert.equal(wide.neighborsLimited, true)
+  assert.ok(wide.neighbors.every((row: any) => row.seq >= 12 && row.seq <= 23))
   await assert.rejects(
     readNativeHandoff({}, history, scope, 'receiver', { session_id: 'source', seq: 24 }),
     /超出/

@@ -1,6 +1,7 @@
 import { MemoryError } from './store'
 import { service, type HistoryIndex } from './history'
 import type { nativeHistoryScope } from './native-history-policy'
+import { NativeVisibleQuery } from './native-visible-query'
 
 /** Use native query filters/cursors, then export only matches in the shared visible evidence. */
 export async function searchNativeHandoff(
@@ -31,68 +32,71 @@ export async function searchNativeHandoff(
   const items: any[] = [],
     seen = new Set<number>(),
     cursors = new Set<string>()
-  const terms = query.toLocaleLowerCase().split(/\s+/u).filter(Boolean)
+  const matcher = new NativeVisibleQuery(query)
   let cursor: string | undefined,
     partial = false
-  for (let pageIndex = 0; from <= to && pageIndex < 50; pageIndex++) {
-    check()
-    const page = await native.searchEvents(
-      {
-        sessionId: target,
-        query,
-        filters: constrainedFilters,
-        ...(cursor === undefined ? {} : { cursor })
-      },
-      { signal }
-    )
-    check()
-    if (page.session?.id !== target) throw new MemoryError('原生搜索会话归属不一致', 403)
-    for (const hit of page.items) {
-      if (seen.has(hit.seq)) continue
-      seen.add(hit.seq)
-      if (!scope.allowsEvent(target, hit.seq)) throw new MemoryError('原生搜索返回了交接范围外的事件', 403)
-      let row: any
-      try {
-        row = await history.read(host, caller, target, hit.seq, 0, signal)
-      } catch (error) {
-        check()
-        if (error instanceof MemoryError && [403, 404].includes(error.status)) continue
-        throw error
-      }
+  try {
+    for (let pageIndex = 0; from <= to && pageIndex < 50; pageIndex++) {
       check()
-      if (row.nextOffset !== null) partial = true
-      // A match in hidden reasoning/private tool metadata is not a visible-history match.
-      if (!terms.every((term) => row.text.toLocaleLowerCase().includes(term))) continue
-      const start = Math.max(0, row.text.toLocaleLowerCase().indexOf(terms[0] ?? '') - 100)
-      items.push({
-        seq: row.seq,
-        kind: row.kind,
-        time: row.time,
-        snippet: row.text.slice(start, start + 700),
-        readOffset: start
-      })
-      if (items.length >= Math.min(100, Math.max(1, maxResults))) {
-        partial = true
-        break
+      const page = await native.searchEvents(
+        {
+          sessionId: target,
+          query,
+          filters: constrainedFilters,
+          ...(cursor === undefined ? {} : { cursor })
+        },
+        { signal }
+      )
+      check()
+      if (page.session?.id !== target) throw new MemoryError('原生搜索会话归属不一致', 403)
+      for (const hit of page.items) {
+        if (seen.has(hit.seq)) continue
+        seen.add(hit.seq)
+        if (!scope.allowsEvent(target, hit.seq)) throw new MemoryError('原生搜索返回了交接范围外的事件', 403)
+        let row: any
+        try {
+          row = await history.read(host, caller, target, hit.seq, 0, signal)
+        } catch (error) {
+          check()
+          if (error instanceof MemoryError && [403, 404].includes(error.status)) continue
+          throw error
+        }
+        check()
+        if (row.nextOffset !== null) partial = true
+        // A match in hidden reasoning/private tool metadata is not a visible-history match.
+        const excerpt = matcher.excerpt(row.text)
+        if (!excerpt) continue
+        items.push({
+          seq: row.seq,
+          kind: row.kind,
+          time: row.time,
+          ...excerpt
+        })
+        if (items.length >= Math.min(100, Math.max(1, maxResults))) {
+          partial = true
+          break
+        }
       }
+      if (items.length >= Math.min(100, Math.max(1, maxResults))) break
+      if (page.nextCursor === undefined) break
+      if (typeof page.nextCursor !== 'string' || cursors.has(page.nextCursor))
+        throw new MemoryError('原生历史搜索游标无法继续', 503)
+      cursors.add(page.nextCursor)
+      cursor = page.nextCursor
+      if (pageIndex === 49) partial = true
     }
-    if (items.length >= Math.min(100, Math.max(1, maxResults))) break
-    if (page.nextCursor === undefined) break
-    if (typeof page.nextCursor !== 'string' || cursors.has(page.nextCursor))
-      throw new MemoryError('原生历史搜索游标无法继续', 503)
-    cursors.add(page.nextCursor)
-    cursor = page.nextCursor
-    if (pageIndex === 49) partial = true
+    check()
+    return JSON.stringify({
+      view: 'explicit-handoff-search',
+      sessionId: target,
+      throughSeq: grant.throughSeq,
+      items,
+      partial,
+      note: '只返回明确交接的可见交流及执行回执；不返回原生私有摘要、当前标题或范围外计数。partial 表示达到检索或正文预算，请缩小范围或用 persona_history 读取原文。'
+    })
+  } finally {
+    matcher.close()
   }
-  check()
-  return JSON.stringify({
-    view: 'explicit-handoff-search',
-    sessionId: target,
-    throughSeq: grant.throughSeq,
-    items,
-    partial,
-    note: '只返回明确交接的可见交流及执行回执；不返回原生私有摘要、当前标题或范围外计数。partial 表示达到检索或正文预算，请缩小范围或用 persona_history 读取原文。'
-  })
 }
 
 /** Keep full native results separate from sources shared only through a recorded cutoff. */

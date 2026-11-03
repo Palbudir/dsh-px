@@ -162,7 +162,7 @@ export class HistoryIndex {
     await this.refreshQueue.finally(() => this.db.close())
   }
   private allowed(sessionId: string): Record<string, number> {
-    const s = this.store.read(),
+    const s = this.store.authorizationSnapshot(),
       b = s.bindings[sessionId]
     if (!b) throw new MemoryError('会话尚未绑定人格', 409)
     if (b.purpose || isInternalSession(sessionId)) return Object.create(null)

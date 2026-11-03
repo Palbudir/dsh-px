@@ -20,16 +20,13 @@ export async function readNativeHandoff(
   }
   check()
   for (const count of [args.before ?? 0, args.after ?? 0])
-    if (!Number.isSafeInteger(count) || count < 0 || count > 10)
-      throw new MemoryError('交接视图每侧最多读取 10 个相邻事件')
+    if (!Number.isSafeInteger(count) || count < 0) throw new MemoryError('相邻事件数量必须是非负安全整数')
+  const before = Math.min(10, args.before ?? 0),
+    after = Math.min(10, args.after ?? 0)
   const event = await history.read(host, caller, target, args.seq, 0, signal)
   check()
   const neighbors: unknown[] = []
-  for (
-    let seq = Math.max(0, args.seq - (args.before ?? 0));
-    seq <= Math.min(grant.throughSeq, args.seq + (args.after ?? 0));
-    seq++
-  ) {
+  for (let seq = Math.max(0, args.seq - before); seq <= Math.min(grant.throughSeq, args.seq + after); seq++) {
     if (seq === args.seq) continue
     check()
     try {
@@ -50,6 +47,8 @@ export async function readNativeHandoff(
     view: 'explicit-handoff-visible-evidence',
     sessionId: target,
     throughSeq: grant.throughSeq,
+    neighborsLimited:
+      before !== (args.before ?? 0) || after !== (args.after ?? 0) || args.seq + after > grant.throughSeq,
     note: '明确交接的可见交流与执行回执；不是完整原生事件。隐藏推理、系统上下文、私有技能及记忆工具副本不随交接公开。正文有 nextOffset 时，可用 persona_history read 继续读取。',
     event,
     neighbors

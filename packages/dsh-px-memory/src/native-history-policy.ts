@@ -75,7 +75,6 @@ export function nativeHistoryScope(store: MemoryStore, agent: any, tool: string)
     return shared
   }
   if (!captured.has(id)) throw new Error('当前原生历史操作未获准')
-  let currentState: typeof initial | undefined
   return Object.freeze({
     ids: Object.freeze(ids),
     boundedIds: Object.freeze(shared ? [shared.sessionId] : []),
@@ -83,7 +82,7 @@ export function nativeHistoryScope(store: MemoryStore, agent: any, tool: string)
     // the entire source session, including later events and private tool copies.
     bounded(target: string) {
       try {
-        return bounded(store.read(), target)
+        return bounded(store.authorizationSnapshot(), target)
       } catch {
         return
       }
@@ -91,7 +90,7 @@ export function nativeHistoryScope(store: MemoryStore, agent: any, tool: string)
     allowsEvent(target: string, seq: number) {
       if (!Number.isSafeInteger(seq) || seq < 0) return false
       try {
-        const current = store.read()
+        const current = store.authorizationSnapshot()
         if (captured.has(target) && permits(current, target)) return true
         const grant = bounded(current, target)
         return !!grant && seq <= grant.throughSeq
@@ -102,13 +101,7 @@ export function nativeHistoryScope(store: MemoryStore, agent: any, tool: string)
     allows(target: string) {
       if (!captured.has(target)) return false
       try {
-        if (!currentState) {
-          currentState = store.read()
-          queueMicrotask(() => {
-            currentState = undefined
-          })
-        }
-        return permits(currentState, target)
+        return permits(store.authorizationSnapshot(), target)
       } catch {
         return false
       }
