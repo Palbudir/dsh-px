@@ -45,6 +45,8 @@ export class DesktopDriver {
   private tail: Promise<unknown> = Promise.resolve()
   private epoch = 0
   private scopeEpochs = new Map<string, number>()
+  private readonly queued = new Map<symbol, { scope?: string; name: string; at: number }>()
+  private active?: { token: symbol; scope?: string; name: string; at: number }
   constructor(private readonly load: LoadDriver) {}
 
   call(
@@ -53,29 +55,63 @@ export class DesktopDriver {
     signal: AbortSignal,
     scope?: string
   ): Promise<DriverResult> {
+    if (signal.aborted) return Promise.reject(signal.reason ?? Error('桌面操作已取消'))
     const epoch = this.epoch
     const scopeEpoch = scope ? (this.scopeEpochs.get(scope) ?? 0) : 0
+    const token = Symbol('desktop-call')
+    this.queued.set(token, { scope, name, at: Date.now() })
+    let rejectQueued!: (reason: unknown) => void
+    const cancelled = new Promise<never>((_, reject) => {
+      rejectQueued = reject
+    })
+    const abortQueued = () => {
+      if (!this.queued.delete(token)) return
+      signal.removeEventListener('abort', abortQueued)
+      rejectQueued(signal.reason ?? Error('排队中的桌面操作已取消，未发送'))
+    }
+    signal.addEventListener('abort', abortQueued, { once: true })
     const run = this.tail.then(async () => {
+      this.queued.delete(token)
+      signal.removeEventListener('abort', abortQueued)
       signal.throwIfAborted()
       if (epoch !== this.epoch) throw new Error('驱动已关闭，已排队的动作未执行；请重新观察后发起')
       if (scope && name !== '__px_close_scope' && scopeEpoch !== (this.scopeEpochs.get(scope) ?? 0))
         throw new Error('本会话的控制已结束或恢复，原排队动作未执行；请重新观察后发起')
-      this.driver ??= this.load().catch((error) => {
-        this.driver = undefined
-        throw new Error(`无法加载 Cua Driver：${error instanceof Error ? error.message : String(error)}`)
-      })
-      const driver = await this.driver
-      // Cua keeps explicit input-session tombstones across SDK connections. Reconnecting alone
-      // cannot reuse the ended px-* label, including for the first read after a panel resume.
-      const currentArgs =
-        scopeEpoch > 0 && typeof args.session === 'string'
-          ? { ...args, session: `${args.session}-r${scopeEpoch}` }
-          : args
-      const raw = await driver.callTool(name, JSON.stringify(currentArgs), { signal, scope })
-      return JSON.parse(raw.rawJson) as DriverResult
+      this.active = { token, scope, name, at: Date.now() }
+      try {
+        this.driver ??= this.load().catch((error) => {
+          this.driver = undefined
+          throw new Error(`无法加载 Cua Driver：${error instanceof Error ? error.message : String(error)}`)
+        })
+        const driver = await this.driver
+        signal.throwIfAborted()
+        // Cua keeps explicit input-session tombstones across SDK connections. Reconnecting alone
+        // cannot reuse the ended px-* label, including for the first read after a panel resume.
+        const currentArgs =
+          scopeEpoch > 0 && typeof args.session === 'string'
+            ? { ...args, session: `${args.session}-r${scopeEpoch}` }
+            : args
+        const raw = await driver.callTool(name, JSON.stringify(currentArgs), { signal, scope })
+        return JSON.parse(raw.rawJson) as DriverResult
+      } finally {
+        if (this.active?.token === token) this.active = undefined
+      }
     })
     this.tail = run.catch(() => undefined)
-    return run
+    return Promise.race([run, cancelled])
+  }
+
+  occupancy() {
+    return {
+      active: this.active
+        ? { sessionId: this.active.scope, operation: this.active.name, since: this.active.at }
+        : null,
+      queued: [...this.queued.values()].map((row) => ({
+        sessionId: row.scope,
+        operation: row.name,
+        since: row.at
+      }))
+    }
   }
 
   get loaded(): boolean {

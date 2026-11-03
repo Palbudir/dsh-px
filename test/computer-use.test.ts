@@ -769,6 +769,38 @@ test('driver calls are serialized and a failed load is retried', async () => {
   assert.equal(peak, 1)
 })
 
+test('cancelling a queued desktop call returns without waiting for another session or interrupting it', async () => {
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const calls: string[] = []
+  const driver = new DesktopDriver(async () => ({
+    callTool: async (name: string) => {
+      calls.push(name)
+      if (name === 'held') await pending
+      return { rawJson: '{"content":[]}' }
+    },
+    shutdown: async () => {}
+  }))
+  const first = driver.call('held', {}, new AbortController().signal, 'owner-a')
+  await new Promise((resolve) => setImmediate(resolve))
+  const stop = new AbortController()
+  const second = driver.call('queued', {}, stop.signal, 'owner-b')
+  const rejection = assert.rejects(second, /cancel queued/)
+  stop.abort(Error('cancel queued'))
+  await rejection
+  assert.deepEqual(calls, ['held'])
+  assert.equal(driver.occupancy().active?.sessionId, 'owner-a')
+  assert.equal(driver.occupancy().queued.length, 0)
+  release()
+  await first
+  await driver.call('new', {}, new AbortController().signal, 'owner-c')
+  assert.deepEqual(calls, ['held', 'new'])
+  assert.equal(driver.occupancy().active, null)
+  await driver.close()
+})
+
 test('browser launches keep files out of the project and never skip the extension consent', () => {
   const base = { headless: false, cli: 'C:/m/cli.js', node: 'node.exe', electron: true, profileDir: 'D:/p' }
   const isolated = browserArgs({ ...base, mode: 'isolated' }, 'T:/out')

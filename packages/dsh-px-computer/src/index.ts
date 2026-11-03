@@ -30,6 +30,7 @@ import {
 } from './desktop'
 import { InputInstances, INSTANCE_TOOLS } from './instances'
 import { DriverProcess } from './driver-process'
+import { BrowserResourceWaits } from './resource-wait'
 import computerDriver from '../../../config/computer-driver.json'
 import { guidance } from './guidance'
 import { accessPolicy } from './authorization'
@@ -145,6 +146,7 @@ export function apply(ctx: any): void {
     join(tmpdir(), 'dsh-px-computer', String(process.pid)),
     process.env
   )
+  const resourceWaits = new BrowserResourceWaits(browsers, states)
   sweepOutput(join(tmpdir(), 'dsh-px-computer'), (pid) => pid === process.pid || processAlive(pid))
   const approval = (): any => ctx.get?.('approval') ?? ctx.approval
 
@@ -545,6 +547,38 @@ export function apply(ctx: any): void {
     }
   )
 
+  const browserResourceTool = tool(
+    'browser',
+    {
+      name: 'computer_browser_resource',
+      description:
+        '查看浏览器是否可用，或创建原生后台作业等待释放。wait 会立即返回作业编号，可以继续其他工作，通过 job_output 收取通知或 job_kill 取消。通知不预留浏览器、不授予权限、不重放动作。',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['action'],
+        properties: {
+          action: { type: 'string', enum: ['status', 'wait'] },
+          timeout_ms: { type: 'integer', minimum: 1000, maximum: 60000 }
+        }
+      }
+    },
+    () => '浏览器占用',
+    ['action'],
+    async (args, _run, session, signal) => {
+      if (args.action === 'status')
+        return { text: JSON.stringify(browsers.availability(session.id)), images: [] }
+      const waiting = resourceWaits.start(session.agent, Number(args.timeout_ms ?? 30000), signal)
+      return {
+        text: JSON.stringify({
+          ...waiting,
+          message: '等待由原生后台作业处理。继续其他独立工作，完成后重新观察浏览器。'
+        }),
+        images: []
+      }
+    }
+  )
+
   ctx.inject(['tools'], (host: any) => {
     let registered: Array<() => void> = []
     let shape = ''
@@ -558,8 +592,10 @@ export function apply(ctx: any): void {
         for (const spec of DESKTOP_TOOLS) registered.push(host.tools.register(desktopTool(spec)))
       if (windows && current.desktop && current.independentInstances)
         for (const spec of INSTANCE_TOOLS) registered.push(host.tools.register(instanceTool(spec)))
-      if (windows && current.browser !== 'off')
+      if (windows && current.browser !== 'off') {
         for (const spec of BROWSER_TOOLS) registered.push(host.tools.register(browserTool(spec)))
+        registered.push(host.tools.register(browserResourceTool))
+      }
       if (enabled(current)) registered.push(host.tools.register(confirmTool))
     }
     sync(settings.read())
@@ -649,8 +685,13 @@ export function apply(ctx: any): void {
 
   ctx.effect(
     () => async () => {
-      await browsers.closeAll()
-      await driver.close()
+      const results = await Promise.allSettled([resourceWaits.dispose(), browsers.closeAll(), driver.close()])
+      const failures = results.filter((row): row is PromiseRejectedResult => row.status === 'rejected')
+      if (failures.length)
+        throw new AggregateError(
+          failures.map((row) => row.reason),
+          '部分电脑操作资源未完成释放'
+        )
     },
     'computer: shutdown'
   )
@@ -763,8 +804,7 @@ export function apply(ctx: any): void {
       case 'pause':
         instances.forget(sessionId)
         states.pause(sessionId)
-        void browsers.close(sessionId).catch(() => undefined)
-        await driver.releaseSession(sessionId)
+        await Promise.all([browsers.close(sessionId), driver.releaseSession(sessionId)])
         return
       case 'resume':
         instances.forget(sessionId)
@@ -774,8 +814,9 @@ export function apply(ctx: any): void {
         states.resume(sessionId)
         return
       case 'release-browser': {
-        const holder = browsers.holder()
-        if (holder) void browsers.close(holder).catch(() => undefined)
+        if (typeof body.owner !== 'string' || typeof body.generation !== 'string')
+          throw new SettingsError('请刷新并选择具体的浏览器占用记录')
+        await browsers.release(body.owner, body.generation)
         return
       }
       default:
@@ -804,8 +845,21 @@ export function apply(ctx: any): void {
       },
       status: {
         driverLoaded: driver.loaded,
+        desktop: driver.occupancy(),
         browserOpen: browsers.active.includes(sessionId),
         browserHeldElsewhere: !!holder && holder !== sessionId,
+        browsers: browsers.ownership().map((row) => {
+          const agent = observedAgents.get(row.sessionId),
+            titles = ctx.get?.('sessionTitle') ?? ctx.sessionTitle,
+            memory = ctx.get?.('pxMemoryChannels') ?? ctx.pxMemoryChannels
+          let persona: string | undefined
+          try {
+            persona = memory?.inspect(row.sessionId)?.persona?.name
+          } catch {
+            /* status is still useful without identity service */
+          }
+          return { ...row, title: agent && titles?.get(agent.session)?.title, persona }
+        }),
         edgeExtension: edgeExtensionInstalled(process.env),
         platform: process.platform
       }
