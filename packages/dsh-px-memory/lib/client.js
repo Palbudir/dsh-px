@@ -1976,12 +1976,12 @@ function PersonaResourcesPanel({ personaId }) {
         ] }, name)) })
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("div", { style: { marginTop: 12 }, children: /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("label", { children: [
-        "QQ \u8D26\u53F7\u8303\u56F4",
+        "\u6E20\u9053\u8D26\u53F7\u8303\u56F4",
         " ",
         /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)(
           "select",
           {
-            "aria-label": "\u4EBA\u683CQQ\u8D26\u53F7\u8303\u56F4",
+            "aria-label": "\u4EBA\u683C\u6E20\u9053\u8D26\u53F7\u8303\u56F4",
             value: draft.channels.mode,
             onChange: (e) => {
               setSaved(false);
@@ -1995,12 +1995,12 @@ function PersonaResourcesPanel({ personaId }) {
         )
       ] }) }),
       draft.channels.mode === "selected" && /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("label", { style: { display: "block", marginTop: 8 }, children: [
-        "\u6BCF\u884C\u586B\u5199 qq:\u8D26\u53F7ID\uFF1B\u7559\u7A7A\u7981\u7528 QQ",
+        "\u6BCF\u884C\u586B\u5199\u6E20\u9053:\u8D26\u53F7ID\uFF08\u5982 qq:123456\u3001feishu:bot_xxx\uFF09\uFF1B\u7559\u7A7A\u7981\u7528\u6E20\u9053\u8D26\u53F7",
         " ",
         /* @__PURE__ */ (0, import_jsx_runtime9.jsx)(
           "textarea",
           {
-            "aria-label": "\u4EBA\u683C\u5141\u8BB8\u7684QQ\u8D26\u53F7",
+            "aria-label": "\u4EBA\u683C\u5141\u8BB8\u7684\u6E20\u9053\u8D26\u53F7",
             rows: 3,
             value: accounts,
             onChange: (e) => {
@@ -2010,7 +2010,7 @@ function PersonaResourcesPanel({ personaId }) {
           }
         )
       ] }),
-      /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { className: "px-muted", children: "\u8D26\u53F7\u89C4\u5219\u7EA6\u675F PX \u7684 QQ \u8DEF\u7531\u3001\u901A\u77E5\u4E0E\u4EA4\u4ED8\uFF0C\u5176\u4ED6\u6E20\u9053\u4ECD\u7531\u5DE5\u5177\u8303\u56F4\u548C\u539F\u751F\u914D\u7F6E\u63A7\u5236\u3002\u5B83\u4E0D\u4F1A\u65AD\u5F00\u5176\u4ED6\u4EBA\u683C\u5171\u7528\u7684\u8D26\u53F7\u3002" }),
+      /* @__PURE__ */ (0, import_jsx_runtime9.jsx)("p", { className: "px-muted", children: "\u8D26\u53F7\u89C4\u5219\u7EA6\u675F\u5DF2\u63A5\u5165 PX \u7684\u4EBA\u683C\u8DEF\u7531\u3001\u901A\u77E5\u4E0E\u4EA4\u4ED8\uFF1B\u586B\u5199\u8D26\u53F7\u4E0D\u4F1A\u81EA\u52A8\u5EFA\u7ACB\u8FDE\u63A5\u3002\u5176\u4ED6\u6E20\u9053\u4ECD\u7531\u5DE5\u5177\u8303\u56F4\u548C\u539F\u751F\u914D\u7F6E\u63A7\u5236\u3002\u5B83\u4E0D\u4F1A\u65AD\u5F00\u5176\u4ED6\u4EBA\u683C\u5171\u7528\u7684\u8D26\u53F7\u3002" }),
       draft.expiresAt && /* @__PURE__ */ (0, import_jsx_runtime9.jsxs)("p", { children: [
         "\u73B0\u6709\u6388\u6743\u622A\u6B62\uFF1A",
         draft.expiresAt,
@@ -2036,8 +2036,8 @@ function PersonaResourcesPanel({ personaId }) {
               setError("");
               setSaved(false);
               const rows = accounts.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-              if (rows.some((row) => !/^qq:[^\s:]{1,200}$/.test(row))) {
-                setError("\u8D26\u53F7\u683C\u5F0F\u5E94\u4E3A qq:\u8D26\u53F7ID");
+              if (rows.some((row) => !/^[a-z0-9-]{1,80}:[^\s]{1,200}$/.test(row))) {
+                setError("\u6BCF\u884C\u586B\u5199\u6E20\u9053:\u8D26\u53F7ID\uFF0C\u4F8B\u5982 qq:123456 \u6216 feishu:bot_xxx");
                 setBusy(false);
                 return;
               }
@@ -2045,7 +2045,10 @@ function PersonaResourcesPanel({ personaId }) {
                 ...draft,
                 channels: {
                   ...draft.channels,
-                  accounts: rows.map((row) => ({ provider: "qq", accountId: row.slice(3) }))
+                  accounts: rows.map((row) => ({
+                    provider: row.slice(0, row.indexOf(":")),
+                    accountId: row.slice(row.indexOf(":") + 1)
+                  }))
                 }
               };
               void requestJson("/dsh-px-personas", {

@@ -25601,8 +25601,11 @@ var SegmentRuntime = class {
     }
     let result;
     try {
+      const namespace = this.knowledge.namespace(caller, record2.memoryTarget.scope);
+      if (record2.memoryTarget.conversation !== !!namespace.conversation || record2.identity !== this.identity(sessionId).fingerprint)
+        throw new MemoryError("\u8BB0\u5FC6\u5EFA\u8BAE\u7684\u6E20\u9053\u6216\u4EBA\u683C\u8303\u56F4\u5DF2\u53D8\u5316\uFF0C\u672A\u5199\u5165", 409);
       result = await this.knowledge.write(caller, record2.memoryTarget.scope, {
-        key: record2.memoryTarget.conversation ? `QQ \u7ECF\u5386 / ${record2.personaId} / ${memory.key}` : memory.key,
+        key: namespace.conversation ? conversationNotePrefix(namespace.conversation.provider, record2.personaId) + memory.key : memory.key,
         body: record2.memoryTarget.conversation ? JSON.stringify({
           kind: "conversation-observation",
           version: 1,

@@ -19,6 +19,7 @@ import { KnowledgeBank } from '../packages/dsh-px-memory/src/knowledge'
 import { SegmentRuntime } from '../packages/dsh-px-memory/src/segment-runtime'
 import { parseSegmentSummary } from '../packages/dsh-px-memory/src/segment-summarizer'
 import { registerSegmentBoundary } from '../packages/dsh-px-memory/src/segment-context'
+import { ChannelNotes } from '../packages/dsh-px-memory/src/channel-notes'
 
 async function until(check: () => boolean, label: string) {
   const end = Date.now() + 5000
@@ -358,6 +359,30 @@ async function preparedMemory(f: Awaited<ReturnType<typeof fixture>>, id: string
   }, 'memory preparation settled')
   return f.runtime.snapshot(id).records[0]
 }
+
+test('adopted background memory stays visible in its Feishu conversation namespace', async (t) => {
+  const f = await fixture(t)
+  f.identities.bind('feishu-notes', {
+    locked: true,
+    channel: {
+      provider: 'feishu',
+      accountId: 'bot',
+      conversationId: 'oc_group',
+      access: 'public',
+      publicInstructions: '',
+      workspace: f.root
+    }
+  })
+  const row = await preparedMemory(f, 'feishu-notes')
+  assert.equal(row.memoryTarget?.conversation, true)
+  await f.runtime.decideMemory('feishu-notes', row.id, 0, 'accept', f.root)
+  const notes = new ChannelNotes(f.identities, f.bank, (caller, target, seq, signal) =>
+    f.history.read(f.host, caller, target, seq, 0, signal)
+  )
+  const result = await notes.execute('feishu-notes', { action: 'catalog' }, new AbortController().signal)
+  assert.equal(result.total, 1)
+  assert.equal(result.notes[0].topic, '稳定约定')
+})
 
 test('a lost adoption receipt reports the native save and retry cannot overwrite it', async (t) => {
   const f = await fixture(t),

@@ -11,7 +11,7 @@ import {
 import { summarizeSegment, SegmentSummaryError } from './segment-summarizer'
 import { SegmentStore, type SegmentRecord } from './segment-store'
 import { scopedService } from './native-resources'
-import type { KnowledgeBank, KnowledgeCaller } from './knowledge'
+import { conversationNotePrefix, type KnowledgeBank, type KnowledgeCaller } from './knowledge'
 
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const finished = (status: string) => ['completed', 'failed', 'killed'].includes(status)
@@ -622,8 +622,16 @@ export class SegmentRuntime {
     }
     let result: Awaited<ReturnType<KnowledgeBank['write']>>
     try {
+      const namespace = this.knowledge.namespace(caller, record.memoryTarget.scope)
+      if (
+        record.memoryTarget.conversation !== !!namespace.conversation ||
+        record.identity !== this.identity(sessionId).fingerprint
+      )
+        throw new MemoryError('记忆建议的渠道或人格范围已变化，未写入', 409)
       result = await this.knowledge.write(caller, record.memoryTarget.scope, {
-        key: record.memoryTarget.conversation ? `QQ 经历 / ${record.personaId} / ${memory.key}` : memory.key,
+        key: namespace.conversation
+          ? conversationNotePrefix(namespace.conversation.provider, record.personaId) + memory.key
+          : memory.key,
         body: record.memoryTarget.conversation
           ? JSON.stringify({
               kind: 'conversation-observation',

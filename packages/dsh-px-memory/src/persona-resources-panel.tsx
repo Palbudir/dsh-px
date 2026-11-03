@@ -113,9 +113,9 @@ export function PersonaResourcesPanel({ personaId }: { personaId: string }) {
           )}
           <div style={{ marginTop: 12 }}>
             <label>
-              QQ 账号范围{' '}
+              渠道账号范围{' '}
               <select
-                aria-label="人格QQ账号范围"
+                aria-label="人格渠道账号范围"
                 value={draft.channels.mode}
                 onChange={(e: any) => {
                   setSaved(false)
@@ -129,9 +129,9 @@ export function PersonaResourcesPanel({ personaId }: { personaId: string }) {
           </div>
           {draft.channels.mode === 'selected' && (
             <label style={{ display: 'block', marginTop: 8 }}>
-              每行填写 qq:账号ID；留空禁用 QQ{' '}
+              每行填写渠道:账号ID（如 qq:123456、feishu:bot_xxx）；留空禁用渠道账号{' '}
               <textarea
-                aria-label="人格允许的QQ账号"
+                aria-label="人格允许的渠道账号"
                 rows={3}
                 value={accounts}
                 onChange={(e: any) => {
@@ -142,8 +142,8 @@ export function PersonaResourcesPanel({ personaId }: { personaId: string }) {
             </label>
           )}
           <p className="px-muted">
-            账号规则约束 PX 的 QQ
-            路由、通知与交付，其他渠道仍由工具范围和原生配置控制。它不会断开其他人格共用的账号。
+            账号规则约束已接入 PX
+            的人格路由、通知与交付；填写账号不会自动建立连接。其他渠道仍由工具范围和原生配置控制。它不会断开其他人格共用的账号。
           </p>
           {draft.expiresAt && (
             <p>
@@ -169,8 +169,8 @@ export function PersonaResourcesPanel({ personaId }: { personaId: string }) {
                   .split(/\r?\n/)
                   .map((s) => s.trim())
                   .filter(Boolean)
-                if (rows.some((row) => !/^qq:[^\s:]{1,200}$/.test(row))) {
-                  setError('账号格式应为 qq:账号ID')
+                if (rows.some((row) => !/^[a-z0-9-]{1,80}:[^\s]{1,200}$/.test(row))) {
+                  setError('每行填写渠道:账号ID，例如 qq:123456 或 feishu:bot_xxx')
                   setBusy(false)
                   return
                 }
@@ -178,7 +178,10 @@ export function PersonaResourcesPanel({ personaId }: { personaId: string }) {
                   ...draft,
                   channels: {
                     ...draft.channels,
-                    accounts: rows.map((row) => ({ provider: 'qq', accountId: row.slice(3) }))
+                    accounts: rows.map((row) => ({
+                      provider: row.slice(0, row.indexOf(':')),
+                      accountId: row.slice(row.indexOf(':') + 1)
+                    }))
                   }
                 }
                 void requestJson<ResourceView>('/dsh-px-personas', {
