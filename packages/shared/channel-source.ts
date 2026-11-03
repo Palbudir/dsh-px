@@ -86,3 +86,10 @@ export const QQ_CONVERSATION_TOOLS: readonly string[] = [
   'qq_reply',
   'persona_history'
 ]
+export const CHANNEL_CONVERSATION_TOOLS: readonly string[] = [
+  'channel_reply',
+  'channel_history',
+  'channel_memory',
+  'channel_knowledge',
+  'persona_history'
+]

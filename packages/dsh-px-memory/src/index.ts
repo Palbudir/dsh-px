@@ -1,6 +1,10 @@
 import { join } from 'node:path'
 import { ChannelNotes, type ChannelNoteInput } from './channel-notes'
-import { QQ_CONVERSATION_TOOLS, channelMessageOrigin } from '../../shared/channel-source'
+import {
+  QQ_CONVERSATION_TOOLS,
+  CHANNEL_CONVERSATION_TOOLS,
+  channelMessageOrigin
+} from '../../shared/channel-source'
 import {
   MemoryStore,
   MemoryError,
@@ -145,11 +149,20 @@ export function apply(ctx: any): void {
     'system-prompt/assemble',
     async (_assembly: any, context: any, next: () => Promise<any>) => {
       const assembly = await next()
+      const channel = bindingFor(context.agent)?.channel
       if (
         publicSession(bindingFor(context.agent)) &&
-        !assembly.sections.some((section: any) => section.name === 'px-qq-public-persona')
+        !assembly.sections.some(
+          (section: any) =>
+            section.name ===
+            (channel?.provider === 'qq'
+              ? 'px-qq-public-persona'
+              : channel?.provider === 'feishu'
+                ? 'px-channel-public-persona'
+                : null)
+        )
       )
-        throw new MemoryError('QQ 公共会话的权限预设未就绪，请启用配套 QQ 能力或新建普通会话', 409)
+        throw new MemoryError('公共渠道会话的权限预设未就绪，请启用配套能力或新建普通会话', 409)
       return assembly
     },
     { prepend: true }
@@ -163,6 +176,13 @@ export function apply(ctx: any): void {
           if (historyDenial) return historyDenial
           const binding = bindingFor(exec.agent)
           if (!publicSession(binding)) return
+          if (binding!.channel?.provider === 'feishu') {
+            if (binding!.channel.task) return '此渠道的任务授权尚未就绪，未执行本机操作'
+            if (!CHANNEL_CONVERSATION_TOOLS.includes(exec.name))
+              return '公共渠道会话没有本机执行或私有信息权限'
+            return
+          }
+          if (binding!.channel?.provider !== 'qq') return '该公共渠道尚未提供经过验证的工具边界'
           if (binding!.channel?.task) {
             if (!service(host, 'pxQq')?.canRunGroupTask(exec.agent?.session.id))
               return '群任务授权不可用，请检查 QQ 接入与授权成员'

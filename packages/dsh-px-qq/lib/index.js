@@ -432,6 +432,29 @@ var NativeQqSettings = class {
   }
 };
 
+// packages/shared/native-model-selection.ts
+function nativeModelSelection(host, sessionId, fallback) {
+  const get5 = (name2) => host.get ? host.get(name2) : host[name2];
+  return {
+    assembled: void 0,
+    get current() {
+      const session = get5("sessions")?.get(sessionId), pending = session && get5("sessionProjections")?.stateOf(session, "modelSelection")?.pending;
+      if (pending) return { ...pending };
+      const header = session?.requestHeader?.();
+      if (header)
+        return {
+          provider: header.config.provider,
+          model: header.config.model,
+          ...header.config.reasoningEffort !== void 0 && header.adapterDefaults?.reasoningEffort !== true ? { reasoningEffort: header.config.reasoningEffort } : {}
+        };
+      return fallback;
+    },
+    set current(value) {
+      fallback = value;
+    }
+  };
+}
+
 // packages/dsh-px-qq/src/session-policy.ts
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID as randomUUID8 } from "node:crypto";
@@ -944,9 +967,13 @@ function renderPersonaExpression(expression, context) {
   ].filter(Boolean).join("\n");
 }
 
-// packages/dsh-px-qq/src/public-input.ts
+// packages/shared/public-input.ts
 import { randomUUID as randomUUID2 } from "node:crypto";
-function publicInputBoundary(ctx, authority) {
+function publicInputBoundary(ctx, authority, channel = {
+  sourceKind: "plugin:dsh-onebot",
+  noticeKind: "px-qq-authority",
+  label: "qq: public input boundary"
+}) {
   const active = /* @__PURE__ */ new Map();
   const release = (scope) => {
     active.get(scope)?.();
@@ -957,7 +984,7 @@ function publicInputBoundary(ctx, authority) {
     () => () => {
       for (const scope of active.keys()) release(scope);
     },
-    "qq: public input boundary"
+    channel.label
   );
   return (scope = ctx, agent) => {
     release(scope);
@@ -972,11 +999,11 @@ function publicInputBoundary(ctx, authority) {
             (message) => !["dsh-mnemon", "plugin:dsh-mnemon", "agent-instructions"].includes(message.source?.kind)
           );
           const notice = agent && authority?.(agent, messages);
-          if (notice && messages.some((message) => message.source?.kind === "plugin:dsh-onebot"))
+          if (notice && messages.some((message) => message.source?.kind === channel.sourceKind))
             messages.push({
               id: randomUUID2(),
               role: "user",
-              source: { kind: "px-qq-authority" },
+              source: { kind: channel.noticeKind },
               content: [{ type: "text", text: notice }]
             });
           return {
@@ -3726,26 +3753,7 @@ var QqSessionPolicy = class {
     await controller.selectModelForSession({ sessionId: agent.session.id, ...route });
   }
   modelSelection(sessionId, fallback) {
-    const host = this.host;
-    return {
-      assembled: void 0,
-      get current() {
-        const session = get4(host, "sessions")?.get(sessionId);
-        const pending = session && get4(host, "sessionProjections")?.stateOf(session, "modelSelection")?.pending;
-        if (pending) return { ...pending };
-        const header = session?.requestHeader?.();
-        if (header)
-          return {
-            provider: header.config.provider,
-            model: header.config.model,
-            ...header.config.reasoningEffort !== void 0 && header.adapterDefaults?.reasoningEffort !== true ? { reasoningEffort: header.config.reasoningEffort } : {}
-          };
-        return fallback;
-      },
-      set current(value) {
-        fallback = value;
-      }
-    };
+    return nativeModelSelection(this.host, sessionId, fallback);
   }
   defaultModel(fallback) {
     return this.settings.model ? { ...this.settings.model } : fallback;

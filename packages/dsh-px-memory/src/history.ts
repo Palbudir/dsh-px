@@ -28,7 +28,7 @@ export interface HistoryRecord {
 }
 // Loaded skills can contain persona-private instructions. Keep the original native event,
 // but do not re-export its body or invocation metadata through history and handoff tools.
-const privateTools = /^(persona_(memory|history)|qq_memory$|mnemon_|memory_|skill$)/
+const privateTools = /^(persona_(memory|history)|qq_memory$|channel_memory$|mnemon_|memory_|skill$)/
 const texts = (blocks: any): string =>
   Array.isArray(blocks)
     ? blocks

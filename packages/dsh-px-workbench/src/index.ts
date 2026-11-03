@@ -8,6 +8,8 @@ import { readJsonBody } from './http'
 import { registerActivity } from './activity'
 import { installFileEditing } from './file-edit'
 import { installContextPolicy, modelCapacity, ownRequestContext } from './context-policy'
+import { installPublicChannelAgent } from './channel-public-agent'
+import { registerChannels } from './channels'
 
 export const name = 'dsh-px-workbench'
 export const inject: string[] = []
@@ -18,8 +20,13 @@ function json(res: HostResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
-export function apply(ctx: HostPluginContext): void {
+export async function apply(ctx: HostPluginContext, config: { publicChannel?: boolean } = {}): Promise<void> {
+  if (config.publicChannel === true) {
+    await ctx.inject(['tools', 'systemPrompt'], (host: any) => installPublicChannelAgent(host))
+    return
+  }
   installFileEditing(ctx)
+  registerChannels(ctx)
   installContextPolicy(ctx)
   const activity = registerActivity(ctx)
   // dsh profile launchers provide `profileContext` (name, dir); it names the profile whose manifest we report.

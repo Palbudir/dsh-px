@@ -1,4 +1,4 @@
-import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
+import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import type { SessionStore } from '@deepseek-ai/dsh-session'
 import type { ChannelInbox, IngressClaim, PendingChannelMessage } from './channel-inbox'
@@ -60,6 +60,7 @@ export async function admitChannelMessage(
   signal: AbortSignal,
   wake = true
 ): Promise<boolean> {
+  const { createUserMessage } = await import('@deepseek-ai/dsh-llm')
   signal.throwIfAborted()
   if (native.agent.session.id !== claim.sessionId || !native.validate(row, claim))
     throw Error('渠道消息的原生会话、人格或受众已改变，未投递')

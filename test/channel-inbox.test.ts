@@ -153,3 +153,27 @@ test('legacy prototype schema is rejected without assigning existing messages a 
     db.close()
   }
 })
+
+test('reply intents survive restart, deduplicate exact native calls and block an uncertain conversation only', (t) => {
+  const f = fixture(t),
+    a = f.inbox.accept(message(), recipient),
+    claim = { ...recipient, epoch: 'run', sessionId: 'session', requestId: 'request' }
+  assert.throws(() => f.inbox.beginReply('call', a.id, 'session', 'reply'), /持久接收/)
+  f.inbox.claim(a.id, claim)
+  f.inbox.admit(a.id, claim, 'native-message')
+  const intent = f.inbox.beginReply('call', a.id, 'session', 'reply')
+  assert.equal(intent.phase, 'new')
+  assert.equal(f.inbox.beginReply('call', a.id, 'session', 'reply').phase, 'sending')
+  assert.throws(() => f.inbox.beginReply('call', a.id, 'session', 'different'), /内容已变化/)
+  f.reopen()
+  assert.throws(() => f.inbox.beginReply('new-call', a.id, 'session', 'reply'), /尚未确认/)
+  f.inbox.finishReply(intent.id, 'sent', { sent: true, messageId: 'external-reply' })
+  assert.deepEqual(f.inbox.beginReply('call', a.id, 'session', 'reply').result, {
+    sent: true,
+    messageId: 'external-reply'
+  })
+  const next = f.inbox.beginReply('new-call', a.id, 'session', 'another reply')
+  f.inbox.finishReply(next.id, 'uncertain', { code: 'reply-result-unknown' })
+  f.reopen()
+  assert.throws(() => f.inbox.beginReply('third-call', a.id, 'session', 'another'), /尚未确认/)
+})

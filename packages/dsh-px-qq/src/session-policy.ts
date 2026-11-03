@@ -1,3 +1,4 @@
+import { nativeModelSelection } from '../../shared/native-model-selection'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
@@ -1374,30 +1375,7 @@ export class QqSessionPolicy {
     await controller.selectModelForSession({ sessionId: agent.session.id, ...route })
   }
   modelSelection(sessionId: string, fallback: any): any {
-    const host = this.host
-    return {
-      assembled: undefined,
-      get current() {
-        const session = get(host, 'sessions')?.get(sessionId)
-        const pending =
-          session && get(host, 'sessionProjections')?.stateOf(session, 'modelSelection')?.pending
-        if (pending) return { ...pending }
-        const header = session?.requestHeader?.()
-        if (header)
-          return {
-            provider: header.config.provider,
-            model: header.config.model,
-            ...(header.config.reasoningEffort !== undefined &&
-            header.adapterDefaults?.reasoningEffort !== true
-              ? { reasoningEffort: header.config.reasoningEffort }
-              : {})
-          }
-        return fallback
-      },
-      set current(value: any) {
-        fallback = value
-      }
-    }
+    return nativeModelSelection(this.host, sessionId, fallback)
   }
   defaultModel(fallback: any): any {
     return this.settings.model ? { ...this.settings.model } : fallback

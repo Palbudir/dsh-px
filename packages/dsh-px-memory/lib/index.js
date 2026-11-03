@@ -1787,6 +1787,13 @@ var QQ_CONVERSATION_TOOLS = [
   "qq_reply",
   "persona_history"
 ];
+var CHANNEL_CONVERSATION_TOOLS = [
+  "channel_reply",
+  "channel_history",
+  "channel_memory",
+  "channel_knowledge",
+  "persona_history"
+];
 
 // packages/shared/request-trust.ts
 function rejectUnauthenticatedRequest(req, res, connection) {
@@ -1932,7 +1939,7 @@ import { DatabaseSync as DatabaseSync2 } from "node:sqlite";
 import { createHash as createHash3 } from "node:crypto";
 import { mkdirSync as mkdirSync4, existsSync as existsSync2, renameSync as renameSync2 } from "node:fs";
 import { dirname as dirname3 } from "node:path";
-var privateTools = /^(persona_(memory|history)|qq_memory$|mnemon_|memory_|skill$)/;
+var privateTools = /^(persona_(memory|history)|qq_memory$|channel_memory$|mnemon_|memory_|skill$)/;
 var texts = (blocks) => Array.isArray(blocks) ? blocks.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n") : "";
 var hash = (event) => createHash3("sha256").update(JSON.stringify(event)).digest("hex");
 function historyRecord(event, resolveTool) {
@@ -26194,8 +26201,11 @@ function apply(ctx) {
     "system-prompt/assemble",
     async (_assembly, context, next) => {
       const assembly = await next();
-      if (publicSession(bindingFor(context.agent)) && !assembly.sections.some((section) => section.name === "px-qq-public-persona"))
-        throw new MemoryError("QQ \u516C\u5171\u4F1A\u8BDD\u7684\u6743\u9650\u9884\u8BBE\u672A\u5C31\u7EEA\uFF0C\u8BF7\u542F\u7528\u914D\u5957 QQ \u80FD\u529B\u6216\u65B0\u5EFA\u666E\u901A\u4F1A\u8BDD", 409);
+      const channel = bindingFor(context.agent)?.channel;
+      if (publicSession(bindingFor(context.agent)) && !assembly.sections.some(
+        (section) => section.name === (channel?.provider === "qq" ? "px-qq-public-persona" : channel?.provider === "feishu" ? "px-channel-public-persona" : null)
+      ))
+        throw new MemoryError("\u516C\u5171\u6E20\u9053\u4F1A\u8BDD\u7684\u6743\u9650\u9884\u8BBE\u672A\u5C31\u7EEA\uFF0C\u8BF7\u542F\u7528\u914D\u5957\u80FD\u529B\u6216\u65B0\u5EFA\u666E\u901A\u4F1A\u8BDD", 409);
       return assembly;
     },
     { prepend: true }
@@ -26209,6 +26219,13 @@ function apply(ctx) {
         if (historyDenial) return historyDenial;
         const binding = bindingFor(exec.agent);
         if (!publicSession(binding)) return;
+        if (binding.channel?.provider === "feishu") {
+          if (binding.channel.task) return "\u6B64\u6E20\u9053\u7684\u4EFB\u52A1\u6388\u6743\u5C1A\u672A\u5C31\u7EEA\uFF0C\u672A\u6267\u884C\u672C\u673A\u64CD\u4F5C";
+          if (!CHANNEL_CONVERSATION_TOOLS.includes(exec.name))
+            return "\u516C\u5171\u6E20\u9053\u4F1A\u8BDD\u6CA1\u6709\u672C\u673A\u6267\u884C\u6216\u79C1\u6709\u4FE1\u606F\u6743\u9650";
+          return;
+        }
+        if (binding.channel?.provider !== "qq") return "\u8BE5\u516C\u5171\u6E20\u9053\u5C1A\u672A\u63D0\u4F9B\u7ECF\u8FC7\u9A8C\u8BC1\u7684\u5DE5\u5177\u8FB9\u754C";
         if (binding.channel?.task) {
           if (!service(host, "pxQq")?.canRunGroupTask(exec.agent?.session.id))
             return "\u7FA4\u4EFB\u52A1\u6388\u6743\u4E0D\u53EF\u7528\uFF0C\u8BF7\u68C0\u67E5 QQ \u63A5\u5165\u4E0E\u6388\u6743\u6210\u5458";

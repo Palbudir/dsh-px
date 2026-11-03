@@ -89,6 +89,9 @@ export class ChannelInbox {
         'CREATE TABLE IF NOT EXISTS channel_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS channel_messages(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,chat TEXT NOT NULL,message TEXT NOT NULL,digest TEXT NOT NULL,phase TEXT NOT NULL,event TEXT,bytes INTEGER NOT NULL,metadata TEXT NOT NULL,recipient TEXT NOT NULL,claim TEXT,native_message TEXT); CREATE INDEX IF NOT EXISTS channel_pending ON channel_messages(phase,seq);'
       )
       db.exec('CREATE INDEX IF NOT EXISTS channel_conversation_order ON channel_messages(chat,seq)')
+      db.exec(
+        'CREATE TABLE IF NOT EXISTS channel_replies(id TEXT PRIMARY KEY,chat TEXT NOT NULL,source TEXT NOT NULL,session TEXT NOT NULL,digest TEXT NOT NULL,phase TEXT NOT NULL,result TEXT); CREATE INDEX IF NOT EXISTS channel_reply_pending ON channel_replies(chat,phase)'
+      )
       const identity = JSON.stringify(this.owner),
         existing = db.prepare("SELECT value FROM channel_meta WHERE key='owner'").get()?.value,
         schema = db.prepare("SELECT value FROM channel_meta WHERE key='schema'").get()?.value
@@ -275,6 +278,68 @@ export class ChannelInbox {
         )
         .run(key).changes === 1
     )
+  }
+  beginReply(
+    callId: string,
+    sourceId: string,
+    sessionId: string,
+    text: string
+  ): { id: string; phase: string; result?: unknown } {
+    if (!id(callId) || !id(sessionId) || typeof text !== 'string' || !text.trim() || text.length > 4000)
+      throw Error('渠道回复参数无效')
+    const source = this.receipt(sourceId)
+    if (source?.phase !== 'admitted' || source.claim?.sessionId !== sessionId)
+      throw Error('回复缺少已持久接收的原生来源')
+    const key = hash([sessionId, sourceId, callId]),
+      digest = hash([sourceId, text])
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const previous = this.db.prepare('SELECT digest,phase,result FROM channel_replies WHERE id=?').get(key)
+      if (previous) {
+        if (previous.digest !== digest) throw Error('同一原生调用的回复内容已变化')
+        this.db.exec('COMMIT')
+        return {
+          id: key,
+          phase: String(previous.phase),
+          ...(previous.result ? { result: JSON.parse(String(previous.result)) } : {})
+        }
+      }
+      if (
+        this.db
+          .prepare("SELECT id FROM channel_replies WHERE chat=? AND phase IN ('sending','uncertain') LIMIT 1")
+          .get(source.source.conversationId)
+      )
+        throw Error('此聊天有回复尚未确认，请先核对，不要重复发送')
+      if (Number(this.db.prepare('SELECT count(*) n FROM channel_replies').get()!.n) >= this.bounds.records)
+        throw Error('回复凭据容量已满，未丢弃原记录')
+      this.db
+        .prepare(
+          "INSERT INTO channel_replies(id,chat,source,session,digest,phase) VALUES(?,?,?,?,?,'sending')"
+        )
+        .run(key, source.source.conversationId, sourceId, sessionId, digest)
+      this.db.exec('COMMIT')
+      return { id: key, phase: 'new' }
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+  finishReply(key: string, phase: 'sent' | 'uncertain' | 'refused', result: unknown): void {
+    const data = JSON.stringify(result)
+    if (typeof data !== 'string' || Buffer.byteLength(data) > 8192) throw Error('回复回执超出容量')
+    if (
+      this.db
+        .prepare("UPDATE channel_replies SET phase=?,result=? WHERE id=? AND phase='sending'")
+        .run(phase, data, key).changes !== 1
+    )
+      throw Error('回复状态已变化，未覆盖旧回执')
+  }
+  hasPendingMention(conversationId: string): boolean {
+    return !!this.db
+      .prepare(
+        "SELECT id FROM channel_messages WHERE chat=? AND phase='received' AND json_extract(event,'$.mentioned')=1 LIMIT 1"
+      )
+      .get(conversationId)
   }
   close(): void {
     this.db.close()
