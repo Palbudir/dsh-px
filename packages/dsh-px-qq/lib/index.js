@@ -198,6 +198,25 @@ function taskRequester(settings, channel, events, requestMessageId) {
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
 
+// packages/shared/channel-attention.ts
+function decideChannelAttention(settings, message) {
+  if (!["focus", "normal", "notifications"].includes(settings.mode) || !["direct", "group"].includes(message.kind) || typeof message.conversationId !== "string" || !message.conversationId.trim() || message.conversationId.length > 200 || /[\r\n\0]/.test(message.conversationId))
+    throw new Error("\u6E20\u9053\u6D88\u606F\u6A21\u5F0F\u6216\u804A\u5929\u6807\u8BC6\u65E0\u6548");
+  if (message.self) return { content: "ignore", notify: false, reason: "self" };
+  const direct = message.kind === "direct", muted = settings.mutedChats.includes(message.conversationId) && !(message.mentioned && settings.mentionOverridesMute), notify = !muted && (direct ? settings.notifyDirect : message.mentioned ? settings.notifyMentions : settings.notifyGroups);
+  if (settings.mode === "focus") return { content: "full", notify: false, reason: "focus" };
+  if (settings.openedChats?.includes(message.conversationId))
+    return { content: "full", notify: false, reason: "watched" };
+  if (settings.mode === "notifications")
+    return { content: "preview", notify, reason: muted ? "muted" : "notification" };
+  if (settings.focusedChats.includes(message.conversationId))
+    return { content: "full", notify: false, reason: "watched" };
+  if (muted) return { content: "preview", notify: false, reason: "muted" };
+  if (direct) return { content: "full", notify: false, reason: "direct" };
+  if (message.mentioned) return { content: "full", notify: false, reason: "mention" };
+  return { content: "preview", notify, reason: "unfocused" };
+}
+
 // packages/dsh-px-qq/src/attention.ts
 var DEFAULT_ATTENTION = {
   mode: "normal",
@@ -240,21 +259,12 @@ function validAttentionChat(value) {
 }
 function attentionDelivery(settings, message) {
   if (!validAttentionChat(message.chatId)) throw new Error("QQ \u6D88\u606F\u6240\u5C5E\u804A\u5929\u65E0\u6548");
-  if (message.self) return { content: "ignore", notify: false, reason: "self" };
-  const direct = message.chatId.startsWith("private:");
-  const muted = settings.mutedChats.includes(message.chatId) && !(message.mentioned && settings.mentionOverridesMute);
-  const notify = !muted && (direct ? settings.notifyDirect : message.mentioned ? settings.notifyMentions : settings.notifyGroups);
-  if (settings.mode === "focus") return { content: "full", notify: false, reason: "focus" };
-  if (settings.openedChats?.includes(message.chatId))
-    return { content: "full", notify: false, reason: "watched" };
-  if (settings.mode === "notifications")
-    return { content: "preview", notify, reason: muted ? "muted" : "notification" };
-  if (settings.focusedChats.includes(message.chatId))
-    return { content: "full", notify: false, reason: "watched" };
-  if (muted) return { content: "preview", notify: false, reason: "muted" };
-  if (direct) return { content: "full", notify: false, reason: "direct" };
-  if (message.mentioned) return { content: "full", notify: false, reason: "mention" };
-  return { content: "preview", notify, reason: "unfocused" };
+  return decideChannelAttention(settings, {
+    conversationId: message.chatId,
+    kind: message.chatId.startsWith("private:") ? "direct" : "group",
+    mentioned: message.mentioned,
+    self: message.self
+  });
 }
 var QqAttentionControl = class {
   constructor(settings, now = Date.now) {

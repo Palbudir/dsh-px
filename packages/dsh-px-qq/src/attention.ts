@@ -1,3 +1,4 @@
+import { decideChannelAttention } from '../../shared/channel-attention'
 /** Attention controls delivery and wakeups, never actor authorization or memory visibility. */
 export type QqAttentionMode = 'focus' | 'normal' | 'notifications'
 export interface QqAttentionSettings {
@@ -65,25 +66,12 @@ export function attentionDelivery(
   message: AttentionMessage
 ): AttentionDelivery {
   if (!validAttentionChat(message.chatId)) throw new Error('QQ 消息所属聊天无效')
-  if (message.self) return { content: 'ignore', notify: false, reason: 'self' }
-  const direct = message.chatId.startsWith('private:')
-  const muted =
-    settings.mutedChats.includes(message.chatId) && !(message.mentioned && settings.mentionOverridesMute)
-  const notify =
-    !muted &&
-    (direct ? settings.notifyDirect : message.mentioned ? settings.notifyMentions : settings.notifyGroups)
-  // Explicitly looking at a chat is different from being interrupted by its notification.
-  if (settings.mode === 'focus') return { content: 'full', notify: false, reason: 'focus' }
-  if (settings.openedChats?.includes(message.chatId))
-    return { content: 'full', notify: false, reason: 'watched' }
-  if (settings.mode === 'notifications')
-    return { content: 'preview', notify, reason: muted ? 'muted' : 'notification' }
-  if (settings.focusedChats.includes(message.chatId))
-    return { content: 'full', notify: false, reason: 'watched' }
-  if (muted) return { content: 'preview', notify: false, reason: 'muted' }
-  if (direct) return { content: 'full', notify: false, reason: 'direct' }
-  if (message.mentioned) return { content: 'full', notify: false, reason: 'mention' }
-  return { content: 'preview', notify, reason: 'unfocused' }
+  return decideChannelAttention(settings, {
+    conversationId: message.chatId,
+    kind: message.chatId.startsWith('private:') ? 'direct' : 'group',
+    mentioned: message.mentioned,
+    self: message.self
+  })
 }
 
 /** Temporary attention is local to one account, bounded, and superseded by every explicit user setting. */
