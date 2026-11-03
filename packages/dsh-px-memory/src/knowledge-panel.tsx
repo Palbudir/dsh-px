@@ -687,6 +687,11 @@ export function KnowledgePanel({
                 />
                 允许原生 Agent 发现和调用
               </label>
+              {skillScope === 'persona' && (
+                <p className="px-muted">
+                  点击保存只授权写入此人格的这一个技能文件，不改变会话访问模式或模型的文件权限。
+                </p>
+              )}
               <div className="px-actions">
                 <button
                   disabled={busy || !skillName || !skillDescription || !body}

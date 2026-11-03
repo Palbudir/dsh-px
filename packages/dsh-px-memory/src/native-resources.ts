@@ -1,4 +1,5 @@
 import { join, dirname, resolve } from 'node:path'
+import { lstat } from 'node:fs/promises'
 import { MemoryError } from './store'
 import { service } from './history'
 import type { FileReference, KnowledgeCaller } from './knowledge'
@@ -31,6 +32,24 @@ function skillName(value: unknown): string {
   if (typeof value !== 'string' || value.length > 80 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value))
     throw new MemoryError('技能名需使用小写英文、数字和连字符')
   return value
+}
+/** A human save may target one managed file, never a redirected ancestor or another persona. */
+async function assertPrivateSkillPath(home: string, personaId: string, name: string): Promise<void> {
+  const ownerRoot = personaSkillDirectory(home, personaId)
+  for (const path of [
+    join(home, 'storages'),
+    join(home, 'storages', 'dsh-px-persona-skills'),
+    ownerRoot,
+    join(ownerRoot, name),
+    join(ownerRoot, name, 'SKILL.md')
+  ]) {
+    try {
+      if ((await lstat(path)).isSymbolicLink())
+        throw new MemoryError('人格技能保存位置包含链接，请使用所属人格的受管目录', 409)
+    } catch (error: any) {
+      if (error?.code !== 'ENOENT') throw error
+    }
+  }
 }
 /** Match the pinned native filesystem provider: nearest .git ancestor, otherwise the selected cwd. */
 export async function nativeSkillProjectRoot(fs: any, cwd: string): Promise<string> {
@@ -148,6 +167,7 @@ export async function skillAction(host: any, caller: KnowledgeCaller, home: stri
   if (!agent || !sandbox?.resolve)
     throw new MemoryError('当前会话的原生文件权限暂不可用，请重新打开会话', 503)
   const policy = sandbox.resolve({ session: agent.session })
+  const manualPrivateSave = args.scope === 'persona' && caller.actor === 'human'
   if (args.scope === 'persona' && !privatePersona) throw new MemoryError('当前会话不能编辑人格私有技能', 403)
   if (args.scope === 'project' && !caller.project) throw new MemoryError('项目技能需要当前项目')
   if (
@@ -195,17 +215,26 @@ export async function skillAction(host: any, caller: KnowledgeCaller, home: stri
   const { stringify: stringifyYaml } = await import('yaml')
   let result
   try {
+    let writeTarget = target
+    if (manualPrivateSave) {
+      await assertPrivateSkillPath(home, privatePersona!, name)
+      writeTarget = await fs.resolve(path, { cwd: caller.project })
+      if (!target.targetKey || target.targetKey !== writeTarget.targetKey)
+        throw new MemoryError('技能保存位置已变化，请刷新后核对', 409)
+    }
     if (args.scope === 'persona') {
       const fresh = identities.inspect(caller.sessionId)
       if (fresh.persona?.id !== privatePersona || fresh.persona?.archived || publicSession(fresh.binding))
         throw new MemoryError('人格或资料范围已经改变，草稿未写入', 409)
     }
     result = await fs.writeText(
-      target,
+      writeTarget,
       '---\n' + stringifyYaml(metadata) + '---\n\n' + args.body.trim() + '\n',
       info ? { kind: 'replaceIfVersion', version: info.version } : { kind: 'createIfAbsent' },
       undefined,
-      policy
+      // Per-call native policy only. The authenticated settings handler supplies actor;
+      // neither request-body fields nor model calls can change the session policy.
+      manualPrivateSave ? { ...policy, mode: 'danger-full-access' } : policy
     )
   } catch (error) {
     if (error instanceof Error && (error as any).code === 'FS_SANDBOX_DENIED')

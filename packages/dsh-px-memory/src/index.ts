@@ -35,6 +35,9 @@ import { PersonaResourceAccess, installPersonaResourceAccess } from './persona-r
 import { SegmentRuntime } from './segment-runtime'
 import { registerSegmentBoundary } from './segment-context'
 import { nativeHistoryGuard, nativeHistoryScope } from './native-history-policy'
+import { readNativeHandoff } from './native-handoff-read'
+import { searchNativeHandoff, appendNativeHandoffs } from './native-handoff-search'
+import { traceNativeHandoff } from './native-handoff-trace'
 import { HotMemory } from './hot-memory'
 import { currentMemoryEvidence } from './hot-memory-evidence'
 
@@ -51,9 +54,77 @@ export function apply(ctx: any): void {
   const root = process.env.DSH_HOME
   if (!root) throw new Error('DSH_HOME 未设置，无法保存人格与记忆')
   const store = new MemoryStore(join(root, 'storages', name, 'memory.json'))
+  let handoffHistory: HistoryIndex | undefined
   ctx.provide('pxNativeHistorySubjects', {
     version: 1,
-    scope: (agent: any, tool: string) => nativeHistoryScope(store, agent, tool)
+    scope: (agent: any, tool: string) => nativeHistoryScope(store, agent, tool),
+    readBounded: (
+      scope: ReturnType<typeof nativeHistoryScope>,
+      caller: string,
+      args: any,
+      signal?: AbortSignal
+    ) => {
+      if (!handoffHistory) throw new MemoryError('交接历史读取服务尚未就绪', 503)
+      return readNativeHandoff(ctx, handoffHistory, scope, caller, args, signal)
+    },
+    traceBounded: (
+      scope: ReturnType<typeof nativeHistoryScope>,
+      caller: string,
+      target: string,
+      seq: number | undefined,
+      signal: AbortSignal
+    ) => {
+      if (!handoffHistory) throw new MemoryError('交接历史追溯服务尚未就绪', 503)
+      return traceNativeHandoff(ctx, handoffHistory, scope, caller, target, seq, signal)
+    },
+    appendHandoffs: (
+      scope: ReturnType<typeof nativeHistoryScope>,
+      caller: string,
+      args: any,
+      query: string,
+      filters: any[],
+      events: any[],
+      own: string,
+      max: number,
+      signal: AbortSignal
+    ) => {
+      if (!handoffHistory) throw new MemoryError('交接历史搜索服务尚未就绪', 503)
+      return appendNativeHandoffs(
+        ctx,
+        handoffHistory,
+        scope,
+        caller,
+        args,
+        query,
+        filters,
+        events,
+        own,
+        max,
+        signal
+      )
+    },
+    searchBounded: (
+      scope: ReturnType<typeof nativeHistoryScope>,
+      caller: string,
+      target: string,
+      query: string,
+      filters: any[],
+      maxResults: number,
+      signal: AbortSignal
+    ) => {
+      if (!handoffHistory) throw new MemoryError('交接历史搜索服务尚未就绪', 503)
+      return searchNativeHandoff(
+        ctx,
+        handoffHistory,
+        scope,
+        caller,
+        target,
+        query,
+        filters,
+        maxResults,
+        signal
+      )
+    }
   })
   ctx.effect(() => {
     const navigation = new PersonaNavigation(store, join(root, 'storages', name, 'navigation.sqlite'))
@@ -353,6 +424,7 @@ export function apply(ctx: any): void {
     )
   )
   const history = new HistoryIndex(join(root, 'storages', name, 'history.sqlite'), store)
+  handoffHistory = history
   ctx.effect(
     () => async () => {
       await settleSegments()
@@ -767,7 +839,12 @@ export function apply(ctx: any): void {
                 if (args.type === 'skills')
                   return send(
                     200,
-                    await skillAction(host, { sessionId: id, project: meta.cwd }, root, args.input)
+                    await skillAction(
+                      host,
+                      { sessionId: id, project: meta.cwd, actor: 'human' },
+                      root,
+                      args.input
+                    )
                   )
                 if (args.type === 'experience')
                   return send(

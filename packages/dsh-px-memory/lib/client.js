@@ -1606,6 +1606,7 @@ function KnowledgePanel({
           ),
           "\u5141\u8BB8\u539F\u751F Agent \u53D1\u73B0\u548C\u8C03\u7528"
         ] }),
+        skillScope === "persona" && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { className: "px-muted", children: "\u70B9\u51FB\u4FDD\u5B58\u53EA\u6388\u6743\u5199\u5165\u6B64\u4EBA\u683C\u7684\u8FD9\u4E00\u4E2A\u6280\u80FD\u6587\u4EF6\uFF0C\u4E0D\u6539\u53D8\u4F1A\u8BDD\u8BBF\u95EE\u6A21\u5F0F\u6216\u6A21\u578B\u7684\u6587\u4EF6\u6743\u9650\u3002" }),
         /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
           /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
             "button",

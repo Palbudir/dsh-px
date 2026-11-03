@@ -37,10 +37,68 @@ export function nativeHistoryScope(store: MemoryStore, agent: any, tool: string)
       .filter((target) => permits(initial, target))
       .sort(),
     captured = new Set(ids)
+  const shared =
+    caller.handoff && !captured.has(caller.handoff.sessionId)
+      ? Object.freeze({ ...caller.handoff })
+      : undefined
+  const bounded = (state: typeof initial, target: string) => {
+    if (!shared || target !== shared.sessionId) return
+    const current = state.bindings[id],
+      persona = state.personas.find((p) => p.id === current?.personaId),
+      source = state.bindings[target],
+      grant = current?.handoff
+    if (
+      !current ||
+      current.pending ||
+      current.purpose ||
+      !persona ||
+      persona.archived ||
+      !persona.memoryEnabled ||
+      current.personaId !== caller.personaId ||
+      !personaToolAllowed(owner.resources, tool) ||
+      !personaToolAllowed(persona.resources, tool) ||
+      (current.channel &&
+        !personaChannelAllowed(persona.resources, current.channel.provider, current.channel.accountId)) ||
+      !source ||
+      source.pending ||
+      source.purpose ||
+      !source.locked ||
+      isInternalSession(target) ||
+      (publicSession(current) && !samePublicConversation(current, source)) ||
+      !grant ||
+      grant.sessionId !== shared.sessionId ||
+      grant.throughSeq !== shared.throughSeq ||
+      grant.createdAt !== shared.createdAt ||
+      grant.summary !== shared.summary
+    )
+      return
+    return shared
+  }
   if (!captured.has(id)) throw new Error('当前原生历史操作未获准')
   let currentState: typeof initial | undefined
   return Object.freeze({
     ids: Object.freeze(ids),
+    boundedIds: Object.freeze(shared ? [shared.sessionId] : []),
+    // A bounded grant must never enter ids: native session search would then read
+    // the entire source session, including later events and private tool copies.
+    bounded(target: string) {
+      try {
+        return bounded(store.read(), target)
+      } catch {
+        return
+      }
+    },
+    allowsEvent(target: string, seq: number) {
+      if (!Number.isSafeInteger(seq) || seq < 0) return false
+      try {
+        const current = store.read()
+        if (captured.has(target) && permits(current, target)) return true
+        const grant = bounded(current, target)
+        return !!grant && seq <= grant.throughSeq
+      } catch {
+        return false
+      }
+    },
     allows(target: string) {
       if (!captured.has(target)) return false
       try {

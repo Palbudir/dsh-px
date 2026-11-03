@@ -2839,6 +2839,7 @@ function pxKnowledgeSource(bank, canParticipate, authorize, onContract, resolveC
 
 // packages/dsh-px-memory/src/native-resources.ts
 import { join as join3, dirname as dirname4, resolve as resolve3 } from "node:path";
+import { lstat } from "node:fs/promises";
 
 // packages/dsh-px-memory/src/persona-skills.ts
 import { createHash as createHash5 } from "node:crypto";
@@ -3039,6 +3040,23 @@ function skillName(value) {
     throw new MemoryError("\u6280\u80FD\u540D\u9700\u4F7F\u7528\u5C0F\u5199\u82F1\u6587\u3001\u6570\u5B57\u548C\u8FDE\u5B57\u7B26");
   return value;
 }
+async function assertPrivateSkillPath(home, personaId, name2) {
+  const ownerRoot = personaSkillDirectory(home, personaId);
+  for (const path of [
+    join3(home, "storages"),
+    join3(home, "storages", "dsh-px-persona-skills"),
+    ownerRoot,
+    join3(ownerRoot, name2),
+    join3(ownerRoot, name2, "SKILL.md")
+  ]) {
+    try {
+      if ((await lstat(path)).isSymbolicLink())
+        throw new MemoryError("\u4EBA\u683C\u6280\u80FD\u4FDD\u5B58\u4F4D\u7F6E\u5305\u542B\u94FE\u63A5\uFF0C\u8BF7\u4F7F\u7528\u6240\u5C5E\u4EBA\u683C\u7684\u53D7\u7BA1\u76EE\u5F55", 409);
+    } catch (error62) {
+      if (error62?.code !== "ENOENT") throw error62;
+    }
+  }
+}
 async function nativeSkillProjectRoot(fs, cwd) {
   let current = resolve3(cwd);
   for (; ; ) {
@@ -3129,6 +3147,7 @@ async function skillAction(host, caller, home, args) {
   if (!agent || !sandbox?.resolve)
     throw new MemoryError("\u5F53\u524D\u4F1A\u8BDD\u7684\u539F\u751F\u6587\u4EF6\u6743\u9650\u6682\u4E0D\u53EF\u7528\uFF0C\u8BF7\u91CD\u65B0\u6253\u5F00\u4F1A\u8BDD", 503);
   const policy = sandbox.resolve({ session: agent.session });
+  const manualPrivateSave = args.scope === "persona" && caller.actor === "human";
   if (args.scope === "persona" && !privatePersona) throw new MemoryError("\u5F53\u524D\u4F1A\u8BDD\u4E0D\u80FD\u7F16\u8F91\u4EBA\u683C\u79C1\u6709\u6280\u80FD", 403);
   if (args.scope === "project" && !caller.project) throw new MemoryError("\u9879\u76EE\u6280\u80FD\u9700\u8981\u5F53\u524D\u9879\u76EE");
   if (typeof args.description !== "string" || !args.description.trim() || args.description.length > 1e3 || typeof args.body !== "string" || !args.body.trim() || args.body.length > 64e3 || typeof args.enabled !== "boolean")
@@ -3161,17 +3180,26 @@ async function skillAction(host, caller, home, args) {
   const { stringify: stringifyYaml } = await import("yaml");
   let result;
   try {
+    let writeTarget = target;
+    if (manualPrivateSave) {
+      await assertPrivateSkillPath(home, privatePersona, name2);
+      writeTarget = await fs.resolve(path, { cwd: caller.project });
+      if (!target.targetKey || target.targetKey !== writeTarget.targetKey)
+        throw new MemoryError("\u6280\u80FD\u4FDD\u5B58\u4F4D\u7F6E\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u6838\u5BF9", 409);
+    }
     if (args.scope === "persona") {
       const fresh = identities.inspect(caller.sessionId);
       if (fresh.persona?.id !== privatePersona || fresh.persona?.archived || publicSession(fresh.binding))
         throw new MemoryError("\u4EBA\u683C\u6216\u8D44\u6599\u8303\u56F4\u5DF2\u7ECF\u6539\u53D8\uFF0C\u8349\u7A3F\u672A\u5199\u5165", 409);
     }
     result = await fs.writeText(
-      target,
+      writeTarget,
       "---\n" + stringifyYaml(metadata) + "---\n\n" + args.body.trim() + "\n",
       info ? { kind: "replaceIfVersion", version: info.version } : { kind: "createIfAbsent" },
       void 0,
-      policy
+      // Per-call native policy only. The authenticated settings handler supplies actor;
+      // neither request-body fields nor model calls can change the session policy.
+      manualPrivateSave ? { ...policy, mode: "danger-full-access" } : policy
     );
   } catch (error62) {
     if (error62 instanceof Error && error62.code === "FS_SANDBOX_DENIED")
@@ -25573,10 +25601,39 @@ function nativeHistoryScope(store, agent, tool) {
     return !!current && !!persona && !persona.archived && current.personaId === caller.personaId && personaToolAllowed(owner.resources, tool) && personaToolAllowed(persona.resources, tool) && (!current.channel || personaChannelAllowed(persona.resources, current.channel.provider, current.channel.accountId)) && !!binding && !binding.pending && !binding.purpose && !isInternalSession(target) && (binding.locked || target === id) && binding.personaId === caller.personaId && (target === id || persona.memoryEnabled) && (!publicSession(current) || samePublicConversation(current, binding));
   };
   const ids = Object.keys(initial2.bindings).filter((target) => permits(initial2, target)).sort(), captured = new Set(ids);
+  const shared = caller.handoff && !captured.has(caller.handoff.sessionId) ? Object.freeze({ ...caller.handoff }) : void 0;
+  const bounded2 = (state, target) => {
+    if (!shared || target !== shared.sessionId) return;
+    const current = state.bindings[id], persona = state.personas.find((p) => p.id === current?.personaId), source = state.bindings[target], grant = current?.handoff;
+    if (!current || current.pending || current.purpose || !persona || persona.archived || !persona.memoryEnabled || current.personaId !== caller.personaId || !personaToolAllowed(owner.resources, tool) || !personaToolAllowed(persona.resources, tool) || current.channel && !personaChannelAllowed(persona.resources, current.channel.provider, current.channel.accountId) || !source || source.pending || source.purpose || !source.locked || isInternalSession(target) || publicSession(current) && !samePublicConversation(current, source) || !grant || grant.sessionId !== shared.sessionId || grant.throughSeq !== shared.throughSeq || grant.createdAt !== shared.createdAt || grant.summary !== shared.summary)
+      return;
+    return shared;
+  };
   if (!captured.has(id)) throw new Error("\u5F53\u524D\u539F\u751F\u5386\u53F2\u64CD\u4F5C\u672A\u83B7\u51C6");
   let currentState;
   return Object.freeze({
     ids: Object.freeze(ids),
+    boundedIds: Object.freeze(shared ? [shared.sessionId] : []),
+    // A bounded grant must never enter ids: native session search would then read
+    // the entire source session, including later events and private tool copies.
+    bounded(target) {
+      try {
+        return bounded2(store.read(), target);
+      } catch {
+        return;
+      }
+    },
+    allowsEvent(target, seq) {
+      if (!Number.isSafeInteger(seq) || seq < 0) return false;
+      try {
+        const current = store.read();
+        if (captured.has(target) && permits(current, target)) return true;
+        const grant = bounded2(current, target);
+        return !!grant && seq <= grant.throughSeq;
+      } catch {
+        return false;
+      }
+    },
     allows(target) {
       if (!captured.has(target)) return false;
       try {
@@ -25629,6 +25686,223 @@ function nativeHistoryGuard(store, exec, adapted = false) {
   }
   if (!allowed(args.session_id ?? id))
     return "\u76EE\u6807\u5386\u53F2\u4E0D\u5C5E\u4E8E\u672C\u4EBA\u683C\u7684\u53EF\u89C1\u4F1A\u8BDD\uFF0C\u6216\u5C1A\u672A\u56FA\u5B9A\u4EBA\u683C\uFF1B\u672A\u8BFB\u53D6\u3002\u660E\u786E\u4EA4\u63A5\u7684\u5185\u5BB9\u8BF7\u4F7F\u7528 persona_history\u3002";
+}
+
+// packages/dsh-px-memory/src/native-handoff-read.ts
+async function readNativeHandoff(host, history, scope, caller, args, signal) {
+  const target = args.session_id ?? caller, grant = scope.bounded(target);
+  if (!grant) return;
+  const check2 = () => {
+    signal?.throwIfAborted();
+    if (!scope.allowsEvent(target, args.seq)) throw new MemoryError("\u8BE5\u4E8B\u4EF6\u5DF2\u8D85\u51FA\u5F53\u524D\u660E\u786E\u4EA4\u63A5\u8303\u56F4", 403);
+  };
+  check2();
+  for (const count of [args.before ?? 0, args.after ?? 0])
+    if (!Number.isSafeInteger(count) || count < 0 || count > 10)
+      throw new MemoryError("\u4EA4\u63A5\u89C6\u56FE\u6BCF\u4FA7\u6700\u591A\u8BFB\u53D6 10 \u4E2A\u76F8\u90BB\u4E8B\u4EF6");
+  const event = await history.read(host, caller, target, args.seq, 0, signal);
+  check2();
+  const neighbors = [];
+  for (let seq = Math.max(0, args.seq - (args.before ?? 0)); seq <= Math.min(grant.throughSeq, args.seq + (args.after ?? 0)); seq++) {
+    if (seq === args.seq) continue;
+    check2();
+    try {
+      const row = await history.read(host, caller, target, seq, 0, signal);
+      neighbors.push({
+        seq: row.seq,
+        kind: row.kind,
+        text: row.text.slice(0, 700),
+        truncated: row.totalCharacters > 700
+      });
+    } catch (error62) {
+      if (!(error62 instanceof MemoryError) || ![403, 404].includes(error62.status)) throw error62;
+    }
+    check2();
+  }
+  return JSON.stringify({
+    view: "explicit-handoff-visible-evidence",
+    sessionId: target,
+    throughSeq: grant.throughSeq,
+    note: "\u660E\u786E\u4EA4\u63A5\u7684\u53EF\u89C1\u4EA4\u6D41\u4E0E\u6267\u884C\u56DE\u6267\uFF1B\u4E0D\u662F\u5B8C\u6574\u539F\u751F\u4E8B\u4EF6\u3002\u9690\u85CF\u63A8\u7406\u3001\u7CFB\u7EDF\u4E0A\u4E0B\u6587\u3001\u79C1\u6709\u6280\u80FD\u53CA\u8BB0\u5FC6\u5DE5\u5177\u526F\u672C\u4E0D\u968F\u4EA4\u63A5\u516C\u5F00\u3002\u6B63\u6587\u6709 nextOffset \u65F6\uFF0C\u53EF\u7528 persona_history read \u7EE7\u7EED\u8BFB\u53D6\u3002",
+    event,
+    neighbors
+  });
+}
+
+// packages/dsh-px-memory/src/native-handoff-search.ts
+async function searchNativeHandoff(host, history, scope, caller, target, query, filters, maxResults, signal) {
+  const grant = scope.bounded(target);
+  if (!grant) throw new MemoryError("\u660E\u786E\u4EA4\u63A5\u8303\u56F4\u5DF2\u4E0D\u53EF\u7528", 403);
+  if (filters.some((filter) => filter.kind === "surface"))
+    throw new MemoryError("\u6709\u754C\u4EA4\u63A5\u4E0D\u63D0\u4F9B\u6765\u6E90\u4F1A\u8BDD\u5F53\u524D\u7684\u4E0A\u4E0B\u6587\u72B6\u6001\u7B5B\u9009\uFF1B\u8BF7\u53BB\u6389 surfaces \u540E\u6309\u4E8B\u4EF6\u8303\u56F4\u68C0\u7D22", 403);
+  const check2 = () => {
+    signal.throwIfAborted();
+    if (!scope.bounded(target)) throw new MemoryError("\u660E\u786E\u4EA4\u63A5\u6388\u6743\u5DF2\u53D8\u5316", 403);
+  };
+  const native = service(host, "sessionQuery");
+  if (!native?.searchEvents) throw new MemoryError("\u539F\u751F\u5386\u53F2\u641C\u7D22\u670D\u52A1\u4E0D\u53EF\u7528", 503);
+  const ranges = filters.filter((filter) => filter.kind === "seq"), from = Math.max(0, ...ranges.map((filter) => filter.from ?? 0)), to = Math.min(grant.throughSeq, ...ranges.map((filter) => filter.to ?? grant.throughSeq)), constrainedFilters = [...filters.filter((filter) => filter.kind !== "seq"), { kind: "seq", from, to }];
+  const items = [], seen = /* @__PURE__ */ new Set(), cursors = /* @__PURE__ */ new Set();
+  const terms = query.toLocaleLowerCase().split(/\s+/u).filter(Boolean);
+  let cursor, partial2 = false;
+  for (let pageIndex = 0; from <= to && pageIndex < 50; pageIndex++) {
+    check2();
+    const page = await native.searchEvents(
+      {
+        sessionId: target,
+        query,
+        filters: constrainedFilters,
+        ...cursor === void 0 ? {} : { cursor }
+      },
+      { signal }
+    );
+    check2();
+    if (page.session?.id !== target) throw new MemoryError("\u539F\u751F\u641C\u7D22\u4F1A\u8BDD\u5F52\u5C5E\u4E0D\u4E00\u81F4", 403);
+    for (const hit of page.items) {
+      if (seen.has(hit.seq)) continue;
+      seen.add(hit.seq);
+      if (!scope.allowsEvent(target, hit.seq)) throw new MemoryError("\u539F\u751F\u641C\u7D22\u8FD4\u56DE\u4E86\u4EA4\u63A5\u8303\u56F4\u5916\u7684\u4E8B\u4EF6", 403);
+      let row;
+      try {
+        row = await history.read(host, caller, target, hit.seq, 0, signal);
+      } catch (error62) {
+        check2();
+        if (error62 instanceof MemoryError && [403, 404].includes(error62.status)) continue;
+        throw error62;
+      }
+      check2();
+      if (row.nextOffset !== null) partial2 = true;
+      if (!terms.every((term) => row.text.toLocaleLowerCase().includes(term))) continue;
+      const start = Math.max(0, row.text.toLocaleLowerCase().indexOf(terms[0] ?? "") - 100);
+      items.push({
+        seq: row.seq,
+        kind: row.kind,
+        time: row.time,
+        snippet: row.text.slice(start, start + 700),
+        readOffset: start
+      });
+      if (items.length >= Math.min(100, Math.max(1, maxResults))) {
+        partial2 = true;
+        break;
+      }
+    }
+    if (items.length >= Math.min(100, Math.max(1, maxResults))) break;
+    if (page.nextCursor === void 0) break;
+    if (typeof page.nextCursor !== "string" || cursors.has(page.nextCursor))
+      throw new MemoryError("\u539F\u751F\u5386\u53F2\u641C\u7D22\u6E38\u6807\u65E0\u6CD5\u7EE7\u7EED", 503);
+    cursors.add(page.nextCursor);
+    cursor = page.nextCursor;
+    if (pageIndex === 49) partial2 = true;
+  }
+  check2();
+  return JSON.stringify({
+    view: "explicit-handoff-search",
+    sessionId: target,
+    throughSeq: grant.throughSeq,
+    items,
+    partial: partial2,
+    note: "\u53EA\u8FD4\u56DE\u660E\u786E\u4EA4\u63A5\u7684\u53EF\u89C1\u4EA4\u6D41\u53CA\u6267\u884C\u56DE\u6267\uFF1B\u4E0D\u8FD4\u56DE\u539F\u751F\u79C1\u6709\u6458\u8981\u3001\u5F53\u524D\u6807\u9898\u6216\u8303\u56F4\u5916\u8BA1\u6570\u3002partial \u8868\u793A\u8FBE\u5230\u68C0\u7D22\u6216\u6B63\u6587\u9884\u7B97\uFF0C\u8BF7\u7F29\u5C0F\u8303\u56F4\u6216\u7528 persona_history \u8BFB\u53D6\u539F\u6587\u3002"
+  });
+}
+async function appendNativeHandoffs(host, history, scope, caller, args, query, sessionFilters, eventFilters, own2, maxResults, signal) {
+  const sources = scope.boundedIds.filter(
+    (id) => args.session_ids === void 0 || args.session_ids.includes(id)
+  );
+  if (!sources.length) return own2;
+  const check2 = () => {
+    signal.throwIfAborted();
+    if (!scope.allows(caller) || sources.some((id) => !scope.bounded(id)))
+      throw new MemoryError("\u4EA4\u63A5\u641C\u7D22\u6388\u6743\u5DF2\u53D8\u5316", 403);
+  };
+  check2();
+  if (args.parent_session_ids !== void 0 || args.include_root_sessions === true || sessionFilters.some((filter) => filter.kind === "availability") || eventFilters.some((filter) => filter.kind === "surface")) {
+    return JSON.stringify({
+      samePersonaResults: own2,
+      handoffNotice: "\u672C\u6B21\u672A\u68C0\u7D22\u6709\u754C\u4EA4\u63A5\uFF1A\u7236\u5B50\u5173\u7CFB\u3001\u5F53\u524D\u53EF\u7528\u6027\u548C\u5F53\u524D\u4E0A\u4E0B\u6587\u72B6\u6001\u4E0D\u5728\u4EA4\u63A5\u5185\u5BB9\u6388\u6743\u5185\u3002\u53BB\u6389\u8FD9\u4E9B\u7B5B\u9009\u540E\u53EF\u641C\u7D22\u4EA4\u63A5\u4E8B\u4EF6\u3002"
+    });
+  }
+  const native = service(host, "sessionQuery");
+  if (!native?.filterSessions) throw new MemoryError("\u539F\u751F\u4F1A\u8BDD\u7B5B\u9009\u670D\u52A1\u4E0D\u53EF\u7528", 503);
+  const matches = [];
+  for (const id of sources) {
+    const records = await native.filterSessions([...sessionFilters, { kind: "id", values: [id] }], signal);
+    check2();
+    if (!records.some((record2) => record2.header.id === id)) continue;
+    const result = JSON.parse(
+      await searchNativeHandoff(host, history, scope, caller, id, query, eventFilters, maxResults, signal)
+    );
+    check2();
+    if (result.items.length || result.partial) matches.push(result);
+  }
+  check2();
+  return matches.length ? JSON.stringify({ samePersonaResults: own2, handoffMatches: matches }) : own2;
+}
+
+// packages/dsh-px-memory/src/native-handoff-trace.ts
+async function traceNativeHandoff(host, history, scope, caller, target, seq, signal) {
+  const grant = scope.bounded(target);
+  if (!grant) throw new MemoryError("\u660E\u786E\u4EA4\u63A5\u8303\u56F4\u5DF2\u4E0D\u53EF\u7528", 403);
+  const check2 = () => {
+    signal.throwIfAborted();
+    if (!scope.bounded(target)) throw new MemoryError("\u660E\u786E\u4EA4\u63A5\u6388\u6743\u5DF2\u53D8\u5316", 403);
+  };
+  check2();
+  if (seq === void 0) {
+    const reader = await nativeReader(host, target, signal);
+    let response;
+    try {
+      check2();
+      if (reader.header.id !== target) throw new MemoryError("\u539F\u59CB\u4F1A\u8BDD\u5F52\u5C5E\u4E0D\u4E00\u81F4", 403);
+      response = JSON.stringify({
+        view: "explicit-handoff-lineage",
+        sessionId: target,
+        throughSeq: grant.throughSeq,
+        handoffSummary: grant.summary,
+        lineageBoundary: true,
+        note: "\u672C\u6388\u6743\u53EA\u4EA4\u63A5\u6B64\u4F1A\u8BDD\u7684\u6709\u754C\u53EF\u89C1\u5185\u5BB9\uFF0C\u4E0D\u4EA4\u63A5\u5176\u7236\u5B50\u4F1A\u8BDD\u3002\u4E0D\u4F1A\u628A\u8303\u56F4\u5916\u5173\u8054\u62A5\u544A\u4E3A\u4E0D\u5B58\u5728\u3002"
+      });
+    } finally {
+      await reader.close();
+    }
+    check2();
+    return response;
+  }
+  if (!scope.allowsEvent(target, seq)) throw new MemoryError("\u8BE5\u4E8B\u4EF6\u8D85\u51FA\u660E\u786E\u4EA4\u63A5\u8303\u56F4", 403);
+  const event = await history.read(host, caller, target, seq, 0, signal);
+  check2();
+  const native = service(host, "sessionQuery");
+  if (!native?.traceEvent) throw new MemoryError("\u539F\u751F\u4E8B\u4EF6\u8FFD\u6EAF\u670D\u52A1\u4E0D\u53EF\u7528", 503);
+  const trace = await native.traceEvent({ sessionId: target, seq }, signal);
+  check2();
+  if (trace.session?.id !== target || trace.target?.seq !== seq)
+    throw new MemoryError("\u539F\u751F\u8FFD\u6EAF\u5F52\u5C5E\u4E0D\u4E00\u81F4", 403);
+  const fields = ["replacementChain", "replacedEventSeqs", "sourceEventSeqs", "derivedEventSeqs"];
+  const candidates = [trace.replacedBy, ...fields.flatMap((key) => trace[key] ?? [])], visible = /* @__PURE__ */ new Set();
+  let inspected = 0;
+  for (const candidate of new Set(candidates)) {
+    if (!Number.isSafeInteger(candidate) || candidate < 0 || candidate > grant.throughSeq) continue;
+    if (inspected++ >= 64) break;
+    try {
+      await history.read(host, caller, target, candidate, 0, signal);
+      visible.add(candidate);
+    } catch (error62) {
+      if (!(error62 instanceof MemoryError) || ![403, 404].includes(error62.status)) throw error62;
+    }
+    check2();
+  }
+  check2();
+  return JSON.stringify({
+    view: "explicit-handoff-event-trace",
+    sessionId: target,
+    throughSeq: grant.throughSeq,
+    target: { seq: event.seq, kind: event.kind, time: event.time },
+    ...visible.has(trace.replacedBy) ? { replacedBy: trace.replacedBy } : {},
+    ...Object.fromEntries(
+      fields.map((key) => [key, (trace[key] ?? []).filter((value) => visible.has(value))])
+    ),
+    scopeLimited: true,
+    note: "\u4EC5\u5217\u4EA4\u63A5\u8303\u56F4\u5185\u7684\u53EF\u89C1\u4E8B\u4EF6\u5173\u7CFB\uFF0C\u6700\u591A\u6838\u5BF964\u4E2A\u5019\u9009\u5173\u8054\uFF1B\u672A\u5217\u51FA\u7684\u5173\u7CFB\u53EF\u80FD\u672A\u83B7\u6388\u6743\u6216\u8D85\u51FA\u9884\u7B97\uFF0C\u4E0D\u4EE3\u8868\u4E0D\u5B58\u5728\u3002"
+  });
 }
 
 // packages/dsh-px-memory/src/hot-memory.ts
@@ -25765,9 +26039,48 @@ function apply(ctx) {
   const root = process.env.DSH_HOME;
   if (!root) throw new Error("DSH_HOME \u672A\u8BBE\u7F6E\uFF0C\u65E0\u6CD5\u4FDD\u5B58\u4EBA\u683C\u4E0E\u8BB0\u5FC6");
   const store = new MemoryStore(join5(root, "storages", name, "memory.json"));
+  let handoffHistory;
   ctx.provide("pxNativeHistorySubjects", {
     version: 1,
-    scope: (agent, tool) => nativeHistoryScope(store, agent, tool)
+    scope: (agent, tool) => nativeHistoryScope(store, agent, tool),
+    readBounded: (scope, caller, args, signal) => {
+      if (!handoffHistory) throw new MemoryError("\u4EA4\u63A5\u5386\u53F2\u8BFB\u53D6\u670D\u52A1\u5C1A\u672A\u5C31\u7EEA", 503);
+      return readNativeHandoff(ctx, handoffHistory, scope, caller, args, signal);
+    },
+    traceBounded: (scope, caller, target, seq, signal) => {
+      if (!handoffHistory) throw new MemoryError("\u4EA4\u63A5\u5386\u53F2\u8FFD\u6EAF\u670D\u52A1\u5C1A\u672A\u5C31\u7EEA", 503);
+      return traceNativeHandoff(ctx, handoffHistory, scope, caller, target, seq, signal);
+    },
+    appendHandoffs: (scope, caller, args, query, filters, events, own2, max, signal) => {
+      if (!handoffHistory) throw new MemoryError("\u4EA4\u63A5\u5386\u53F2\u641C\u7D22\u670D\u52A1\u5C1A\u672A\u5C31\u7EEA", 503);
+      return appendNativeHandoffs(
+        ctx,
+        handoffHistory,
+        scope,
+        caller,
+        args,
+        query,
+        filters,
+        events,
+        own2,
+        max,
+        signal
+      );
+    },
+    searchBounded: (scope, caller, target, query, filters, maxResults, signal) => {
+      if (!handoffHistory) throw new MemoryError("\u4EA4\u63A5\u5386\u53F2\u641C\u7D22\u670D\u52A1\u5C1A\u672A\u5C31\u7EEA", 503);
+      return searchNativeHandoff(
+        ctx,
+        handoffHistory,
+        scope,
+        caller,
+        target,
+        query,
+        filters,
+        maxResults,
+        signal
+      );
+    }
   });
   ctx.effect(() => {
     const navigation = new PersonaNavigation(store, join5(root, "storages", name, "navigation.sqlite"));
@@ -26021,6 +26334,7 @@ function apply(ctx) {
     )
   );
   const history = new HistoryIndex(join5(root, "storages", name, "history.sqlite"), store);
+  handoffHistory = history;
   ctx.effect(
     () => async () => {
       await settleSegments();
@@ -26389,7 +26703,12 @@ ${renderPersonaExpression(p.expression, identity.interaction(agent))}`;
               if (args.type === "skills")
                 return send(
                   200,
-                  await skillAction(host, { sessionId: id, project: meta3.cwd }, root, args.input)
+                  await skillAction(
+                    host,
+                    { sessionId: id, project: meta3.cwd, actor: "human" },
+                    root,
+                    args.input
+                  )
                 );
               if (args.type === "experience")
                 return send(

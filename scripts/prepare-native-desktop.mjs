@@ -10,6 +10,7 @@ import { nsisAppGuid } from './nsis-guid.mjs'
 import { validDistribution, compositionMembers, componentFile } from '../src/shared/distribution.ts'
 import { patchNativeModelGuard, patchNativeCompactionBudget } from '../src/shared/native-model-guard.ts'
 import { patchNativeSkillCatalog } from '../src/shared/native-skill-catalog.ts'
+import { patchNativeHistoryAuthorization } from '../src/shared/native-history-authorization.ts'
 import {
   patchNativePersonaController,
   patchNativePersonaSessionClient,
@@ -196,6 +197,11 @@ writeFileSync(
   join(pxRuntime, skillClientRelative),
   patchNativeSkillCatalog(readFileSync(join(nativeRuntime, skillClientRelative), 'utf8'))
 )
+const historyToolsRelative = 'node_modules/@deepseek-ai/dsh-tool-session-query/lib/index.js'
+writeFileSync(
+  join(pxRuntime, historyToolsRelative),
+  patchNativeHistoryAuthorization(readFileSync(join(nativeRuntime, historyToolsRelative), 'utf8'))
+)
 for (const path of [
   hostRelative,
   helperRelative,
@@ -203,7 +209,8 @@ for (const path of [
   personaSessionClientRelative,
   personaWorkspaceClientRelative,
   compactionRelative,
-  skillClientRelative
+  skillClientRelative,
+  historyToolsRelative
 ]) {
   const bytes = readFileSync(join(pxRuntime, path)),
     record = {
