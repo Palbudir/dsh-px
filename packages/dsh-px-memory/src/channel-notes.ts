@@ -1,5 +1,5 @@
 import { MemoryError, type MemoryStore } from './store'
-import type { KnowledgeBank } from './knowledge'
+import { conversationNotePrefix, type KnowledgeBank } from './knowledge'
 
 export interface ChannelNoteInput {
   action: 'catalog' | 'search' | 'read' | 'save' | 'feedback' | 'correct' | 'archive'
@@ -33,11 +33,11 @@ export class ChannelNotes {
       binding = state.bindings[sessionId],
       channel = binding?.channel
     const persona = state.personas.find((p) => p.id === binding?.personaId)
-    if (!binding || binding.pending || channel?.provider !== 'qq' || channel.access !== 'public')
-      throw new MemoryError('交流记忆需要已绑定的公共 QQ 会话', 403)
+    if (!binding || binding.pending || !channel || channel.access !== 'public')
+      throw new MemoryError('交流记忆需要已绑定的公共渠道会话', 403)
     if (!channel.workspace)
       throw new MemoryError(
-        '旧 QQ 会话缺少独立工作区记录；请由负责人发送 /new，再保存交流记忆。原历史保留。',
+        '会话缺少独立工作区记录；请从该渠道创建新的已绑定会话，再保存交流记忆。原历史保留。',
         409
       )
     if (!persona || (actor === 'model' && (persona.archived || !persona.memoryEnabled)))
@@ -48,8 +48,15 @@ export class ChannelNotes {
         project: channel.workspace,
         actor
       }),
-      prefix: `QQ 经历 / ${persona.id} / `,
-      identity: `${persona.id}/${channel.accountId}/${channel.conversationId}/${channel.workspace}`
+      provider: channel.provider,
+      prefix: conversationNotePrefix(channel.provider, persona.id),
+      identity: JSON.stringify([
+        persona.id,
+        channel.provider,
+        channel.accountId,
+        channel.conversationId,
+        channel.workspace
+      ])
     }
   }
   async execute(
@@ -197,9 +204,9 @@ export class ChannelNotes {
       // Recalled notes are not independent corroboration. Keep links to the actual native event.
       if (
         !['user', 'assistant', 'tool-result'].includes(record.kind) ||
-        (record.kind === 'tool-result' && record.tool !== 'qq_context')
+        (record.kind === 'tool-result' && (scope.provider !== 'qq' || record.tool !== 'qq_context'))
       )
-        throw new MemoryError('请引用原始交流或 QQ 群历史，不能把记忆副本作为新依据', 403)
+        throw new MemoryError('请引用原始交流或本渠道已验证的历史，不能把记忆副本作为新依据', 403)
       evidence.push({
         sessionId: ref.sessionId,
         seq: ref.seq,

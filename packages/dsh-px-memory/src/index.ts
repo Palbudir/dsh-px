@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { ChannelNotes, type ChannelNoteInput } from './channel-notes'
-import { QQ_CONVERSATION_TOOLS, qqMessageOrigin } from '../../shared/channel-source'
+import { QQ_CONVERSATION_TOOLS, channelMessageOrigin } from '../../shared/channel-source'
 import {
   MemoryStore,
   MemoryError,
@@ -213,10 +213,11 @@ export function apply(ctx: any): void {
       return events
         .slice(start + 1)
         .filter((event) => {
-          const origin = qqMessageOrigin(event.data?.source)
+          const origin = channelMessageOrigin(event.data?.source)
           return (
             event.type === 'user/message' &&
-            origin?.accountId === channel.accountId &&
+            origin?.provider === channel.provider &&
+            origin.accountId === channel.accountId &&
             origin.conversationId === channel.conversationId
           )
         })
@@ -224,7 +225,7 @@ export function apply(ctx: any): void {
         .map((event) => ({
           sessionId,
           seq: event.seq,
-          userId: qqMessageOrigin(event.data.source)!.senderId,
+          userId: channelMessageOrigin(event.data.source)!.senderId,
           excerpt: (event.data.content ?? [])
             .filter((block: any) => block.type === 'text')
             .map((block: any) => block.text)
@@ -269,10 +270,10 @@ export function apply(ctx: any): void {
         .read()
         .personas.filter((p) => !p.archived)
         .map((p) => ({ id: p.id, name: p.name, revision: p.revision, expression: p.expression })),
-    channelBindings: (accountId: string) =>
+    channelBindings: (accountId: string, provider = 'qq') =>
       Object.entries(store.read().bindings)
         .filter(
-          ([, binding]) => binding.channel?.provider === 'qq' && binding.channel.accountId === accountId
+          ([, binding]) => binding.channel?.provider === provider && binding.channel.accountId === accountId
         )
         .map(([sessionId, binding]) => ({
           sessionId,

@@ -112,6 +112,9 @@ function validateNamespace(ns: Namespace): void {
 const legacyConversationTitle = (title: unknown): boolean =>
   typeof title === 'string' && /^QQ 经历 \/ [^/]{1,200} \/ /.test(title)
 
+export const conversationNotePrefix = (provider: string, personaId: string): string =>
+  provider === 'qq' ? `QQ 经历 / ${personaId} / ` : `渠道经历 / ${provider} / ${personaId} / `
+
 /** Mnemon owns document writes, locks, revisions, archives and search. PX only selects scope and adds provenance. */
 export class KnowledgeBank {
   private conversationSearch = new DocumentSearchPager()
@@ -275,8 +278,13 @@ export class KnowledgeBank {
   /** Imports generated notes into an owner+account+conversation namespace; original provenance remains readable internally. */
   async prepareConversation(caller: KnowledgeCaller, topicPrefix: string): Promise<void> {
     const target = this.namespace(caller, 'project')
-    if (!target.conversation || topicPrefix !== `QQ 经历 / ${target.personaId} / `)
+    if (
+      !target.conversation ||
+      topicPrefix !== conversationNotePrefix(target.conversation.provider, target.personaId!)
+    )
       throw new MemoryError('交流记忆迁移范围无效', 403)
+    // Only QQ had legacy project-level notes. New providers start in their own namespace directly.
+    if (target.conversation.provider !== 'qq') return
     const key = digest(target),
       active = this.migrations.get(key)
     if (active) return active
@@ -606,7 +614,7 @@ export class KnowledgeBank {
         (d: any) =>
           d.status === 'active' &&
           d.healthy !== false &&
-          d.key.startsWith(`QQ 经历 / ${ns.personaId} / `) &&
+          d.key.startsWith(conversationNotePrefix(ns.conversation!.provider, ns.personaId!)) &&
           !d.feedback.disputed
       )
       .map((d: any, order: number) => ({

@@ -5,6 +5,8 @@ import type { ChannelInbox, IngressClaim, PendingChannelMessage } from './channe
 
 interface ChannelMessageSource {
   kind: 'plugin:dsh-px-channel'
+  version: 1
+  delivery?: 'context'
   ingressId: string
   provider: string
   accountId: string
@@ -34,6 +36,7 @@ export interface NativeChannelAdmission {
 function sourceFor(row: PendingChannelMessage, claim: IngressClaim): ChannelMessageSource {
   return {
     kind: 'plugin:dsh-px-channel',
+    version: 1,
     ingressId: row.id,
     provider: row.event.provider,
     accountId: row.event.accountId,
@@ -61,7 +64,7 @@ export async function admitChannelMessage(
   if (native.agent.session.id !== claim.sessionId || !native.validate(row, claim))
     throw Error('渠道消息的原生会话、人格或受众已改变，未投递')
   const message = createUserMessage({
-    source: sourceFor(row, claim),
+    source: { ...sourceFor(row, claim), ...(wake ? {} : { delivery: 'context' as const }) },
     content: [{ type: 'text', text: row.event.text }]
   })
   signal.throwIfAborted()

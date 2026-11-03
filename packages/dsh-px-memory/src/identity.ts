@@ -1,5 +1,5 @@
 import { MemoryError, MemoryStore, type Persona } from './store'
-import { conversationalSource, qqMessageOrigin } from '../../shared/channel-source'
+import { conversationalSource, channelMessageOrigin } from '../../shared/channel-source'
 import type { PersonaInteraction } from '../../shared/persona-scenes'
 export interface AgentIdentity {
   session: {
@@ -16,7 +16,7 @@ export class TurnIdentity {
   >()
   private claimed = new WeakMap<
     AgentIdentity,
-    { turn: number; accountId: string; conversationId: string; participants: Set<string> }
+    { turn: number; provider: string; accountId: string; conversationId: string; participants: Set<string> }
   >()
   constructor(
     private store: MemoryStore,
@@ -25,11 +25,11 @@ export class TurnIdentity {
   /** Native inbox claims precede prompt assembly; user/message persistence happens only afterwards. */
   claim(agent: AgentIdentity, message: { source?: unknown }, turn: number): void {
     if (!Number.isSafeInteger(turn) || turn < 1) return
-    const origin = qqMessageOrigin(message.source)
+    const origin = channelMessageOrigin(message.source)
     if (!origin) return
     const channel = this.store.read().bindings[agent.session.id]?.channel
     if (
-      channel?.provider !== 'qq' ||
+      channel?.provider !== origin.provider ||
       origin.accountId !== channel.accountId ||
       origin.conversationId !== channel.conversationId
     )
@@ -40,11 +40,13 @@ export class TurnIdentity {
     if (
       !pending ||
       pending.turn !== turn ||
+      pending.provider !== origin.provider ||
       pending.accountId !== origin.accountId ||
       pending.conversationId !== origin.conversationId
     ) {
       pending = {
         turn,
+        provider: origin.provider,
         accountId: origin.accountId,
         conversationId: origin.conversationId,
         participants: new Set()
@@ -75,10 +77,11 @@ export class TurnIdentity {
     const channel = state.bindings[agent.session.id]?.channel
     const participants = new Set<string>()
     if (channel?.task) participants.add(channel.task.requesterId)
-    if (channel?.provider === 'qq' && persona.expression?.scenes?.some((rule) => rule.participantId)) {
+    if (channel && persona.expression?.scenes?.some((rule) => rule.participantId)) {
       const claimed = this.claimed.get(agent)
       if (
         claimed?.turn === boundary?.lastTurn &&
+        claimed?.provider === channel.provider &&
         claimed?.accountId === channel.accountId &&
         claimed?.conversationId === channel.conversationId
       )
@@ -87,8 +90,12 @@ export class TurnIdentity {
       for (let i = events.length - 1; i >= 0; i--) {
         if (events[i].type === 'turn/start') break
         if (events[i].type !== 'user/message') continue
-        const origin = qqMessageOrigin(events[i].data?.source)
-        if (origin?.accountId === channel.accountId && origin.conversationId === channel.conversationId)
+        const origin = channelMessageOrigin(events[i].data?.source)
+        if (
+          origin?.provider === channel.provider &&
+          origin.accountId === channel.accountId &&
+          origin.conversationId === channel.conversationId
+        )
           participants.add(origin.senderId)
       }
     }

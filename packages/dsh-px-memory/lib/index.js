@@ -664,6 +664,875 @@ ${persona.memoryEnabled ? JSON.stringify(selected) : "\u672C\u8F6E\u4E0D\u4F7F\u
 \u9700\u8981\u56DE\u5FC6\u672C\u4EBA\u683C\u8FC7\u53BB\u7684\u4EA4\u6D41\u6216\u5DE5\u4F5C\u65F6\uFF0C\u4F7F\u7528 persona_history \u641C\u7D22\u5E76\u6309\u4E8B\u4EF6\u7F16\u53F7\u8BFB\u53D6\u539F\u6587\u3002\u641C\u7D22\u7ED3\u679C\u5305\u542B\u5386\u53F2\u9648\u8FF0\u800C\u975E\u5F53\u524D\u4E8B\u5B9E\uFF1B\u539F\u751F\u76EE\u6807\u3001\u4EFB\u52A1\u548C\u6267\u884C\u56DE\u6267\u5E94\u6309\u65F6\u95F4\u4E0E\u6765\u6E90\u6838\u5BF9\u3002`;
 }
 
+// packages/dsh-px-memory/src/knowledge.ts
+import { createHash as createHash2 } from "node:crypto";
+import { mkdirSync as mkdirSync3 } from "node:fs";
+import { join } from "node:path";
+
+// packages/dsh-px-memory/src/document-search.ts
+var compare = (a, b) => b.rank - a.rank || b.relevance - a.relevance || b.updatedAt.localeCompare(a.updatedAt) || a.order - b.order;
+var DocumentSearchPager = class {
+  plans = /* @__PURE__ */ new Map();
+  async page(input2) {
+    const { signature, offset, signal } = input2;
+    if (input2.cursor !== void 0 && input2.cursor !== signature)
+      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u76EE\u5F55\u5DF2\u53D8\u5316\uFF08\u6B63\u6587\u6216\u53CD\u9988\uFF09\uFF0C\u8BF7\u4ECE\u7B2C\u4E00\u9875\u91CD\u65B0\u67E5\u8BE2", 409);
+    if (offset > 0 && input2.cursor === void 0 && input2.requireCursor)
+      throw new MemoryError("\u5E26\u53CD\u9988\u6392\u5E8F\u7684\u540E\u7EED\u9875\u9700\u8981 cursor\uFF0C\u8BF7\u4ECE\u7B2C\u4E00\u9875\u91CD\u65B0\u67E5\u8BE2", 409);
+    let plan = this.plans.get(signature);
+    if (plan && Date.now() - plan.at > 3e5) {
+      this.plans.delete(signature);
+      plan = void 0;
+    }
+    if (!plan) {
+      if (offset > 0) throw new MemoryError("\u641C\u7D22\u6E38\u6807\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u4ECE\u7B2C\u4E00\u9875\u91CD\u65B0\u67E5\u8BE2", 409);
+      const runtime = await input2.runtime();
+      if (!runtime.query) throw new MemoryError("\u539F\u751F\u6587\u6863\u67E5\u8BE2\u63A5\u53E3\u4E0D\u53EF\u7528", 503);
+      const facts = await runtime.facts(
+        {
+          scope: input2.scope,
+          scenario: "px.conversation-search",
+          budget: {
+            maxProjectionCharacters: 0,
+            maxRoutes: 1,
+            maxActions: 0,
+            maxEvidenceResults: 6,
+            maxEvidenceCharacters: 16e3
+          }
+        },
+        signal
+      );
+      const projection = await runtime.project(
+        {
+          scope: input2.scope,
+          sourceInstanceKey: input2.sourceKey,
+          expectedRevision: facts.revision,
+          includeProjection: false,
+          mode: "routed",
+          maxCharacters: 0
+        },
+        signal
+      );
+      const grant = projection.readGrant, value = grant?.value;
+      if (!grant || grant.schema !== "dsh-mnemon.documents/v1" || !Array.isArray(value?.documentIds))
+        throw new MemoryError("\u539F\u751F\u6587\u6863\u8BFB\u53D6\u8303\u56F4\u4E0D\u53EF\u7528", 503);
+      const permitted = new Set(value.documentIds), candidates = new Map(
+        input2.candidates.filter((row) => permitted.has(row.id)).map((row) => [row.id, row])
+      );
+      const groups = /* @__PURE__ */ new Map();
+      for (const row of candidates.values()) {
+        if (!groups.has(row.strength)) groups.set(row.strength, []);
+        groups.get(row.strength).push(row.id);
+      }
+      plan = {
+        signature,
+        scope: input2.scope,
+        sourceKey: input2.sourceKey,
+        grant,
+        candidates,
+        buckets: [...groups.values()].map((ids) => ({
+          remaining: new Set(ids),
+          heads: [],
+          exhausted: false
+        })),
+        materialized: [],
+        done: false,
+        at: Date.now(),
+        queue: Promise.resolve(),
+        reads: 0
+      };
+      this.plans.set(signature, plan);
+      while (this.plans.size > 32) this.plans.delete(this.plans.keys().next().value);
+    }
+    const active = plan;
+    active.at = Date.now();
+    const task = active.queue.catch(() => {
+    }).then(async () => {
+      signal.throwIfAborted();
+      if (offset > active.materialized.length)
+        throw new MemoryError("\u8BF7\u4F7F\u7528\u4E0A\u6B21\u8FD4\u56DE\u7684 nextOffset \u987A\u5E8F\u8BFB\u53D6", 409);
+      let reads2 = 0;
+      const fill = async (bucket) => {
+        if (bucket.heads.length || bucket.exhausted) return;
+        if (!bucket.remaining.size) {
+          bucket.exhausted = true;
+          return;
+        }
+        signal.throwIfAborted();
+        if (++reads2 > 12) throw new MemoryError("\u672C\u9875\u8BFB\u53D6\u8FBE\u5230\u9884\u7B97\uFF0C\u8BF7\u7F29\u5C0F\u68C0\u7D22\u8BCD\u540E\u91CD\u65B0\u67E5\u8BE2", 409);
+        const runtime = await input2.runtime(), value = active.grant.value;
+        const grant = {
+          ...active.grant,
+          id: active.grant.id + "/page-" + ++active.reads,
+          value: { ...value, documentIds: [...bucket.remaining], archivedDocumentIds: [] }
+        };
+        const result = await runtime.query({
+          // Backend-only subview; derived strictly by narrowing a Source-issued grant, never by model-supplied ids.
+          view: { id: "px-conversation-search-" + signature + "-" + active.reads, scope: input2.scope },
+          route: {
+            id: input2.sourceKey + "/search",
+            sourceInstanceKey: input2.sourceKey,
+            sourceRouteId: "search",
+            description: "Scoped native document search",
+            capability: "search",
+            inputSchema: { type: "object" },
+            readGrantId: grant.id,
+            maxCalls: 1,
+            maxResults: 6,
+            maxCharacters: 16e3
+          },
+          grant,
+          input: { query: input2.query, limit: 6 },
+          signal
+        });
+        signal.throwIfAborted();
+        const hits = result.items.filter(
+          (item) => item.provenance?.kind === "match" && typeof item.score === "number" && Number.isFinite(item.score) && item.score > 0
+        );
+        for (const hit of hits) {
+          const candidate = active.candidates.get(hit.id);
+          if (!candidate || !bucket.remaining.has(hit.id) || Number(hit.revision) !== candidate.revision)
+            throw new MemoryError("\u6587\u6863\u5728\u68C0\u7D22\u671F\u95F4\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u67E5\u8BE2", 409);
+          bucket.remaining.delete(hit.id);
+          bucket.heads.push({
+            ...candidate,
+            relevance: hit.score,
+            rank: hit.score + candidate.strength * 0.5
+          });
+        }
+        bucket.heads.sort(compare);
+        if (hits.length < 6) bucket.exhausted = true;
+      };
+      while (active.materialized.length < offset + 8 && !active.done) {
+        for (const bucket of active.buckets) await fill(bucket);
+        const heads = active.buckets.filter((bucket) => bucket.heads.length).sort((a, b) => compare(a.heads[0], b.heads[0]));
+        if (!heads.length) {
+          active.done = true;
+          break;
+        }
+        active.materialized.push(heads[0].heads.shift());
+      }
+      const rows = active.materialized.slice(offset, offset + 8);
+      const hasMore = active.materialized.length > offset + rows.length || !active.done && active.buckets.some((bucket) => bucket.heads.length || !bucket.exhausted);
+      return {
+        rows,
+        cursor: signature,
+        nextOffset: hasMore ? offset + rows.length : null,
+        partial: hasMore
+      };
+    });
+    active.queue = task;
+    try {
+      return await task;
+    } catch (error62) {
+      if (this.plans.get(signature) === active) this.plans.delete(signature);
+      throw error62;
+    }
+  }
+  clear() {
+    this.plans.clear();
+  }
+};
+
+// packages/dsh-px-memory/src/memory-feedback.ts
+import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
+import { mkdirSync as mkdirSync2 } from "node:fs";
+import { dirname as dirname2 } from "node:path";
+async function prepareFeedback(input2, actor, read, signal) {
+  if (!input2 || !["confirmed", "useful", "not-applicable", "disputed"].includes(input2.kind) || typeof input2.reason !== "string" || !input2.reason.trim() || input2.reason.length > 1e3)
+    throw new MemoryError("\u53CD\u9988\u7C7B\u578B\u6216\u7406\u7531\u65E0\u6548");
+  if (actor === "model" && !["useful", "not-applicable"].includes(input2.kind))
+    throw new MemoryError("\u786E\u8BA4\u4E0E\u5224\u5B9A\u4E0D\u6B63\u786E\u9700\u7531\u7528\u6237\u64CD\u4F5C\uFF1B\u6A21\u578B\u53EA\u80FD\u8BB0\u5F55\u6709\u4F9D\u636E\u7684\u5E94\u7528\u53CD\u9988", 403);
+  let evidence;
+  if (input2.evidence !== void 0) {
+    const ref = input2.evidence;
+    if (!ref || typeof ref.sessionId !== "string" || !Number.isSafeInteger(ref.seq) || ref.seq < 0 || !read)
+      throw new MemoryError("\u53CD\u9988\u9700\u8981\u53EF\u8BFB\u53D6\u7684\u539F\u59CB\u4E8B\u4EF6\u4F9D\u636E");
+    const record2 = await read(ref.sessionId, ref.seq, signal);
+    if (!["user", "tool-result"].includes(record2?.kind) || typeof record2.text !== "string" || !record2.text.trim())
+      throw new MemoryError("\u6A21\u578B\u590D\u8FF0\u6216\u8BB0\u5FC6\u68C0\u7D22\u4E0D\u662F\u72EC\u7ACB\u53CD\u9988\u4F9D\u636E", 403);
+    if (actor === "model" && input2.kind === "useful" && (record2.kind !== "tool-result" || record2.failed !== false))
+      throw new MemoryError("\u6210\u529F\u5E94\u7528\u9700\u8981\u539F\u751F\u5DE5\u5177\u7684\u6210\u529F\u56DE\u6267\uFF1B\u4EA4\u6D41\u9648\u8FF0\u4E0D\u7B49\u4E8E\u4EFB\u52A1\u6210\u529F", 403);
+    evidence = {
+      sessionId: ref.sessionId,
+      seq: ref.seq,
+      kind: record2.kind,
+      hash: feedbackHash([record2.kind, record2.tool ?? null, record2.text.trim()])
+    };
+  } else if (actor === "model")
+    throw new MemoryError("\u6A21\u578B\u5E94\u7528\u53CD\u9988\u5FC5\u987B\u5F15\u7528\u539F\u59CB\u4E8B\u4EF6\uFF0C\u4E0D\u80FD\u901A\u8FC7\u91CD\u590D\u68C0\u7D22\u81EA\u6211\u52A0\u6743", 403);
+  signal?.throwIfAborted();
+  return {
+    origin: feedbackHash(actor === "human" ? ["human"] : ["native-evidence", evidence.hash]),
+    entry: {
+      actor,
+      kind: input2.kind,
+      reason: input2.reason.trim(),
+      ...evidence ? { evidence } : {},
+      at: (/* @__PURE__ */ new Date()).toISOString()
+    }
+  };
+}
+function presentFeedback(view, actor) {
+  if (actor === "human") return view;
+  const { entries: _, ...summary } = view;
+  return summary;
+}
+var feedbackHash = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
+var MemoryFeedback = class {
+  db;
+  closed = false;
+  constructor(path) {
+    mkdirSync2(dirname2(path), { recursive: true });
+    this.db = new DatabaseSync(path);
+    try {
+      this.db.exec("PRAGMA busy_timeout=3000; PRAGMA journal_mode=WAL;");
+      const version2 = this.db.prepare("PRAGMA user_version").get().user_version;
+      if (version2 > 1 || this.db.prepare("PRAGMA quick_check").get().quick_check !== "ok")
+        throw new MemoryError("\u8BB0\u5FC6\u53CD\u9988\u5B58\u50A8\u7248\u672C\u6216\u5B8C\u6574\u6027\u9700\u8981\u68C0\u67E5\uFF0C\u672A\u6E05\u7A7A\u539F\u8BB0\u5F55", 503);
+      this.db.exec(
+        `CREATE TABLE IF NOT EXISTS feedback(target TEXT NOT NULL, origin TEXT NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(target,origin,kind)); PRAGMA user_version=1;`
+      );
+    } catch (error62) {
+      this.db.close();
+      throw error62;
+    }
+  }
+  view(target) {
+    const entries = this.db.prepare("SELECT body FROM feedback WHERE target=? ORDER BY rowid").all(target).map((row) => JSON.parse(String(row.body)));
+    const human = (kind) => entries.some((entry) => entry.actor === "human" && entry.kind === kind);
+    const useful = entries.filter((entry) => entry.kind === "useful").length;
+    const negative = entries.filter((entry) => entry.kind === "not-applicable").length;
+    return {
+      confirmed: human("confirmed") && !human("disputed"),
+      disputed: human("disputed"),
+      strength: Math.max(
+        -4,
+        Math.min(4, (human("confirmed") ? 2 : 0) + Math.min(2, useful) - Math.min(4, negative * 2))
+      ),
+      count: entries.length,
+      entries
+    };
+  }
+  record(target, origin, entry) {
+    if (!/^[a-f0-9]{64}$/.test(target) || !/^[a-f0-9]{64}$/.test(origin))
+      throw new MemoryError("\u53CD\u9988\u76EE\u6807\u65E0\u6548");
+    if (this.db.prepare("SELECT 1 FROM feedback WHERE target=? AND origin=? AND kind=?").get(target, origin, entry.kind))
+      return { duplicate: true, feedback: this.view(target) };
+    const current = this.view(target);
+    if (current.count >= 128 || Number(this.db.prepare("SELECT count(*) n FROM feedback").get().n) >= 1e5)
+      throw new MemoryError("\u53CD\u9988\u8BB0\u5F55\u5DF2\u8FBE\u5230\u5BB9\u91CF\u9650\u5236\uFF0C\u8BF7\u5148\u6574\u7406\uFF1B\u672A\u5220\u9664\u539F\u8BB0\u5F55", 409);
+    const result = this.db.prepare("INSERT OR IGNORE INTO feedback VALUES(?,?,?,?)").run(target, origin, entry.kind, JSON.stringify(entry));
+    return { duplicate: result.changes === 0, feedback: this.view(target) };
+  }
+  close() {
+    if (!this.closed) {
+      this.closed = true;
+      this.db.close();
+    }
+  }
+};
+function rankMemoryMatch(score, feedback) {
+  return score + feedback.strength * 0.5;
+}
+
+// packages/dsh-px-memory/src/knowledge.ts
+var KNOWLEDGE_SCOPES = ["persona", "persona-project", "project", "global"];
+var SCOPE_LABELS = {
+  persona: "\u4EBA\u683C\u79C1\u6709",
+  "persona-project": "\u4EBA\u683C \xD7 \u9879\u76EE",
+  project: "\u9879\u76EE\u5171\u4EAB",
+  global: "\u5168\u5C40\u5171\u4EAB"
+};
+var prefix = "<!-- dsh-px-knowledge:";
+var digest = (value) => createHash2("sha256").update(JSON.stringify(value)).digest("hex");
+var contentRevision = (snapshot) => digest(snapshot.documents.map((d) => [d.id, d.revision, d.contentHash, d.title, d.status, d.healthy]));
+function unwrap(document) {
+  const end = document.content.indexOf(" -->\n");
+  if (!document.content.startsWith(prefix) || end < 0)
+    throw new MemoryError("\u77E5\u8BC6\u6765\u6E90\u4FE1\u606F\u7F3A\u5931\uFF0C\u8BF7\u68C0\u67E5\u6B64\u6761\u76EE\u7684\u539F\u6587", 409);
+  let metadata;
+  try {
+    metadata = JSON.parse(document.content.slice(prefix.length, end));
+  } catch {
+    throw new MemoryError("\u77E5\u8BC6\u6765\u6E90\u4FE1\u606F\u65E0\u6548", 409);
+  }
+  if (metadata.schema !== 1 || !Array.isArray(metadata.sources))
+    throw new MemoryError("\u77E5\u8BC6\u7248\u672C\u683C\u5F0F\u4E0D\u53D7\u652F\u6301", 409);
+  return { metadata, body: document.content.slice(end + 5) };
+}
+function wrap(metadata, body) {
+  return prefix + JSON.stringify(metadata) + " -->\n" + body;
+}
+function bounded(value, label, max) {
+  if (typeof value !== "string" || !value.trim() || value.length > max)
+    throw new MemoryError(`${label}\u4E3A\u7A7A\u6216\u8D85\u8FC7\u9650\u5236`);
+  return value.trim();
+}
+function validateNamespace(ns) {
+  if (!ns || !KNOWLEDGE_SCOPES.includes(ns.scope)) throw new MemoryError("\u77E5\u8BC6\u6765\u6E90\u8303\u56F4\u65E0\u6548", 409);
+  const privateScope = ns.scope === "persona" || ns.scope === "persona-project" || !!ns.conversation, projectScope = ns.scope === "project" || ns.scope === "persona-project";
+  if (privateScope !== (typeof ns.personaId === "string" && ns.personaId.length > 0 && ns.personaId.length <= 200) || projectScope !== (typeof ns.project === "string" && ns.project.length > 0))
+    throw new MemoryError("\u77E5\u8BC6\u6765\u6E90\u8EAB\u4EFD\u65E0\u6548", 409);
+  if (ns.conversation && (ns.scope !== "project" || [ns.conversation.provider, ns.conversation.accountId, ns.conversation.id].some(
+    (value) => typeof value !== "string" || !value || value.length > 200
+  )))
+    throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u6765\u6E90\u8EAB\u4EFD\u65E0\u6548", 409);
+}
+var legacyConversationTitle = (title) => typeof title === "string" && /^QQ 经历 \/ [^/]{1,200} \/ /.test(title);
+var conversationNotePrefix = (provider, personaId) => provider === "qq" ? `QQ \u7ECF\u5386 / ${personaId} / ` : `\u6E20\u9053\u7ECF\u5386 / ${provider} / ${personaId} / `;
+var KnowledgeBank = class {
+  constructor(root, identities, observeFile2, readEvidence) {
+    this.root = root;
+    this.identities = identities;
+    this.observeFile = observeFile2;
+    this.readEvidence = readEvidence;
+    mkdirSync3(root, { recursive: true });
+    this.feedbackStore = new MemoryFeedback(join(root, "feedback.sqlite"));
+  }
+  conversationSearch = new DocumentSearchPager();
+  feedbackStore;
+  runtimes = /* @__PURE__ */ new Map();
+  factory;
+  conversationCallers = /* @__PURE__ */ new WeakMap();
+  migrations = /* @__PURE__ */ new Map();
+  feedbackTarget(caller, ns, document) {
+    const binding = this.identities.read().bindings[caller.sessionId];
+    if (!binding || binding.pending) return "";
+    const audience = publicSession(binding) ? {
+      provider: binding.channel.provider,
+      accountId: binding.channel.accountId,
+      conversationId: binding.channel.conversationId
+    } : "private";
+    return feedbackHash([
+      ns,
+      document.id,
+      document.revision,
+      document.contentHash,
+      binding.personaId,
+      audience
+    ]);
+  }
+  async feedback(caller, scope, input2, signal) {
+    const ns = this.namespace(caller, scope), id = bounded(input2.id, "\u77E5\u8BC6\u7F16\u53F7", 300), actor = caller.actor === "human" ? "human" : "model";
+    const before = (await this.call(ns, "document", { id })).value;
+    this.assertReadableDocument(ns, before);
+    if (before.status !== "active" || before.revision !== input2.documentRevision)
+      throw new MemoryError("\u77E5\u8BC6\u5DF2\u53D8\u5316\u6216\u5F52\u6863\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6\u540E\u53CD\u9988", 409);
+    const target = this.feedbackTarget(caller, ns, before);
+    if (!target) throw new MemoryError("\u53CD\u9988\u9700\u8981\u5DF2\u56FA\u5B9A\u7684\u4EBA\u683C\u4F1A\u8BDD", 409);
+    const feedback = await prepareFeedback(
+      input2,
+      actor,
+      this.readEvidence ? (source, seq, stop) => this.readEvidence(caller, source, seq, stop) : void 0,
+      signal
+    );
+    signal?.throwIfAborted();
+    const now = (await this.call(ns, "document", { id })).value;
+    if (now.status !== "active" || now.revision !== before.revision || now.contentHash !== before.contentHash || this.feedbackTarget(caller, this.namespace(caller, scope), now) !== target)
+      throw new MemoryError("\u77E5\u8BC6\u6216\u53CD\u9988\u53D7\u4F17\u5DF2\u53D8\u5316\uFF0C\u672A\u91C7\u7EB3\u8FDF\u5230\u53CD\u9988", 409);
+    const result = this.feedbackStore.record(target, feedback.origin, feedback.entry);
+    return {
+      ...result,
+      feedback: presentFeedback(result.feedback, caller.actor),
+      ...await this.read(caller, scope, id, true)
+    };
+  }
+  namespace(caller, scope) {
+    if (!KNOWLEDGE_SCOPES.includes(scope)) throw new MemoryError("\u77E5\u8BC6\u8303\u56F4\u65E0\u6548");
+    const state = this.identities.read(), binding = state.bindings[caller.sessionId];
+    const granted = this.conversationCallers.get(caller);
+    if (granted) {
+      if (scope !== "project" || digest(granted) !== digest(this.conversationNamespace(caller)))
+        throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u8C03\u7528\u8303\u56F4\u5DF2\u53D8\u5316", 403);
+      return structuredClone(granted);
+    }
+    if (publicSession(binding) && (scope === "persona" || scope === "persona-project"))
+      throw new MemoryError("\u516C\u5171\u804A\u5929\u4E0D\u80FD\u8BFB\u53D6\u4EBA\u683C\u79C1\u6709\u77E5\u8BC6", 403);
+    if ((scope === "persona" || scope === "persona-project") && (!binding || binding.pending))
+      throw new MemoryError("\u8BF7\u5148\u5EFA\u7ACB\u5F53\u524D\u4F1A\u8BDD\u4EBA\u683C", 409);
+    const project = projectKey(
+      publicSession(binding) && binding.channel?.workspace ? binding.channel.workspace : caller.project
+    );
+    if ((scope === "project" || scope === "persona-project") && !project)
+      throw new MemoryError("\u6B64\u8303\u56F4\u9700\u8981\u5F53\u524D\u9879\u76EE\u76EE\u5F55");
+    return {
+      scope,
+      ...scope === "persona" || scope === "persona-project" ? { personaId: binding.personaId } : {},
+      ...scope === "project" || scope === "persona-project" ? { project } : {}
+    };
+  }
+  /** An in-process capability, not a caller-controlled JSON flag. Ordinary knowledge routes cannot mint it. */
+  conversationCaller(caller) {
+    const value = { ...caller };
+    this.conversationCallers.set(value, this.conversationNamespace(value));
+    return value;
+  }
+  conversationNamespace(caller) {
+    const state = this.identities.read(), binding = state.bindings[caller.sessionId], channel = binding?.channel;
+    const persona = state.personas.find((row) => row.id === binding?.personaId);
+    if (!binding || binding.pending || !publicSession(binding) || !channel?.workspace || projectKey(caller.project) !== projectKey(channel.workspace) || !persona || caller.actor !== "human" && (persona.archived || !persona.memoryEnabled))
+      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u8C03\u7528\u8303\u56F4\u5DF2\u53D8\u5316\u6216\u5DF2\u5173\u95ED", 403);
+    return {
+      scope: "project",
+      personaId: binding.personaId,
+      project: projectKey(channel.workspace),
+      conversation: { provider: channel.provider, accountId: channel.accountId, id: channel.conversationId }
+    };
+  }
+  exportable(ns, document) {
+    if (ns.conversation || !legacyConversationTitle(document.title)) return true;
+    try {
+      const meta3 = unwrap(document).metadata;
+      return !!meta3.sharedBy;
+    } catch {
+      return false;
+    }
+  }
+  assertReadableDocument(ns, document) {
+    if (!this.exportable(ns, document))
+      throw new MemoryError("\u6B64\u6761\u76EE\u5C5E\u4E8E\u4EBA\u683C\u4EA4\u6D41\u8BB0\u5FC6\uFF0C\u8BF7\u4ECE\u5BF9\u5E94\u804A\u5929\u7684\u8BB0\u5FC6\u5165\u53E3\u8BFB\u53D6", 403);
+  }
+  /** Imports generated notes into an owner+account+conversation namespace; original provenance remains readable internally. */
+  async prepareConversation(caller, topicPrefix) {
+    const target = this.namespace(caller, "project");
+    if (!target.conversation || topicPrefix !== conversationNotePrefix(target.conversation.provider, target.personaId))
+      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u8FC1\u79FB\u8303\u56F4\u65E0\u6548", 403);
+    if (target.conversation.provider !== "qq") return;
+    const key = digest(target), active = this.migrations.get(key);
+    if (active) return active;
+    const work = this.migrateConversation(caller, target, topicPrefix).finally(() => {
+      if (this.migrations.get(key) === work) this.migrations.delete(key);
+    });
+    this.migrations.set(key, work);
+    return work;
+  }
+  async migrateConversation(caller, target, topicPrefix) {
+    const originNs = this.namespace({ ...caller }, "project");
+    const initial2 = await this.call(originNs, "snapshot");
+    const pending = initial2.value.documents.filter(
+      (row) => row.status === "active" && row.title.startsWith(topicPrefix)
+    );
+    let copied = 0, remaining = 0;
+    for (const row of pending) {
+      const source = (await this.call(originNs, "document", { id: row.id })).value;
+      const { metadata, body } = unwrap(source);
+      if (metadata.sharedBy) continue;
+      let observation;
+      try {
+        observation = JSON.parse(body);
+      } catch {
+        throw new MemoryError("\u65E7\u4EA4\u6D41\u8BB0\u5FC6\u683C\u5F0F\u9700\u8981\u68C0\u67E5\uFF1B\u539F\u8BB0\u5F55\u5DF2\u4FDD\u7559", 409);
+      }
+      if (observation.kind !== "conversation-observation" || observation.version !== 1)
+        throw new MemoryError("\u65E7\u4EA4\u6D41\u8BB0\u5FC6\u7C7B\u578B\u9700\u8981\u68C0\u67E5\uFF1B\u539F\u8BB0\u5F55\u5DF2\u4FDD\u7559", 409);
+      const destination = await this.call(target, "snapshot");
+      const existing = destination.value.documents.find(
+        (doc) => doc.title === source.title && doc.status === "active"
+      );
+      const migration = {
+        ...originNs,
+        id: source.id,
+        revision: source.revision,
+        contentHash: source.contentHash
+      };
+      if (existing) {
+        const migrated = unwrap((await this.call(target, "document", { id: existing.id })).value).metadata.migration;
+        if (!migrated || migrated.id !== source.id || migrated.revision !== source.revision || migrated.contentHash !== source.contentHash)
+          throw new MemoryError("\u65B0\u65E7\u4EA4\u6D41\u8BB0\u5FC6\u5747\u6709\u53D8\u5316\uFF0C\u8BF7\u6838\u5BF9\u540E\u5408\u5E76\uFF1B\u672A\u8986\u76D6\u4EFB\u4E00\u539F\u6587", 409);
+      } else {
+        if (copied >= 32) {
+          remaining++;
+          continue;
+        }
+        await this.write(
+          caller,
+          "project",
+          {
+            key: source.title,
+            body,
+            sources: metadata.sources,
+            revision: contentRevision(destination.value)
+          },
+          void 0,
+          metadata.author ?? { kind: "unknown", at: source.updatedAt },
+          migration
+        );
+        copied++;
+      }
+      const current = await this.call(originNs, "snapshot");
+      const latest = current.value.documents.find((doc) => doc.id === source.id);
+      if (latest?.status !== "active" || latest.revision !== source.revision || latest.contentHash !== source.contentHash)
+        throw new MemoryError("\u65E7\u4EA4\u6D41\u8BB0\u5FC6\u5728\u8FC1\u79FB\u671F\u95F4\u53D8\u5316\uFF0C\u5DF2\u4FDD\u7559\u526F\u672C\uFF0C\u8BF7\u91CD\u65B0\u6838\u5BF9", 409);
+    }
+    if (remaining) throw new MemoryError("\u5DF2\u8FC1\u79FB\u4E00\u6279\u4EA4\u6D41\u8BB0\u5FC6\uFF0C\u8BF7\u518D\u6B21\u8BFB\u53D6\u4EE5\u7EE7\u7EED\uFF1B\u539F\u8BB0\u5F55\u4FDD\u7559", 409);
+  }
+  async invalidateMigratedSource(origin) {
+    if (!origin) return;
+    const { id, revision, contentHash, ...ns } = origin;
+    const source = await this.call(ns, "snapshot"), row = source.value.documents.find((item) => item.id === id);
+    if (!row || row.status !== "active") return;
+    if (row.revision !== revision || row.contentHash !== contentHash)
+      throw new MemoryError("\u8FC1\u79FB\u6765\u6E90\u5DF2\u6709\u5176\u4ED6\u4FEE\u6539\uFF0C\u8BF7\u6838\u5BF9\u540E\u518D\u7EA0\u6B63\uFF1B\u539F\u4EF6\u4FDD\u7559", 409);
+    await this.call(
+      ns,
+      "archive",
+      { id, documentRevision: revision, summary: "\u4EBA\u683C\u4EA4\u6D41\u8BB0\u5FC6\u5DF2\u6709\u66F4\u65B0\uFF0C\u65E7\u5171\u4EAB\u4F9D\u636E\u4E0D\u518D\u4F5C\u4E3A\u5F53\u524D\u7ED3\u8BBA\u3002" },
+      source.revision
+    );
+  }
+  async conversationAlias(caller, id) {
+    bounded(id, "\u4EA4\u6D41\u8BB0\u5FC6\u7F16\u53F7", 300);
+    const ns = this.namespace(caller, "project");
+    if (!ns.conversation) throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u8303\u56F4\u65E0\u6548", 403);
+    const snapshot = await this.call(ns, "snapshot");
+    for (const row of snapshot.value.documents) {
+      const migrated = unwrap((await this.call(ns, "document", { id: row.id })).value).metadata.migration;
+      if (migrated?.id === id) return row.id;
+    }
+  }
+  async runtime(ns) {
+    validateNamespace(ns);
+    const key = digest(ns), existing = this.runtimes.get(key);
+    if (existing) return existing;
+    const module = await (this.factory ??= import("dsh-mnemon-source-documents").catch((e) => {
+      this.factory = void 0;
+      throw e;
+    }));
+    const runtime = module.createDocumentsMemorySource({ dataDir: join(this.root, ns.scope, key), limitBytes: 10 * 1024 * 1024 }).create({
+      sourceInstanceKey: "px-knowledge-" + key,
+      provenance: { packageName: "dsh-px-memory", entryId: "px-knowledge" }
+    });
+    if (this.runtimes.size >= 64) {
+      const oldest = this.runtimes.keys().next().value;
+      await this.runtimes.get(oldest)?.dispose?.();
+      this.runtimes.delete(oldest);
+    }
+    this.runtimes.set(key, runtime);
+    return runtime;
+  }
+  async call(ns, operation, input2 = {}, revision) {
+    const runtime = await this.runtime(ns);
+    const mutate = operation === "mutate" || operation === "archive";
+    if (mutate && (!revision || typeof revision !== "string"))
+      throw new MemoryError("\u8BF7\u5148\u8BFB\u53D6\u5F53\u524D\u77E5\u8BC6\u7248\u672C", 409);
+    return runtime.manage({
+      scope: { storage: "workspace", workspaceId: ns.project ?? this.root },
+      sourceInstanceKey: "px-knowledge-" + digest(ns),
+      mode: mutate ? "mutate" : "read",
+      operation,
+      input: input2,
+      expectedRevision: revision,
+      confirmed: mutate
+    });
+  }
+  async catalog(caller, scope) {
+    const ns = this.namespace(caller, scope), result = await this.call(ns, "snapshot");
+    const documents = [];
+    for (const row of result.value.documents) {
+      const document = !ns.conversation && legacyConversationTitle(row.title) ? (await this.call(ns, "document", { id: row.id })).value : row;
+      if (this.exportable(ns, document)) documents.push(row);
+    }
+    return {
+      scope,
+      label: SCOPE_LABELS[scope],
+      revision: contentRevision(result.value),
+      documents: documents.map((d) => ({
+        id: d.id,
+        key: d.title,
+        revision: d.revision,
+        contentHash: d.contentHash,
+        status: d.status,
+        updatedAt: d.updatedAt,
+        healthy: d.healthy,
+        feedback: (() => {
+          const f = this.feedbackStore.view(this.feedbackTarget(caller, ns, d));
+          return { confirmed: f.confirmed, disputed: f.disputed, strength: f.strength, count: f.count };
+        })()
+      }))
+    };
+  }
+  async present(ns, document, caller) {
+    this.assertReadableDocument(ns, document);
+    const { metadata, body } = unwrap(document);
+    const feedback = this.feedbackStore.view(this.feedbackTarget(caller, ns, document));
+    let stale = false, sourceState = "original";
+    if (metadata.origin) {
+      const { id, revision, contentHash, ...originNs } = metadata.origin;
+      try {
+        const original = (await this.call(originNs, "document", { id })).value;
+        stale = original.status !== "active" || original.revision !== revision || original.contentHash !== contentHash;
+        sourceState = stale ? "shared-source-changed" : "shared-snapshot";
+      } catch {
+        stale = true;
+        sourceState = "shared-source-unavailable";
+      }
+    }
+    const sourceFiles = [];
+    for (const source of metadata.sources) {
+      let state = "unavailable";
+      try {
+        const current = await this.observeFile?.(caller, source.path);
+        state = !current ? "missing" : current.version === source.version ? "current" : "changed";
+      } catch {
+      }
+      sourceFiles.push({ ...source, state });
+      if (state !== "current") {
+        stale = true;
+        sourceState = "file-source-" + state;
+      }
+    }
+    return {
+      id: document.id,
+      key: document.title,
+      scope: ns.scope,
+      revision: document.revision,
+      contentHash: document.contentHash,
+      status: document.status,
+      current: document.status === "active" && !stale && !feedback.disputed,
+      feedback: presentFeedback(feedback, caller.actor),
+      sourceState,
+      body,
+      sources: sourceFiles,
+      events: metadata.events ?? [],
+      author: metadata.author ?? { kind: "unknown" },
+      sourceMeaning: "File versions track freshness; they do not prove the content supports every claim.",
+      previous: metadata.previous,
+      sharedFrom: metadata.origin ? { scope: metadata.origin.scope, revision: metadata.origin.revision } : void 0
+    };
+  }
+  async read(caller, scope, id, includeHistorical = false) {
+    const ns = this.namespace(caller, scope);
+    bounded(id, "\u6761\u76EE\u7F16\u53F7", 300);
+    let result;
+    try {
+      result = await this.call(ns, "document", { id });
+    } catch (error62) {
+      if (error62 instanceof Error && error62.message === `document not found: ${id}`)
+        throw new MemoryError("\u6B64\u77E5\u8BC6\u6761\u76EE\u4E0D\u5728\u5F53\u524D\u53EF\u89C1\u8303\u56F4\u5185\uFF0C\u6216\u5DF2\u4E0D\u5B58\u5728", 404);
+      throw error62;
+    }
+    const document = await this.present(ns, result.value, caller);
+    if (!document.current && !includeHistorical) {
+      delete document.body;
+      document.requiresHistoricalRead = true;
+    }
+    const snapshot = (await this.call(ns, "snapshot")).value, now = snapshot.documents.find((d) => d.id === document.id);
+    if (!now || now.revision !== document.revision || now.contentHash !== document.contentHash || now.status !== document.status)
+      throw new MemoryError("\u77E5\u8BC6\u8BFB\u53D6\u671F\u95F4\u53D1\u751F\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6", 409);
+    return { revision: contentRevision(snapshot), document };
+  }
+  async search(caller, scope, query, includeHistorical = false) {
+    const ns = this.namespace(caller, scope), result = await this.call(ns, "search", {
+      query: bounded(query, "\u5173\u952E\u8BCD", 256),
+      limit: 20,
+      includeArchived: includeHistorical
+    });
+    const matches = await Promise.all(
+      result.value.results.filter((d) => this.exportable(ns, d)).map(async (d) => {
+        const item = await this.present(ns, d, caller), lexicalScore = Number.isFinite(d.score) ? d.score : 0;
+        return { ...item, relevance: lexicalScore, rank: rankMemoryMatch(lexicalScore, item.feedback) };
+      })
+    );
+    const snapshot = (await this.call(ns, "snapshot")).value;
+    if (matches.some(
+      (d) => !snapshot.documents.some(
+        (now) => now.id === d.id && now.revision === d.revision && now.contentHash === d.contentHash && now.status === d.status
+      )
+    ))
+      throw new MemoryError("\u77E5\u8BC6\u67E5\u8BE2\u671F\u95F4\u53D1\u751F\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u67E5\u8BE2", 409);
+    return {
+      scope,
+      revision: contentRevision(snapshot),
+      results: matches.filter((d) => includeHistorical || d.current).sort((a, b) => b.rank - a.rank || b.relevance - a.relevance),
+      excludedHistorical: includeHistorical ? 0 : matches.filter((d) => !d.current).length
+    };
+  }
+  async searchConversation(caller, query, offset = 0, cursor, revision, signal = new AbortController().signal) {
+    const ns = this.namespace(caller, "project");
+    if (!ns.conversation) throw new MemoryError("\u6B64\u641C\u7D22\u9700\u8981\u4EBA\u683C\u4EA4\u6D41\u8BB0\u5FC6\u8303\u56F4", 403);
+    const normalized = bounded(query, "\u5173\u952E\u8BCD", 256), catalog = await this.catalog(caller, "project");
+    if (offset > 0 && revision !== catalog.revision)
+      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u76EE\u5F55\u5DF2\u53D8\u5316\uFF0C\u8BF7\u4ECE\u7B2C\u4E00\u9875\u91CD\u65B0\u67E5\u8BE2", 409);
+    const candidates = catalog.documents.filter(
+      (d) => d.status === "active" && d.healthy !== false && d.key.startsWith(conversationNotePrefix(ns.conversation.provider, ns.personaId)) && !d.feedback.disputed
+    ).map((d, order) => ({
+      id: d.id,
+      revision: d.revision,
+      strength: d.feedback.strength,
+      updatedAt: d.updatedAt,
+      order
+    }));
+    const signature = digest([
+      ns,
+      normalized,
+      catalog.revision,
+      catalog.documents.map((d) => [d.id, d.feedback])
+    ]);
+    const page = await this.conversationSearch.page({
+      signature,
+      cursor,
+      requireCursor: catalog.documents.some((d) => d.feedback.count > 0),
+      offset,
+      query: normalized,
+      scope: { storage: "workspace", workspaceId: ns.project, sessionId: caller.sessionId },
+      sourceKey: "px-knowledge-" + digest(ns),
+      candidates,
+      runtime: () => this.runtime(ns),
+      signal
+    });
+    const documents = [];
+    for (const hit of page.rows) {
+      signal.throwIfAborted();
+      const result = await this.read(caller, "project", hit.id);
+      if (result.revision !== catalog.revision || !result.document.current)
+        throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u76EE\u5F55\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u67E5\u8BE2", 409);
+      documents.push({ ...result.document, relevance: hit.relevance, rank: hit.rank });
+    }
+    const after = await this.catalog(caller, "project");
+    if (digest([ns, normalized, after.revision, after.documents.map((d) => [d.id, d.feedback])]) !== signature || digest(this.namespace(caller, "project")) !== digest(ns))
+      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u76EE\u5F55\u5DF2\u53D8\u5316\uFF08\u6B63\u6587\u6216\u53CD\u9988\uFF09\uFF0C\u8BF7\u91CD\u65B0\u67E5\u8BE2", 409);
+    return {
+      revision: catalog.revision,
+      documents,
+      cursor: page.cursor,
+      nextOffset: page.nextOffset,
+      partial: page.partial
+    };
+  }
+  async write(caller, scope, args, origin, sourceAuthor, migration) {
+    const ns = this.namespace(caller, scope), key = bounded(args.key, "\u77E5\u8BC6\u4E3B\u9898", 160), body = bounded(args.body, "\u77E5\u8BC6\u6B63\u6587", 64e3);
+    const snapshot = await this.call(ns, "snapshot");
+    if (contentRevision(snapshot.value) !== args.revision)
+      throw new MemoryError("\u77E5\u8BC6\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u5148 catalog \u8BFB\u53D6 CONTROL.revision \u540E\u518D\u4FEE\u6539", 409);
+    const matches = snapshot.value.documents.filter((d) => d.status === "active" && d.title === key);
+    if (matches.length > 1) throw new MemoryError("\u4E3B\u9898\u5B58\u5728\u91CD\u590D\u8BB0\u5F55\uFF0C\u8BF7\u5148\u6574\u7406\u4E3A\u5355\u4E00\u73B0\u884C\u6761\u76EE", 409);
+    const old = matches[0];
+    const oldMetadata = old ? unwrap((await this.call(ns, "document", { id: old.id })).value).metadata : void 0;
+    if (!ns.conversation && legacyConversationTitle(key) && !origin && !oldMetadata?.sharedBy)
+      throw new MemoryError("\u6B64\u4E3B\u9898\u5C5E\u4E8E\u4EBA\u683C\u4EA4\u6D41\u8BB0\u5FC6\uFF0C\u8BF7\u901A\u8FC7\u5BF9\u5E94\u804A\u5929\u7684\u8BB0\u5FC6\u5165\u53E3\u4FEE\u6539", 403);
+    let sources = args.sources ?? (old ? unwrap((await this.call(ns, "document", { id: old.id })).value).metadata.sources : []);
+    if (args.sourcePaths !== void 0) {
+      if (!Array.isArray(args.sourcePaths) || args.sourcePaths.length > 12 || !this.observeFile)
+        throw new MemoryError("\u6587\u4EF6\u6765\u6E90\u6216\u539F\u751F\u8BFB\u53D6\u670D\u52A1\u4E0D\u53EF\u7528");
+      sources = await Promise.all(
+        args.sourcePaths.map(async (path) => {
+          const ref = await this.observeFile(caller, path);
+          if (!ref) throw new MemoryError("\u6765\u6E90\u6587\u4EF6\u4E0D\u5B58\u5728");
+          return ref;
+        })
+      );
+    }
+    if (!Array.isArray(sources) || sources.length > 12 || sources.some(
+      (s) => typeof s.path !== "string" || typeof s.version !== "string" || !Number.isFinite(Date.parse(s.observedAt))
+    ))
+      throw new MemoryError("\u6587\u4EF6\u7248\u672C\u5F15\u7528\u65E0\u6548");
+    let events = oldMetadata?.events;
+    if (args.sourceEvents !== void 0) {
+      if (!Array.isArray(args.sourceEvents) || args.sourceEvents.length > 12 || !this.readEvidence)
+        throw new MemoryError("\u539F\u59CB\u4E8B\u4EF6\u5F15\u7528\u6216\u8BFB\u53D6\u670D\u52A1\u4E0D\u53EF\u7528");
+      events = [];
+      for (const ref of args.sourceEvents) {
+        if (!ref || typeof ref.sessionId !== "string" || !Number.isSafeInteger(ref.seq) || ref.seq < 0)
+          throw new MemoryError("\u539F\u59CB\u4E8B\u4EF6\u5F15\u7528\u65E0\u6548");
+        const record2 = await this.readEvidence(caller, ref.sessionId, ref.seq);
+        if (record2?.source !== "native-session-event" || !/^[a-f0-9]{64}$/.test(record2.eventHash))
+          throw new MemoryError("\u539F\u59CB\u4E8B\u4EF6\u6765\u6E90\u65E0\u6CD5\u9A8C\u8BC1", 409);
+        if (!events.some((row) => row.sessionId === ref.sessionId && row.seq === ref.seq))
+          events.push({
+            sessionId: ref.sessionId,
+            seq: ref.seq,
+            kind: record2.kind,
+            eventHash: record2.eventHash,
+            time: Number.isFinite(record2.time) ? record2.time : null
+          });
+      }
+    }
+    if (digest(this.namespace(caller, scope)) !== digest(ns))
+      throw new MemoryError("\u4FDD\u5B58\u671F\u95F4\u77E5\u8BC6\u53D7\u4F17\u5DF2\u53D8\u5316\uFF0C\u672A\u5199\u5165", 409);
+    const metadata = {
+      schema: 1,
+      sources,
+      ...events ? { events } : {},
+      author: sourceAuthor ?? (origin ? { kind: "unknown", at: (/* @__PURE__ */ new Date()).toISOString() } : { kind: caller.actor ?? "model", at: (/* @__PURE__ */ new Date()).toISOString() }),
+      ...migration ?? oldMetadata?.migration ? { migration: migration ?? oldMetadata?.migration } : {},
+      ...origin ? { sharedBy: { kind: caller.actor ?? "model", at: (/* @__PURE__ */ new Date()).toISOString() } } : {},
+      ...!origin && legacyConversationTitle(key) && oldMetadata?.sharedBy ? { sharedBy: oldMetadata.sharedBy } : {},
+      ...origin ? { origin } : {},
+      ...old ? { previous: { revision: old.revision, contentHash: old.contentHash } } : {}
+    };
+    const mutation = {
+      action: old ? "update" : "create",
+      ...old ? { id: old.id } : {},
+      title: key,
+      description: "\u7531 PX \u7BA1\u7406\u7684\u73B0\u884C\u77E5\u8BC6\uFF1B\u5386\u53F2\u4FEE\u8BA2\u4E0D\u4F5C\u4E3A\u5F53\u524D\u7ED3\u8BBA\u3002",
+      content: wrap(metadata, body),
+      sourcePaths: sources.map((s) => s.path),
+      sessionIds: caller.sessionId ? [caller.sessionId] : []
+    };
+    let result;
+    if (ns.conversation) await this.invalidateMigratedSource(oldMetadata?.migration);
+    try {
+      result = await this.call(ns, "mutate", mutation, snapshot.revision);
+    } catch (error62) {
+      if (error62?.name !== "DocumentConflictError") throw error62;
+      const latest = await this.call(ns, "snapshot");
+      if (contentRevision(latest.value) !== args.revision)
+        throw new MemoryError("\u77E5\u8BC6\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u5148 catalog \u8BFB\u53D6 CONTROL.revision \u540E\u518D\u4FEE\u6539", 409);
+      result = await this.call(ns, "mutate", mutation, latest.revision);
+    }
+    return {
+      revision: contentRevision(result.value.snapshot),
+      document: await this.present(ns, result.value.document, caller)
+    };
+  }
+  async share(caller, from, id, to, revision, expectedSourceRevision) {
+    if (from === to) throw new MemoryError("\u6765\u6E90\u4E0E\u76EE\u6807\u8303\u56F4\u76F8\u540C");
+    const ns = this.namespace(caller, from), document = (await this.call(ns, "document", { id })).value;
+    this.assertReadableDocument(ns, document);
+    if (document.revision !== expectedSourceRevision || document.status !== "active")
+      throw new MemoryError("\u6765\u6E90\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u9884\u89C8\u540E\u5206\u4EAB", 409);
+    const { metadata, body } = unwrap(document);
+    if (!(await this.present(ns, document, caller)).current)
+      throw new MemoryError("\u6765\u6E90\u4E0D\u662F\u73B0\u884C\u77E5\u8BC6\uFF0C\u4E0D\u80FD\u7EE7\u7EED\u5206\u4EAB\u65E7\u526F\u672C", 409);
+    return this.write(
+      caller,
+      to,
+      { key: document.title, body, revision, sources: metadata.sources },
+      metadata.origin ?? { ...ns, id, revision: document.revision, contentHash: document.contentHash },
+      metadata.author
+    );
+  }
+  async archive(caller, scope, id, revision, documentRevision) {
+    const ns = this.namespace(caller, scope), current = await this.call(ns, "snapshot");
+    if (contentRevision(current.value) !== revision)
+      throw new MemoryError("\u77E5\u8BC6\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u518D\u5F52\u6863", 409);
+    const target = current.value.documents.find((row) => row.id === id);
+    if (target) {
+      const document = (await this.call(ns, "document", { id })).value;
+      this.assertReadableDocument(ns, document);
+      if (ns.conversation) await this.invalidateMigratedSource(unwrap(document).metadata.migration);
+    }
+    const result = await this.call(
+      ns,
+      "archive",
+      { id, documentRevision, summary: "\u7531\u7528\u6237\u5F52\u6863\uFF0C\u4E0D\u518D\u7528\u4E8E\u5F53\u524D\u7ED3\u8BBA\u3002" },
+      current.revision
+    );
+    return {
+      revision: contentRevision(result.value.snapshot),
+      document: await this.present(ns, result.value.document, caller)
+    };
+  }
+  async dispose() {
+    this.conversationSearch.clear();
+    for (const runtime of this.runtimes.values()) await runtime.dispose?.();
+    this.runtimes.clear();
+    this.feedbackStore.close();
+  }
+};
+
 // packages/dsh-px-memory/src/channel-notes.ts
 var checkedText = (value, label, max) => {
   if (typeof value !== "string" || !value.trim() || value.length > max) throw new MemoryError(label + "\u65E0\u6548");
@@ -679,11 +1548,11 @@ var ChannelNotes = class {
   scope(sessionId, actor = "model") {
     const state = this.store.read(), binding = state.bindings[sessionId], channel = binding?.channel;
     const persona = state.personas.find((p) => p.id === binding?.personaId);
-    if (!binding || binding.pending || channel?.provider !== "qq" || channel.access !== "public")
-      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u9700\u8981\u5DF2\u7ED1\u5B9A\u7684\u516C\u5171 QQ \u4F1A\u8BDD", 403);
+    if (!binding || binding.pending || !channel || channel.access !== "public")
+      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u9700\u8981\u5DF2\u7ED1\u5B9A\u7684\u516C\u5171\u6E20\u9053\u4F1A\u8BDD", 403);
     if (!channel.workspace)
       throw new MemoryError(
-        "\u65E7 QQ \u4F1A\u8BDD\u7F3A\u5C11\u72EC\u7ACB\u5DE5\u4F5C\u533A\u8BB0\u5F55\uFF1B\u8BF7\u7531\u8D1F\u8D23\u4EBA\u53D1\u9001 /new\uFF0C\u518D\u4FDD\u5B58\u4EA4\u6D41\u8BB0\u5FC6\u3002\u539F\u5386\u53F2\u4FDD\u7559\u3002",
+        "\u4F1A\u8BDD\u7F3A\u5C11\u72EC\u7ACB\u5DE5\u4F5C\u533A\u8BB0\u5F55\uFF1B\u8BF7\u4ECE\u8BE5\u6E20\u9053\u521B\u5EFA\u65B0\u7684\u5DF2\u7ED1\u5B9A\u4F1A\u8BDD\uFF0C\u518D\u4FDD\u5B58\u4EA4\u6D41\u8BB0\u5FC6\u3002\u539F\u5386\u53F2\u4FDD\u7559\u3002",
         409
       );
     if (!persona || actor === "model" && (persona.archived || !persona.memoryEnabled))
@@ -694,8 +1563,15 @@ var ChannelNotes = class {
         project: channel.workspace,
         actor
       }),
-      prefix: `QQ \u7ECF\u5386 / ${persona.id} / `,
-      identity: `${persona.id}/${channel.accountId}/${channel.conversationId}/${channel.workspace}`
+      provider: channel.provider,
+      prefix: conversationNotePrefix(channel.provider, persona.id),
+      identity: JSON.stringify([
+        persona.id,
+        channel.provider,
+        channel.accountId,
+        channel.conversationId,
+        channel.workspace
+      ])
     };
   }
   async execute(sessionId, input2, signal, actor = "model") {
@@ -824,8 +1700,8 @@ var ChannelNotes = class {
       if (!ref || typeof ref.sessionId !== "string" || !Number.isSafeInteger(ref.seq) || ref.seq < 0)
         throw new MemoryError("\u539F\u59CB\u4F9D\u636E\u7684\u4F1A\u8BDD\u6216\u4E8B\u4EF6\u7F16\u53F7\u65E0\u6548");
       const record2 = await this.readEvidence(sessionId, ref.sessionId, ref.seq, signal);
-      if (!["user", "assistant", "tool-result"].includes(record2.kind) || record2.kind === "tool-result" && record2.tool !== "qq_context")
-        throw new MemoryError("\u8BF7\u5F15\u7528\u539F\u59CB\u4EA4\u6D41\u6216 QQ \u7FA4\u5386\u53F2\uFF0C\u4E0D\u80FD\u628A\u8BB0\u5FC6\u526F\u672C\u4F5C\u4E3A\u65B0\u4F9D\u636E", 403);
+      if (!["user", "assistant", "tool-result"].includes(record2.kind) || record2.kind === "tool-result" && (scope.provider !== "qq" || record2.tool !== "qq_context"))
+        throw new MemoryError("\u8BF7\u5F15\u7528\u539F\u59CB\u4EA4\u6D41\u6216\u672C\u6E20\u9053\u5DF2\u9A8C\u8BC1\u7684\u5386\u53F2\uFF0C\u4E0D\u80FD\u628A\u8BB0\u5FC6\u526F\u672C\u4F5C\u4E3A\u65B0\u4F9D\u636E", 403);
       evidence.push({
         sessionId: ref.sessionId,
         seq: ref.seq,
@@ -876,7 +1752,32 @@ function qqMessageOrigin(source) {
   } : void 0;
 }
 function conversationalSource(source) {
-  return source?.kind === "user" || qqMessageOrigin(source) !== void 0;
+  return source?.kind === "user" || channelMessageOrigin(source) !== void 0;
+}
+function channelMessageOrigin(source) {
+  const qq = qqMessageOrigin(source);
+  if (qq) return { ...qq, provider: "qq" };
+  const identifier2 = (value) => typeof value === "string" && !!value.trim() && value.length <= 512 && !/[\r\n\0]/.test(value);
+  if (source?.kind !== "plugin:dsh-px-channel" || source.version !== 1 || typeof source.provider !== "string" || !/^[a-z][a-z0-9.-]{0,79}$/.test(source.provider) || ![
+    source.accountId,
+    source.conversationId,
+    source.actorId,
+    source.messageId,
+    source.personaId,
+    source.epoch,
+    source.requestId
+  ].every(identifier2) || !/^[a-f0-9]{64}$/.test(source.fingerprint ?? "") || !/^[a-f0-9]{64}$/.test(source.ingressId ?? "") || !Number.isSafeInteger(source.routeRevision) || source.routeRevision < 0 || source.delivery !== void 0 && source.delivery !== "context")
+    return;
+  return {
+    version: 1,
+    provider: source.provider,
+    accountId: source.accountId,
+    conversationId: source.conversationId,
+    senderId: source.actorId,
+    messageId: source.messageId,
+    routeRevision: source.routeRevision,
+    ...source.delivery === "context" ? { delivery: "context" } : {}
+  };
 }
 var QQ_CONVERSATION_TOOLS = [
   "qq_context",
@@ -951,16 +1852,17 @@ var TurnIdentity = class {
   /** Native inbox claims precede prompt assembly; user/message persistence happens only afterwards. */
   claim(agent, message, turn) {
     if (!Number.isSafeInteger(turn) || turn < 1) return;
-    const origin = qqMessageOrigin(message.source);
+    const origin = channelMessageOrigin(message.source);
     if (!origin) return;
     const channel = this.store.read().bindings[agent.session.id]?.channel;
-    if (channel?.provider !== "qq" || origin.accountId !== channel.accountId || origin.conversationId !== channel.conversationId)
+    if (channel?.provider !== origin.provider || origin.accountId !== channel.accountId || origin.conversationId !== channel.conversationId)
       return;
     if (this.boundary?.(agent)?.lastTurn === turn && this.active.get(agent)?.turnSeq === turn - 1) return;
     let pending = this.claimed.get(agent);
-    if (!pending || pending.turn !== turn || pending.accountId !== origin.accountId || pending.conversationId !== origin.conversationId) {
+    if (!pending || pending.turn !== turn || pending.provider !== origin.provider || pending.accountId !== origin.accountId || pending.conversationId !== origin.conversationId) {
       pending = {
         turn,
+        provider: origin.provider,
         accountId: origin.accountId,
         conversationId: origin.conversationId,
         participants: /* @__PURE__ */ new Set()
@@ -991,16 +1893,16 @@ var TurnIdentity = class {
     const channel = state.bindings[agent.session.id]?.channel;
     const participants = /* @__PURE__ */ new Set();
     if (channel?.task) participants.add(channel.task.requesterId);
-    if (channel?.provider === "qq" && persona.expression?.scenes?.some((rule) => rule.participantId)) {
+    if (channel && persona.expression?.scenes?.some((rule) => rule.participantId)) {
       const claimed = this.claimed.get(agent);
-      if (claimed?.turn === boundary?.lastTurn && claimed?.accountId === channel.accountId && claimed?.conversationId === channel.conversationId)
+      if (claimed?.turn === boundary?.lastTurn && claimed?.provider === channel.provider && claimed?.accountId === channel.accountId && claimed?.conversationId === channel.conversationId)
         for (const id of claimed.participants) participants.add(id);
       const events = agent.session.snapshotEvents?.() ?? [];
       for (let i = events.length - 1; i >= 0; i--) {
         if (events[i].type === "turn/start") break;
         if (events[i].type !== "user/message") continue;
-        const origin = qqMessageOrigin(events[i].data?.source);
-        if (origin?.accountId === channel.accountId && origin.conversationId === channel.conversationId)
+        const origin = channelMessageOrigin(events[i].data?.source);
+        if (origin?.provider === channel.provider && origin.accountId === channel.accountId && origin.conversationId === channel.conversationId)
           participants.add(origin.senderId);
       }
     }
@@ -1026,13 +1928,13 @@ function hasStarted(events) {
 }
 
 // packages/dsh-px-memory/src/history.ts
-import { DatabaseSync } from "node:sqlite";
-import { createHash } from "node:crypto";
-import { mkdirSync as mkdirSync2, existsSync as existsSync2, renameSync as renameSync2 } from "node:fs";
-import { dirname as dirname2 } from "node:path";
+import { DatabaseSync as DatabaseSync2 } from "node:sqlite";
+import { createHash as createHash3 } from "node:crypto";
+import { mkdirSync as mkdirSync4, existsSync as existsSync2, renameSync as renameSync2 } from "node:fs";
+import { dirname as dirname3 } from "node:path";
 var privateTools = /^(persona_(memory|history)|qq_memory$|mnemon_|memory_|skill$)/;
 var texts = (blocks) => Array.isArray(blocks) ? blocks.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n") : "";
-var hash = (event) => createHash("sha256").update(JSON.stringify(event)).digest("hex");
+var hash = (event) => createHash3("sha256").update(JSON.stringify(event)).digest("hex");
 function historyRecord(event, resolveTool) {
   const d = event.data ?? {};
   let kind, text3, toolName, failed;
@@ -1095,10 +1997,10 @@ async function nativeReader(host, id, signal) {
 var HistoryIndex = class {
   constructor(path, store) {
     this.store = store;
-    mkdirSync2(dirname2(path), { recursive: true });
+    mkdirSync4(dirname3(path), { recursive: true });
     let opened;
     try {
-      opened = new DatabaseSync(path);
+      opened = new DatabaseSync2(path);
       const check2 = opened.prepare("PRAGMA quick_check").get();
       if (check2?.quick_check !== "ok") throw Error("malformed history index");
     } catch (error62) {
@@ -1107,7 +2009,7 @@ var HistoryIndex = class {
       const suffix = ".invalid-" + Date.now();
       for (const ext of ["", "-wal", "-shm"])
         if (existsSync2(path + ext)) renameSync2(path + ext, path + ext + suffix);
-      opened = new DatabaseSync(path);
+      opened = new DatabaseSync2(path);
     }
     this.db = opened;
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=3000;
@@ -1607,873 +2509,6 @@ async function createPersonaAttempt(host, store, sourceId, args, id, signal) {
     signal
   });
 }
-
-// packages/dsh-px-memory/src/knowledge.ts
-import { createHash as createHash3 } from "node:crypto";
-import { mkdirSync as mkdirSync4 } from "node:fs";
-import { join } from "node:path";
-
-// packages/dsh-px-memory/src/document-search.ts
-var compare = (a, b) => b.rank - a.rank || b.relevance - a.relevance || b.updatedAt.localeCompare(a.updatedAt) || a.order - b.order;
-var DocumentSearchPager = class {
-  plans = /* @__PURE__ */ new Map();
-  async page(input2) {
-    const { signature, offset, signal } = input2;
-    if (input2.cursor !== void 0 && input2.cursor !== signature)
-      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u76EE\u5F55\u5DF2\u53D8\u5316\uFF08\u6B63\u6587\u6216\u53CD\u9988\uFF09\uFF0C\u8BF7\u4ECE\u7B2C\u4E00\u9875\u91CD\u65B0\u67E5\u8BE2", 409);
-    if (offset > 0 && input2.cursor === void 0 && input2.requireCursor)
-      throw new MemoryError("\u5E26\u53CD\u9988\u6392\u5E8F\u7684\u540E\u7EED\u9875\u9700\u8981 cursor\uFF0C\u8BF7\u4ECE\u7B2C\u4E00\u9875\u91CD\u65B0\u67E5\u8BE2", 409);
-    let plan = this.plans.get(signature);
-    if (plan && Date.now() - plan.at > 3e5) {
-      this.plans.delete(signature);
-      plan = void 0;
-    }
-    if (!plan) {
-      if (offset > 0) throw new MemoryError("\u641C\u7D22\u6E38\u6807\u5DF2\u8FC7\u671F\uFF0C\u8BF7\u4ECE\u7B2C\u4E00\u9875\u91CD\u65B0\u67E5\u8BE2", 409);
-      const runtime = await input2.runtime();
-      if (!runtime.query) throw new MemoryError("\u539F\u751F\u6587\u6863\u67E5\u8BE2\u63A5\u53E3\u4E0D\u53EF\u7528", 503);
-      const facts = await runtime.facts(
-        {
-          scope: input2.scope,
-          scenario: "px.conversation-search",
-          budget: {
-            maxProjectionCharacters: 0,
-            maxRoutes: 1,
-            maxActions: 0,
-            maxEvidenceResults: 6,
-            maxEvidenceCharacters: 16e3
-          }
-        },
-        signal
-      );
-      const projection = await runtime.project(
-        {
-          scope: input2.scope,
-          sourceInstanceKey: input2.sourceKey,
-          expectedRevision: facts.revision,
-          includeProjection: false,
-          mode: "routed",
-          maxCharacters: 0
-        },
-        signal
-      );
-      const grant = projection.readGrant, value = grant?.value;
-      if (!grant || grant.schema !== "dsh-mnemon.documents/v1" || !Array.isArray(value?.documentIds))
-        throw new MemoryError("\u539F\u751F\u6587\u6863\u8BFB\u53D6\u8303\u56F4\u4E0D\u53EF\u7528", 503);
-      const permitted = new Set(value.documentIds), candidates = new Map(
-        input2.candidates.filter((row) => permitted.has(row.id)).map((row) => [row.id, row])
-      );
-      const groups = /* @__PURE__ */ new Map();
-      for (const row of candidates.values()) {
-        if (!groups.has(row.strength)) groups.set(row.strength, []);
-        groups.get(row.strength).push(row.id);
-      }
-      plan = {
-        signature,
-        scope: input2.scope,
-        sourceKey: input2.sourceKey,
-        grant,
-        candidates,
-        buckets: [...groups.values()].map((ids) => ({
-          remaining: new Set(ids),
-          heads: [],
-          exhausted: false
-        })),
-        materialized: [],
-        done: false,
-        at: Date.now(),
-        queue: Promise.resolve(),
-        reads: 0
-      };
-      this.plans.set(signature, plan);
-      while (this.plans.size > 32) this.plans.delete(this.plans.keys().next().value);
-    }
-    const active = plan;
-    active.at = Date.now();
-    const task = active.queue.catch(() => {
-    }).then(async () => {
-      signal.throwIfAborted();
-      if (offset > active.materialized.length)
-        throw new MemoryError("\u8BF7\u4F7F\u7528\u4E0A\u6B21\u8FD4\u56DE\u7684 nextOffset \u987A\u5E8F\u8BFB\u53D6", 409);
-      let reads2 = 0;
-      const fill = async (bucket) => {
-        if (bucket.heads.length || bucket.exhausted) return;
-        if (!bucket.remaining.size) {
-          bucket.exhausted = true;
-          return;
-        }
-        signal.throwIfAborted();
-        if (++reads2 > 12) throw new MemoryError("\u672C\u9875\u8BFB\u53D6\u8FBE\u5230\u9884\u7B97\uFF0C\u8BF7\u7F29\u5C0F\u68C0\u7D22\u8BCD\u540E\u91CD\u65B0\u67E5\u8BE2", 409);
-        const runtime = await input2.runtime(), value = active.grant.value;
-        const grant = {
-          ...active.grant,
-          id: active.grant.id + "/page-" + ++active.reads,
-          value: { ...value, documentIds: [...bucket.remaining], archivedDocumentIds: [] }
-        };
-        const result = await runtime.query({
-          // Backend-only subview; derived strictly by narrowing a Source-issued grant, never by model-supplied ids.
-          view: { id: "px-conversation-search-" + signature + "-" + active.reads, scope: input2.scope },
-          route: {
-            id: input2.sourceKey + "/search",
-            sourceInstanceKey: input2.sourceKey,
-            sourceRouteId: "search",
-            description: "Scoped native document search",
-            capability: "search",
-            inputSchema: { type: "object" },
-            readGrantId: grant.id,
-            maxCalls: 1,
-            maxResults: 6,
-            maxCharacters: 16e3
-          },
-          grant,
-          input: { query: input2.query, limit: 6 },
-          signal
-        });
-        signal.throwIfAborted();
-        const hits = result.items.filter(
-          (item) => item.provenance?.kind === "match" && typeof item.score === "number" && Number.isFinite(item.score) && item.score > 0
-        );
-        for (const hit of hits) {
-          const candidate = active.candidates.get(hit.id);
-          if (!candidate || !bucket.remaining.has(hit.id) || Number(hit.revision) !== candidate.revision)
-            throw new MemoryError("\u6587\u6863\u5728\u68C0\u7D22\u671F\u95F4\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u67E5\u8BE2", 409);
-          bucket.remaining.delete(hit.id);
-          bucket.heads.push({
-            ...candidate,
-            relevance: hit.score,
-            rank: hit.score + candidate.strength * 0.5
-          });
-        }
-        bucket.heads.sort(compare);
-        if (hits.length < 6) bucket.exhausted = true;
-      };
-      while (active.materialized.length < offset + 8 && !active.done) {
-        for (const bucket of active.buckets) await fill(bucket);
-        const heads = active.buckets.filter((bucket) => bucket.heads.length).sort((a, b) => compare(a.heads[0], b.heads[0]));
-        if (!heads.length) {
-          active.done = true;
-          break;
-        }
-        active.materialized.push(heads[0].heads.shift());
-      }
-      const rows = active.materialized.slice(offset, offset + 8);
-      const hasMore = active.materialized.length > offset + rows.length || !active.done && active.buckets.some((bucket) => bucket.heads.length || !bucket.exhausted);
-      return {
-        rows,
-        cursor: signature,
-        nextOffset: hasMore ? offset + rows.length : null,
-        partial: hasMore
-      };
-    });
-    active.queue = task;
-    try {
-      return await task;
-    } catch (error62) {
-      if (this.plans.get(signature) === active) this.plans.delete(signature);
-      throw error62;
-    }
-  }
-  clear() {
-    this.plans.clear();
-  }
-};
-
-// packages/dsh-px-memory/src/memory-feedback.ts
-import { DatabaseSync as DatabaseSync2 } from "node:sqlite";
-import { createHash as createHash2 } from "node:crypto";
-import { mkdirSync as mkdirSync3 } from "node:fs";
-import { dirname as dirname3 } from "node:path";
-async function prepareFeedback(input2, actor, read, signal) {
-  if (!input2 || !["confirmed", "useful", "not-applicable", "disputed"].includes(input2.kind) || typeof input2.reason !== "string" || !input2.reason.trim() || input2.reason.length > 1e3)
-    throw new MemoryError("\u53CD\u9988\u7C7B\u578B\u6216\u7406\u7531\u65E0\u6548");
-  if (actor === "model" && !["useful", "not-applicable"].includes(input2.kind))
-    throw new MemoryError("\u786E\u8BA4\u4E0E\u5224\u5B9A\u4E0D\u6B63\u786E\u9700\u7531\u7528\u6237\u64CD\u4F5C\uFF1B\u6A21\u578B\u53EA\u80FD\u8BB0\u5F55\u6709\u4F9D\u636E\u7684\u5E94\u7528\u53CD\u9988", 403);
-  let evidence;
-  if (input2.evidence !== void 0) {
-    const ref = input2.evidence;
-    if (!ref || typeof ref.sessionId !== "string" || !Number.isSafeInteger(ref.seq) || ref.seq < 0 || !read)
-      throw new MemoryError("\u53CD\u9988\u9700\u8981\u53EF\u8BFB\u53D6\u7684\u539F\u59CB\u4E8B\u4EF6\u4F9D\u636E");
-    const record2 = await read(ref.sessionId, ref.seq, signal);
-    if (!["user", "tool-result"].includes(record2?.kind) || typeof record2.text !== "string" || !record2.text.trim())
-      throw new MemoryError("\u6A21\u578B\u590D\u8FF0\u6216\u8BB0\u5FC6\u68C0\u7D22\u4E0D\u662F\u72EC\u7ACB\u53CD\u9988\u4F9D\u636E", 403);
-    if (actor === "model" && input2.kind === "useful" && (record2.kind !== "tool-result" || record2.failed !== false))
-      throw new MemoryError("\u6210\u529F\u5E94\u7528\u9700\u8981\u539F\u751F\u5DE5\u5177\u7684\u6210\u529F\u56DE\u6267\uFF1B\u4EA4\u6D41\u9648\u8FF0\u4E0D\u7B49\u4E8E\u4EFB\u52A1\u6210\u529F", 403);
-    evidence = {
-      sessionId: ref.sessionId,
-      seq: ref.seq,
-      kind: record2.kind,
-      hash: feedbackHash([record2.kind, record2.tool ?? null, record2.text.trim()])
-    };
-  } else if (actor === "model")
-    throw new MemoryError("\u6A21\u578B\u5E94\u7528\u53CD\u9988\u5FC5\u987B\u5F15\u7528\u539F\u59CB\u4E8B\u4EF6\uFF0C\u4E0D\u80FD\u901A\u8FC7\u91CD\u590D\u68C0\u7D22\u81EA\u6211\u52A0\u6743", 403);
-  signal?.throwIfAborted();
-  return {
-    origin: feedbackHash(actor === "human" ? ["human"] : ["native-evidence", evidence.hash]),
-    entry: {
-      actor,
-      kind: input2.kind,
-      reason: input2.reason.trim(),
-      ...evidence ? { evidence } : {},
-      at: (/* @__PURE__ */ new Date()).toISOString()
-    }
-  };
-}
-function presentFeedback(view, actor) {
-  if (actor === "human") return view;
-  const { entries: _, ...summary } = view;
-  return summary;
-}
-var feedbackHash = (value) => createHash2("sha256").update(JSON.stringify(value)).digest("hex");
-var MemoryFeedback = class {
-  db;
-  closed = false;
-  constructor(path) {
-    mkdirSync3(dirname3(path), { recursive: true });
-    this.db = new DatabaseSync2(path);
-    try {
-      this.db.exec("PRAGMA busy_timeout=3000; PRAGMA journal_mode=WAL;");
-      const version2 = this.db.prepare("PRAGMA user_version").get().user_version;
-      if (version2 > 1 || this.db.prepare("PRAGMA quick_check").get().quick_check !== "ok")
-        throw new MemoryError("\u8BB0\u5FC6\u53CD\u9988\u5B58\u50A8\u7248\u672C\u6216\u5B8C\u6574\u6027\u9700\u8981\u68C0\u67E5\uFF0C\u672A\u6E05\u7A7A\u539F\u8BB0\u5F55", 503);
-      this.db.exec(
-        `CREATE TABLE IF NOT EXISTS feedback(target TEXT NOT NULL, origin TEXT NOT NULL, kind TEXT NOT NULL, body TEXT NOT NULL, PRIMARY KEY(target,origin,kind)); PRAGMA user_version=1;`
-      );
-    } catch (error62) {
-      this.db.close();
-      throw error62;
-    }
-  }
-  view(target) {
-    const entries = this.db.prepare("SELECT body FROM feedback WHERE target=? ORDER BY rowid").all(target).map((row) => JSON.parse(String(row.body)));
-    const human = (kind) => entries.some((entry) => entry.actor === "human" && entry.kind === kind);
-    const useful = entries.filter((entry) => entry.kind === "useful").length;
-    const negative = entries.filter((entry) => entry.kind === "not-applicable").length;
-    return {
-      confirmed: human("confirmed") && !human("disputed"),
-      disputed: human("disputed"),
-      strength: Math.max(
-        -4,
-        Math.min(4, (human("confirmed") ? 2 : 0) + Math.min(2, useful) - Math.min(4, negative * 2))
-      ),
-      count: entries.length,
-      entries
-    };
-  }
-  record(target, origin, entry) {
-    if (!/^[a-f0-9]{64}$/.test(target) || !/^[a-f0-9]{64}$/.test(origin))
-      throw new MemoryError("\u53CD\u9988\u76EE\u6807\u65E0\u6548");
-    if (this.db.prepare("SELECT 1 FROM feedback WHERE target=? AND origin=? AND kind=?").get(target, origin, entry.kind))
-      return { duplicate: true, feedback: this.view(target) };
-    const current = this.view(target);
-    if (current.count >= 128 || Number(this.db.prepare("SELECT count(*) n FROM feedback").get().n) >= 1e5)
-      throw new MemoryError("\u53CD\u9988\u8BB0\u5F55\u5DF2\u8FBE\u5230\u5BB9\u91CF\u9650\u5236\uFF0C\u8BF7\u5148\u6574\u7406\uFF1B\u672A\u5220\u9664\u539F\u8BB0\u5F55", 409);
-    const result = this.db.prepare("INSERT OR IGNORE INTO feedback VALUES(?,?,?,?)").run(target, origin, entry.kind, JSON.stringify(entry));
-    return { duplicate: result.changes === 0, feedback: this.view(target) };
-  }
-  close() {
-    if (!this.closed) {
-      this.closed = true;
-      this.db.close();
-    }
-  }
-};
-function rankMemoryMatch(score, feedback) {
-  return score + feedback.strength * 0.5;
-}
-
-// packages/dsh-px-memory/src/knowledge.ts
-var KNOWLEDGE_SCOPES = ["persona", "persona-project", "project", "global"];
-var SCOPE_LABELS = {
-  persona: "\u4EBA\u683C\u79C1\u6709",
-  "persona-project": "\u4EBA\u683C \xD7 \u9879\u76EE",
-  project: "\u9879\u76EE\u5171\u4EAB",
-  global: "\u5168\u5C40\u5171\u4EAB"
-};
-var prefix = "<!-- dsh-px-knowledge:";
-var digest = (value) => createHash3("sha256").update(JSON.stringify(value)).digest("hex");
-var contentRevision = (snapshot) => digest(snapshot.documents.map((d) => [d.id, d.revision, d.contentHash, d.title, d.status, d.healthy]));
-function unwrap(document) {
-  const end = document.content.indexOf(" -->\n");
-  if (!document.content.startsWith(prefix) || end < 0)
-    throw new MemoryError("\u77E5\u8BC6\u6765\u6E90\u4FE1\u606F\u7F3A\u5931\uFF0C\u8BF7\u68C0\u67E5\u6B64\u6761\u76EE\u7684\u539F\u6587", 409);
-  let metadata;
-  try {
-    metadata = JSON.parse(document.content.slice(prefix.length, end));
-  } catch {
-    throw new MemoryError("\u77E5\u8BC6\u6765\u6E90\u4FE1\u606F\u65E0\u6548", 409);
-  }
-  if (metadata.schema !== 1 || !Array.isArray(metadata.sources))
-    throw new MemoryError("\u77E5\u8BC6\u7248\u672C\u683C\u5F0F\u4E0D\u53D7\u652F\u6301", 409);
-  return { metadata, body: document.content.slice(end + 5) };
-}
-function wrap(metadata, body) {
-  return prefix + JSON.stringify(metadata) + " -->\n" + body;
-}
-function bounded(value, label, max) {
-  if (typeof value !== "string" || !value.trim() || value.length > max)
-    throw new MemoryError(`${label}\u4E3A\u7A7A\u6216\u8D85\u8FC7\u9650\u5236`);
-  return value.trim();
-}
-function validateNamespace(ns) {
-  if (!ns || !KNOWLEDGE_SCOPES.includes(ns.scope)) throw new MemoryError("\u77E5\u8BC6\u6765\u6E90\u8303\u56F4\u65E0\u6548", 409);
-  const privateScope = ns.scope === "persona" || ns.scope === "persona-project" || !!ns.conversation, projectScope = ns.scope === "project" || ns.scope === "persona-project";
-  if (privateScope !== (typeof ns.personaId === "string" && ns.personaId.length > 0 && ns.personaId.length <= 200) || projectScope !== (typeof ns.project === "string" && ns.project.length > 0))
-    throw new MemoryError("\u77E5\u8BC6\u6765\u6E90\u8EAB\u4EFD\u65E0\u6548", 409);
-  if (ns.conversation && (ns.scope !== "project" || [ns.conversation.provider, ns.conversation.accountId, ns.conversation.id].some(
-    (value) => typeof value !== "string" || !value || value.length > 200
-  )))
-    throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u6765\u6E90\u8EAB\u4EFD\u65E0\u6548", 409);
-}
-var legacyConversationTitle = (title) => typeof title === "string" && /^QQ 经历 \/ [^/]{1,200} \/ /.test(title);
-var KnowledgeBank = class {
-  constructor(root, identities, observeFile2, readEvidence) {
-    this.root = root;
-    this.identities = identities;
-    this.observeFile = observeFile2;
-    this.readEvidence = readEvidence;
-    mkdirSync4(root, { recursive: true });
-    this.feedbackStore = new MemoryFeedback(join(root, "feedback.sqlite"));
-  }
-  conversationSearch = new DocumentSearchPager();
-  feedbackStore;
-  runtimes = /* @__PURE__ */ new Map();
-  factory;
-  conversationCallers = /* @__PURE__ */ new WeakMap();
-  migrations = /* @__PURE__ */ new Map();
-  feedbackTarget(caller, ns, document) {
-    const binding = this.identities.read().bindings[caller.sessionId];
-    if (!binding || binding.pending) return "";
-    const audience = publicSession(binding) ? {
-      provider: binding.channel.provider,
-      accountId: binding.channel.accountId,
-      conversationId: binding.channel.conversationId
-    } : "private";
-    return feedbackHash([
-      ns,
-      document.id,
-      document.revision,
-      document.contentHash,
-      binding.personaId,
-      audience
-    ]);
-  }
-  async feedback(caller, scope, input2, signal) {
-    const ns = this.namespace(caller, scope), id = bounded(input2.id, "\u77E5\u8BC6\u7F16\u53F7", 300), actor = caller.actor === "human" ? "human" : "model";
-    const before = (await this.call(ns, "document", { id })).value;
-    this.assertReadableDocument(ns, before);
-    if (before.status !== "active" || before.revision !== input2.documentRevision)
-      throw new MemoryError("\u77E5\u8BC6\u5DF2\u53D8\u5316\u6216\u5F52\u6863\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6\u540E\u53CD\u9988", 409);
-    const target = this.feedbackTarget(caller, ns, before);
-    if (!target) throw new MemoryError("\u53CD\u9988\u9700\u8981\u5DF2\u56FA\u5B9A\u7684\u4EBA\u683C\u4F1A\u8BDD", 409);
-    const feedback = await prepareFeedback(
-      input2,
-      actor,
-      this.readEvidence ? (source, seq, stop) => this.readEvidence(caller, source, seq, stop) : void 0,
-      signal
-    );
-    signal?.throwIfAborted();
-    const now = (await this.call(ns, "document", { id })).value;
-    if (now.status !== "active" || now.revision !== before.revision || now.contentHash !== before.contentHash || this.feedbackTarget(caller, this.namespace(caller, scope), now) !== target)
-      throw new MemoryError("\u77E5\u8BC6\u6216\u53CD\u9988\u53D7\u4F17\u5DF2\u53D8\u5316\uFF0C\u672A\u91C7\u7EB3\u8FDF\u5230\u53CD\u9988", 409);
-    const result = this.feedbackStore.record(target, feedback.origin, feedback.entry);
-    return {
-      ...result,
-      feedback: presentFeedback(result.feedback, caller.actor),
-      ...await this.read(caller, scope, id, true)
-    };
-  }
-  namespace(caller, scope) {
-    if (!KNOWLEDGE_SCOPES.includes(scope)) throw new MemoryError("\u77E5\u8BC6\u8303\u56F4\u65E0\u6548");
-    const state = this.identities.read(), binding = state.bindings[caller.sessionId];
-    const granted = this.conversationCallers.get(caller);
-    if (granted) {
-      if (scope !== "project" || digest(granted) !== digest(this.conversationNamespace(caller)))
-        throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u8C03\u7528\u8303\u56F4\u5DF2\u53D8\u5316", 403);
-      return structuredClone(granted);
-    }
-    if (publicSession(binding) && (scope === "persona" || scope === "persona-project"))
-      throw new MemoryError("\u516C\u5171\u804A\u5929\u4E0D\u80FD\u8BFB\u53D6\u4EBA\u683C\u79C1\u6709\u77E5\u8BC6", 403);
-    if ((scope === "persona" || scope === "persona-project") && (!binding || binding.pending))
-      throw new MemoryError("\u8BF7\u5148\u5EFA\u7ACB\u5F53\u524D\u4F1A\u8BDD\u4EBA\u683C", 409);
-    const project = projectKey(
-      publicSession(binding) && binding.channel?.workspace ? binding.channel.workspace : caller.project
-    );
-    if ((scope === "project" || scope === "persona-project") && !project)
-      throw new MemoryError("\u6B64\u8303\u56F4\u9700\u8981\u5F53\u524D\u9879\u76EE\u76EE\u5F55");
-    return {
-      scope,
-      ...scope === "persona" || scope === "persona-project" ? { personaId: binding.personaId } : {},
-      ...scope === "project" || scope === "persona-project" ? { project } : {}
-    };
-  }
-  /** An in-process capability, not a caller-controlled JSON flag. Ordinary knowledge routes cannot mint it. */
-  conversationCaller(caller) {
-    const value = { ...caller };
-    this.conversationCallers.set(value, this.conversationNamespace(value));
-    return value;
-  }
-  conversationNamespace(caller) {
-    const state = this.identities.read(), binding = state.bindings[caller.sessionId], channel = binding?.channel;
-    const persona = state.personas.find((row) => row.id === binding?.personaId);
-    if (!binding || binding.pending || !publicSession(binding) || !channel?.workspace || projectKey(caller.project) !== projectKey(channel.workspace) || !persona || caller.actor !== "human" && (persona.archived || !persona.memoryEnabled))
-      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u8C03\u7528\u8303\u56F4\u5DF2\u53D8\u5316\u6216\u5DF2\u5173\u95ED", 403);
-    return {
-      scope: "project",
-      personaId: binding.personaId,
-      project: projectKey(channel.workspace),
-      conversation: { provider: channel.provider, accountId: channel.accountId, id: channel.conversationId }
-    };
-  }
-  exportable(ns, document) {
-    if (ns.conversation || !legacyConversationTitle(document.title)) return true;
-    try {
-      const meta3 = unwrap(document).metadata;
-      return !!meta3.sharedBy;
-    } catch {
-      return false;
-    }
-  }
-  assertReadableDocument(ns, document) {
-    if (!this.exportable(ns, document))
-      throw new MemoryError("\u6B64\u6761\u76EE\u5C5E\u4E8E\u4EBA\u683C\u4EA4\u6D41\u8BB0\u5FC6\uFF0C\u8BF7\u4ECE\u5BF9\u5E94\u804A\u5929\u7684\u8BB0\u5FC6\u5165\u53E3\u8BFB\u53D6", 403);
-  }
-  /** Imports generated notes into an owner+account+conversation namespace; original provenance remains readable internally. */
-  async prepareConversation(caller, topicPrefix) {
-    const target = this.namespace(caller, "project");
-    if (!target.conversation || topicPrefix !== `QQ \u7ECF\u5386 / ${target.personaId} / `)
-      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u8FC1\u79FB\u8303\u56F4\u65E0\u6548", 403);
-    const key = digest(target), active = this.migrations.get(key);
-    if (active) return active;
-    const work = this.migrateConversation(caller, target, topicPrefix).finally(() => {
-      if (this.migrations.get(key) === work) this.migrations.delete(key);
-    });
-    this.migrations.set(key, work);
-    return work;
-  }
-  async migrateConversation(caller, target, topicPrefix) {
-    const originNs = this.namespace({ ...caller }, "project");
-    const initial2 = await this.call(originNs, "snapshot");
-    const pending = initial2.value.documents.filter(
-      (row) => row.status === "active" && row.title.startsWith(topicPrefix)
-    );
-    let copied = 0, remaining = 0;
-    for (const row of pending) {
-      const source = (await this.call(originNs, "document", { id: row.id })).value;
-      const { metadata, body } = unwrap(source);
-      if (metadata.sharedBy) continue;
-      let observation;
-      try {
-        observation = JSON.parse(body);
-      } catch {
-        throw new MemoryError("\u65E7\u4EA4\u6D41\u8BB0\u5FC6\u683C\u5F0F\u9700\u8981\u68C0\u67E5\uFF1B\u539F\u8BB0\u5F55\u5DF2\u4FDD\u7559", 409);
-      }
-      if (observation.kind !== "conversation-observation" || observation.version !== 1)
-        throw new MemoryError("\u65E7\u4EA4\u6D41\u8BB0\u5FC6\u7C7B\u578B\u9700\u8981\u68C0\u67E5\uFF1B\u539F\u8BB0\u5F55\u5DF2\u4FDD\u7559", 409);
-      const destination = await this.call(target, "snapshot");
-      const existing = destination.value.documents.find(
-        (doc) => doc.title === source.title && doc.status === "active"
-      );
-      const migration = {
-        ...originNs,
-        id: source.id,
-        revision: source.revision,
-        contentHash: source.contentHash
-      };
-      if (existing) {
-        const migrated = unwrap((await this.call(target, "document", { id: existing.id })).value).metadata.migration;
-        if (!migrated || migrated.id !== source.id || migrated.revision !== source.revision || migrated.contentHash !== source.contentHash)
-          throw new MemoryError("\u65B0\u65E7\u4EA4\u6D41\u8BB0\u5FC6\u5747\u6709\u53D8\u5316\uFF0C\u8BF7\u6838\u5BF9\u540E\u5408\u5E76\uFF1B\u672A\u8986\u76D6\u4EFB\u4E00\u539F\u6587", 409);
-      } else {
-        if (copied >= 32) {
-          remaining++;
-          continue;
-        }
-        await this.write(
-          caller,
-          "project",
-          {
-            key: source.title,
-            body,
-            sources: metadata.sources,
-            revision: contentRevision(destination.value)
-          },
-          void 0,
-          metadata.author ?? { kind: "unknown", at: source.updatedAt },
-          migration
-        );
-        copied++;
-      }
-      const current = await this.call(originNs, "snapshot");
-      const latest = current.value.documents.find((doc) => doc.id === source.id);
-      if (latest?.status !== "active" || latest.revision !== source.revision || latest.contentHash !== source.contentHash)
-        throw new MemoryError("\u65E7\u4EA4\u6D41\u8BB0\u5FC6\u5728\u8FC1\u79FB\u671F\u95F4\u53D8\u5316\uFF0C\u5DF2\u4FDD\u7559\u526F\u672C\uFF0C\u8BF7\u91CD\u65B0\u6838\u5BF9", 409);
-    }
-    if (remaining) throw new MemoryError("\u5DF2\u8FC1\u79FB\u4E00\u6279\u4EA4\u6D41\u8BB0\u5FC6\uFF0C\u8BF7\u518D\u6B21\u8BFB\u53D6\u4EE5\u7EE7\u7EED\uFF1B\u539F\u8BB0\u5F55\u4FDD\u7559", 409);
-  }
-  async invalidateMigratedSource(origin) {
-    if (!origin) return;
-    const { id, revision, contentHash, ...ns } = origin;
-    const source = await this.call(ns, "snapshot"), row = source.value.documents.find((item) => item.id === id);
-    if (!row || row.status !== "active") return;
-    if (row.revision !== revision || row.contentHash !== contentHash)
-      throw new MemoryError("\u8FC1\u79FB\u6765\u6E90\u5DF2\u6709\u5176\u4ED6\u4FEE\u6539\uFF0C\u8BF7\u6838\u5BF9\u540E\u518D\u7EA0\u6B63\uFF1B\u539F\u4EF6\u4FDD\u7559", 409);
-    await this.call(
-      ns,
-      "archive",
-      { id, documentRevision: revision, summary: "\u4EBA\u683C\u4EA4\u6D41\u8BB0\u5FC6\u5DF2\u6709\u66F4\u65B0\uFF0C\u65E7\u5171\u4EAB\u4F9D\u636E\u4E0D\u518D\u4F5C\u4E3A\u5F53\u524D\u7ED3\u8BBA\u3002" },
-      source.revision
-    );
-  }
-  async conversationAlias(caller, id) {
-    bounded(id, "\u4EA4\u6D41\u8BB0\u5FC6\u7F16\u53F7", 300);
-    const ns = this.namespace(caller, "project");
-    if (!ns.conversation) throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u8303\u56F4\u65E0\u6548", 403);
-    const snapshot = await this.call(ns, "snapshot");
-    for (const row of snapshot.value.documents) {
-      const migrated = unwrap((await this.call(ns, "document", { id: row.id })).value).metadata.migration;
-      if (migrated?.id === id) return row.id;
-    }
-  }
-  async runtime(ns) {
-    validateNamespace(ns);
-    const key = digest(ns), existing = this.runtimes.get(key);
-    if (existing) return existing;
-    const module = await (this.factory ??= import("dsh-mnemon-source-documents").catch((e) => {
-      this.factory = void 0;
-      throw e;
-    }));
-    const runtime = module.createDocumentsMemorySource({ dataDir: join(this.root, ns.scope, key), limitBytes: 10 * 1024 * 1024 }).create({
-      sourceInstanceKey: "px-knowledge-" + key,
-      provenance: { packageName: "dsh-px-memory", entryId: "px-knowledge" }
-    });
-    if (this.runtimes.size >= 64) {
-      const oldest = this.runtimes.keys().next().value;
-      await this.runtimes.get(oldest)?.dispose?.();
-      this.runtimes.delete(oldest);
-    }
-    this.runtimes.set(key, runtime);
-    return runtime;
-  }
-  async call(ns, operation, input2 = {}, revision) {
-    const runtime = await this.runtime(ns);
-    const mutate = operation === "mutate" || operation === "archive";
-    if (mutate && (!revision || typeof revision !== "string"))
-      throw new MemoryError("\u8BF7\u5148\u8BFB\u53D6\u5F53\u524D\u77E5\u8BC6\u7248\u672C", 409);
-    return runtime.manage({
-      scope: { storage: "workspace", workspaceId: ns.project ?? this.root },
-      sourceInstanceKey: "px-knowledge-" + digest(ns),
-      mode: mutate ? "mutate" : "read",
-      operation,
-      input: input2,
-      expectedRevision: revision,
-      confirmed: mutate
-    });
-  }
-  async catalog(caller, scope) {
-    const ns = this.namespace(caller, scope), result = await this.call(ns, "snapshot");
-    const documents = [];
-    for (const row of result.value.documents) {
-      const document = !ns.conversation && legacyConversationTitle(row.title) ? (await this.call(ns, "document", { id: row.id })).value : row;
-      if (this.exportable(ns, document)) documents.push(row);
-    }
-    return {
-      scope,
-      label: SCOPE_LABELS[scope],
-      revision: contentRevision(result.value),
-      documents: documents.map((d) => ({
-        id: d.id,
-        key: d.title,
-        revision: d.revision,
-        contentHash: d.contentHash,
-        status: d.status,
-        updatedAt: d.updatedAt,
-        healthy: d.healthy,
-        feedback: (() => {
-          const f = this.feedbackStore.view(this.feedbackTarget(caller, ns, d));
-          return { confirmed: f.confirmed, disputed: f.disputed, strength: f.strength, count: f.count };
-        })()
-      }))
-    };
-  }
-  async present(ns, document, caller) {
-    this.assertReadableDocument(ns, document);
-    const { metadata, body } = unwrap(document);
-    const feedback = this.feedbackStore.view(this.feedbackTarget(caller, ns, document));
-    let stale = false, sourceState = "original";
-    if (metadata.origin) {
-      const { id, revision, contentHash, ...originNs } = metadata.origin;
-      try {
-        const original = (await this.call(originNs, "document", { id })).value;
-        stale = original.status !== "active" || original.revision !== revision || original.contentHash !== contentHash;
-        sourceState = stale ? "shared-source-changed" : "shared-snapshot";
-      } catch {
-        stale = true;
-        sourceState = "shared-source-unavailable";
-      }
-    }
-    const sourceFiles = [];
-    for (const source of metadata.sources) {
-      let state = "unavailable";
-      try {
-        const current = await this.observeFile?.(caller, source.path);
-        state = !current ? "missing" : current.version === source.version ? "current" : "changed";
-      } catch {
-      }
-      sourceFiles.push({ ...source, state });
-      if (state !== "current") {
-        stale = true;
-        sourceState = "file-source-" + state;
-      }
-    }
-    return {
-      id: document.id,
-      key: document.title,
-      scope: ns.scope,
-      revision: document.revision,
-      contentHash: document.contentHash,
-      status: document.status,
-      current: document.status === "active" && !stale && !feedback.disputed,
-      feedback: presentFeedback(feedback, caller.actor),
-      sourceState,
-      body,
-      sources: sourceFiles,
-      events: metadata.events ?? [],
-      author: metadata.author ?? { kind: "unknown" },
-      sourceMeaning: "File versions track freshness; they do not prove the content supports every claim.",
-      previous: metadata.previous,
-      sharedFrom: metadata.origin ? { scope: metadata.origin.scope, revision: metadata.origin.revision } : void 0
-    };
-  }
-  async read(caller, scope, id, includeHistorical = false) {
-    const ns = this.namespace(caller, scope);
-    bounded(id, "\u6761\u76EE\u7F16\u53F7", 300);
-    let result;
-    try {
-      result = await this.call(ns, "document", { id });
-    } catch (error62) {
-      if (error62 instanceof Error && error62.message === `document not found: ${id}`)
-        throw new MemoryError("\u6B64\u77E5\u8BC6\u6761\u76EE\u4E0D\u5728\u5F53\u524D\u53EF\u89C1\u8303\u56F4\u5185\uFF0C\u6216\u5DF2\u4E0D\u5B58\u5728", 404);
-      throw error62;
-    }
-    const document = await this.present(ns, result.value, caller);
-    if (!document.current && !includeHistorical) {
-      delete document.body;
-      document.requiresHistoricalRead = true;
-    }
-    const snapshot = (await this.call(ns, "snapshot")).value, now = snapshot.documents.find((d) => d.id === document.id);
-    if (!now || now.revision !== document.revision || now.contentHash !== document.contentHash || now.status !== document.status)
-      throw new MemoryError("\u77E5\u8BC6\u8BFB\u53D6\u671F\u95F4\u53D1\u751F\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u8BFB\u53D6", 409);
-    return { revision: contentRevision(snapshot), document };
-  }
-  async search(caller, scope, query, includeHistorical = false) {
-    const ns = this.namespace(caller, scope), result = await this.call(ns, "search", {
-      query: bounded(query, "\u5173\u952E\u8BCD", 256),
-      limit: 20,
-      includeArchived: includeHistorical
-    });
-    const matches = await Promise.all(
-      result.value.results.filter((d) => this.exportable(ns, d)).map(async (d) => {
-        const item = await this.present(ns, d, caller), lexicalScore = Number.isFinite(d.score) ? d.score : 0;
-        return { ...item, relevance: lexicalScore, rank: rankMemoryMatch(lexicalScore, item.feedback) };
-      })
-    );
-    const snapshot = (await this.call(ns, "snapshot")).value;
-    if (matches.some(
-      (d) => !snapshot.documents.some(
-        (now) => now.id === d.id && now.revision === d.revision && now.contentHash === d.contentHash && now.status === d.status
-      )
-    ))
-      throw new MemoryError("\u77E5\u8BC6\u67E5\u8BE2\u671F\u95F4\u53D1\u751F\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u67E5\u8BE2", 409);
-    return {
-      scope,
-      revision: contentRevision(snapshot),
-      results: matches.filter((d) => includeHistorical || d.current).sort((a, b) => b.rank - a.rank || b.relevance - a.relevance),
-      excludedHistorical: includeHistorical ? 0 : matches.filter((d) => !d.current).length
-    };
-  }
-  async searchConversation(caller, query, offset = 0, cursor, revision, signal = new AbortController().signal) {
-    const ns = this.namespace(caller, "project");
-    if (!ns.conversation) throw new MemoryError("\u6B64\u641C\u7D22\u9700\u8981\u4EBA\u683C\u4EA4\u6D41\u8BB0\u5FC6\u8303\u56F4", 403);
-    const normalized = bounded(query, "\u5173\u952E\u8BCD", 256), catalog = await this.catalog(caller, "project");
-    if (offset > 0 && revision !== catalog.revision)
-      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u76EE\u5F55\u5DF2\u53D8\u5316\uFF0C\u8BF7\u4ECE\u7B2C\u4E00\u9875\u91CD\u65B0\u67E5\u8BE2", 409);
-    const candidates = catalog.documents.filter(
-      (d) => d.status === "active" && d.healthy !== false && d.key.startsWith(`QQ \u7ECF\u5386 / ${ns.personaId} / `) && !d.feedback.disputed
-    ).map((d, order) => ({
-      id: d.id,
-      revision: d.revision,
-      strength: d.feedback.strength,
-      updatedAt: d.updatedAt,
-      order
-    }));
-    const signature = digest([
-      ns,
-      normalized,
-      catalog.revision,
-      catalog.documents.map((d) => [d.id, d.feedback])
-    ]);
-    const page = await this.conversationSearch.page({
-      signature,
-      cursor,
-      requireCursor: catalog.documents.some((d) => d.feedback.count > 0),
-      offset,
-      query: normalized,
-      scope: { storage: "workspace", workspaceId: ns.project, sessionId: caller.sessionId },
-      sourceKey: "px-knowledge-" + digest(ns),
-      candidates,
-      runtime: () => this.runtime(ns),
-      signal
-    });
-    const documents = [];
-    for (const hit of page.rows) {
-      signal.throwIfAborted();
-      const result = await this.read(caller, "project", hit.id);
-      if (result.revision !== catalog.revision || !result.document.current)
-        throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u76EE\u5F55\u5DF2\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u67E5\u8BE2", 409);
-      documents.push({ ...result.document, relevance: hit.relevance, rank: hit.rank });
-    }
-    const after = await this.catalog(caller, "project");
-    if (digest([ns, normalized, after.revision, after.documents.map((d) => [d.id, d.feedback])]) !== signature || digest(this.namespace(caller, "project")) !== digest(ns))
-      throw new MemoryError("\u4EA4\u6D41\u8BB0\u5FC6\u76EE\u5F55\u5DF2\u53D8\u5316\uFF08\u6B63\u6587\u6216\u53CD\u9988\uFF09\uFF0C\u8BF7\u91CD\u65B0\u67E5\u8BE2", 409);
-    return {
-      revision: catalog.revision,
-      documents,
-      cursor: page.cursor,
-      nextOffset: page.nextOffset,
-      partial: page.partial
-    };
-  }
-  async write(caller, scope, args, origin, sourceAuthor, migration) {
-    const ns = this.namespace(caller, scope), key = bounded(args.key, "\u77E5\u8BC6\u4E3B\u9898", 160), body = bounded(args.body, "\u77E5\u8BC6\u6B63\u6587", 64e3);
-    const snapshot = await this.call(ns, "snapshot");
-    if (contentRevision(snapshot.value) !== args.revision)
-      throw new MemoryError("\u77E5\u8BC6\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u5148 catalog \u8BFB\u53D6 CONTROL.revision \u540E\u518D\u4FEE\u6539", 409);
-    const matches = snapshot.value.documents.filter((d) => d.status === "active" && d.title === key);
-    if (matches.length > 1) throw new MemoryError("\u4E3B\u9898\u5B58\u5728\u91CD\u590D\u8BB0\u5F55\uFF0C\u8BF7\u5148\u6574\u7406\u4E3A\u5355\u4E00\u73B0\u884C\u6761\u76EE", 409);
-    const old = matches[0];
-    const oldMetadata = old ? unwrap((await this.call(ns, "document", { id: old.id })).value).metadata : void 0;
-    if (!ns.conversation && legacyConversationTitle(key) && !origin && !oldMetadata?.sharedBy)
-      throw new MemoryError("\u6B64\u4E3B\u9898\u5C5E\u4E8E\u4EBA\u683C\u4EA4\u6D41\u8BB0\u5FC6\uFF0C\u8BF7\u901A\u8FC7\u5BF9\u5E94\u804A\u5929\u7684\u8BB0\u5FC6\u5165\u53E3\u4FEE\u6539", 403);
-    let sources = args.sources ?? (old ? unwrap((await this.call(ns, "document", { id: old.id })).value).metadata.sources : []);
-    if (args.sourcePaths !== void 0) {
-      if (!Array.isArray(args.sourcePaths) || args.sourcePaths.length > 12 || !this.observeFile)
-        throw new MemoryError("\u6587\u4EF6\u6765\u6E90\u6216\u539F\u751F\u8BFB\u53D6\u670D\u52A1\u4E0D\u53EF\u7528");
-      sources = await Promise.all(
-        args.sourcePaths.map(async (path) => {
-          const ref = await this.observeFile(caller, path);
-          if (!ref) throw new MemoryError("\u6765\u6E90\u6587\u4EF6\u4E0D\u5B58\u5728");
-          return ref;
-        })
-      );
-    }
-    if (!Array.isArray(sources) || sources.length > 12 || sources.some(
-      (s) => typeof s.path !== "string" || typeof s.version !== "string" || !Number.isFinite(Date.parse(s.observedAt))
-    ))
-      throw new MemoryError("\u6587\u4EF6\u7248\u672C\u5F15\u7528\u65E0\u6548");
-    let events = oldMetadata?.events;
-    if (args.sourceEvents !== void 0) {
-      if (!Array.isArray(args.sourceEvents) || args.sourceEvents.length > 12 || !this.readEvidence)
-        throw new MemoryError("\u539F\u59CB\u4E8B\u4EF6\u5F15\u7528\u6216\u8BFB\u53D6\u670D\u52A1\u4E0D\u53EF\u7528");
-      events = [];
-      for (const ref of args.sourceEvents) {
-        if (!ref || typeof ref.sessionId !== "string" || !Number.isSafeInteger(ref.seq) || ref.seq < 0)
-          throw new MemoryError("\u539F\u59CB\u4E8B\u4EF6\u5F15\u7528\u65E0\u6548");
-        const record2 = await this.readEvidence(caller, ref.sessionId, ref.seq);
-        if (record2?.source !== "native-session-event" || !/^[a-f0-9]{64}$/.test(record2.eventHash))
-          throw new MemoryError("\u539F\u59CB\u4E8B\u4EF6\u6765\u6E90\u65E0\u6CD5\u9A8C\u8BC1", 409);
-        if (!events.some((row) => row.sessionId === ref.sessionId && row.seq === ref.seq))
-          events.push({
-            sessionId: ref.sessionId,
-            seq: ref.seq,
-            kind: record2.kind,
-            eventHash: record2.eventHash,
-            time: Number.isFinite(record2.time) ? record2.time : null
-          });
-      }
-    }
-    if (digest(this.namespace(caller, scope)) !== digest(ns))
-      throw new MemoryError("\u4FDD\u5B58\u671F\u95F4\u77E5\u8BC6\u53D7\u4F17\u5DF2\u53D8\u5316\uFF0C\u672A\u5199\u5165", 409);
-    const metadata = {
-      schema: 1,
-      sources,
-      ...events ? { events } : {},
-      author: sourceAuthor ?? (origin ? { kind: "unknown", at: (/* @__PURE__ */ new Date()).toISOString() } : { kind: caller.actor ?? "model", at: (/* @__PURE__ */ new Date()).toISOString() }),
-      ...migration ?? oldMetadata?.migration ? { migration: migration ?? oldMetadata?.migration } : {},
-      ...origin ? { sharedBy: { kind: caller.actor ?? "model", at: (/* @__PURE__ */ new Date()).toISOString() } } : {},
-      ...!origin && legacyConversationTitle(key) && oldMetadata?.sharedBy ? { sharedBy: oldMetadata.sharedBy } : {},
-      ...origin ? { origin } : {},
-      ...old ? { previous: { revision: old.revision, contentHash: old.contentHash } } : {}
-    };
-    const mutation = {
-      action: old ? "update" : "create",
-      ...old ? { id: old.id } : {},
-      title: key,
-      description: "\u7531 PX \u7BA1\u7406\u7684\u73B0\u884C\u77E5\u8BC6\uFF1B\u5386\u53F2\u4FEE\u8BA2\u4E0D\u4F5C\u4E3A\u5F53\u524D\u7ED3\u8BBA\u3002",
-      content: wrap(metadata, body),
-      sourcePaths: sources.map((s) => s.path),
-      sessionIds: caller.sessionId ? [caller.sessionId] : []
-    };
-    let result;
-    if (ns.conversation) await this.invalidateMigratedSource(oldMetadata?.migration);
-    try {
-      result = await this.call(ns, "mutate", mutation, snapshot.revision);
-    } catch (error62) {
-      if (error62?.name !== "DocumentConflictError") throw error62;
-      const latest = await this.call(ns, "snapshot");
-      if (contentRevision(latest.value) !== args.revision)
-        throw new MemoryError("\u77E5\u8BC6\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u5148 catalog \u8BFB\u53D6 CONTROL.revision \u540E\u518D\u4FEE\u6539", 409);
-      result = await this.call(ns, "mutate", mutation, latest.revision);
-    }
-    return {
-      revision: contentRevision(result.value.snapshot),
-      document: await this.present(ns, result.value.document, caller)
-    };
-  }
-  async share(caller, from, id, to, revision, expectedSourceRevision) {
-    if (from === to) throw new MemoryError("\u6765\u6E90\u4E0E\u76EE\u6807\u8303\u56F4\u76F8\u540C");
-    const ns = this.namespace(caller, from), document = (await this.call(ns, "document", { id })).value;
-    this.assertReadableDocument(ns, document);
-    if (document.revision !== expectedSourceRevision || document.status !== "active")
-      throw new MemoryError("\u6765\u6E90\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u91CD\u65B0\u9884\u89C8\u540E\u5206\u4EAB", 409);
-    const { metadata, body } = unwrap(document);
-    if (!(await this.present(ns, document, caller)).current)
-      throw new MemoryError("\u6765\u6E90\u4E0D\u662F\u73B0\u884C\u77E5\u8BC6\uFF0C\u4E0D\u80FD\u7EE7\u7EED\u5206\u4EAB\u65E7\u526F\u672C", 409);
-    return this.write(
-      caller,
-      to,
-      { key: document.title, body, revision, sources: metadata.sources },
-      metadata.origin ?? { ...ns, id, revision: document.revision, contentHash: document.contentHash },
-      metadata.author
-    );
-  }
-  async archive(caller, scope, id, revision, documentRevision) {
-    const ns = this.namespace(caller, scope), current = await this.call(ns, "snapshot");
-    if (contentRevision(current.value) !== revision)
-      throw new MemoryError("\u77E5\u8BC6\u5DF2\u7ECF\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\u540E\u518D\u5F52\u6863", 409);
-    const target = current.value.documents.find((row) => row.id === id);
-    if (target) {
-      const document = (await this.call(ns, "document", { id })).value;
-      this.assertReadableDocument(ns, document);
-      if (ns.conversation) await this.invalidateMigratedSource(unwrap(document).metadata.migration);
-    }
-    const result = await this.call(
-      ns,
-      "archive",
-      { id, documentRevision, summary: "\u7531\u7528\u6237\u5F52\u6863\uFF0C\u4E0D\u518D\u7528\u4E8E\u5F53\u524D\u7ED3\u8BBA\u3002" },
-      current.revision
-    );
-    return {
-      revision: contentRevision(result.value.snapshot),
-      document: await this.present(ns, result.value.document, caller)
-    };
-  }
-  async dispose() {
-    this.conversationSearch.clear();
-    for (const runtime of this.runtimes.values()) await runtime.dispose?.();
-    this.runtimes.clear();
-    this.feedbackStore.close();
-  }
-};
 
 // packages/dsh-px-memory/src/knowledge-source.ts
 import { createHash as createHash4, randomUUID as randomUUID2 } from "node:crypto";
@@ -26216,12 +26251,12 @@ function apply(ctx) {
       const start = events.findLastIndex((event) => event.type === "turn/start");
       if (start < 0 || !channel) return [];
       return events.slice(start + 1).filter((event) => {
-        const origin = qqMessageOrigin(event.data?.source);
-        return event.type === "user/message" && origin?.accountId === channel.accountId && origin.conversationId === channel.conversationId;
+        const origin = channelMessageOrigin(event.data?.source);
+        return event.type === "user/message" && origin?.provider === channel.provider && origin.accountId === channel.accountId && origin.conversationId === channel.conversationId;
       }).slice(-6).map((event) => ({
         sessionId,
         seq: event.seq,
-        userId: qqMessageOrigin(event.data.source).senderId,
+        userId: channelMessageOrigin(event.data.source).senderId,
         excerpt: (event.data.content ?? []).filter((block) => block.type === "text").map((block) => block.text).join("\n").slice(0, 2e3)
       }));
     }
@@ -26249,8 +26284,8 @@ function apply(ctx) {
       );
     },
     personas: () => store.read().personas.filter((p) => !p.archived).map((p) => ({ id: p.id, name: p.name, revision: p.revision, expression: p.expression })),
-    channelBindings: (accountId) => Object.entries(store.read().bindings).filter(
-      ([, binding]) => binding.channel?.provider === "qq" && binding.channel.accountId === accountId
+    channelBindings: (accountId, provider = "qq") => Object.entries(store.read().bindings).filter(
+      ([, binding]) => binding.channel?.provider === provider && binding.channel.accountId === accountId
     ).map(([sessionId, binding]) => ({
       sessionId,
       personaId: binding.personaId,

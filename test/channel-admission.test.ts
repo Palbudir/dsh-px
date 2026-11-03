@@ -106,6 +106,8 @@ test('native session acceptance preserves typed source, flushes before receipt, 
   const source = f.session.snapshotEvents().find((e: any) => e.type === 'agent/inbox/spliced').data
     .inserted[0].source
   assert.equal(source.kind, 'plugin:dsh-px-channel')
+  assert.equal(source.version, 1)
+  assert.equal(source.delivery, 'context')
   assert.equal(source.actorId, 'sender')
   assert.equal(source.personaId, 'persona-a')
   assert.equal('principal' in source, false, 'a message cannot confer user authority')

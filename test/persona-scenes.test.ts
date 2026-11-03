@@ -10,6 +10,96 @@ import {
 } from '../packages/shared/persona-expression'
 import { MemoryStore } from '../packages/dsh-px-memory/src/store'
 import { TurnIdentity } from '../packages/dsh-px-memory/src/identity'
+import { channelMessageOrigin, conversationalSource } from '../packages/shared/channel-source'
+
+test('generic channel provenance selects Feishu scenes without mixing a QQ sender with identical IDs', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'px-feishu-scene-')),
+    store = new MemoryStore(join(root, 'memory.json'))
+  t.after(() => {
+    assert.ok(resolve(root).startsWith(resolve(tmpdir()) + sep))
+    rmSync(root, { recursive: true, force: true })
+  })
+  store.bind('feishu', {
+    channel: {
+      provider: 'feishu',
+      accountId: '12001',
+      conversationId: 'group:34011',
+      access: 'public',
+      publicInstructions: ''
+    },
+    locked: true
+  })
+  store.action(
+    store.read().revision,
+    {
+      type: 'configure',
+      name: 'Example',
+      instructions: 'PRIVATE',
+      memoryEnabled: true,
+      expression: {
+        ...expressionStarter('balanced'),
+        scenes: [
+          {
+            id: 'known',
+            scene: 'chat',
+            provider: 'feishu',
+            participantId: '23007',
+            instructions: 'FEISHU_MEMBER_STYLE'
+          }
+        ]
+      }
+    },
+    'feishu',
+    null
+  )
+  store.action(store.read().revision, { type: 'adopt-version' }, 'feishu', null)
+  let turn = 1
+  const agent = { session: { id: 'feishu', header: { id: 'feishu' }, snapshotEvents: () => [] } },
+    identity = new TurnIdentity(store, () => ({ lastTurn: turn }))
+  const source = {
+    kind: 'plugin:dsh-px-channel',
+    version: 1,
+    provider: 'feishu',
+    accountId: '12001',
+    conversationId: 'group:34011',
+    actorId: '23007',
+    messageId: 'om_1',
+    fingerprint: 'a'.repeat(64),
+    ingressId: 'b'.repeat(64),
+    personaId: store.read().bindings.feishu.personaId,
+    routeRevision: 1,
+    epoch: 'run',
+    requestId: 'request'
+  }
+  assert.equal(channelMessageOrigin(source)?.senderId, '23007')
+  assert.equal(conversationalSource(source), true)
+  assert.equal(conversationalSource({ ...source, version: undefined }), false)
+  identity.claim(
+    agent,
+    {
+      source: {
+        kind: 'plugin:dsh-onebot',
+        pxQq: { version: 1, accountId: '12001', conversationId: 'group:34011', senderId: '23007' }
+      }
+    },
+    1
+  )
+  assert.deepEqual(identity.interaction(agent).participants, [])
+  turn = 2
+  identity.claim(agent, { source }, 2)
+  assert.deepEqual(identity.interaction(agent).participants, ['23007'])
+  assert.match(
+    renderPersonaExpression(identity.current(agent).expression, identity.interaction(agent)),
+    /FEISHU_MEMBER_STYLE/
+  )
+  assert.doesNotMatch(identity.current(agent).instructions, /PRIVATE/)
+  identity.claim(agent, { source: { ...source, actorId: '45009' } }, 2)
+  assert.deepEqual(
+    identity.interaction(agent).participants,
+    ['23007'],
+    'late steering cannot replace turn identity'
+  )
+})
 
 test('scene expression uses trusted channel/object selectors and leaves privacy and permission separate', () => {
   const expression = parsePersonaExpression({

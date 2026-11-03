@@ -10,7 +10,7 @@ import { ChannelNotes } from '../packages/dsh-px-memory/src/channel-notes'
 import { messageSource, DEFAULT_QQ_SETTINGS } from '../packages/dsh-px-qq/src/policy'
 
 const signal = () => new AbortController().signal
-function fixture(t: any) {
+function fixture(t: any, provider = 'qq') {
   const root = mkdtempSync(join(tmpdir(), 'px-qq-notes-')),
     storePath = join(root, 'memory.json')
   const store = new MemoryStore(storePath)
@@ -19,7 +19,7 @@ function fixture(t: any) {
   mkdirSync(a, { recursive: true })
   mkdirSync(b, { recursive: true })
   const channel: SessionChannel = {
-    provider: 'qq',
+    provider,
     accountId: '12001',
     conversationId: 'group:34007',
     access: 'public',
@@ -28,6 +28,10 @@ function fixture(t: any) {
   }
   store.bind('old', { channel, locked: true })
   store.bind('new', { channel, locked: true })
+  store.bind('other-channel', {
+    channel: { ...channel, provider: provider === 'qq' ? 'feishu' : 'qq' },
+    locked: true
+  })
   store.bind('other-group', {
     channel: { ...channel, conversationId: 'group:34008', workspace: b },
     locked: true
@@ -38,12 +42,30 @@ function fixture(t: any) {
   })
   const other = store.createPersona('另一个人格')
   store.bind('other-persona', { personaId: other.id, channel, locked: true })
-  const source = messageSource(
+  const qqSource = messageSource(
     { ...DEFAULT_QQ_SETTINGS, accountId: '12001' },
     'group:34007',
     '45009',
     'test-731'
   )
+  const source =
+    provider === 'qq'
+      ? qqSource
+      : {
+          kind: 'plugin:dsh-px-channel',
+          version: 1,
+          provider,
+          accountId: '12001',
+          conversationId: 'group:34007',
+          actorId: '45009',
+          messageId: 'test-731',
+          personaId: store.read().bindings.old.personaId,
+          fingerprint: 'a'.repeat(64),
+          ingressId: 'b'.repeat(64),
+          routeRevision: 1,
+          epoch: 'test',
+          requestId: 'request'
+        }
   const events: any = {
     old: [
       {
@@ -162,6 +184,31 @@ test('native Mnemon conversation notes survive a fresh instance and keep only co
   assert.doesNotMatch(current.note.body, /喜欢长解释/)
   assert.equal(current.note.authority, 'conversation-evidence-only')
   assert.deepEqual(JSON.parse(JSON.stringify(current)), current)
+})
+
+test('Feishu notes use native Documents and remain separate from the same IDs on QQ and another persona', async (t) => {
+  const f = fixture(t, 'feishu'),
+    before = await f.notes.execute('old', { action: 'catalog' }, signal())
+  const saved = await f.notes.execute(
+    'old',
+    {
+      action: 'save',
+      topic: '表达偏好',
+      text: 'FEISHU_NOTE_731',
+      revision: before.revision,
+      evidence: [{ sessionId: 'old', seq: 1 }]
+    },
+    signal()
+  )
+  await f.reopen()
+  const current = await f.notes.execute('new', { action: 'read', id: saved.note.id }, signal())
+  assert.match(current.note.body, /FEISHU_NOTE_731/)
+  const found = await f.notes.execute('new', { action: 'search', query: 'FEISHU_NOTE_731' }, signal())
+  assert.equal(found.notes.length, 1)
+  for (const target of ['other-channel', 'other-persona', 'other-group']) {
+    assert.equal((await f.notes.execute(target, { action: 'catalog' }, signal())).total, 0, target)
+    await assert.rejects(f.notes.execute(target, { action: 'read', id: saved.note.id }, signal()), /不属于/)
+  }
 })
 
 test('human conversation feedback, correction and archive preserve evidence and reject stale or model-forged edits', async (t) => {
@@ -315,7 +362,7 @@ test('group and persona boundaries survive crafted IDs and private evidence atte
   const other = { sessionId: 'other-persona', project: f.root }
   assert.equal((await f.bank.search(other, 'project', '简短')).results.length, 0)
   await assert.rejects(f.bank.read(other, 'project', saved.note.id, true), /不在当前可见范围/)
-  await assert.rejects(f.notes.execute('owner', { action: 'catalog' }, signal()), /公共 QQ/)
+  await assert.rejects(f.notes.execute('owner', { action: 'catalog' }, signal()), /公共渠道/)
   assert.equal(f.store.read().personas[0].instructions, '')
   assert.equal(f.store.read().bindings.old.channel?.access, 'public')
 })
