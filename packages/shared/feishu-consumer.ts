@@ -1,5 +1,5 @@
 import { feishuEvidence, type FeishuAccountBinding } from './feishu-evidence'
-import type { ChannelInbox, ChannelInboxEvent } from './channel-inbox'
+import type { ChannelInbox, ChannelInboxEvent, ChannelRecipient } from './channel-inbox'
 
 export interface NativeFeishuIntake {
   contractVersion: number
@@ -25,6 +25,7 @@ export interface FeishuConsumerOptions {
   epoch: string
   signal?: AbortSignal
   authorize: (event: ChannelInboxEvent) => boolean
+  destination: (event: ChannelInboxEvent) => ChannelRecipient
   available: (signal: AbortSignal) => void | Promise<void>
   failed: (error: unknown) => void | Promise<void>
 }
@@ -112,7 +113,8 @@ export async function startFeishuConsumer(
             reply: { ...event.reply }
           }
         if (!options.authorize(envelope)) throw Error('此飞书消息不在获准接收范围内')
-        const result = inbox.accept(envelope, deliverySignal)
+        const destination = options.destination(envelope)
+        const result = inbox.accept(envelope, destination, deliverySignal)
         if (!result.duplicate) notify()
         return { accepted: true }
       }

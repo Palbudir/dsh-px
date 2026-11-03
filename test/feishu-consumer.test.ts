@@ -46,6 +46,7 @@ test('native consumer commits before acknowledgment, wakes once and blocks callb
     epoch: 'host1',
     signal: abort.signal,
     authorize: () => true,
+    destination: () => ({ personaId: 'persona-a', routeRevision: 1 }),
     available: async () => {
       notified++
       if (notified === 2) throw Error('asynchronous dispatch observer failed')
@@ -130,6 +131,7 @@ test('cancelled registration releases its late native handle before exposing a l
       epoch: 'host2',
       signal: abort.signal,
       authorize: () => true,
+      destination: () => ({ personaId: 'persona-a', routeRevision: 1 }),
       available: () => assert.fail('cancelled start cannot wake'),
       failed: () => {}
     }

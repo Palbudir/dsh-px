@@ -20,21 +20,37 @@ export interface ChannelInboxEvent extends ChannelInboxOwner {
   reply: Record<string, string>
 }
 export type IngressPhase = 'received' | 'dispatching' | 'admitted' | 'uncertain' | 'cancelled'
-export interface IngressClaim {
-  epoch: string
+export interface ChannelRecipient {
   personaId: string
+  routeRevision: number
+}
+export interface IngressClaim extends ChannelRecipient {
+  epoch: string
   sessionId: string
   requestId: string
+}
+export interface PendingChannelMessage {
+  id: string
+  seq: number
+  event: ChannelInboxEvent
+  recipient: ChannelRecipient
 }
 const id = (v: unknown): v is string =>
   typeof v === 'string' && !!v.trim() && v.length <= 512 && !/[\r\n\0]/.test(v)
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
+const recipientJson = (value: ChannelRecipient): string => {
+  if (!value || !id(value.personaId) || !Number.isSafeInteger(value.routeRevision) || value.routeRevision < 0)
+    throw Error('收件目标人格或路由版本无效')
+  return JSON.stringify({ personaId: value.personaId, routeRevision: value.routeRevision })
+}
 const claimJson = (claim: IngressClaim): string => {
   if (![claim.epoch, claim.personaId, claim.sessionId, claim.requestId].every(id))
     throw Error('收件投递归属无效')
+  recipientJson(claim)
   return JSON.stringify({
     epoch: claim.epoch,
     personaId: claim.personaId,
+    routeRevision: claim.routeRevision,
     sessionId: claim.sessionId,
     requestId: claim.requestId
   })
@@ -68,17 +84,17 @@ export class ChannelInbox {
       db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=3000;')
       if (db.prepare('PRAGMA quick_check').get()?.quick_check !== 'ok')
         throw Error('渠道收件存储需要检查，未清空原记录')
-      db.exec(
-        'CREATE TABLE IF NOT EXISTS channel_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS channel_messages(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,chat TEXT NOT NULL,message TEXT NOT NULL,digest TEXT NOT NULL,phase TEXT NOT NULL,event TEXT,bytes INTEGER NOT NULL,metadata TEXT NOT NULL,claim TEXT,native_message TEXT); CREATE INDEX IF NOT EXISTS channel_pending ON channel_messages(phase,seq);'
-      )
       db.exec('BEGIN IMMEDIATE')
+      db.exec(
+        'CREATE TABLE IF NOT EXISTS channel_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE IF NOT EXISTS channel_messages(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,chat TEXT NOT NULL,message TEXT NOT NULL,digest TEXT NOT NULL,phase TEXT NOT NULL,event TEXT,bytes INTEGER NOT NULL,metadata TEXT NOT NULL,recipient TEXT NOT NULL,claim TEXT,native_message TEXT); CREATE INDEX IF NOT EXISTS channel_pending ON channel_messages(phase,seq);'
+      )
       const identity = JSON.stringify(this.owner),
         existing = db.prepare("SELECT value FROM channel_meta WHERE key='owner'").get()?.value,
         schema = db.prepare("SELECT value FROM channel_meta WHERE key='schema'").get()?.value
-      if ((existing !== undefined && existing !== identity) || (schema !== undefined && schema !== '1'))
+      if ((existing !== undefined && existing !== identity) || (schema !== undefined && schema !== '2'))
         throw Error('渠道收件账号或格式不匹配，原数据保留')
       db.prepare("INSERT OR IGNORE INTO channel_meta VALUES('owner',?)").run(identity)
-      db.prepare("INSERT OR IGNORE INTO channel_meta VALUES('schema','1')").run()
+      db.prepare("INSERT OR IGNORE INTO channel_meta VALUES('schema','2')").run()
       db.exec('COMMIT')
       this.db = db
     } catch (error) {
@@ -89,8 +105,13 @@ export class ChannelInbox {
       throw error
     }
   }
-  accept(event: ChannelInboxEvent, signal?: AbortSignal): { id: string; duplicate: boolean } {
+  accept(
+    event: ChannelInboxEvent,
+    recipient: ChannelRecipient,
+    signal?: AbortSignal
+  ): { id: string; duplicate: boolean; recipient: ChannelRecipient } {
     signal?.throwIfAborted()
+    const destination = recipientJson(recipient)
     if (
       event.provider !== this.owner.provider ||
       event.accountId !== this.owner.accountId ||
@@ -128,11 +149,11 @@ export class ChannelInbox {
     if (bytes > this.bounds.eventBytes) throw Error('单条渠道消息超出容量')
     this.db.exec('BEGIN IMMEDIATE')
     try {
-      const prior = this.db.prepare('SELECT digest FROM channel_messages WHERE id=?').get(key)
+      const prior = this.db.prepare('SELECT digest,recipient FROM channel_messages WHERE id=?').get(key)
       if (prior) {
         if (prior.digest !== digest) throw Error('同一平台消息内容或来源已变化，未覆盖原收件')
         this.db.exec('COMMIT')
-        return { id: key, duplicate: true }
+        return { id: key, duplicate: true, recipient: JSON.parse(String(prior.recipient)) }
       }
       const size = this.db
         .prepare('SELECT count(*) count,coalesce(sum(bytes),0) bytes FROM channel_messages')
@@ -143,28 +164,61 @@ export class ChannelInbox {
       const { text: _body, ...metadata } = canonical
       this.db
         .prepare(
-          "INSERT INTO channel_messages(id,chat,message,digest,phase,event,bytes,metadata) VALUES(?,?,?,?,'received',?,?,?)"
+          "INSERT INTO channel_messages(id,chat,message,digest,phase,event,bytes,metadata,recipient) VALUES(?,?,?,?,'received',?,?,?,?)"
         )
-        .run(key, event.conversationId, event.messageId, digest, body, bytes, JSON.stringify(metadata))
+        .run(
+          key,
+          event.conversationId,
+          event.messageId,
+          digest,
+          body,
+          bytes,
+          JSON.stringify(metadata),
+          destination
+        )
       this.db.exec('COMMIT')
-      return { id: key, duplicate: false }
+      return { id: key, duplicate: false, recipient: JSON.parse(destination) }
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error
     }
   }
-  pending(limit = 20): Array<{ id: string; seq: number; event: ChannelInboxEvent }> {
+  pending(limit = 20): PendingChannelMessage[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw Error('收件批次大小无效')
     return this.db
-      .prepare("SELECT id,seq,event FROM channel_messages WHERE phase='received' ORDER BY seq LIMIT ?")
+      .prepare(
+        "SELECT id,seq,event,recipient FROM channel_messages WHERE phase='received' ORDER BY seq LIMIT ?"
+      )
       .all(limit)
-      .map((r) => ({ id: String(r.id), seq: Number(r.seq), event: JSON.parse(String(r.event)) }))
+      .map((r) => ({
+        id: String(r.id),
+        seq: Number(r.seq),
+        event: JSON.parse(String(r.event)),
+        recipient: JSON.parse(String(r.recipient))
+      }))
+  }
+  /** One head per conversation; an unresolved native admission blocks only its own conversation. */
+  heads(limit = 20): PendingChannelMessage[] {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw Error('收件批次大小无效')
+    return this.db
+      .prepare(
+        "SELECT m.id,m.seq,m.event,m.recipient FROM channel_messages m WHERE m.phase='received' AND NOT EXISTS (SELECT 1 FROM channel_messages older WHERE older.chat=m.chat AND older.seq<m.seq AND older.phase IN ('received','dispatching','uncertain')) ORDER BY m.seq LIMIT ?"
+      )
+      .all(limit)
+      .map((r) => ({
+        id: String(r.id),
+        seq: Number(r.seq),
+        event: JSON.parse(String(r.event)),
+        recipient: JSON.parse(String(r.recipient))
+      }))
   }
   claim(key: string, claim: IngressClaim): boolean {
     return (
       this.db
-        .prepare("UPDATE channel_messages SET phase='dispatching',claim=? WHERE id=? AND phase='received'")
-        .run(claimJson(claim), key).changes === 1
+        .prepare(
+          "UPDATE channel_messages SET phase='dispatching',claim=? WHERE id=? AND phase='received' AND recipient=?"
+        )
+        .run(claimJson(claim), key, recipientJson(claim)).changes === 1
     )
   }
   admit(key: string, claim: IngressClaim, nativeMessageId: string): boolean {
@@ -199,11 +253,12 @@ export class ChannelInbox {
   }
   receipt(key: string) {
     const r = this.db
-      .prepare('SELECT phase,claim,native_message,metadata FROM channel_messages WHERE id=?')
+      .prepare('SELECT phase,claim,native_message,metadata,recipient FROM channel_messages WHERE id=?')
       .get(key)
     return r
       ? {
           phase: String(r.phase) as IngressPhase,
+          recipient: JSON.parse(String(r.recipient)) as ChannelRecipient,
           claim: r.claim ? (JSON.parse(String(r.claim)) as IngressClaim) : undefined,
           nativeMessageId: r.native_message ? String(r.native_message) : undefined,
           source: JSON.parse(String(r.metadata)) as Omit<ChannelInboxEvent, 'text'>
