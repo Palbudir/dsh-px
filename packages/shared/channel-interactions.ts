@@ -160,6 +160,7 @@ export class ChannelInteractions {
     if (request.signal?.aborted)
       return kind === 'approval' ? 'cancelled' : Promise.reject(this.error('问题已取消', 409))
     const id = (kind === 'approval' ? 'A' : 'Q') + randomBytes(5).toString('hex')
+    const notification = new AbortController()
     let resolve!: (value: unknown) => void, reject!: (error: Error) => void
     const promise = new Promise<unknown>((yes, no) => {
       resolve = yes
@@ -180,6 +181,7 @@ export class ChannelInteractions {
       allowed: authority?.allowed,
       settle: (value, error) => {
         if (!this.active.delete(id)) return
+        notification.abort(Error('此交互已结束，不再发送旧通知'))
         clearTimeout(timer)
         request.signal?.removeEventListener('abort', abort)
         if (error && kind === 'question') reject(error)
@@ -209,7 +211,7 @@ export class ChannelInteractions {
         '\n也可在客户端“' +
         (this.options.settingsPath ?? '设置 → 渠道与活动 → 待处理请求') +
         '”操作；取消或超时后的回复不会执行。',
-      { sessionId: request.agent.session.id, interactionId: id, signal: request.signal }
+      { sessionId: request.agent.session.id, interactionId: id, signal: notification.signal }
     ).catch(() =>
       pending.settle(
         undefined,

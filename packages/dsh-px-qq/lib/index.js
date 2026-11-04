@@ -706,6 +706,7 @@ var ChannelInteractions = class {
     if (request.signal?.aborted)
       return kind === "approval" ? "cancelled" : Promise.reject(this.error("\u95EE\u9898\u5DF2\u53D6\u6D88", 409));
     const id = (kind === "approval" ? "A" : "Q") + randomBytes(5).toString("hex");
+    const notification = new AbortController();
     let resolve, reject;
     const promise = new Promise((yes, no) => {
       resolve = yes;
@@ -726,6 +727,7 @@ var ChannelInteractions = class {
       allowed: authority?.allowed,
       settle: (value, error) => {
         if (!this.active.delete(id)) return;
+        notification.abort(Error("\u6B64\u4EA4\u4E92\u5DF2\u7ED3\u675F\uFF0C\u4E0D\u518D\u53D1\u9001\u65E7\u901A\u77E5"));
         clearTimeout(timer);
         request.signal?.removeEventListener("abort", abort);
         if (error && kind === "question") reject(error);
@@ -744,7 +746,7 @@ var ChannelInteractions = class {
     void this.send(
       chatId,
       text2 + hint + "\n\u4E5F\u53EF\u5728\u5BA2\u6237\u7AEF\u201C" + (this.options.settingsPath ?? "\u8BBE\u7F6E \u2192 \u6E20\u9053\u4E0E\u6D3B\u52A8 \u2192 \u5F85\u5904\u7406\u8BF7\u6C42") + "\u201D\u64CD\u4F5C\uFF1B\u53D6\u6D88\u6216\u8D85\u65F6\u540E\u7684\u56DE\u590D\u4E0D\u4F1A\u6267\u884C\u3002",
-      { sessionId: request.agent.session.id, interactionId: id, signal: request.signal }
+      { sessionId: request.agent.session.id, interactionId: id, signal: notification.signal }
     ).catch(
       () => pending.settle(
         void 0,

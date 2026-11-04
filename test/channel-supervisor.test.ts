@@ -3,6 +3,47 @@ import assert from 'node:assert/strict'
 import { setTimeout as delay } from 'node:timers/promises'
 import { ChannelSupervisor } from '../packages/shared/channel-supervisor'
 type Config = { accountId: string; enabled: boolean; revision: number; mode: string }
+test('stop during asynchronous coordinator creation never starts the stale transport', async () => {
+  let release!: () => void,
+    entered = false,
+    starts = 0,
+    stops = 0
+  const gate = new Promise<void>((done) => {
+    release = done
+  })
+  const runtime = {
+    matches: () => true,
+    refreshAttention() {},
+    requestStop() {},
+    async start() {
+      starts++
+    },
+    async dispose() {
+      stops++
+    }
+  }
+  const rows = new Map<string, typeof runtime>(),
+    errors: unknown[] = []
+  const supervisor = new ChannelSupervisor(
+    rows,
+    async (_config: Config) => {
+      entered = true
+      await gate
+      return runtime
+    },
+    (_id, error) => errors.push(error)
+  )
+  supervisor.update([{ accountId: 'bot', enabled: true, revision: 1, mode: 'normal' }])
+  await until(() => entered)
+  const stopped = supervisor.pause('bot')
+  release()
+  await stopped
+  assert.equal(starts, 0)
+  assert.equal(stops, 1)
+  assert.equal(rows.size, 0)
+  assert.deepEqual(errors, [])
+  await supervisor.close()
+})
 async function until(check: () => boolean) {
   const end = Date.now() + 2000
   while (!check()) {

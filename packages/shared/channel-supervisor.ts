@@ -17,7 +17,7 @@ export class ChannelSupervisor<
   private closing = false
   constructor(
     readonly runtimes: Map<string, R>,
-    private readonly create: (config: C) => R,
+    private readonly create: (config: C) => R | Promise<R>,
     private readonly failed: (id: string, error: unknown) => void,
     private readonly settled: (id: string) => void = () => {}
   ) {}
@@ -101,8 +101,14 @@ export class ChannelSupervisor<
       this.attempted.set(id, signature)
       let runtime: R | undefined
       try {
-        runtime = this.create(wanted)
+        runtime = await this.create(wanted)
         this.runtimes.set(id, runtime)
+        if (this.target(id) !== wanted) {
+          runtime.requestStop()
+          await runtime.dispose()
+          if (this.runtimes.get(id) === runtime) this.runtimes.delete(id)
+          continue
+        }
         await runtime.start()
         try {
           this.settled(id)

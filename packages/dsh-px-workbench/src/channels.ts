@@ -4,6 +4,8 @@ import { rejectUnauthenticatedRequest } from '../../shared/request-trust'
 import { readJsonBody } from './http'
 import { NativeChannelSettings, ChannelError, type ChannelAccount } from './channel-settings'
 import { FeishuChannel } from './feishu-channel'
+import { FeishuTasks } from './feishu-tasks'
+import { randomUUID } from 'node:crypto'
 import { CHANNEL_CONVERSATION_TOOLS } from '../../shared/channel-source'
 
 /** Optional channel services never prevent the workbench's file/context/diagnostic services from loading. */
@@ -26,6 +28,7 @@ export function registerChannels(ctx: any): void {
     )
   )
   const runtimes = new Map<string, FeishuChannel>(),
+    tasks = new Map<string, FeishuTasks>(),
     failures = new Map<string, string>()
   let settings: NativeChannelSettings | undefined,
     available = false,
@@ -37,12 +40,12 @@ export function registerChannels(ctx: any): void {
   ctx.on(
     'agent/created',
     ({ agent }: any) => {
-      for (const runtime of runtimes.values()) runtime.tasks.created(agent)
+      for (const task of tasks.values()) task.created(agent)
     },
     { prepend: true }
   )
   ctx.on('session/event', (session: any, event: any) => {
-    for (const runtime of runtimes.values()) runtime.tasks.event(session, event)
+    for (const task of tasks.values()) task.event(session, event)
   })
   for (const [event, kind] of [
     ['approval/request', 'approval'],
@@ -51,14 +54,14 @@ export function registerChannels(ctx: any): void {
     ctx.on(
       event,
       (request: any, next: any) => {
-        const runtime = [...runtimes.values()].find((row) => row.tasks.owns(request.agent))
-        return runtime ? runtime.interaction(kind, request, next) : next()
+        const task = [...tasks.values()].find((row) => row.owns(request.agent))
+        return task ? task.interaction(kind, request, next) : next()
       },
       { prepend: true }
     )
   ctx.provide('pxChannels', {
     version: 1,
-    taskAllowed: (agent: any) => [...runtimes.values()].some((row) => row.tasks.owns(agent)),
+    taskAllowed: (agent: any) => [...tasks.values()].some((row) => row.owns(agent)),
     taskAuthority: (agent: any, pending: any[]) =>
       [...runtimes.values()].find((row) => row.owns(agent))?.taskAuthority(agent, pending),
     tool: (name: string, args: any, exec: any) => {
@@ -80,7 +83,6 @@ export function registerChannels(ctx: any): void {
   ctx.inject(
     [
       'configEditor',
-      'dshIm',
       'pxMemoryChannels',
       'pxPersonaResources',
       'agents',
@@ -94,14 +96,12 @@ export function registerChannels(ctx: any): void {
       'workspaceRegistry'
     ],
     async (host: any) => {
-      const ownSettings = new NativeChannelSettings(host.configEditor),
-        ownIm = host.dshIm
+      const ownSettings = new NativeChannelSettings(host.configEditor)
       const home = process.env.DSH_HOME
       if (!home) {
         failures.set('configuration', 'DSH_HOME 未设置')
         return
       }
-      im = ownIm
       memory = host.pxMemoryChannels
       let preset: any
       try {
@@ -134,49 +134,128 @@ export function registerChannels(ctx: any): void {
         failures.set('preset', String(error))
         return
       }
-      const current = new ChannelSupervisor<ChannelAccount, FeishuChannel>(
-        runtimes,
-        (account) =>
-          new FeishuChannel(
-            host,
-            account,
-            () => {
-              const latest = ownSettings.read(),
-                value = latest.configuration.accounts.find((row) => row.accountId === account.accountId)
-              return value && latest.componentEnabled ? value : undefined
-            },
-            join(home, 'storages', 'dsh-px-channels')
-          ),
-        (id, error) => failures.set(id, error instanceof Error ? error.message : '渠道操作未完成'),
-        (id) => failures.delete(id)
-      )
+      const directory = join(home, 'storages', 'dsh-px-channels')
+      const currentAccount = (id: string) => {
+        const latest = ownSettings.read()
+        return latest.componentEnabled
+          ? latest.configuration.accounts.find((row) => row.accountId === id)
+          : undefined
+      }
+      let transportSync: (() => void) | undefined
+      let closing = false
+      const acquisitions = new Map<string, Promise<FeishuTasks>>()
+      const acquire = (account: ChannelAccount): Promise<FeishuTasks> => {
+        const pending = acquisitions.get(account.accountId)
+        if (pending) return pending.then((task) => (task.matches(account) ? task : acquire(account)))
+        const work = (async () => {
+          if (closing) throw new ChannelError('任务协调器正在停止', 409)
+          const latest = currentAccount(account.accountId)
+          if (
+            !latest?.enabled ||
+            latest.fingerprint !== account.fingerprint ||
+            latest.routeRevision !== account.routeRevision ||
+            latest.personaId !== account.personaId
+          )
+            throw new ChannelError('渠道配置已被后续修改取代', 409)
+          let task = tasks.get(account.accountId)
+          if (task && !task.matches(account)) {
+            await task.dispose()
+            tasks.delete(account.accountId)
+            task = undefined
+          }
+          if (closing) throw new ChannelError('任务协调器正在停止', 409)
+          if (!task) {
+            task = new FeishuTasks(
+              host,
+              structuredClone(account),
+              () => currentAccount(account.accountId),
+              () => runtimes.get(account.accountId)?.connected() === true,
+              directory,
+              randomUUID(),
+              (inbox, origin, session, key, text, signal) => {
+                const channel = runtimes.get(account.accountId)
+                if (!channel?.connected()) throw new ChannelError('渠道暂不可用，结果保留待发', 503)
+                return channel.deliverReply(inbox, origin, session, key, text, signal)
+              }
+            )
+            tasks.set(account.accountId, task)
+          }
+          return task
+        })().finally(() => {
+          if (acquisitions.get(account.accountId) === work) acquisitions.delete(account.accountId)
+        })
+        acquisitions.set(account.accountId, work)
+        return work
+      }
       const sync = () => {
         try {
-          const next = ownSettings.read()
           failures.delete('configuration')
-          current.update(next.componentEnabled ? next.configuration.accounts : [])
+          for (const task of tasks.values()) task.refreshAuthorization()
+          transportSync?.()
+          const next = ownSettings.read()
+          if (next.componentEnabled)
+            for (const account of next.configuration.accounts.filter((row) => row.enabled))
+              void acquire(account).catch((error) => failures.set(account.accountId, String(error)))
         } catch (error) {
           failures.set('configuration', String(error))
-          current.update([])
         }
       }
-      supervisor = current
       synchronise = sync
-      available = true
       host.effect(
         () => async () => {
-          if (supervisor === current) {
-            supervisor = undefined
+          closing = true
+          if (synchronise === sync) {
             synchronise = undefined
-            available = false
-            im = undefined
             memory = undefined
           }
-          await current.close()
+          await Promise.allSettled([...acquisitions.values()])
+          const settled = await Promise.allSettled([...tasks.values()].map((task) => task.dispose()))
+          if (settled.some((r) => r.status === 'rejected'))
+            throw new ChannelError('部分任务协调器尚未停止', 503)
+          tasks.clear()
           if (typeof preset === 'function') await preset()
         },
-        'channels: native consumer and Agent ownership'
+        'channels: persistent native task ownership'
       )
+      host.inject(['dshIm'], (transportHost: any) => {
+        im = transportHost.dshIm
+        const current = new ChannelSupervisor<ChannelAccount, FeishuChannel>(
+          runtimes,
+          async (account) => {
+            const task = await acquire(account)
+            return new FeishuChannel(
+              transportHost,
+              account,
+              () => currentAccount(account.accountId),
+              directory,
+              task
+            )
+          },
+          (id, error) => failures.set(id, error instanceof Error ? error.message : '渠道操作未完成'),
+          (id) => failures.delete(id)
+        )
+        const syncTransport = () => {
+          const next = ownSettings.read()
+          current.update(next.componentEnabled ? next.configuration.accounts : [])
+        }
+        supervisor = current
+        transportSync = syncTransport
+        available = true
+        transportHost.effect(
+          () => async () => {
+            if (supervisor === current) {
+              supervisor = undefined
+              transportSync = undefined
+              available = false
+              im = undefined
+            }
+            // A transport reload owns only transport/public-chat handles. Local task roots remain alive.
+            await current.close()
+          },
+          'channels: transport-only ownership'
+        )
+        syncTransport()
+      })
       sync()
     }
   )
@@ -237,6 +316,7 @@ export function registerChannels(ctx: any): void {
                   accounts,
                   discoveryError,
                   runtimes: [...runtimes.values()].map((runtime) => runtime.status()),
+                  activities: [...tasks].map(([accountId, task]) => ({ accountId, ...task.status() })),
                   failures: [...failures].map(([id, error]) => ({ id, error }))
                 })
               }
@@ -249,16 +329,17 @@ export function registerChannels(ctx: any): void {
                 return send(res, 200, saved)
               }
               if (body.type === 'answer-interaction' || body.type === 'stop-task') {
-                const runtime = runtimes.get(body.accountId)
-                if (!runtime) throw new ChannelError('此渠道未运行', 409)
+                const task = tasks.get(body.accountId)
+                if (!task) throw new ChannelError('此任务协调器未运行', 409)
                 if (body.type === 'answer-interaction')
-                  return send(res, 200, { message: runtime.answerInteraction(body) })
+                  return send(res, 200, { message: task.answerInteraction(body) })
                 if (typeof body.taskId !== 'string') throw new ChannelError('任务标识无效')
-                await runtime.tasks.stopTask(body.taskId)
+                await task.stopTask(body.taskId)
                 return send(res, 200, { stopped: true })
               }
               if (body.type === 'stop') {
                 if (typeof body.accountId !== 'string') throw new ChannelError('账号无效')
+                await tasks.get(body.accountId)?.pause()
                 if (supervisor) await supervisor.pause(body.accountId)
                 return send(res, 200, { stopped: true, persistent: false })
               }
@@ -272,7 +353,20 @@ export function registerChannels(ctx: any): void {
                   )
                 )
                   throw new ChannelError('账号接收未启用或服务未就绪', 409)
+                tasks.get(body.accountId)?.resumeReception()
                 supervisor.retry(body.accountId)
+                return send(res, 200, { accepted: true })
+              }
+              if (body.type === 'resolve-task-reply') {
+                const task = tasks.get(body.accountId)
+                if (!task) throw new ChannelError('任务协调器未运行', 409)
+                if (
+                  typeof body.id !== 'string' ||
+                  typeof body.revision !== 'string' ||
+                  !['sent', 'release'].includes(body.decision)
+                )
+                  throw new ChannelError('回复核对参数无效')
+                task.resolveReply(body.id, body.revision, body.decision)
                 return send(res, 200, { accepted: true })
               }
               if (['reconcile', 'resolve-reply', 'retry'].includes(body.type)) {

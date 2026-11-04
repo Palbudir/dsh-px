@@ -2390,8 +2390,14 @@ var ChannelSupervisor = class {
       this.attempted.set(id3, signature);
       let runtime;
       try {
-        runtime = this.create(wanted);
+        runtime = await this.create(wanted);
         this.runtimes.set(id3, runtime);
+        if (this.target(id3) !== wanted) {
+          runtime.requestStop();
+          await runtime.dispose();
+          if (this.runtimes.get(id3) === runtime) this.runtimes.delete(id3);
+          continue;
+        }
         await runtime.start();
         try {
           this.settled(id3);
@@ -2514,6 +2520,7 @@ var ChannelInbox = class {
       const replyColumns = columns("channel_replies");
       if (!replyColumns.has("draft")) db.exec("ALTER TABLE channel_replies ADD COLUMN draft TEXT");
       if (!replyColumns.has("epoch")) db.exec("ALTER TABLE channel_replies ADD COLUMN epoch TEXT");
+      if (!replyColumns.has("call_key")) db.exec("ALTER TABLE channel_replies ADD COLUMN call_key TEXT");
       const identity = JSON.stringify(this.owner), existing = db.prepare("SELECT value FROM channel_meta WHERE key='owner'").get()?.value, schema = db.prepare("SELECT value FROM channel_meta WHERE key='schema'").get()?.value;
       if (existing !== void 0 && existing !== identity || schema !== void 0 && schema !== "2")
         throw Error("\u6E20\u9053\u6536\u4EF6\u8D26\u53F7\u6216\u683C\u5F0F\u4E0D\u5339\u914D\uFF0C\u539F\u6570\u636E\u4FDD\u7559");
@@ -2753,7 +2760,29 @@ var ChannelInbox = class {
   beginControlReply(sourceId, text, epoch) {
     return this.startReply("control-response", sourceId, "control:" + sourceId, text, epoch, true);
   }
-  startReply(callId, sourceId, sessionId, text, epoch, control) {
+  /** Durable, never-attempted output. Only beginReply may move it into sending. */
+  queueReply(callId, sourceId, sessionId, text) {
+    return this.startReply(callId, sourceId, sessionId, text, void 0, false, true);
+  }
+  queuedReplies(limit = 100, afterSequence = 0) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(afterSequence) || afterSequence < 0)
+      throw Error("\u56DE\u590D\u5206\u9875\u65E0\u6548");
+    return this.db.prepare(
+      "SELECT rowid AS seq,* FROM channel_replies WHERE phase='queued' AND rowid>? ORDER BY rowid LIMIT ?"
+    ).all(afterSequence, limit).map((r) => ({ ...this.replyView(r), callId: String(r.call_key) }));
+  }
+  cancelQueuedReplies(sessionId) {
+    this.db.prepare("UPDATE channel_replies SET phase='cancelled',draft=NULL WHERE session=? AND phase='queued'").run(sessionId);
+  }
+  cancelQueuedReply(sessionId, sourceId, callId) {
+    this.db.prepare("UPDATE channel_replies SET phase='cancelled',draft=NULL WHERE id=? AND phase='queued'").run(hash([sessionId, sourceId, callId]));
+  }
+  retireQueuedInteractions() {
+    this.db.prepare(
+      "UPDATE channel_replies SET phase='cancelled',draft=NULL WHERE phase='queued' AND call_key LIKE 'interaction:%'"
+    ).run();
+  }
+  startReply(callId, sourceId, sessionId, text, epoch, control, queued = false) {
     if (!id2(callId) || !id2(sessionId) || typeof text !== "string" || !text.trim() || text.length > 4e3)
       throw Error("\u6E20\u9053\u56DE\u590D\u53C2\u6570\u65E0\u6548");
     if (epoch !== void 0 && !id2(epoch)) throw Error("\u56DE\u590D\u751F\u547D\u5468\u671F\u65E0\u6548");
@@ -2766,12 +2795,14 @@ var ChannelInbox = class {
       const previous = this.db.prepare("SELECT digest,phase,result FROM channel_replies WHERE id=?").get(key);
       if (previous) {
         if (previous.digest !== digest2) throw Error("\u540C\u4E00\u539F\u751F\u8C03\u7528\u7684\u56DE\u590D\u5185\u5BB9\u5DF2\u53D8\u5316");
-        this.db.exec("COMMIT");
-        return {
-          id: key,
-          phase: String(previous.phase),
-          ...previous.result ? { result: JSON.parse(String(previous.result)) } : {}
-        };
+        if (previous.phase !== "queued" || queued) {
+          this.db.exec("COMMIT");
+          return {
+            id: key,
+            phase: String(previous.phase),
+            ...previous.result ? { result: JSON.parse(String(previous.result)) } : {}
+          };
+        }
       }
       const blocked = control ? this.db.prepare(
         "SELECT id FROM channel_replies WHERE source=? AND phase IN ('sending','uncertain') LIMIT 1"
@@ -2780,14 +2811,36 @@ var ChannelInbox = class {
       ).get(sessionId) : this.db.prepare(
         "SELECT id FROM channel_replies WHERE chat=? AND phase IN ('sending','uncertain') LIMIT 1"
       ).get(source.source.conversationId);
-      if (blocked) throw Error("\u6B64\u804A\u5929\u6709\u56DE\u590D\u5C1A\u672A\u786E\u8BA4\uFF0C\u8BF7\u5148\u6838\u5BF9\uFF0C\u4E0D\u8981\u91CD\u590D\u53D1\u9001");
+      if (blocked && !queued) throw Error("\u6B64\u804A\u5929\u6709\u56DE\u590D\u5C1A\u672A\u786E\u8BA4\uFF0C\u8BF7\u5148\u6838\u5BF9\uFF0C\u4E0D\u8981\u91CD\u590D\u53D1\u9001");
+      if (previous) {
+        this.db.prepare("UPDATE channel_replies SET phase='sending',epoch=? WHERE id=? AND phase='queued'").run(epoch ?? null, key);
+        this.db.exec("COMMIT");
+        return { id: key, phase: "new" };
+      }
       if (Number(this.db.prepare("SELECT count(*) n FROM channel_replies").get().n) >= this.bounds.records)
         throw Error("\u56DE\u590D\u51ED\u636E\u5BB9\u91CF\u5DF2\u6EE1\uFF0C\u672A\u4E22\u5F03\u539F\u8BB0\u5F55");
+      const retained = Number(
+        this.db.prepare(
+          "SELECT coalesce(sum(length(cast(draft AS BLOB))),0) n FROM channel_replies WHERE draft IS NOT NULL"
+        ).get().n
+      );
+      if (retained + Buffer.byteLength(text) > this.bounds.pendingBytes)
+        throw Error("\u5F85\u4EA4\u4ED8\u6B63\u6587\u5BB9\u91CF\u5DF2\u6EE1\uFF0C\u539F\u59CB\u7ED3\u679C\u4ECD\u5728\u539F\u751F\u4F1A\u8BDD\u4E2D");
       this.db.prepare(
-        "INSERT INTO channel_replies(id,chat,source,session,digest,phase,draft,epoch) VALUES(?,?,?,?,?,'sending',?,?)"
-      ).run(key, source.source.conversationId, sourceId, sessionId, digest2, text, epoch ?? null);
+        "INSERT INTO channel_replies(id,chat,source,session,digest,phase,draft,epoch,call_key) VALUES(?,?,?,?,?,?,?,?,?)"
+      ).run(
+        key,
+        source.source.conversationId,
+        sourceId,
+        sessionId,
+        digest2,
+        queued ? "queued" : "sending",
+        text,
+        epoch ?? null,
+        callId
+      );
       this.db.exec("COMMIT");
-      return { id: key, phase: "new" };
+      return { id: key, phase: queued ? "queued" : "new" };
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -3449,381 +3502,6 @@ ${channel.publicInstructions}
     });
 }
 
-// packages/dsh-px-workbench/src/feishu-tasks.ts
-var hash2 = (value) => createHash5("sha256").update(JSON.stringify(value)).digest("hex");
-var get5 = (ctx, key) => ctx.get ? ctx.get(key) : ctx[key];
-var FeishuTasks = class {
-  constructor(host, account, current, leaseActive, directory, epoch, deliver) {
-    this.host = host;
-    this.account = account;
-    this.current = current;
-    this.leaseActive = leaseActive;
-    this.epoch = epoch;
-    this.deliver = deliver;
-    this.inbox = new ChannelInbox(
-      join2(directory, hash2([account.accountId, account.fingerprint]) + "-tasks.sqlite"),
-      { provider: "feishu", accountId: account.accountId, fingerprint: account.fingerprint }
-    );
-    this.dispatch = new ChannelDispatch(this.inbox, epoch, {
-      selection: (row) => this.activated && this.authorized(row) ? "wake" : "hold",
-      prepare: (row, signal) => this.prepare(row, signal),
-      failed: (row, error) => this.errors.set(row?.id ?? "storage", String(error))
-    });
-  }
-  inbox;
-  dispatch;
-  handles = /* @__PURE__ */ new Map();
-  actors = /* @__PURE__ */ new Map();
-  opening = /* @__PURE__ */ new Map();
-  creation = /* @__PURE__ */ new Map();
-  stoppingRoots = /* @__PURE__ */ new Set();
-  outputControllers = /* @__PURE__ */ new Map();
-  prepared = /* @__PURE__ */ new Map();
-  stopping = /* @__PURE__ */ new Map();
-  sends = /* @__PURE__ */ new Map();
-  errors = /* @__PURE__ */ new Map();
-  stop = new AbortController();
-  closed = false;
-  disposal;
-  recovery;
-  activated = false;
-  memory() {
-    return get5(this.host, "pxMemoryChannels");
-  }
-  /** Called only after exclusive transport ownership. Read native receipts without waking old tasks. */
-  activate() {
-    if (this.recovery) return this.recovery;
-    if (this.activated) return Promise.resolve();
-    if (!this.leaseActive() || this.stop.signal.aborted) throw new ChannelError("\u6E20\u9053\u63A5\u6536\u79DF\u7EA6\u672A\u5C31\u7EEA", 409);
-    this.inbox.recoverInterrupted(this.epoch);
-    const work = (async () => {
-      let after = 0;
-      for (; ; ) {
-        this.stop.signal.throwIfAborted();
-        const batch = this.inbox.uncertainInputs(20, after);
-        if (!batch.length) break;
-        for (const first of batch) {
-          let row = first;
-          try {
-            for (; ; ) {
-              const outcome = await recoverStoredAdmission(this.host, this.inbox, row, this.stop.signal);
-              if (outcome !== "partial") {
-                if (outcome === "missing") this.errors.set(row.id, "\u6CA1\u6709\u627E\u5230\u539F\u751F\u6536\u4EF6\u4F9D\u636E\uFF0C\u672A\u91CD\u65B0\u6267\u884C\u4EFB\u52A1");
-                else this.errors.delete(row.id);
-                break;
-              }
-              const next = this.inbox.uncertainInputs(1, row.seq - 1)[0];
-              if (next?.id !== row.id) break;
-              row = next;
-              await new Promise((done) => setTimeout(done, 0));
-            }
-          } catch (error) {
-            this.stop.signal.throwIfAborted();
-            this.errors.set(row.id, String(error));
-          }
-          after = first.seq;
-        }
-      }
-      this.stop.signal.throwIfAborted();
-      this.activated = true;
-      this.dispatch.schedule();
-    })().finally(() => {
-      if (this.recovery === work) this.recovery = void 0;
-    });
-    this.recovery = work;
-    return work;
-  }
-  authorized(row) {
-    const c = this.current();
-    return !this.stop.signal.aborted && this.leaseActive() && !!c?.enabled && c.fingerprint === this.account.fingerprint && c.personaId === row.recipient.personaId && c.routeRevision === row.recipient.routeRevision && c.authorizedUsers.includes(row.event.actorId) && get5(this.host, "pxPersonaResources")?.allowsChannel(c.personaId, "feishu", c.accountId) === true;
-  }
-  rootSource(id3) {
-    return this.inbox.firstForSession(id3);
-  }
-  owns(agent) {
-    try {
-      const info = this.memory().inspect(agent?.session.id), channel = info.binding?.channel, rootId = channel?.task?.rootSessionId;
-      if (!rootId || channel.provider !== "feishu" || channel.accountId !== this.account.accountId || channel.access !== "public")
-        return false;
-      if (this.outputControllers.get(rootId)?.signal.aborted) return false;
-      const row = this.rootSource(rootId), preparation = this.prepared.get(rootId);
-      const source = row ? { event: row.receipt.source, recipient: row.receipt.recipient } : preparation;
-      if (!source || !this.authorized(source) || channel.task.requesterId !== source.event.actorId || channel.conversationId !== source.event.conversationId || info.binding.personaId !== source.recipient.personaId)
-        return false;
-      const root = this.memory().inspect(rootId).binding;
-      return root?.channel?.task?.rootSessionId === rootId && root.personaId === info.binding.personaId && root.channel.task.requesterId === channel.task.requesterId;
-    } catch {
-      return false;
-    }
-  }
-  created(agent) {
-    const agents = get5(this.host, "agents");
-    const parent = agents.list().find(
-      (candidate) => candidate !== agent && agents.isOwnedBy(agent.id, candidate) && this.owns(candidate)
-    );
-    if (parent) {
-      const info = this.memory().inspect(parent.id);
-      this.memory().bind(agent.id, info.binding.personaId, info.binding.channel, parent.id);
-    }
-    const channel = this.memory().inspect(agent.id)?.binding?.channel;
-    if (channel?.provider !== "feishu" || channel.accountId !== this.account.accountId || !channel.task)
-      return;
-    if (!this.owns(agent)) throw new ChannelError("\u6B64\u98DE\u4E66\u4EFB\u52A1\u6388\u6743\u5DF2\u5931\u6548", 403);
-    this.actors.set(agent.id, agent);
-    installChannelTaskAudience(agent.ctx);
-  }
-  submit(origin, options) {
-    const row = {
-      event: { ...origin.receipt.source, text: origin.text },
-      recipient: origin.receipt.recipient
-    };
-    if (!this.authorized(row)) throw new ChannelError("\u6B64\u98DE\u4E66\u6210\u5458\u6CA1\u6709\u5F53\u524D\u4EFB\u52A1\u6743\u9650", 403);
-    const rootId = options.action === "continue" ? options.taskId : "px-channel-task-" + hash2([origin.id, row.recipient]);
-    if (!rootId) throw new ChannelError("\u7EE7\u7EED\u4EFB\u52A1\u9700\u8981\u4EFB\u52A1\u7F16\u53F7");
-    if (this.stoppingRoots.has(rootId)) throw new ChannelError("\u6B64\u4EFB\u52A1\u6B63\u5728\u505C\u6B62\uFF0C\u8BF7\u7A0D\u540E\u518D\u7EE7\u7EED", 409);
-    if (options.action === "continue") {
-      const first = this.rootSource(rootId);
-      if (!first || first.receipt.source.actorId !== row.event.actorId || first.receipt.source.conversationId !== row.event.conversationId || first.receipt.recipient.personaId !== row.recipient.personaId || first.receipt.recipient.routeRevision !== row.recipient.routeRevision)
-        throw new ChannelError("\u8BE5\u4EFB\u52A1\u4E0D\u5C5E\u4E8E\u5F53\u524D\u6210\u5458\u3001\u804A\u5929\u6216\u4EBA\u683C", 403);
-    }
-    const accepted = this.inbox.accept(row.event, { ...row.recipient, executionSessionId: rootId });
-    if (accepted.recipient.executionSessionId !== rootId)
-      throw new ChannelError("\u8FD9\u6761\u539F\u59CB\u6D88\u606F\u5DF2\u4EA4\u7ED9\u53E6\u4E00\u4EFB\u52A1\uFF0C\u672A\u91CD\u590D\u53D7\u7406", 409);
-    if (!accepted.duplicate && this.outputControllers.get(rootId)?.signal.aborted)
-      this.outputControllers.set(rootId, new AbortController());
-    this.dispatch.schedule();
-    const receipt = this.inbox.receipt(accepted.id);
-    return {
-      taskId: rootId,
-      admission: receipt.phase,
-      duplicate: accepted.duplicate,
-      note: "\u539F\u751F\u4EFB\u52A1\u5DF2\u53D7\u7406\u6216\u6392\u961F\uFF0C\u4E0D\u8868\u793A\u6267\u884C\u5B8C\u6210\uFF1B\u7ED3\u679C\u4EA4\u4ED8\u5230\u4EFB\u52A1\u539F\u59CB\u6D88\u606F\u3002"
-    };
-  }
-  async prepare(row, signal) {
-    if (!this.authorized(row)) throw new ChannelError("\u4EFB\u52A1\u6388\u6743\u5DF2\u64A4\u9500", 403);
-    const id3 = row.recipient.executionSessionId;
-    if (!id3) throw new ChannelError("\u4EFB\u52A1\u7F3A\u5C11\u539F\u751F\u63A5\u6536\u4F1A\u8BDD");
-    let pending = this.opening.get(id3);
-    if (!pending) {
-      const controller = new AbortController();
-      this.creation.set(id3, controller);
-      pending = this.open(row, AbortSignal.any([signal, this.stop.signal, controller.signal])).finally(() => {
-        this.opening.delete(id3);
-        this.creation.delete(id3);
-      });
-      this.opening.set(id3, pending);
-    }
-    const agent = await pending;
-    return {
-      agent,
-      sessions: get5(this.host, "sessions"),
-      validate: () => this.authorized(row) && this.owns(agent) && this.matchesInput(agent, row)
-    };
-  }
-  matchesInput(agent, row) {
-    const binding2 = this.memory().inspect(agent.id)?.binding, channel = binding2?.channel;
-    return agent.id === row.recipient.executionSessionId && binding2?.personaId === row.recipient.personaId && channel?.provider === "feishu" && channel.accountId === this.account.accountId && channel.conversationId === row.event.conversationId && channel.task?.rootSessionId === agent.id && channel.task.requesterId === row.event.actorId;
-  }
-  async open(row, signal) {
-    const id3 = row.recipient.executionSessionId, agents = get5(this.host, "agents"), memory = this.memory();
-    this.prepared.set(id3, row);
-    if (!this.outputControllers.has(id3)) this.outputControllers.set(id3, new AbortController());
-    const live = agents.get(id3);
-    if (live) {
-      if (!this.owns(live) || !this.matchesInput(live, row))
-        throw new ChannelError("\u5DF2\u6709\u4EFB\u52A1\u4F1A\u8BDD\u5F52\u5C5E\u4E0D\u540C", 409);
-      this.created(live);
-      return live;
-    }
-    const chatWorkspace = join2(
-      this.account.workspace,
-      "feishu",
-      hash2([this.account.accountId, this.account.fingerprint, row.event.conversationId])
-    ), cwd = join2(chatWorkspace, "tasks", id3), channel = {
-      provider: "feishu",
-      accountId: this.account.accountId,
-      conversationId: row.event.conversationId,
-      access: "public",
-      publicInstructions: this.account.publicInstructions,
-      workspace: chatWorkspace,
-      task: { requesterId: row.event.actorId, rootSessionId: id3 }
-    };
-    let existing;
-    try {
-      existing = await get5(this.host, "sessionController").inspect(id3);
-    } catch (error) {
-      if (error?.code !== "session/not-found" && error?.constructor?.name !== "ApiSessionNotFound")
-        throw error;
-    }
-    if (existing && resolve2(existing.meta.cwd) !== resolve2(cwd))
-      throw new ChannelError("\u539F\u4EFB\u52A1\u5DE5\u4F5C\u533A\u5F52\u5C5E\u4E0D\u540C", 409);
-    memory.bind(id3, row.recipient.personaId, channel);
-    mkdirSync2(cwd, { recursive: true });
-    const presets = get5(this.host, "agentPresets"), route2 = get5(this.host, "agentDefaultModel").currentSelection();
-    if (!route2?.provider || !route2?.model) throw new ChannelError("\u8BF7\u5148\u9009\u62E9\u539F\u751F\u9ED8\u8BA4\u6A21\u578B", 409);
-    const setup = async (ctx, agent) => {
-      const recorded = existing ? get5(this.host, "sessionProjections").stateOf(agent.session, "agentPreset") : presets.defaultId;
-      if (typeof recorded !== "string" || !recorded)
-        throw new ChannelError("\u539F\u4EFB\u52A1\u7684\u9884\u8BBE\u65E0\u6CD5\u786E\u8BA4\uFF0C\u672A\u66FF\u6362\u6210\u9ED8\u8BA4\u9884\u8BBE", 409);
-      await presets.mount(ctx, recorded);
-      const { installModelSelection } = await import("@deepseek-ai/dsh-agent");
-      ctx.effect(
-        () => installModelSelection(ctx, nativeModelSelection(this.host, id3, route2)),
-        "channels: task model selection"
-      );
-      installChannelTaskAudience(ctx);
-      return {
-        commit: () => {
-          signal.throwIfAborted();
-          if (!this.authorized(row)) throw new ChannelError("\u4EFB\u52A1\u6388\u6743\u5DF2\u53D8\u5316", 403);
-        }
-      };
-    };
-    const handle = await agents.withoutInitiator(
-      () => existing ? agents.resume({ resumeSessionId: id3, agentOptions: route2, signal, setup }) : agents.create({
-        sessionId: id3,
-        meta: { cwd, agentPreset: presets.defaultId },
-        agentOptions: route2,
-        signal,
-        setup
-      })
-    );
-    this.handles.set(id3, handle);
-    signal.throwIfAborted();
-    memory.bind(id3, row.recipient.personaId, channel);
-    this.created(handle.agent);
-    return handle.agent;
-  }
-  event(session, event) {
-    if (event.type === "user/message" && event.data.source?.kind === "user" && !this.stoppingRoots.has(session.id) && this.outputControllers.get(session.id)?.signal.aborted)
-      this.outputControllers.set(session.id, new AbortController());
-    const agent = this.actors.get(session.id);
-    if (!agent || this.stopping.has(session.id) || !this.owns(agent)) return;
-    const channel = this.memory().inspect(session.id).binding.channel;
-    if (channel.task.rootSessionId !== session.id || !["assistant/message", "turn/end"].includes(event.type))
-      return;
-    const text = event.type === "assistant/message" ? (event.data.message?.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n") : ["error", "aborted", "blocked", "max-tokens", "interrupted"].includes(event.data.reason?.kind) ? "\u4EFB\u52A1\u672C\u8F6E\u672A\u5B8C\u6210\uFF08" + event.data.reason.kind + "\uFF09\u3002\u6267\u884C\u8BB0\u5F55\u4FDD\u7559\uFF0C\u672A\u81EA\u52A8\u91CD\u65B0\u6267\u884C\u3002" : "";
-    if (!text.trim()) return;
-    const deliverySignal = this.signalFor(session.id);
-    const previous = this.sends.get(session.id) ?? Promise.resolve();
-    const pending = previous.catch(() => {
-    }).then(async () => {
-      if (!this.owns(agent)) return;
-      const origin = this.rootSource(session.id);
-      if (!origin) throw new ChannelError("\u4EFB\u52A1\u4EA4\u4ED8\u7F3A\u5C11\u539F\u59CB\u8BF7\u6C42", 409);
-      const chunks = [];
-      for (let at = 0; at < text.length; ) {
-        let end = Math.min(at + 3400, text.length);
-        if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end--;
-        chunks.push(text.slice(at, end));
-        at = end;
-      }
-      for (const [i, part] of chunks.entries()) {
-        if (!this.owns(agent)) throw new ChannelError("\u4EFB\u52A1\u4EA4\u4ED8\u6388\u6743\u5DF2\u53D8\u5316", 403);
-        await this.deliver(
-          this.inbox,
-          origin,
-          session.id,
-          `task-event:${event.seq}:${i}`,
-          (chunks.length > 1 ? `\u4EFB\u52A1\u8F93\u51FA ${i + 1}/${chunks.length}
-` : "") + part,
-          deliverySignal
-        );
-      }
-    });
-    this.sends.set(session.id, pending);
-    void pending.catch((error) => this.errors.set(session.id, String(error))).finally(() => {
-      if (this.sends.get(session.id) === pending) this.sends.delete(session.id);
-    });
-  }
-  origin(agent, allowChild = false) {
-    if (!this.owns(agent)) throw new ChannelError("\u4EFB\u52A1\u6388\u6743\u5DF2\u5931\u6548", 403);
-    const rootId = this.memory().inspect(agent.id).binding.channel.task.rootSessionId;
-    if (!allowChild && agent.id !== rootId) throw new ChannelError("\u5B50\u667A\u80FD\u4F53\u8BF7\u5C06\u7ED3\u679C\u4EA4\u7ED9\u4EFB\u52A1\u4E3B\u4F1A\u8BDD", 403);
-    const source = this.rootSource(rootId);
-    if (!source) throw new ChannelError("\u4EFB\u52A1\u539F\u59CB\u8BF7\u6C42\u672A\u786E\u8BA4", 409);
-    return source;
-  }
-  async stopTask(taskId) {
-    if (!this.rootSource(taskId) && !this.prepared.has(taskId)) throw new ChannelError("\u4EFB\u52A1\u4E0D\u5B58\u5728", 404);
-    this.stoppingRoots.add(taskId);
-    this.outputControllers.get(taskId)?.abort(Error("\u4EFB\u52A1\u4EA4\u4ED8\u5DF2\u505C\u6B62"));
-    this.inbox.cancelTarget(taskId);
-    this.creation.get(taskId)?.abort(Error("\u4EFB\u52A1\u5DF2\u505C\u6B62"));
-    try {
-      await this.opening.get(taskId)?.catch(() => void 0);
-      const actors = [...this.actors.values()].filter(
-        (agent) => this.memory().inspect(agent.id).binding?.channel?.task?.rootSessionId === taskId
-      );
-      await stopNativeTaskActors(this.host, actors, this.stopping);
-      await this.sends.get(taskId)?.catch(() => void 0);
-    } finally {
-      this.stoppingRoots.delete(taskId);
-    }
-  }
-  signalFor(taskId) {
-    const controller = this.outputControllers.get(taskId);
-    return controller ? AbortSignal.any([this.stop.signal, controller.signal]) : this.stop.signal;
-  }
-  async stopForRequester(taskId, conversationId, requesterId) {
-    const source = typeof taskId === "string" ? this.rootSource(taskId) : void 0;
-    if (!source || source.receipt.source.conversationId !== conversationId || source.receipt.source.actorId !== requesterId || !this.authorized({ event: source.receipt.source, recipient: source.receipt.recipient }))
-      throw new ChannelError("\u4EFB\u52A1\u4E0D\u5C5E\u4E8E\u5F53\u524D\u6210\u5458\u548C\u804A\u5929\uFF0C\u6216\u539F\u4EFB\u52A1\u6388\u6743\u5DF2\u53D8\u5316", 403);
-    await this.stopTask(taskId);
-  }
-  refreshAuthorization() {
-    for (const agent of this.actors.values()) {
-      const channel = this.memory().inspect(agent.id).binding?.channel;
-      if (channel?.task?.rootSessionId !== agent.id || this.stoppingRoots.has(agent.id) || this.outputControllers.get(agent.id)?.signal.aborted || this.owns(agent))
-        continue;
-      void this.stopTask(agent.id).catch((error) => this.errors.set(agent.id, String(error)));
-    }
-    this.dispatch.schedule();
-  }
-  status(filter) {
-    const records = this.memory().channelBindings(this.account.accountId, "feishu").filter(
-      (r) => r.channel.task?.rootSessionId === r.sessionId && (!filter || r.channel.conversationId === filter.conversationId && r.channel.task.requesterId === filter.requesterId)
-    );
-    return {
-      total: records.length,
-      partial: records.length > 100,
-      records: records.slice(-100).reverse().map((r) => ({
-        taskId: r.sessionId,
-        requesterId: r.channel.task.requesterId,
-        conversationId: r.channel.conversationId,
-        personaId: r.personaId,
-        state: get5(this.host, "agents").get(r.sessionId)?.status ?? "stored",
-        paused: this.outputControllers.get(r.sessionId)?.signal.aborted === true,
-        authorized: this.owns({ id: r.sessionId, session: { id: r.sessionId } })
-      })),
-      // Account-wide diagnostics are local UI data, never exported to a channel participant.
-      ...!filter ? { errors: [...this.errors].map(([id3, error]) => ({ id: id3, error })), receipts: this.inbox.counts() } : {}
-    };
-  }
-  dispose() {
-    if (this.closed) return Promise.resolve();
-    if (this.disposal) return this.disposal;
-    const work = this.finishDispose().finally(() => {
-      if (this.disposal === work) this.disposal = void 0;
-    });
-    this.disposal = work;
-    return work;
-  }
-  async finishDispose() {
-    this.stop.abort(Error("\u6E20\u9053\u4EFB\u52A1\u63A5\u5165\u5DF2\u505C\u6B62"));
-    await this.recovery?.catch(() => void 0);
-    await this.dispatch.dispose();
-    await Promise.allSettled([...this.opening.values()]);
-    await stopNativeTaskActors(this.host, [...this.actors.values()], this.stopping);
-    const settled = await Promise.allSettled([...this.handles.values()].map((h) => h.dispose()));
-    await Promise.allSettled([...this.sends.values()]);
-    if (settled.some((r) => r.status === "rejected")) throw new ChannelError("\u90E8\u5206\u4EFB\u52A1\u672A\u5B8C\u6210\u505C\u6B62", 503);
-    this.inbox.close();
-    this.closed = true;
-  }
-};
-
 // packages/shared/channel-interactions.ts
 import { randomBytes } from "node:crypto";
 var InteractionError = class extends Error {
@@ -3914,6 +3592,7 @@ var ChannelInteractions = class {
     if (request.signal?.aborted)
       return kind === "approval" ? "cancelled" : Promise.reject(this.error("\u95EE\u9898\u5DF2\u53D6\u6D88", 409));
     const id3 = (kind === "approval" ? "A" : "Q") + randomBytes(5).toString("hex");
+    const notification = new AbortController();
     let resolve5, reject;
     const promise = new Promise((yes, no) => {
       resolve5 = yes;
@@ -3934,6 +3613,7 @@ var ChannelInteractions = class {
       allowed: authority?.allowed,
       settle: (value, error) => {
         if (!this.active.delete(id3)) return;
+        notification.abort(Error("\u6B64\u4EA4\u4E92\u5DF2\u7ED3\u675F\uFF0C\u4E0D\u518D\u53D1\u9001\u65E7\u901A\u77E5"));
         clearTimeout(timer);
         request.signal?.removeEventListener("abort", abort);
         if (error && kind === "question") reject(error);
@@ -3952,7 +3632,7 @@ var ChannelInteractions = class {
     void this.send(
       chatId,
       text + hint + "\n\u4E5F\u53EF\u5728\u5BA2\u6237\u7AEF\u201C" + (this.options.settingsPath ?? "\u8BBE\u7F6E \u2192 \u6E20\u9053\u4E0E\u6D3B\u52A8 \u2192 \u5F85\u5904\u7406\u8BF7\u6C42") + "\u201D\u64CD\u4F5C\uFF1B\u53D6\u6D88\u6216\u8D85\u65F6\u540E\u7684\u56DE\u590D\u4E0D\u4F1A\u6267\u884C\u3002",
-      { sessionId: request.agent.session.id, interactionId: id3, signal: request.signal }
+      { sessionId: request.agent.session.id, interactionId: id3, signal: notification.signal }
     ).catch(
       () => pending.settle(
         void 0,
@@ -4004,6 +3684,541 @@ var ChannelInteractions = class {
       return "\u56DE\u7B54\u5DF2\u63D0\u4EA4\uFF0C\u4EFB\u52A1\u5C06\u7EE7\u7EED\u3002";
     }
     return "\u5DF2\u8BB0\u5F55\u7B2C " + input.question + " \u9898\uFF0C\u8BF7\u7EE7\u7EED\u56DE\u7B54\u5176\u4F59\u9898\u76EE\u3002";
+  }
+};
+
+// packages/dsh-px-workbench/src/feishu-tasks.ts
+var hash2 = (value) => createHash5("sha256").update(JSON.stringify(value)).digest("hex");
+var get5 = (ctx, key) => ctx.get ? ctx.get(key) : ctx[key];
+var FeishuTasks = class {
+  constructor(host, account, current, leaseActive, directory, epoch, deliver) {
+    this.host = host;
+    this.account = account;
+    this.current = current;
+    this.leaseActive = leaseActive;
+    this.epoch = epoch;
+    this.deliver = deliver;
+    this.inbox = new ChannelInbox(
+      join2(directory, hash2([account.accountId, account.fingerprint]) + "-tasks.sqlite"),
+      { provider: "feishu", accountId: account.accountId, fingerprint: account.fingerprint }
+    );
+    this.dispatch = new ChannelDispatch(this.inbox, epoch, {
+      selection: (row) => this.activated && this.leaseActive() && !this.receptionPaused && this.authorized(row) ? "wake" : "hold",
+      prepare: (row, signal) => this.prepare(row, signal),
+      failed: (row, error) => this.errors.set(row?.id ?? "storage", String(error))
+    });
+    this.interactions = new ChannelInteractions(
+      async (_chat, text, source) => {
+        if (!source) throw new ChannelError("\u8BF7\u6C42\u4EA4\u4ED8\u7F3A\u5C11\u539F\u751F\u4F1A\u8BDD", 409);
+        const origin = this.origin(get5(this.host, "agents").get(source.sessionId), true), signal = source.signal ? AbortSignal.any([source.signal, this.stop.signal]) : this.stop.signal;
+        const key = "interaction:" + source.sessionId + ":" + source.interactionId;
+        if (origin.receipt.phase !== "admitted")
+          await reconcileChannelAdmission(
+            this.inbox,
+            origin.id,
+            {
+              agent: get5(this.host, "agents").get(origin.receipt.claim.sessionId),
+              sessions: get5(this.host, "sessions")
+            },
+            signal
+          );
+        this.inbox.queueReply(key, origin.id, origin.receipt.claim.sessionId, text);
+        const cancel = () => this.inbox.cancelQueuedReply(origin.receipt.claim.sessionId, origin.id, key);
+        signal.addEventListener("abort", cancel, { once: true });
+        if (signal.aborted) cancel();
+        void this.flushOutputs().catch((error) => this.errors.set(source.sessionId, String(error)));
+        return { queued: true };
+      },
+      10 * 6e4,
+      {
+        label: "\u98DE\u4E66",
+        maxCharacters: 4e3,
+        remoteAnswers: true,
+        plainAnswers: false,
+        error: (message2, status) => new ChannelError(message2, status)
+      }
+    );
+  }
+  inbox;
+  dispatch;
+  interactions;
+  handles = /* @__PURE__ */ new Map();
+  actors = /* @__PURE__ */ new Map();
+  opening = /* @__PURE__ */ new Map();
+  creation = /* @__PURE__ */ new Map();
+  stoppingRoots = /* @__PURE__ */ new Set();
+  outputControllers = /* @__PURE__ */ new Map();
+  prepared = /* @__PURE__ */ new Map();
+  stopping = /* @__PURE__ */ new Map();
+  sends = /* @__PURE__ */ new Map();
+  errors = /* @__PURE__ */ new Map();
+  stop = new AbortController();
+  closed = false;
+  disposal;
+  recovery;
+  activated = false;
+  outputFlush;
+  flushAgain = false;
+  receptionPaused = false;
+  matches(account) {
+    return !this.closed && !this.stop.signal.aborted && account.fingerprint === this.account.fingerprint && account.routeRevision === this.account.routeRevision && account.personaId === this.account.personaId;
+  }
+  interaction(kind, request, next) {
+    if (!this.owns(request.agent)) return next();
+    const channel = this.memory().inspect(request.agent.id).binding.channel;
+    return this.interactions.request(kind, request, channel.conversationId, next, {
+      requesterId: channel.task.requesterId,
+      allowed: () => this.owns(request.agent)
+    });
+  }
+  answerInteraction(input) {
+    const pending = this.interactions.list().find((row) => row.id === input.id);
+    if (!pending) throw new ChannelError("\u8BF7\u6C42\u5DF2\u5904\u7406\u6216\u53D6\u6D88", 409);
+    return this.interactions.respond(pending.chatId, input, pending.requesterId);
+  }
+  async pause() {
+    this.receptionPaused = true;
+    for (const controller of this.creation.values()) controller.abort(Error("\u6E20\u9053\u5904\u7406\u5DF2\u505C\u6B62"));
+    let cursor = 0;
+    for (; ; ) {
+      const rows = this.inbox.pending(100, cursor);
+      if (!rows.length) break;
+      for (const row of rows) {
+        cursor = row.seq;
+        this.inbox.cancelPending(row.id);
+      }
+    }
+    await Promise.allSettled([...this.opening.values()]);
+    await Promise.all(
+      [...this.actors.values()].filter((agent) => this.memory().inspect(agent.id).binding?.channel?.task?.rootSessionId === agent.id).map((agent) => this.stopTask(agent.id))
+    );
+  }
+  resumeReception() {
+    this.receptionPaused = false;
+    this.dispatch.schedule();
+    void this.flushOutputs();
+  }
+  memory() {
+    return get5(this.host, "pxMemoryChannels");
+  }
+  /** Called only after exclusive transport ownership. Read native receipts without waking old tasks. */
+  activate() {
+    if (this.recovery) return this.recovery;
+    if (this.activated) {
+      this.dispatch.schedule();
+      return this.flushOutputs();
+    }
+    if (!this.leaseActive() || this.stop.signal.aborted) throw new ChannelError("\u6E20\u9053\u63A5\u6536\u79DF\u7EA6\u672A\u5C31\u7EEA", 409);
+    this.inbox.recoverInterrupted(this.epoch);
+    this.inbox.retireQueuedInteractions();
+    const work = (async () => {
+      let after = 0;
+      for (; ; ) {
+        this.stop.signal.throwIfAborted();
+        const batch = this.inbox.uncertainInputs(20, after);
+        if (!batch.length) break;
+        for (const first of batch) {
+          let row = first;
+          try {
+            for (; ; ) {
+              const outcome = await recoverStoredAdmission(this.host, this.inbox, row, this.stop.signal);
+              if (outcome !== "partial") {
+                if (outcome === "missing") this.errors.set(row.id, "\u6CA1\u6709\u627E\u5230\u539F\u751F\u6536\u4EF6\u4F9D\u636E\uFF0C\u672A\u91CD\u65B0\u6267\u884C\u4EFB\u52A1");
+                else this.errors.delete(row.id);
+                break;
+              }
+              const next = this.inbox.uncertainInputs(1, row.seq - 1)[0];
+              if (next?.id !== row.id) break;
+              row = next;
+              await new Promise((done) => setTimeout(done, 0));
+            }
+          } catch (error) {
+            this.stop.signal.throwIfAborted();
+            this.errors.set(row.id, String(error));
+          }
+          after = first.seq;
+        }
+      }
+      this.stop.signal.throwIfAborted();
+      this.activated = true;
+      this.dispatch.schedule();
+      await this.flushOutputs();
+    })().finally(() => {
+      if (this.recovery === work) this.recovery = void 0;
+    });
+    this.recovery = work;
+    return work;
+  }
+  authorized(row) {
+    const c = this.current();
+    return !this.stop.signal.aborted && !!c?.enabled && c.fingerprint === this.account.fingerprint && c.personaId === row.recipient.personaId && c.routeRevision === row.recipient.routeRevision && c.authorizedUsers.includes(row.event.actorId) && get5(this.host, "pxPersonaResources")?.allowsChannel(c.personaId, "feishu", c.accountId) === true;
+  }
+  rootSource(id3) {
+    return this.inbox.firstForSession(id3);
+  }
+  owns(agent) {
+    try {
+      const info = this.memory().inspect(agent?.session.id), channel = info.binding?.channel, rootId = channel?.task?.rootSessionId;
+      if (!rootId || channel.provider !== "feishu" || channel.accountId !== this.account.accountId || channel.access !== "public")
+        return false;
+      if (this.outputControllers.get(rootId)?.signal.aborted) return false;
+      const row = this.rootSource(rootId), preparation = this.prepared.get(rootId);
+      const source = row ? { event: row.receipt.source, recipient: row.receipt.recipient } : preparation;
+      if (!source || !this.authorized(source) || channel.task.requesterId !== source.event.actorId || channel.conversationId !== source.event.conversationId || info.binding.personaId !== source.recipient.personaId)
+        return false;
+      const root = this.memory().inspect(rootId).binding;
+      return root?.channel?.task?.rootSessionId === rootId && root.personaId === info.binding.personaId && root.channel.task.requesterId === channel.task.requesterId;
+    } catch {
+      return false;
+    }
+  }
+  created(agent) {
+    const agents = get5(this.host, "agents");
+    const parent = agents.list().find(
+      (candidate) => candidate !== agent && agents.isOwnedBy(agent.id, candidate) && this.owns(candidate)
+    );
+    if (parent) {
+      const info = this.memory().inspect(parent.id);
+      this.memory().bind(agent.id, info.binding.personaId, info.binding.channel, parent.id);
+    }
+    const channel = this.memory().inspect(agent.id)?.binding?.channel;
+    if (channel?.provider !== "feishu" || channel.accountId !== this.account.accountId || !channel.task)
+      return;
+    if (!this.owns(agent)) throw new ChannelError("\u6B64\u98DE\u4E66\u4EFB\u52A1\u6388\u6743\u5DF2\u5931\u6548", 403);
+    this.actors.set(agent.id, agent);
+    installChannelTaskAudience(agent.ctx);
+  }
+  submit(origin, options) {
+    const row = {
+      event: { ...origin.receipt.source, text: origin.text },
+      recipient: origin.receipt.recipient
+    };
+    if (this.receptionPaused || !this.leaseActive() || !this.authorized(row))
+      throw new ChannelError("\u6B64\u98DE\u4E66\u6210\u5458\u6CA1\u6709\u5F53\u524D\u4EFB\u52A1\u6743\u9650\u6216\u6E20\u9053\u5DF2\u505C\u6B62\u63A5\u6536", 403);
+    const rootId = options.action === "continue" ? options.taskId : "px-channel-task-" + hash2([origin.id, row.recipient]);
+    if (!rootId) throw new ChannelError("\u7EE7\u7EED\u4EFB\u52A1\u9700\u8981\u4EFB\u52A1\u7F16\u53F7");
+    if (this.stoppingRoots.has(rootId)) throw new ChannelError("\u6B64\u4EFB\u52A1\u6B63\u5728\u505C\u6B62\uFF0C\u8BF7\u7A0D\u540E\u518D\u7EE7\u7EED", 409);
+    if (options.action === "continue") {
+      const first = this.rootSource(rootId);
+      if (!first || first.receipt.source.actorId !== row.event.actorId || first.receipt.source.conversationId !== row.event.conversationId || first.receipt.recipient.personaId !== row.recipient.personaId || first.receipt.recipient.routeRevision !== row.recipient.routeRevision)
+        throw new ChannelError("\u8BE5\u4EFB\u52A1\u4E0D\u5C5E\u4E8E\u5F53\u524D\u6210\u5458\u3001\u804A\u5929\u6216\u4EBA\u683C", 403);
+    }
+    const accepted = this.inbox.accept(row.event, { ...row.recipient, executionSessionId: rootId });
+    if (accepted.recipient.executionSessionId !== rootId)
+      throw new ChannelError("\u8FD9\u6761\u539F\u59CB\u6D88\u606F\u5DF2\u4EA4\u7ED9\u53E6\u4E00\u4EFB\u52A1\uFF0C\u672A\u91CD\u590D\u53D7\u7406", 409);
+    if (!accepted.duplicate && this.outputControllers.get(rootId)?.signal.aborted)
+      this.outputControllers.set(rootId, new AbortController());
+    this.dispatch.schedule();
+    const receipt = this.inbox.receipt(accepted.id);
+    return {
+      taskId: rootId,
+      admission: receipt.phase,
+      duplicate: accepted.duplicate,
+      note: "\u539F\u751F\u4EFB\u52A1\u5DF2\u53D7\u7406\u6216\u6392\u961F\uFF0C\u4E0D\u8868\u793A\u6267\u884C\u5B8C\u6210\uFF1B\u7ED3\u679C\u4EA4\u4ED8\u5230\u4EFB\u52A1\u539F\u59CB\u6D88\u606F\u3002"
+    };
+  }
+  async prepare(row, signal) {
+    if (this.receptionPaused || !this.authorized(row))
+      throw new ChannelError("\u4EFB\u52A1\u6388\u6743\u5DF2\u64A4\u9500\u6216\u63A5\u6536\u5DF2\u505C\u6B62", 403);
+    const id3 = row.recipient.executionSessionId;
+    if (!id3) throw new ChannelError("\u4EFB\u52A1\u7F3A\u5C11\u539F\u751F\u63A5\u6536\u4F1A\u8BDD");
+    let pending = this.opening.get(id3);
+    if (!pending) {
+      const controller = new AbortController();
+      this.creation.set(id3, controller);
+      pending = this.open(row, AbortSignal.any([signal, this.stop.signal, controller.signal])).finally(() => {
+        this.opening.delete(id3);
+        this.creation.delete(id3);
+      });
+      this.opening.set(id3, pending);
+    }
+    const agent = await pending;
+    return {
+      agent,
+      sessions: get5(this.host, "sessions"),
+      validate: () => !this.receptionPaused && this.authorized(row) && this.owns(agent) && this.matchesInput(agent, row)
+    };
+  }
+  matchesInput(agent, row) {
+    const binding2 = this.memory().inspect(agent.id)?.binding, channel = binding2?.channel;
+    return agent.id === row.recipient.executionSessionId && binding2?.personaId === row.recipient.personaId && channel?.provider === "feishu" && channel.accountId === this.account.accountId && channel.conversationId === row.event.conversationId && channel.task?.rootSessionId === agent.id && channel.task.requesterId === row.event.actorId;
+  }
+  async open(row, signal) {
+    const id3 = row.recipient.executionSessionId, agents = get5(this.host, "agents"), memory = this.memory();
+    this.prepared.set(id3, row);
+    if (!this.outputControllers.has(id3)) this.outputControllers.set(id3, new AbortController());
+    const live = agents.get(id3);
+    if (live) {
+      if (!this.owns(live) || !this.matchesInput(live, row))
+        throw new ChannelError("\u5DF2\u6709\u4EFB\u52A1\u4F1A\u8BDD\u5F52\u5C5E\u4E0D\u540C", 409);
+      this.created(live);
+      return live;
+    }
+    const chatWorkspace = join2(
+      this.account.workspace,
+      "feishu",
+      hash2([this.account.accountId, this.account.fingerprint, row.event.conversationId])
+    ), cwd = join2(chatWorkspace, "tasks", id3), channel = {
+      provider: "feishu",
+      accountId: this.account.accountId,
+      conversationId: row.event.conversationId,
+      access: "public",
+      publicInstructions: this.account.publicInstructions,
+      workspace: chatWorkspace,
+      task: { requesterId: row.event.actorId, rootSessionId: id3 }
+    };
+    let existing;
+    try {
+      existing = await get5(this.host, "sessionController").inspect(id3);
+    } catch (error) {
+      if (error?.code !== "session/not-found" && error?.constructor?.name !== "ApiSessionNotFound")
+        throw error;
+    }
+    if (existing && resolve2(existing.meta.cwd) !== resolve2(cwd))
+      throw new ChannelError("\u539F\u4EFB\u52A1\u5DE5\u4F5C\u533A\u5F52\u5C5E\u4E0D\u540C", 409);
+    memory.bind(id3, row.recipient.personaId, channel);
+    mkdirSync2(cwd, { recursive: true });
+    const presets = get5(this.host, "agentPresets"), route2 = get5(this.host, "agentDefaultModel").currentSelection();
+    if (!route2?.provider || !route2?.model) throw new ChannelError("\u8BF7\u5148\u9009\u62E9\u539F\u751F\u9ED8\u8BA4\u6A21\u578B", 409);
+    const setup = async (ctx, agent) => {
+      const recorded = existing ? get5(this.host, "sessionProjections").stateOf(agent.session, "agentPreset") : presets.defaultId;
+      if (typeof recorded !== "string" || !recorded)
+        throw new ChannelError("\u539F\u4EFB\u52A1\u7684\u9884\u8BBE\u65E0\u6CD5\u786E\u8BA4\uFF0C\u672A\u66FF\u6362\u6210\u9ED8\u8BA4\u9884\u8BBE", 409);
+      await presets.mount(ctx, recorded);
+      const { installModelSelection } = await import("@deepseek-ai/dsh-agent");
+      ctx.effect(
+        () => installModelSelection(ctx, nativeModelSelection(this.host, id3, route2)),
+        "channels: task model selection"
+      );
+      installChannelTaskAudience(ctx);
+      return {
+        commit: () => {
+          signal.throwIfAborted();
+          if (!this.authorized(row)) throw new ChannelError("\u4EFB\u52A1\u6388\u6743\u5DF2\u53D8\u5316", 403);
+        }
+      };
+    };
+    const handle = await agents.withoutInitiator(
+      () => existing ? agents.resume({ resumeSessionId: id3, agentOptions: route2, signal, setup }) : agents.create({
+        sessionId: id3,
+        meta: { cwd, agentPreset: presets.defaultId },
+        agentOptions: route2,
+        signal,
+        setup
+      })
+    );
+    this.handles.set(id3, handle);
+    signal.throwIfAborted();
+    memory.bind(id3, row.recipient.personaId, channel);
+    this.created(handle.agent);
+    return handle.agent;
+  }
+  event(session, event) {
+    if (event.type === "user/message" && event.data.source?.kind === "user" && !this.stoppingRoots.has(session.id) && this.outputControllers.get(session.id)?.signal.aborted)
+      this.outputControllers.set(session.id, new AbortController());
+    const agent = this.actors.get(session.id);
+    if (!agent || this.stopping.has(session.id) || !this.owns(agent)) return;
+    const channel = this.memory().inspect(session.id).binding.channel;
+    if (channel.task.rootSessionId !== session.id || !["assistant/message", "turn/end"].includes(event.type))
+      return;
+    const text = event.type === "assistant/message" ? (event.data.message?.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n") : ["error", "aborted", "blocked", "max-tokens", "interrupted"].includes(event.data.reason?.kind) ? "\u4EFB\u52A1\u672C\u8F6E\u672A\u5B8C\u6210\uFF08" + event.data.reason.kind + "\uFF09\u3002\u6267\u884C\u8BB0\u5F55\u4FDD\u7559\uFF0C\u672A\u81EA\u52A8\u91CD\u65B0\u6267\u884C\u3002" : "";
+    if (!text.trim()) return;
+    const previous = this.sends.get(session.id) ?? Promise.resolve();
+    const pending = previous.catch(() => {
+    }).then(async () => {
+      if (!this.owns(agent)) return;
+      const origin = this.rootSource(session.id);
+      if (!origin) throw new ChannelError("\u4EFB\u52A1\u4EA4\u4ED8\u7F3A\u5C11\u539F\u59CB\u8BF7\u6C42", 409);
+      if (origin.receipt.phase !== "admitted")
+        await reconcileChannelAdmission(
+          this.inbox,
+          origin.id,
+          { agent, sessions: get5(this.host, "sessions") },
+          this.stop.signal
+        );
+      const chunks = [];
+      for (let at = 0; at < text.length; ) {
+        let end = Math.min(at + 3400, text.length);
+        if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end--;
+        chunks.push(text.slice(at, end));
+        at = end;
+      }
+      const output = chunks.map((part, i) => ({
+        key: `task-event:${event.seq}:${i}`,
+        body: (chunks.length > 1 ? `\u4EFB\u52A1\u8F93\u51FA ${i + 1}/${chunks.length}
+` : "") + part
+      }));
+      for (const item of output) this.inbox.queueReply(item.key, origin.id, session.id, item.body);
+    });
+    this.sends.set(session.id, pending);
+    void pending.catch((error) => this.errors.set(session.id, String(error))).finally(() => {
+      if (this.sends.get(session.id) === pending) this.sends.delete(session.id);
+      void this.flushOutputs().catch((error) => this.errors.set(session.id, String(error)));
+    });
+  }
+  flushOutputs() {
+    if (this.outputFlush) {
+      this.flushAgain = true;
+      return this.outputFlush;
+    }
+    if (this.closed || this.stop.signal.aborted || !this.leaseActive()) return Promise.resolve();
+    const work = (async () => {
+      this.flushAgain = false;
+      let cursor = 0;
+      for (; ; ) {
+        const rows = this.inbox.queuedReplies(100, cursor);
+        if (!rows.length) return;
+        const groups = /* @__PURE__ */ new Map();
+        for (const row of rows) {
+          cursor = row.seq;
+          const group = groups.get(row.sessionId) ?? [];
+          group.push(row);
+          groups.set(row.sessionId, group);
+        }
+        await Promise.all(
+          [...groups].map(async ([sessionId, group]) => {
+            const previous = this.sends.get(sessionId) ?? Promise.resolve();
+            const pending = previous.catch(() => {
+            }).then(async () => {
+              for (const row of group) {
+                if (!this.leaseActive() || !this.owns({ id: sessionId, session: { id: sessionId } })) return;
+                const receipt = this.inbox.receipt(row.sourceId);
+                if (!receipt || !row.draft) continue;
+                try {
+                  await this.deliver(
+                    this.inbox,
+                    { id: row.sourceId, receipt },
+                    sessionId,
+                    row.callId,
+                    row.draft,
+                    this.signalFor(sessionId)
+                  );
+                  this.errors.delete(sessionId);
+                } catch (error) {
+                  this.errors.set(sessionId, String(error));
+                  return;
+                }
+              }
+            });
+            this.sends.set(sessionId, pending);
+            try {
+              await pending;
+            } finally {
+              if (this.sends.get(sessionId) === pending) this.sends.delete(sessionId);
+            }
+          })
+        );
+        if (rows.length < 100) return;
+      }
+    })().finally(() => {
+      if (this.outputFlush === work) this.outputFlush = void 0;
+      if (this.flushAgain && !this.closed && !this.stop.signal.aborted)
+        void this.flushOutputs().catch((error) => this.errors.set("delivery", String(error)));
+    });
+    this.outputFlush = work;
+    return work;
+  }
+  resolveReply(id3, revision, decision) {
+    const reply = this.inbox.pendingReply(id3);
+    if (!reply) throw new ChannelError("\u56DE\u590D\u5DF2\u7ED3\u7B97\uFF0C\u8BF7\u5237\u65B0\u67E5\u770B", 409);
+    if (this.sends.has(reply.sessionId)) throw new ChannelError("\u6B64\u4EFB\u52A1\u4ECD\u5728\u4EA4\u4ED8\uFF0C\u8BF7\u7B49\u5F85\u771F\u5B9E\u53D1\u9001\u7ED3\u675F", 409);
+    this.inbox.resolveReply(id3, revision, decision);
+    void this.flushOutputs().catch((error) => this.errors.set(reply.sessionId, String(error)));
+  }
+  origin(agent, allowChild = false) {
+    if (!this.owns(agent)) throw new ChannelError("\u4EFB\u52A1\u6388\u6743\u5DF2\u5931\u6548", 403);
+    const rootId = this.memory().inspect(agent.id).binding.channel.task.rootSessionId;
+    if (!allowChild && agent.id !== rootId) throw new ChannelError("\u5B50\u667A\u80FD\u4F53\u8BF7\u5C06\u7ED3\u679C\u4EA4\u7ED9\u4EFB\u52A1\u4E3B\u4F1A\u8BDD", 403);
+    const source = this.rootSource(rootId);
+    if (!source) throw new ChannelError("\u4EFB\u52A1\u539F\u59CB\u8BF7\u6C42\u672A\u786E\u8BA4", 409);
+    return source;
+  }
+  async stopTask(taskId) {
+    if (!this.rootSource(taskId) && !this.prepared.has(taskId)) throw new ChannelError("\u4EFB\u52A1\u4E0D\u5B58\u5728", 404);
+    this.stoppingRoots.add(taskId);
+    this.outputControllers.get(taskId)?.abort(Error("\u4EFB\u52A1\u4EA4\u4ED8\u5DF2\u505C\u6B62"));
+    this.inbox.cancelTarget(taskId);
+    this.inbox.cancelQueuedReplies(taskId);
+    this.creation.get(taskId)?.abort(Error("\u4EFB\u52A1\u5DF2\u505C\u6B62"));
+    try {
+      await this.opening.get(taskId)?.catch(() => void 0);
+      const actors = [...this.actors.values()].filter(
+        (agent) => this.memory().inspect(agent.id).binding?.channel?.task?.rootSessionId === taskId
+      );
+      await stopNativeTaskActors(this.host, actors, this.stopping);
+      await this.sends.get(taskId)?.catch(() => void 0);
+    } finally {
+      this.stoppingRoots.delete(taskId);
+    }
+  }
+  signalFor(taskId) {
+    const controller = this.outputControllers.get(taskId);
+    return controller ? AbortSignal.any([this.stop.signal, controller.signal]) : this.stop.signal;
+  }
+  async stopForRequester(taskId, conversationId, requesterId) {
+    const source = typeof taskId === "string" ? this.rootSource(taskId) : void 0;
+    if (!source || source.receipt.source.conversationId !== conversationId || source.receipt.source.actorId !== requesterId || !this.authorized({ event: source.receipt.source, recipient: source.receipt.recipient }))
+      throw new ChannelError("\u4EFB\u52A1\u4E0D\u5C5E\u4E8E\u5F53\u524D\u6210\u5458\u548C\u804A\u5929\uFF0C\u6216\u539F\u4EFB\u52A1\u6388\u6743\u5DF2\u53D8\u5316", 403);
+    await this.stopTask(taskId);
+  }
+  refreshAuthorization() {
+    for (const agent of this.actors.values()) {
+      const channel = this.memory().inspect(agent.id).binding?.channel;
+      if (channel?.task?.rootSessionId !== agent.id || this.stoppingRoots.has(agent.id) || this.outputControllers.get(agent.id)?.signal.aborted || this.owns(agent))
+        continue;
+      void this.stopTask(agent.id).catch((error) => this.errors.set(agent.id, String(error)));
+    }
+    this.dispatch.schedule();
+  }
+  status(filter) {
+    const records = this.memory().channelBindings(this.account.accountId, "feishu").filter(
+      (r) => r.channel.task?.rootSessionId === r.sessionId && (!filter || r.channel.conversationId === filter.conversationId && r.channel.task.requesterId === filter.requesterId)
+    );
+    return {
+      total: records.length,
+      partial: records.length > 100,
+      records: records.slice(-100).reverse().map((r) => ({
+        taskId: r.sessionId,
+        requesterId: r.channel.task.requesterId,
+        conversationId: r.channel.conversationId,
+        personaId: r.personaId,
+        state: get5(this.host, "agents").get(r.sessionId)?.status ?? "stored",
+        paused: this.outputControllers.get(r.sessionId)?.signal.aborted === true,
+        authorized: this.owns({ id: r.sessionId, session: { id: r.sessionId } })
+      })),
+      // Account-wide diagnostics are local UI data, never exported to a channel participant.
+      ...!filter ? {
+        errors: [...this.errors].map(([id3, error]) => ({ id: id3, error })),
+        receipts: this.inbox.counts(),
+        queuedReplies: this.inbox.queuedReplies(20),
+        replies: this.inbox.pendingReplies(20),
+        connected: this.leaseActive(),
+        receptionPaused: this.receptionPaused,
+        pendingInteractions: this.interactions.list()
+      } : {}
+    };
+  }
+  dispose() {
+    if (this.closed) return Promise.resolve();
+    if (this.disposal) return this.disposal;
+    const work = this.finishDispose().finally(() => {
+      if (this.disposal === work) this.disposal = void 0;
+    });
+    this.disposal = work;
+    return work;
+  }
+  async finishDispose() {
+    this.stop.abort(Error("\u6E20\u9053\u4EFB\u52A1\u63A5\u5165\u5DF2\u505C\u6B62"));
+    this.interactions.dispose();
+    await this.recovery?.catch(() => void 0);
+    await this.dispatch.dispose();
+    await Promise.allSettled([...this.opening.values()]);
+    await stopNativeTaskActors(this.host, [...this.actors.values()], this.stopping);
+    const settled = await Promise.allSettled([...this.handles.values()].map((h) => h.dispose()));
+    await Promise.allSettled([...this.sends.values()]);
+    if (settled.some((r) => r.status === "rejected")) throw new ChannelError("\u90E8\u5206\u4EFB\u52A1\u672A\u5B8C\u6210\u505C\u6B62", 503);
+    this.inbox.close();
+    this.closed = true;
   }
 };
 
@@ -4215,7 +4430,7 @@ var hash3 = (value) => createHash6("sha256").update(JSON.stringify(value)).diges
 var get7 = (ctx, key) => ctx.get ? ctx.get(key) : ctx[key];
 var pathKey = (value) => resolve3(value).replaceAll("\\", "/").toLowerCase();
 var FeishuChannel = class {
-  constructor(host, account, current, directory) {
+  constructor(host, account, current, directory, tasks) {
     this.host = host;
     this.account = account;
     this.current = current;
@@ -4233,37 +4448,8 @@ var FeishuChannel = class {
       prepare: (row, signal) => this.prepare(row, signal),
       failed: (row, error) => this.failures.set(row?.id ?? "storage", error instanceof Error ? error.message : "\u6295\u9012\u5931\u8D25")
     });
-    this.tasks = new FeishuTasks(
-      host,
-      this.account,
-      current,
-      () => !!this.lease && this.allowed(),
-      directory,
-      this.epoch,
-      (inbox, origin, session, key, text, signal) => this.deliverReply(inbox, origin, session, key, text, signal)
-    );
-    this.interactions = new ChannelInteractions(
-      async (_chat, text, source) => {
-        if (!source) throw new ChannelError("\u8BF7\u6C42\u4EA4\u4ED8\u7F3A\u5C11\u539F\u751F\u4F1A\u8BDD", 409);
-        const agent = get7(this.host, "agents").get(source.sessionId), origin = this.tasks.origin(agent, true);
-        return this.deliverReply(
-          this.tasks.inbox,
-          origin,
-          origin.receipt.claim.sessionId,
-          "interaction:" + source.sessionId + ":" + source.interactionId,
-          text,
-          source.signal ? AbortSignal.any([source.signal, this.tasks.signalFor(origin.receipt.claim.sessionId)]) : this.tasks.signalFor(origin.receipt.claim.sessionId)
-        );
-      },
-      10 * 6e4,
-      {
-        label: "\u98DE\u4E66",
-        maxCharacters: 4e3,
-        remoteAnswers: true,
-        plainAnswers: false,
-        error: (message2, status) => new ChannelError(message2, status)
-      }
-    );
+    this.tasks = tasks;
+    this.interactions = tasks.interactions;
     this.controls = new FeishuControls(
       host,
       this.inbox,
@@ -4307,6 +4493,9 @@ var FeishuChannel = class {
   checked = { admitted: 0, missing: 0, errors: 0 };
   memory() {
     return get7(this.host, "pxMemoryChannels");
+  }
+  connected() {
+    return !!this.lease && this.allowed();
   }
   allowed(row) {
     const current = this.current();
@@ -4728,8 +4917,6 @@ var FeishuChannel = class {
   async finishDispose() {
     if (this.closed) return;
     this.requestStop();
-    this.interactions.dispose();
-    await this.tasks.dispose();
     await this.controls.drain();
     await this.sendQueue.drain();
     await this.dispatch.dispose();
@@ -4753,6 +4940,7 @@ var FeishuChannel = class {
 };
 
 // packages/dsh-px-workbench/src/channels.ts
+import { randomUUID as randomUUID4 } from "node:crypto";
 function registerChannels(ctx) {
   ctx.inject(
     ["pxAudiencePolicies"],
@@ -4769,19 +4957,19 @@ function registerChannels(ctx) {
       "channels: public execution policy"
     )
   );
-  const runtimes = /* @__PURE__ */ new Map(), failures = /* @__PURE__ */ new Map();
+  const runtimes = /* @__PURE__ */ new Map(), tasks = /* @__PURE__ */ new Map(), failures = /* @__PURE__ */ new Map();
   let settings, available = false, im, memory;
   let supervisor, synchronise;
   ctx.on("px/channels-settings", () => synchronise?.());
   ctx.on(
     "agent/created",
     ({ agent }) => {
-      for (const runtime of runtimes.values()) runtime.tasks.created(agent);
+      for (const task of tasks.values()) task.created(agent);
     },
     { prepend: true }
   );
   ctx.on("session/event", (session, event) => {
-    for (const runtime of runtimes.values()) runtime.tasks.event(session, event);
+    for (const task of tasks.values()) task.event(session, event);
   });
   for (const [event, kind] of [
     ["approval/request", "approval"],
@@ -4790,14 +4978,14 @@ function registerChannels(ctx) {
     ctx.on(
       event,
       (request, next) => {
-        const runtime = [...runtimes.values()].find((row) => row.tasks.owns(request.agent));
-        return runtime ? runtime.interaction(kind, request, next) : next();
+        const task = [...tasks.values()].find((row) => row.owns(request.agent));
+        return task ? task.interaction(kind, request, next) : next();
       },
       { prepend: true }
     );
   ctx.provide("pxChannels", {
     version: 1,
-    taskAllowed: (agent) => [...runtimes.values()].some((row) => row.tasks.owns(agent)),
+    taskAllowed: (agent) => [...tasks.values()].some((row) => row.owns(agent)),
     taskAuthority: (agent, pending) => [...runtimes.values()].find((row) => row.owns(agent))?.taskAuthority(agent, pending),
     tool: (name2, args, exec) => {
       const runtime = [...runtimes.values()].find((row) => row.owns(exec.agent));
@@ -4818,7 +5006,6 @@ function registerChannels(ctx) {
   ctx.inject(
     [
       "configEditor",
-      "dshIm",
       "pxMemoryChannels",
       "pxPersonaResources",
       "agents",
@@ -4832,13 +5019,12 @@ function registerChannels(ctx) {
       "workspaceRegistry"
     ],
     async (host) => {
-      const ownSettings = new NativeChannelSettings(host.configEditor), ownIm = host.dshIm;
+      const ownSettings = new NativeChannelSettings(host.configEditor);
       const home = process.env.DSH_HOME;
       if (!home) {
         failures.set("configuration", "DSH_HOME \u672A\u8BBE\u7F6E");
         return;
       }
-      im = ownIm;
       memory = host.pxMemoryChannels;
       let preset;
       try {
@@ -4871,47 +5057,120 @@ function registerChannels(ctx) {
         failures.set("preset", String(error));
         return;
       }
-      const current = new ChannelSupervisor(
-        runtimes,
-        (account) => new FeishuChannel(
-          host,
-          account,
-          () => {
-            const latest = ownSettings.read(), value = latest.configuration.accounts.find((row) => row.accountId === account.accountId);
-            return value && latest.componentEnabled ? value : void 0;
-          },
-          join4(home, "storages", "dsh-px-channels")
-        ),
-        (id3, error) => failures.set(id3, error instanceof Error ? error.message : "\u6E20\u9053\u64CD\u4F5C\u672A\u5B8C\u6210"),
-        (id3) => failures.delete(id3)
-      );
+      const directory = join4(home, "storages", "dsh-px-channels");
+      const currentAccount = (id3) => {
+        const latest = ownSettings.read();
+        return latest.componentEnabled ? latest.configuration.accounts.find((row) => row.accountId === id3) : void 0;
+      };
+      let transportSync;
+      let closing = false;
+      const acquisitions = /* @__PURE__ */ new Map();
+      const acquire = (account) => {
+        const pending = acquisitions.get(account.accountId);
+        if (pending) return pending.then((task) => task.matches(account) ? task : acquire(account));
+        const work = (async () => {
+          if (closing) throw new ChannelError("\u4EFB\u52A1\u534F\u8C03\u5668\u6B63\u5728\u505C\u6B62", 409);
+          const latest = currentAccount(account.accountId);
+          if (!latest?.enabled || latest.fingerprint !== account.fingerprint || latest.routeRevision !== account.routeRevision || latest.personaId !== account.personaId)
+            throw new ChannelError("\u6E20\u9053\u914D\u7F6E\u5DF2\u88AB\u540E\u7EED\u4FEE\u6539\u53D6\u4EE3", 409);
+          let task = tasks.get(account.accountId);
+          if (task && !task.matches(account)) {
+            await task.dispose();
+            tasks.delete(account.accountId);
+            task = void 0;
+          }
+          if (closing) throw new ChannelError("\u4EFB\u52A1\u534F\u8C03\u5668\u6B63\u5728\u505C\u6B62", 409);
+          if (!task) {
+            task = new FeishuTasks(
+              host,
+              structuredClone(account),
+              () => currentAccount(account.accountId),
+              () => runtimes.get(account.accountId)?.connected() === true,
+              directory,
+              randomUUID4(),
+              (inbox, origin, session, key, text, signal) => {
+                const channel = runtimes.get(account.accountId);
+                if (!channel?.connected()) throw new ChannelError("\u6E20\u9053\u6682\u4E0D\u53EF\u7528\uFF0C\u7ED3\u679C\u4FDD\u7559\u5F85\u53D1", 503);
+                return channel.deliverReply(inbox, origin, session, key, text, signal);
+              }
+            );
+            tasks.set(account.accountId, task);
+          }
+          return task;
+        })().finally(() => {
+          if (acquisitions.get(account.accountId) === work) acquisitions.delete(account.accountId);
+        });
+        acquisitions.set(account.accountId, work);
+        return work;
+      };
       const sync = () => {
         try {
-          const next = ownSettings.read();
           failures.delete("configuration");
-          current.update(next.componentEnabled ? next.configuration.accounts : []);
+          for (const task of tasks.values()) task.refreshAuthorization();
+          transportSync?.();
+          const next = ownSettings.read();
+          if (next.componentEnabled)
+            for (const account of next.configuration.accounts.filter((row) => row.enabled))
+              void acquire(account).catch((error) => failures.set(account.accountId, String(error)));
         } catch (error) {
           failures.set("configuration", String(error));
-          current.update([]);
         }
       };
-      supervisor = current;
       synchronise = sync;
-      available = true;
       host.effect(
         () => async () => {
-          if (supervisor === current) {
-            supervisor = void 0;
+          closing = true;
+          if (synchronise === sync) {
             synchronise = void 0;
-            available = false;
-            im = void 0;
             memory = void 0;
           }
-          await current.close();
+          await Promise.allSettled([...acquisitions.values()]);
+          const settled = await Promise.allSettled([...tasks.values()].map((task) => task.dispose()));
+          if (settled.some((r) => r.status === "rejected"))
+            throw new ChannelError("\u90E8\u5206\u4EFB\u52A1\u534F\u8C03\u5668\u5C1A\u672A\u505C\u6B62", 503);
+          tasks.clear();
           if (typeof preset === "function") await preset();
         },
-        "channels: native consumer and Agent ownership"
+        "channels: persistent native task ownership"
       );
+      host.inject(["dshIm"], (transportHost) => {
+        im = transportHost.dshIm;
+        const current = new ChannelSupervisor(
+          runtimes,
+          async (account) => {
+            const task = await acquire(account);
+            return new FeishuChannel(
+              transportHost,
+              account,
+              () => currentAccount(account.accountId),
+              directory,
+              task
+            );
+          },
+          (id3, error) => failures.set(id3, error instanceof Error ? error.message : "\u6E20\u9053\u64CD\u4F5C\u672A\u5B8C\u6210"),
+          (id3) => failures.delete(id3)
+        );
+        const syncTransport = () => {
+          const next = ownSettings.read();
+          current.update(next.componentEnabled ? next.configuration.accounts : []);
+        };
+        supervisor = current;
+        transportSync = syncTransport;
+        available = true;
+        transportHost.effect(
+          () => async () => {
+            if (supervisor === current) {
+              supervisor = void 0;
+              transportSync = void 0;
+              available = false;
+              im = void 0;
+            }
+            await current.close();
+          },
+          "channels: transport-only ownership"
+        );
+        syncTransport();
+      });
       sync();
     }
   );
@@ -4961,6 +5220,7 @@ function registerChannels(ctx) {
                 accounts,
                 discoveryError,
                 runtimes: [...runtimes.values()].map((runtime) => runtime.status()),
+                activities: [...tasks].map(([accountId, task]) => ({ accountId, ...task.status() })),
                 failures: [...failures].map(([id3, error]) => ({ id: id3, error }))
               });
             }
@@ -4973,16 +5233,17 @@ function registerChannels(ctx) {
               return send(res, 200, saved);
             }
             if (body.type === "answer-interaction" || body.type === "stop-task") {
-              const runtime = runtimes.get(body.accountId);
-              if (!runtime) throw new ChannelError("\u6B64\u6E20\u9053\u672A\u8FD0\u884C", 409);
+              const task = tasks.get(body.accountId);
+              if (!task) throw new ChannelError("\u6B64\u4EFB\u52A1\u534F\u8C03\u5668\u672A\u8FD0\u884C", 409);
               if (body.type === "answer-interaction")
-                return send(res, 200, { message: runtime.answerInteraction(body) });
+                return send(res, 200, { message: task.answerInteraction(body) });
               if (typeof body.taskId !== "string") throw new ChannelError("\u4EFB\u52A1\u6807\u8BC6\u65E0\u6548");
-              await runtime.tasks.stopTask(body.taskId);
+              await task.stopTask(body.taskId);
               return send(res, 200, { stopped: true });
             }
             if (body.type === "stop") {
               if (typeof body.accountId !== "string") throw new ChannelError("\u8D26\u53F7\u65E0\u6548");
+              await tasks.get(body.accountId)?.pause();
               if (supervisor) await supervisor.pause(body.accountId);
               return send(res, 200, { stopped: true, persistent: false });
             }
@@ -4992,7 +5253,16 @@ function registerChannels(ctx) {
                 (row) => row.accountId === body.accountId && row.enabled
               ))
                 throw new ChannelError("\u8D26\u53F7\u63A5\u6536\u672A\u542F\u7528\u6216\u670D\u52A1\u672A\u5C31\u7EEA", 409);
+              tasks.get(body.accountId)?.resumeReception();
               supervisor.retry(body.accountId);
+              return send(res, 200, { accepted: true });
+            }
+            if (body.type === "resolve-task-reply") {
+              const task = tasks.get(body.accountId);
+              if (!task) throw new ChannelError("\u4EFB\u52A1\u534F\u8C03\u5668\u672A\u8FD0\u884C", 409);
+              if (typeof body.id !== "string" || typeof body.revision !== "string" || !["sent", "release"].includes(body.decision))
+                throw new ChannelError("\u56DE\u590D\u6838\u5BF9\u53C2\u6570\u65E0\u6548");
+              task.resolveReply(body.id, body.revision, body.decision);
               return send(res, 200, { accepted: true });
             }
             if (["reconcile", "resolve-reply", "retry"].includes(body.type)) {
@@ -5062,7 +5332,7 @@ var AudiencePolicies = class {
 import { join as join6 } from "node:path";
 
 // packages/dsh-px-workbench/src/persona-mail.ts
-import { randomUUID as randomUUID4 } from "node:crypto";
+import { randomUUID as randomUUID5 } from "node:crypto";
 import { mkdirSync as mkdirSync5 } from "node:fs";
 import { join as join5, resolve as resolve4 } from "node:path";
 
@@ -5249,7 +5519,7 @@ var NativePersonaMail = class {
     }
     if (this.active.size >= 4 || [...this.active.values()].filter((r) => r.envelope.sender.sessionId === sender.sessionId).length >= 2)
       throw Error("\u4EBA\u683C\u901A\u4FE1\u6B63\u5728\u5904\u7406\uFF0C\u8BF7\u5148\u8BFB\u53D6\u5DF2\u6709\u4F5C\u4E1A\u7ED3\u679C");
-    const id3 = randomUUID4(), receiverSessionId = "px-persona-mail-" + id3, envelope = {
+    const id3 = randomUUID5(), receiverSessionId = "px-persona-mail-" + id3, envelope = {
       id: id3,
       requestId: args.requestId,
       sender,

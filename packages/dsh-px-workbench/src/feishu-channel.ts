@@ -61,7 +61,8 @@ export class FeishuChannel {
     private readonly host: any,
     private readonly account: ChannelAccount,
     private readonly current: () => ChannelAccount | undefined,
-    directory: string
+    directory: string,
+    tasks: FeishuTasks
   ) {
     this.account = structuredClone(account)
     this.inbox = new ChannelInbox(
@@ -78,41 +79,8 @@ export class FeishuChannel {
       failed: (row, error) =>
         this.failures.set(row?.id ?? 'storage', error instanceof Error ? error.message : '投递失败')
     })
-    this.tasks = new FeishuTasks(
-      host,
-      this.account,
-      current,
-      () => !!this.lease && this.allowed(),
-      directory,
-      this.epoch,
-      (inbox, origin, session, key, text, signal) =>
-        this.deliverReply(inbox, origin, session, key, text, signal)
-    )
-    this.interactions = new ChannelInteractions(
-      async (_chat, text, source) => {
-        if (!source) throw new ChannelError('请求交付缺少原生会话', 409)
-        const agent = get(this.host, 'agents').get(source.sessionId),
-          origin = this.tasks.origin(agent, true)
-        return this.deliverReply(
-          this.tasks.inbox,
-          origin,
-          origin.receipt.claim!.sessionId,
-          'interaction:' + source.sessionId + ':' + source.interactionId,
-          text,
-          source.signal
-            ? AbortSignal.any([source.signal, this.tasks.signalFor(origin.receipt.claim!.sessionId)])
-            : this.tasks.signalFor(origin.receipt.claim!.sessionId)
-        )
-      },
-      10 * 60_000,
-      {
-        label: '飞书',
-        maxCharacters: 4000,
-        remoteAnswers: true,
-        plainAnswers: false,
-        error: (message, status) => new ChannelError(message, status)
-      }
-    )
+    this.tasks = tasks
+    this.interactions = tasks.interactions
     this.controls = new FeishuControls(
       host,
       this.inbox,
@@ -127,6 +95,9 @@ export class FeishuChannel {
   }
   private memory() {
     return get(this.host, 'pxMemoryChannels')
+  }
+  connected(): boolean {
+    return !!this.lease && this.allowed()
   }
   private allowed(row?: PendingChannelMessage): boolean {
     const current = this.current()
@@ -511,7 +482,7 @@ export class FeishuChannel {
       signal
     )
   }
-  private deliverReply(
+  deliverReply(
     inbox: ChannelInbox,
     origin: { id: string; receipt: NonNullable<ReturnType<ChannelInbox['receipt']>> },
     sessionId: string,
@@ -642,8 +613,6 @@ export class FeishuChannel {
   private async finishDispose(): Promise<void> {
     if (this.closed) return
     this.requestStop()
-    this.interactions.dispose()
-    await this.tasks.dispose()
     await this.controls.drain()
     await this.sendQueue.drain()
     await this.dispatch.dispose()

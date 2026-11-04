@@ -128,6 +128,7 @@ export class ChannelInbox {
       const replyColumns = columns('channel_replies')
       if (!replyColumns.has('draft')) db.exec('ALTER TABLE channel_replies ADD COLUMN draft TEXT')
       if (!replyColumns.has('epoch')) db.exec('ALTER TABLE channel_replies ADD COLUMN epoch TEXT')
+      if (!replyColumns.has('call_key')) db.exec('ALTER TABLE channel_replies ADD COLUMN call_key TEXT')
       const identity = JSON.stringify(this.owner),
         existing = db.prepare("SELECT value FROM channel_meta WHERE key='owner'").get()?.value,
         schema = db.prepare("SELECT value FROM channel_meta WHERE key='schema'").get()?.value
@@ -471,13 +472,51 @@ export class ChannelInbox {
   beginControlReply(sourceId: string, text: string, epoch: string) {
     return this.startReply('control-response', sourceId, 'control:' + sourceId, text, epoch, true)
   }
+  /** Durable, never-attempted output. Only beginReply may move it into sending. */
+  queueReply(callId: string, sourceId: string, sessionId: string, text: string) {
+    return this.startReply(callId, sourceId, sessionId, text, undefined, false, true)
+  }
+  queuedReplies(limit = 100, afterSequence = 0) {
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 100 ||
+      !Number.isSafeInteger(afterSequence) ||
+      afterSequence < 0
+    )
+      throw Error('回复分页无效')
+    return this.db
+      .prepare(
+        "SELECT rowid AS seq,* FROM channel_replies WHERE phase='queued' AND rowid>? ORDER BY rowid LIMIT ?"
+      )
+      .all(afterSequence, limit)
+      .map((r) => ({ ...this.replyView(r), callId: String(r.call_key) }))
+  }
+  cancelQueuedReplies(sessionId: string): void {
+    this.db
+      .prepare("UPDATE channel_replies SET phase='cancelled',draft=NULL WHERE session=? AND phase='queued'")
+      .run(sessionId)
+  }
+  cancelQueuedReply(sessionId: string, sourceId: string, callId: string): void {
+    this.db
+      .prepare("UPDATE channel_replies SET phase='cancelled',draft=NULL WHERE id=? AND phase='queued'")
+      .run(hash([sessionId, sourceId, callId]))
+  }
+  retireQueuedInteractions(): void {
+    this.db
+      .prepare(
+        "UPDATE channel_replies SET phase='cancelled',draft=NULL WHERE phase='queued' AND call_key LIKE 'interaction:%'"
+      )
+      .run()
+  }
   private startReply(
     callId: string,
     sourceId: string,
     sessionId: string,
     text: string,
     epoch: string | undefined,
-    control: boolean
+    control: boolean,
+    queued = false
   ): { id: string; phase: string; result?: unknown } {
     if (!id(callId) || !id(sessionId) || typeof text !== 'string' || !text.trim() || text.length > 4000)
       throw Error('渠道回复参数无效')
@@ -497,11 +536,13 @@ export class ChannelInbox {
       const previous = this.db.prepare('SELECT digest,phase,result FROM channel_replies WHERE id=?').get(key)
       if (previous) {
         if (previous.digest !== digest) throw Error('同一原生调用的回复内容已变化')
-        this.db.exec('COMMIT')
-        return {
-          id: key,
-          phase: String(previous.phase),
-          ...(previous.result ? { result: JSON.parse(String(previous.result)) } : {})
+        if (previous.phase !== 'queued' || queued) {
+          this.db.exec('COMMIT')
+          return {
+            id: key,
+            phase: String(previous.phase),
+            ...(previous.result ? { result: JSON.parse(String(previous.result)) } : {})
+          }
         }
       }
       const blocked = control
@@ -521,16 +562,42 @@ export class ChannelInbox {
                 "SELECT id FROM channel_replies WHERE chat=? AND phase IN ('sending','uncertain') LIMIT 1"
               )
               .get(source.source.conversationId)
-      if (blocked) throw Error('此聊天有回复尚未确认，请先核对，不要重复发送')
+      if (blocked && !queued) throw Error('此聊天有回复尚未确认，请先核对，不要重复发送')
+      if (previous) {
+        this.db
+          .prepare("UPDATE channel_replies SET phase='sending',epoch=? WHERE id=? AND phase='queued'")
+          .run(epoch ?? null, key)
+        this.db.exec('COMMIT')
+        return { id: key, phase: 'new' }
+      }
       if (Number(this.db.prepare('SELECT count(*) n FROM channel_replies').get()!.n) >= this.bounds.records)
         throw Error('回复凭据容量已满，未丢弃原记录')
+      const retained = Number(
+        this.db
+          .prepare(
+            'SELECT coalesce(sum(length(cast(draft AS BLOB))),0) n FROM channel_replies WHERE draft IS NOT NULL'
+          )
+          .get()!.n
+      )
+      if (retained + Buffer.byteLength(text) > this.bounds.pendingBytes)
+        throw Error('待交付正文容量已满，原始结果仍在原生会话中')
       this.db
         .prepare(
-          "INSERT INTO channel_replies(id,chat,source,session,digest,phase,draft,epoch) VALUES(?,?,?,?,?,'sending',?,?)"
+          'INSERT INTO channel_replies(id,chat,source,session,digest,phase,draft,epoch,call_key) VALUES(?,?,?,?,?,?,?,?,?)'
         )
-        .run(key, source.source.conversationId, sourceId, sessionId, digest, text, epoch ?? null)
+        .run(
+          key,
+          source.source.conversationId,
+          sourceId,
+          sessionId,
+          digest,
+          queued ? 'queued' : 'sending',
+          text,
+          epoch ?? null,
+          callId
+        )
       this.db.exec('COMMIT')
-      return { id: key, phase: 'new' }
+      return { id: key, phase: queued ? 'queued' : 'new' }
     } catch (error) {
       this.db.exec('ROLLBACK')
       throw error

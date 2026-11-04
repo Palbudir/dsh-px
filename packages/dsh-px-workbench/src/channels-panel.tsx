@@ -3,6 +3,7 @@ import { requestJson } from '../../shared/client-http'
 import { defaultChannelAttention } from '../../shared/channel-attention'
 import type { ChannelAccount, ChannelConfiguration } from './channel-settings'
 import type { FeishuChannel } from './feishu-channel'
+import type { FeishuTasks } from './feishu-tasks'
 import type { createCapabilities } from '../../shared/client-capabilities'
 import { PersonaMailPanel } from './persona-mail-panel'
 import { ChannelInteractionPanel } from '../../shared/channel-interactions-panel'
@@ -21,6 +22,7 @@ interface View {
   personas: Array<{ id: string; name: string }>
   accounts: Array<{ botId: string; channel: string }>
   runtimes: Runtime[]
+  activities: Array<ReturnType<FeishuTasks['status']> & { accountId: string }>
   failures: Array<{ id: string; error: string }>
   discoveryError?: string
 }
@@ -295,6 +297,7 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
       id: string
       revision: string
       decision: 'sent' | 'release'
+      task?: boolean
     } | null>(null)
   const alive = useRef(true),
     sequence = useRef(0)
@@ -477,6 +480,7 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
           )}
           {view.configuration.accounts.map((account) => {
             const runtime = view.runtimes.find((r) => r.accountId === account.accountId)
+            const activity = view.activities.find((r) => r.accountId === account.accountId)
             return (
               <section
                 key={account.accountId}
@@ -484,21 +488,29 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
                 aria-label={'飞书账号 ' + account.accountId}
               >
                 <h3>飞书 · {account.accountId}</h3>
-                {runtime && (
+                {activity && (
                   <ChannelInteractionPanel
-                    items={runtime.pendingInteractions}
+                    items={activity.pendingInteractions ?? []}
                     answer={(input) =>
                       command({ type: 'answer-interaction', accountId: account.accountId, ...input })
                     }
                   />
                 )}
-                {!!runtime?.tasks.records.length && (
+                {!!activity?.records.length && (
                   <details>
                     <summary>
-                      原生任务（{runtime.tasks.total}
-                      {runtime.tasks.partial ? '，显示最近 100 项' : ''}）
+                      原生任务（{activity.total}
+                      {activity.partial ? '，显示最近 100 项' : ''}）
                     </summary>
-                    {runtime.tasks.records.map((task: any) => (
+                    {!activity.connected && (
+                      <p role="status">渠道连接不可用；已授权的本机工作可继续，结果保留待发。</p>
+                    )}
+                    {!!activity.queuedReplies?.length && (
+                      <p>
+                        有 {activity.queuedReplies.length} 条尚未发送的任务结果或通知，连接恢复后继续交付。
+                      </p>
+                    )}
+                    {activity.records.map((task: any) => (
                       <div key={task.taskId} className="px-card">
                         <p>
                           {task.conversationId} · {task.requesterId} ·{' '}
@@ -531,7 +543,77 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
                         </div>
                       </div>
                     ))}
-                    {runtime.tasks.errors?.map((row) => (
+                    {activity.replies?.map((reply) => (
+                      <div className="px-card" key={reply.id}>
+                        <p>
+                          任务回复{reply.phase === 'sending' ? '发送尚未结算' : '发送结果不明'} ·{' '}
+                          {reply.conversationId}
+                        </p>
+                        <pre style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', font: 'inherit' }}>
+                          {reply.draft ?? '请查看原生会话中的结果。'}
+                        </pre>
+                        <div className="px-actions">
+                          <button
+                            disabled={busy || !nav.openSession}
+                            onClick={() => openSession(reply.sessionId)}
+                          >
+                            查看任务会话
+                          </button>
+                          <button
+                            disabled={busy}
+                            onClick={() =>
+                              setConfirm({
+                                accountId: account.accountId,
+                                id: reply.id,
+                                revision: reply.revision,
+                                decision: 'sent',
+                                task: true
+                              })
+                            }
+                          >
+                            确认已发送
+                          </button>
+                          <button
+                            disabled={busy}
+                            onClick={() =>
+                              setConfirm({
+                                accountId: account.accountId,
+                                id: reply.id,
+                                revision: reply.revision,
+                                decision: 'release',
+                                task: true
+                              })
+                            }
+                          >
+                            允许后续新回复
+                          </button>
+                        </div>
+                        {confirm?.task && confirm.id === reply.id && (
+                          <div role="group" aria-label="确认任务回复核对">
+                            <p>
+                              {confirm.decision === 'sent'
+                                ? '记录为人工确认已发送，不会补发。'
+                                : '原回复仍未确认；仅解除后续输出的阻塞，不会补发旧内容。旧回复仍可能稍后送达。'}
+                            </p>
+                            <button
+                              disabled={busy}
+                              onClick={() =>
+                                void run(async () => {
+                                  await command({ type: 'resolve-task-reply', ...confirm })
+                                  setConfirm(null)
+                                })
+                              }
+                            >
+                              确认记录
+                            </button>
+                            <button disabled={busy} onClick={() => setConfirm(null)}>
+                              取消
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                    {activity.errors?.map((row) => (
                       <p key={row.id} role="alert">
                         {row.error}
                       </p>

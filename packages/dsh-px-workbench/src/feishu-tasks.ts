@@ -8,6 +8,8 @@ import { nativeModelSelection } from '../../shared/native-model-selection'
 import { stopNativeTaskActors } from '../../shared/native-task-stop'
 import { installChannelTaskAudience } from './channel-task-audience'
 import { ChannelError, type ChannelAccount } from './channel-settings'
+import { ChannelInteractions } from '../../shared/channel-interactions'
+import { reconcileChannelAdmission } from '../../shared/channel-admission'
 
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const get = (ctx: any, key: string) => (ctx.get ? ctx.get(key) : ctx[key])
@@ -22,6 +24,7 @@ export interface TaskRequest {
 export class FeishuTasks {
   readonly inbox: ChannelInbox
   readonly dispatch: ChannelDispatch
+  readonly interactions: ChannelInteractions
   private readonly handles = new Map<string, any>()
   private readonly actors = new Map<string, any>()
   private readonly opening = new Map<string, Promise<any>>()
@@ -37,6 +40,9 @@ export class FeishuTasks {
   private disposal?: Promise<void>
   private recovery?: Promise<void>
   private activated = false
+  private outputFlush?: Promise<void>
+  private flushAgain = false
+  private receptionPaused = false
   constructor(
     private readonly host: any,
     private readonly account: ChannelAccount,
@@ -58,10 +64,91 @@ export class FeishuTasks {
       { provider: 'feishu', accountId: account.accountId, fingerprint: account.fingerprint }
     )
     this.dispatch = new ChannelDispatch(this.inbox, epoch, {
-      selection: (row) => (this.activated && this.authorized(row) ? 'wake' : 'hold'),
+      selection: (row) =>
+        this.activated && this.leaseActive() && !this.receptionPaused && this.authorized(row)
+          ? 'wake'
+          : 'hold',
       prepare: (row, signal) => this.prepare(row, signal),
       failed: (row, error) => this.errors.set(row?.id ?? 'storage', String(error))
     })
+    this.interactions = new ChannelInteractions(
+      async (_chat, text, source) => {
+        if (!source) throw new ChannelError('请求交付缺少原生会话', 409)
+        const origin = this.origin(get(this.host, 'agents').get(source.sessionId), true),
+          signal = source.signal ? AbortSignal.any([source.signal, this.stop.signal]) : this.stop.signal
+        const key = 'interaction:' + source.sessionId + ':' + source.interactionId
+        if (origin.receipt.phase !== 'admitted')
+          await reconcileChannelAdmission(
+            this.inbox,
+            origin.id,
+            {
+              agent: get(this.host, 'agents').get(origin.receipt.claim!.sessionId),
+              sessions: get(this.host, 'sessions')
+            },
+            signal
+          )
+        this.inbox.queueReply(key, origin.id, origin.receipt.claim!.sessionId, text)
+        const cancel = () => this.inbox.cancelQueuedReply(origin.receipt.claim!.sessionId, origin.id, key)
+        signal.addEventListener('abort', cancel, { once: true })
+        if (signal.aborted) cancel()
+        void this.flushOutputs().catch((error) => this.errors.set(source.sessionId, String(error)))
+        return { queued: true }
+      },
+      10 * 60_000,
+      {
+        label: '飞书',
+        maxCharacters: 4000,
+        remoteAnswers: true,
+        plainAnswers: false,
+        error: (message, status) => new ChannelError(message, status)
+      }
+    )
+  }
+  matches(account: ChannelAccount): boolean {
+    return (
+      !this.closed &&
+      !this.stop.signal.aborted &&
+      account.fingerprint === this.account.fingerprint &&
+      account.routeRevision === this.account.routeRevision &&
+      account.personaId === this.account.personaId
+    )
+  }
+  interaction(kind: 'approval' | 'question', request: any, next: () => Promise<unknown>) {
+    if (!this.owns(request.agent)) return next()
+    const channel = this.memory().inspect(request.agent.id).binding.channel
+    return this.interactions.request(kind, request, channel.conversationId, next, {
+      requesterId: channel.task.requesterId,
+      allowed: () => this.owns(request.agent)
+    })
+  }
+  answerInteraction(input: any) {
+    const pending = this.interactions.list().find((row) => row.id === input.id)
+    if (!pending) throw new ChannelError('请求已处理或取消', 409)
+    return this.interactions.respond(pending.chatId, input, pending.requesterId)
+  }
+  async pause(): Promise<void> {
+    this.receptionPaused = true
+    for (const controller of this.creation.values()) controller.abort(Error('渠道处理已停止'))
+    let cursor = 0
+    for (;;) {
+      const rows = this.inbox.pending(100, cursor)
+      if (!rows.length) break
+      for (const row of rows) {
+        cursor = row.seq
+        this.inbox.cancelPending(row.id)
+      }
+    }
+    await Promise.allSettled([...this.opening.values()])
+    await Promise.all(
+      [...this.actors.values()]
+        .filter((agent) => this.memory().inspect(agent.id).binding?.channel?.task?.rootSessionId === agent.id)
+        .map((agent) => this.stopTask(agent.id))
+    )
+  }
+  resumeReception(): void {
+    this.receptionPaused = false
+    this.dispatch.schedule()
+    void this.flushOutputs()
   }
   private memory() {
     return get(this.host, 'pxMemoryChannels')
@@ -69,9 +156,13 @@ export class FeishuTasks {
   /** Called only after exclusive transport ownership. Read native receipts without waking old tasks. */
   activate(): Promise<void> {
     if (this.recovery) return this.recovery
-    if (this.activated) return Promise.resolve()
+    if (this.activated) {
+      this.dispatch.schedule()
+      return this.flushOutputs()
+    }
     if (!this.leaseActive() || this.stop.signal.aborted) throw new ChannelError('渠道接收租约未就绪', 409)
     this.inbox.recoverInterrupted(this.epoch)
+    this.inbox.retireQueuedInteractions()
     const work = (async () => {
       let after = 0
       for (;;) {
@@ -103,6 +194,7 @@ export class FeishuTasks {
       this.stop.signal.throwIfAborted()
       this.activated = true
       this.dispatch.schedule()
+      await this.flushOutputs()
     })().finally(() => {
       if (this.recovery === work) this.recovery = undefined
     })
@@ -115,7 +207,6 @@ export class FeishuTasks {
     const c = this.current()
     return (
       !this.stop.signal.aborted &&
-      this.leaseActive() &&
       !!c?.enabled &&
       c.fingerprint === this.account.fingerprint &&
       c.personaId === row.recipient.personaId &&
@@ -185,7 +276,8 @@ export class FeishuTasks {
       event: { ...origin.receipt.source, text: origin.text },
       recipient: origin.receipt.recipient
     }
-    if (!this.authorized(row)) throw new ChannelError('此飞书成员没有当前任务权限', 403)
+    if (this.receptionPaused || !this.leaseActive() || !this.authorized(row))
+      throw new ChannelError('此飞书成员没有当前任务权限或渠道已停止接收', 403)
     const rootId =
       options.action === 'continue' ? options.taskId : 'px-channel-task-' + hash([origin.id, row.recipient])
     if (!rootId) throw new ChannelError('继续任务需要任务编号')
@@ -216,7 +308,8 @@ export class FeishuTasks {
     }
   }
   private async prepare(row: PendingChannelMessage, signal: AbortSignal) {
-    if (!this.authorized(row)) throw new ChannelError('任务授权已撤销', 403)
+    if (this.receptionPaused || !this.authorized(row))
+      throw new ChannelError('任务授权已撤销或接收已停止', 403)
     const id = row.recipient.executionSessionId
     if (!id) throw new ChannelError('任务缺少原生接收会话')
     let pending = this.opening.get(id)
@@ -233,7 +326,8 @@ export class FeishuTasks {
     return {
       agent,
       sessions: get(this.host, 'sessions'),
-      validate: () => this.authorized(row) && this.owns(agent) && this.matchesInput(agent, row)
+      validate: () =>
+        !this.receptionPaused && this.authorized(row) && this.owns(agent) && this.matchesInput(agent, row)
     }
   }
   private matchesInput(agent: any, row: PendingChannelMessage): boolean {
@@ -353,7 +447,6 @@ export class FeishuTasks {
           ? '任务本轮未完成（' + event.data.reason.kind + '）。执行记录保留，未自动重新执行。'
           : ''
     if (!text.trim()) return
-    const deliverySignal = this.signalFor(session.id)
     const previous = this.sends.get(session.id) ?? Promise.resolve()
     const pending = previous
       .catch(() => {})
@@ -361,6 +454,13 @@ export class FeishuTasks {
         if (!this.owns(agent)) return
         const origin = this.rootSource(session.id)
         if (!origin) throw new ChannelError('任务交付缺少原始请求', 409)
+        if (origin.receipt.phase !== 'admitted')
+          await reconcileChannelAdmission(
+            this.inbox,
+            origin.id,
+            { agent, sessions: get(this.host, 'sessions') },
+            this.stop.signal
+          )
         const chunks: string[] = []
         for (let at = 0; at < text.length;) {
           let end = Math.min(at + 3400, text.length)
@@ -368,24 +468,89 @@ export class FeishuTasks {
           chunks.push(text.slice(at, end))
           at = end
         }
-        for (const [i, part] of chunks.entries()) {
-          if (!this.owns(agent)) throw new ChannelError('任务交付授权已变化', 403)
-          await this.deliver(
-            this.inbox,
-            origin,
-            session.id,
-            `task-event:${event.seq}:${i}`,
-            (chunks.length > 1 ? `任务输出 ${i + 1}/${chunks.length}\n` : '') + part,
-            deliverySignal
-          )
-        }
+        const output = chunks.map((part, i) => ({
+          key: `task-event:${event.seq}:${i}`,
+          body: (chunks.length > 1 ? `任务输出 ${i + 1}/${chunks.length}\n` : '') + part
+        }))
+        for (const item of output) this.inbox.queueReply(item.key, origin.id, session.id, item.body)
       })
     this.sends.set(session.id, pending)
     void pending
       .catch((error) => this.errors.set(session.id, String(error)))
       .finally(() => {
         if (this.sends.get(session.id) === pending) this.sends.delete(session.id)
+        void this.flushOutputs().catch((error) => this.errors.set(session.id, String(error)))
       })
+  }
+  flushOutputs(): Promise<void> {
+    if (this.outputFlush) {
+      this.flushAgain = true
+      return this.outputFlush
+    }
+    if (this.closed || this.stop.signal.aborted || !this.leaseActive()) return Promise.resolve()
+    const work = (async () => {
+      this.flushAgain = false
+      let cursor = 0
+      for (;;) {
+        const rows = this.inbox.queuedReplies(100, cursor)
+        if (!rows.length) return
+        const groups = new Map<string, typeof rows>()
+        for (const row of rows) {
+          cursor = row.seq
+          const group = groups.get(row.sessionId) ?? []
+          group.push(row)
+          groups.set(row.sessionId, group)
+        }
+        await Promise.all(
+          [...groups].map(async ([sessionId, group]) => {
+            const previous = this.sends.get(sessionId) ?? Promise.resolve()
+            const pending = previous
+              .catch(() => {})
+              .then(async () => {
+                for (const row of group) {
+                  if (!this.leaseActive() || !this.owns({ id: sessionId, session: { id: sessionId } })) return
+                  const receipt = this.inbox.receipt(row.sourceId)
+                  if (!receipt || !row.draft) continue
+                  try {
+                    await this.deliver(
+                      this.inbox,
+                      { id: row.sourceId, receipt },
+                      sessionId,
+                      row.callId,
+                      row.draft,
+                      this.signalFor(sessionId)
+                    )
+                    this.errors.delete(sessionId)
+                  } catch (error) {
+                    this.errors.set(sessionId, String(error))
+                    return
+                  }
+                }
+              })
+            this.sends.set(sessionId, pending)
+            try {
+              await pending
+            } finally {
+              if (this.sends.get(sessionId) === pending) this.sends.delete(sessionId)
+            }
+          })
+        )
+        if (rows.length < 100) return
+      }
+    })().finally(() => {
+      if (this.outputFlush === work) this.outputFlush = undefined
+      if (this.flushAgain && !this.closed && !this.stop.signal.aborted)
+        void this.flushOutputs().catch((error) => this.errors.set('delivery', String(error)))
+    })
+    this.outputFlush = work
+    return work
+  }
+  resolveReply(id: string, revision: string, decision: 'sent' | 'release'): void {
+    const reply = this.inbox.pendingReply(id)
+    if (!reply) throw new ChannelError('回复已结算，请刷新查看', 409)
+    if (this.sends.has(reply.sessionId)) throw new ChannelError('此任务仍在交付，请等待真实发送结束', 409)
+    this.inbox.resolveReply(id, revision, decision)
+    void this.flushOutputs().catch((error) => this.errors.set(reply.sessionId, String(error)))
   }
   origin(agent: any, allowChild = false) {
     if (!this.owns(agent)) throw new ChannelError('任务授权已失效', 403)
@@ -400,6 +565,7 @@ export class FeishuTasks {
     this.stoppingRoots.add(taskId)
     this.outputControllers.get(taskId)?.abort(Error('任务交付已停止'))
     this.inbox.cancelTarget(taskId)
+    this.inbox.cancelQueuedReplies(taskId)
     this.creation.get(taskId)?.abort(Error('任务已停止'))
     try {
       await this.opening.get(taskId)?.catch(() => undefined)
@@ -468,7 +634,15 @@ export class FeishuTasks {
         })),
       // Account-wide diagnostics are local UI data, never exported to a channel participant.
       ...(!filter
-        ? { errors: [...this.errors].map(([id, error]) => ({ id, error })), receipts: this.inbox.counts() }
+        ? {
+            errors: [...this.errors].map(([id, error]) => ({ id, error })),
+            receipts: this.inbox.counts(),
+            queuedReplies: this.inbox.queuedReplies(20),
+            replies: this.inbox.pendingReplies(20),
+            connected: this.leaseActive(),
+            receptionPaused: this.receptionPaused,
+            pendingInteractions: this.interactions.list()
+          }
         : {})
     }
   }
@@ -483,6 +657,7 @@ export class FeishuTasks {
   }
   private async finishDispose(): Promise<void> {
     this.stop.abort(Error('渠道任务接入已停止'))
+    this.interactions.dispose()
     await this.recovery?.catch(() => undefined)
     await this.dispatch.dispose()
     await Promise.allSettled([...this.opening.values()])

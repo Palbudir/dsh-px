@@ -5948,6 +5948,7 @@ function ChannelsPanel({ navigation }) {
       !view.configuration.accounts.length && !edit && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("div", { className: "px-empty", children: "\u5C1A\u672A\u542F\u7528 PX \u6E20\u9053\u63A5\u6536\u3002\u539F\u751F IM \u4E0E QQ \u7684\u73B0\u6709\u8BBE\u7F6E\u4E0D\u4F1A\u81EA\u52A8\u6539\u53D8\u3002" }),
       view.configuration.accounts.map((account) => {
         const runtime = view.runtimes.find((r) => r.accountId === account.accountId);
+        const activity = view.activities.find((r) => r.accountId === account.accountId);
         return /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)(
           "section",
           {
@@ -5958,21 +5959,27 @@ function ChannelsPanel({ navigation }) {
                 "\u98DE\u4E66 \xB7 ",
                 account.accountId
               ] }),
-              runtime && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+              activity && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
                 ChannelInteractionPanel,
                 {
-                  items: runtime.pendingInteractions,
+                  items: activity.pendingInteractions ?? [],
                   answer: (input) => command({ type: "answer-interaction", accountId: account.accountId, ...input })
                 }
               ),
-              !!runtime?.tasks.records.length && /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("details", { children: [
+              !!activity?.records.length && /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("details", { children: [
                 /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("summary", { children: [
                   "\u539F\u751F\u4EFB\u52A1\uFF08",
-                  runtime.tasks.total,
-                  runtime.tasks.partial ? "\uFF0C\u663E\u793A\u6700\u8FD1 100 \u9879" : "",
+                  activity.total,
+                  activity.partial ? "\uFF0C\u663E\u793A\u6700\u8FD1 100 \u9879" : "",
                   "\uFF09"
                 ] }),
-                runtime.tasks.records.map((task) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-card", children: [
+                !activity.connected && /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "status", children: "\u6E20\u9053\u8FDE\u63A5\u4E0D\u53EF\u7528\uFF1B\u5DF2\u6388\u6743\u7684\u672C\u673A\u5DE5\u4F5C\u53EF\u7EE7\u7EED\uFF0C\u7ED3\u679C\u4FDD\u7559\u5F85\u53D1\u3002" }),
+                !!activity.queuedReplies?.length && /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("p", { children: [
+                  "\u6709 ",
+                  activity.queuedReplies.length,
+                  " \u6761\u5C1A\u672A\u53D1\u9001\u7684\u4EFB\u52A1\u7ED3\u679C\u6216\u901A\u77E5\uFF0C\u8FDE\u63A5\u6062\u590D\u540E\u7EE7\u7EED\u4EA4\u4ED8\u3002"
+                ] }),
+                activity.records.map((task) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-card", children: [
                   /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("p", { children: [
                     task.conversationId,
                     " \xB7 ",
@@ -6007,7 +6014,70 @@ function ChannelsPanel({ navigation }) {
                     )
                   ] })
                 ] }, task.taskId)),
-                runtime.tasks.errors?.map((row) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "alert", children: row.error }, row.id))
+                activity.replies?.map((reply) => /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-card", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("p", { children: [
+                    "\u4EFB\u52A1\u56DE\u590D",
+                    reply.phase === "sending" ? "\u53D1\u9001\u5C1A\u672A\u7ED3\u7B97" : "\u53D1\u9001\u7ED3\u679C\u4E0D\u660E",
+                    " \xB7",
+                    " ",
+                    reply.conversationId
+                  ] }),
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("pre", { style: { whiteSpace: "pre-wrap", overflowWrap: "anywhere", font: "inherit" }, children: reply.draft ?? "\u8BF7\u67E5\u770B\u539F\u751F\u4F1A\u8BDD\u4E2D\u7684\u7ED3\u679C\u3002" }),
+                  /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+                      "button",
+                      {
+                        disabled: busy || !nav.openSession,
+                        onClick: () => openSession(reply.sessionId),
+                        children: "\u67E5\u770B\u4EFB\u52A1\u4F1A\u8BDD"
+                      }
+                    ),
+                    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+                      "button",
+                      {
+                        disabled: busy,
+                        onClick: () => setConfirm({
+                          accountId: account.accountId,
+                          id: reply.id,
+                          revision: reply.revision,
+                          decision: "sent",
+                          task: true
+                        }),
+                        children: "\u786E\u8BA4\u5DF2\u53D1\u9001"
+                      }
+                    ),
+                    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+                      "button",
+                      {
+                        disabled: busy,
+                        onClick: () => setConfirm({
+                          accountId: account.accountId,
+                          id: reply.id,
+                          revision: reply.revision,
+                          decision: "release",
+                          task: true
+                        }),
+                        children: "\u5141\u8BB8\u540E\u7EED\u65B0\u56DE\u590D"
+                      }
+                    )
+                  ] }),
+                  confirm?.task && confirm.id === reply.id && /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { role: "group", "aria-label": "\u786E\u8BA4\u4EFB\u52A1\u56DE\u590D\u6838\u5BF9", children: [
+                    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { children: confirm.decision === "sent" ? "\u8BB0\u5F55\u4E3A\u4EBA\u5DE5\u786E\u8BA4\u5DF2\u53D1\u9001\uFF0C\u4E0D\u4F1A\u8865\u53D1\u3002" : "\u539F\u56DE\u590D\u4ECD\u672A\u786E\u8BA4\uFF1B\u4EC5\u89E3\u9664\u540E\u7EED\u8F93\u51FA\u7684\u963B\u585E\uFF0C\u4E0D\u4F1A\u8865\u53D1\u65E7\u5185\u5BB9\u3002\u65E7\u56DE\u590D\u4ECD\u53EF\u80FD\u7A0D\u540E\u9001\u8FBE\u3002" }),
+                    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
+                      "button",
+                      {
+                        disabled: busy,
+                        onClick: () => void run(async () => {
+                          await command({ type: "resolve-task-reply", ...confirm });
+                          setConfirm(null);
+                        }),
+                        children: "\u786E\u8BA4\u8BB0\u5F55"
+                      }
+                    ),
+                    /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("button", { disabled: busy, onClick: () => setConfirm(null), children: "\u53D6\u6D88" })
+                  ] })
+                ] }, reply.id)),
+                activity.errors?.map((row) => /* @__PURE__ */ (0, import_jsx_runtime6.jsx)("p", { role: "alert", children: row.error }, row.id))
               ] }),
               /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("p", { children: [
                 "\u4EBA\u683C\uFF1A",

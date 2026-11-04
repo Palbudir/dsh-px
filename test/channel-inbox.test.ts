@@ -76,6 +76,56 @@ test('unknown output from one task does not block another task in the same conve
   assert.equal(f.inbox.pendingReplies().length, 1)
 })
 
+test('never-attempted task output survives restart, while unknown sends are never retried automatically', (t) => {
+  const f = fixture(t),
+    target = { ...recipient, executionSessionId: 'task' },
+    row = f.inbox.accept(message(), target),
+    claim = { ...target, sessionId: 'task', epoch: 'one', requestId: 'request' }
+  f.inbox.claim(row.id, claim)
+  f.inbox.admit(row.id, claim, 'native')
+  const queued = f.inbox.queueReply('output-1', row.id, 'task', 'first')
+  assert.equal(queued.phase, 'queued')
+  assert.equal(f.inbox.pendingReplies().length, 0)
+  f.reopen()
+  f.inbox.recoverInterrupted('two')
+  assert.equal(f.inbox.queuedReplies()[0].draft, 'first')
+  assert.equal(f.inbox.beginReply('output-1', row.id, 'task', 'first', 'two').phase, 'new')
+  f.inbox.finishReply(queued.id, 'uncertain', { reason: 'receipt-lost' })
+  assert.equal(f.inbox.queueReply('output-1', row.id, 'task', 'first').phase, 'uncertain')
+  f.inbox.queueReply('output-2', row.id, 'task', 'second')
+  assert.equal(f.inbox.queuedReplies().length, 1)
+  assert.throws(() => f.inbox.beginReply('output-2', row.id, 'task', 'second', 'two'), /尚未确认/)
+  const unknown = f.inbox.pendingReply(queued.id)!
+  f.inbox.resolveReply(queued.id, unknown.revision, 'release')
+  assert.equal(f.inbox.beginReply('output-2', row.id, 'task', 'second', 'two').phase, 'new')
+  assert.equal(f.inbox.beginReply('output-1', row.id, 'task', 'first', 'two').phase, 'released')
+})
+
+test('settled or previous-process questions cannot publish queued stale notices', (t) => {
+  const f = fixture(t),
+    target = { ...recipient, executionSessionId: 'task' },
+    row = f.inbox.accept(message(), target),
+    claim = { ...target, sessionId: 'task', epoch: 'one', requestId: 'request' }
+  f.inbox.claim(row.id, claim)
+  f.inbox.admit(row.id, claim, 'native')
+  f.inbox.queueReply('interaction:task:one', row.id, 'task', 'question one')
+  f.inbox.cancelQueuedReply('task', row.id, 'interaction:task:one')
+  assert.equal(
+    f.inbox.beginReply('interaction:task:one', row.id, 'task', 'question one', 'one').phase,
+    'cancelled'
+  )
+  f.inbox.queueReply('interaction:task:two', row.id, 'task', 'question two')
+  f.inbox.queueReply('output', row.id, 'task', 'result')
+  f.reopen()
+  f.inbox.retireQueuedInteractions()
+  assert.deepEqual(
+    f.inbox.queuedReplies().map((r) => r.draft),
+    ['result']
+  )
+  f.inbox.cancelQueuedReplies('task')
+  assert.equal(f.inbox.queuedReplies().length, 0)
+})
+
 test('durable intake deduplicates live/history evidence, preserves admission receipts and rejects changed identity', (t) => {
   const f = fixture(t),
     accepted = f.inbox.accept(message(), recipient),
