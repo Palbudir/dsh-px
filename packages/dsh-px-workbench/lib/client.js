@@ -5987,7 +5987,7 @@ function ChannelsPanel({ navigation }) {
                     " \xB7",
                     " ",
                     { running: "\u8FD0\u884C\u4E2D", idle: "\u5F53\u524D\u672A\u8FD0\u884C", stored: "\u5DF2\u4FDD\u5B58\uFF0C\u672A\u52A0\u8F7D" }[task.state] ?? task.state,
-                    task.paused ? " \xB7 \u5DF2\u505C\u6B62" : task.authorized ? "" : " \xB7 \u5F53\u524D\u6388\u6743\u4E0D\u53EF\u7528"
+                    task.stopping ? " \xB7 \u6B63\u5728\u505C\u6B62" : task.paused ? " \xB7 \u4EA4\u4ED8\u5DF2\u6682\u505C" : task.authorized ? "" : " \xB7 \u5F53\u524D\u6388\u6743\u4E0D\u53EF\u7528"
                   ] }),
                   /* @__PURE__ */ (0, import_jsx_runtime6.jsxs)("div", { className: "px-actions", children: [
                     /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
@@ -6001,7 +6001,7 @@ function ChannelsPanel({ navigation }) {
                     /* @__PURE__ */ (0, import_jsx_runtime6.jsx)(
                       "button",
                       {
-                        disabled: busy || !task.authorized,
+                        disabled: busy || task.stopping,
                         onClick: () => void run(
                           () => command({
                             type: "stop-task",

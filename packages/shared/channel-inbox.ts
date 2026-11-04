@@ -116,6 +116,9 @@ export class ChannelInbox {
       db.exec(
         'CREATE TABLE IF NOT EXISTS channel_controls(id TEXT PRIMARY KEY,kind TEXT NOT NULL,epoch TEXT NOT NULL,status TEXT NOT NULL,result TEXT)'
       )
+      db.exec(
+        'CREATE TABLE IF NOT EXISTS channel_output_scan(session TEXT PRIMARY KEY,next_seq INTEGER NOT NULL,paused INTEGER NOT NULL DEFAULT 0)'
+      )
       const columns = (table: string) =>
         new Set(
           db
@@ -496,6 +499,32 @@ export class ChannelInbox {
     this.db
       .prepare("UPDATE channel_replies SET phase='cancelled',draft=NULL WHERE session=? AND phase='queued'")
       .run(sessionId)
+  }
+  outputScan(sessionId: string): { nextSeq: number; paused: boolean } {
+    const row = this.db
+      .prepare('SELECT next_seq,paused FROM channel_output_scan WHERE session=?')
+      .get(sessionId)
+    return { nextSeq: row ? Number(row.next_seq) : 0, paused: row?.paused === 1 }
+  }
+  advanceOutputScan(sessionId: string, nextSeq: number): void {
+    if (!id(sessionId) || !Number.isSafeInteger(nextSeq) || nextSeq < 0) throw Error('原生输出扫描位置无效')
+    this.db
+      .prepare(
+        'INSERT INTO channel_output_scan(session,next_seq,paused) VALUES(?,?,0) ON CONFLICT(session) DO UPDATE SET next_seq=max(next_seq,excluded.next_seq)'
+      )
+      .run(sessionId, nextSeq)
+  }
+  pauseOutputs(sessionId: string): void {
+    if (!id(sessionId)) throw Error('任务标识无效')
+    this.db
+      .prepare(
+        'INSERT INTO channel_output_scan(session,next_seq,paused) VALUES(?,0,1) ON CONFLICT(session) DO UPDATE SET paused=1'
+      )
+      .run(sessionId)
+    this.cancelQueuedReplies(sessionId)
+  }
+  resumeOutputs(sessionId: string): void {
+    this.db.prepare('UPDATE channel_output_scan SET paused=0 WHERE session=?').run(sessionId)
   }
   cancelQueuedReply(sessionId: string, sourceId: string, callId: string): void {
     this.db

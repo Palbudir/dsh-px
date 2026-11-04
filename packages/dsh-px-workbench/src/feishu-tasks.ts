@@ -10,6 +10,7 @@ import { installChannelTaskAudience } from './channel-task-audience'
 import { ChannelError, type ChannelAccount } from './channel-settings'
 import { ChannelInteractions } from '../../shared/channel-interactions'
 import { reconcileChannelAdmission } from '../../shared/channel-admission'
+import { channelTaskOutput } from './channel-task-output'
 
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const get = (ctx: any, key: string) => (ctx.get ? ctx.get(key) : ctx[key])
@@ -43,6 +44,7 @@ export class FeishuTasks {
   private outputFlush?: Promise<void>
   private flushAgain = false
   private receptionPaused = false
+  private readonly outputScans = new Map<string, Promise<void>>()
   constructor(
     private readonly host: any,
     private readonly account: ChannelAccount,
@@ -192,6 +194,12 @@ export class FeishuTasks {
         }
       }
       this.stop.signal.throwIfAborted()
+      for (const row of this.memory().channelBindings(this.account.accountId, 'feishu')) {
+        if (row.channel.task?.rootSessionId === row.sessionId)
+          await this.recoverOutputs(row.sessionId).catch((error) =>
+            this.errors.set('output-scan:' + row.sessionId, String(error))
+          )
+      }
       this.activated = true
       this.dispatch.schedule()
       await this.flushOutputs()
@@ -218,7 +226,7 @@ export class FeishuTasks {
   private rootSource(id: string): { id: string; receipt: Receipt } | undefined {
     return this.inbox.firstForSession(id)
   }
-  owns(agent: any): boolean {
+  owns(agent: any, ignorePause = false): boolean {
     try {
       const info = this.memory().inspect(agent?.session.id),
         channel = info.binding?.channel,
@@ -230,7 +238,11 @@ export class FeishuTasks {
         channel.access !== 'public'
       )
         return false
-      if (this.outputControllers.get(rootId)?.signal.aborted) return false
+      if (
+        !ignorePause &&
+        (this.outputControllers.get(rootId)?.signal.aborted || this.inbox.outputScan(rootId).paused)
+      )
+        return false
       const row = this.rootSource(rootId),
         preparation = this.prepared.get(rootId)
       const source = row ? { event: row.receipt.source, recipient: row.receipt.recipient } : preparation
@@ -267,7 +279,8 @@ export class FeishuTasks {
     const channel = this.memory().inspect(agent.id)?.binding?.channel
     if (channel?.provider !== 'feishu' || channel.accountId !== this.account.accountId || !channel.task)
       return
-    if (!this.owns(agent)) throw new ChannelError('此飞书任务授权已失效', 403)
+    if (!this.owns(agent, true) && !this.stoppingRoots.has(channel.task.rootSessionId))
+      throw new ChannelError('此飞书任务授权已失效', 403)
     this.actors.set(agent.id, agent)
     installChannelTaskAudience(agent.ctx)
   }
@@ -348,6 +361,12 @@ export class FeishuTasks {
       agents = get(this.host, 'agents'),
       memory = this.memory()
     this.prepared.set(id, row)
+    if (this.inbox.outputScan(id).paused) {
+      await this.recoverOutputs(id)
+      signal.throwIfAborted()
+      this.inbox.resumeOutputs(id)
+      this.outputControllers.set(id, new AbortController())
+    }
     if (!this.outputControllers.has(id)) this.outputControllers.set(id, new AbortController())
     const live = agents.get(id)
     if (live) {
@@ -425,62 +444,81 @@ export class FeishuTasks {
     return handle.agent
   }
   event(session: any, event: any): void {
-    if (
-      event.type === 'user/message' &&
-      event.data.source?.kind === 'user' &&
-      !this.stoppingRoots.has(session.id) &&
-      this.outputControllers.get(session.id)?.signal.aborted
-    )
-      this.outputControllers.set(session.id, new AbortController())
     const agent = this.actors.get(session.id)
     if (!agent || this.stopping.has(session.id) || !this.owns(agent)) return
     const channel = this.memory().inspect(session.id).binding.channel
     if (channel.task.rootSessionId !== session.id || !['assistant/message', 'turn/end'].includes(event.type))
       return
-    const text =
-      event.type === 'assistant/message'
-        ? (event.data.message?.content ?? [])
-            .filter((b: any) => b.type === 'text')
-            .map((b: any) => b.text)
-            .join('\n')
-        : ['error', 'aborted', 'blocked', 'max-tokens', 'interrupted'].includes(event.data.reason?.kind)
-          ? '任务本轮未完成（' + event.data.reason.kind + '）。执行记录保留，未自动重新执行。'
-          : ''
-    if (!text.trim()) return
-    const previous = this.sends.get(session.id) ?? Promise.resolve()
-    const pending = previous
-      .catch(() => {})
-      .then(async () => {
-        if (!this.owns(agent)) return
-        const origin = this.rootSource(session.id)
-        if (!origin) throw new ChannelError('任务交付缺少原始请求', 409)
-        if (origin.receipt.phase !== 'admitted')
-          await reconcileChannelAdmission(
-            this.inbox,
-            origin.id,
-            { agent, sessions: get(this.host, 'sessions') },
-            this.stop.signal
-          )
-        const chunks: string[] = []
-        for (let at = 0; at < text.length;) {
-          let end = Math.min(at + 3400, text.length)
-          if (end < text.length && /[\uD800-\uDBFF]/.test(text[end - 1])) end--
-          chunks.push(text.slice(at, end))
-          at = end
-        }
-        const output = chunks.map((part, i) => ({
-          key: `task-event:${event.seq}:${i}`,
-          body: (chunks.length > 1 ? `任务输出 ${i + 1}/${chunks.length}\n` : '') + part
-        }))
-        for (const item of output) this.inbox.queueReply(item.key, origin.id, session.id, item.body)
-      })
-    this.sends.set(session.id, pending)
-    void pending
-      .catch((error) => this.errors.set(session.id, String(error)))
+    void this.recoverOutputs(session.id, event.seq)
+      .catch((error) => this.errors.set('output-scan:' + session.id, String(error)))
       .finally(() => {
-        if (this.sends.get(session.id) === pending) this.sends.delete(session.id)
         void this.flushOutputs().catch((error) => this.errors.set(session.id, String(error)))
       })
+  }
+  /** Recover transport drafts from native committed output; never start an Agent or rerun its work. */
+  recoverOutputs(sessionId: string, throughSeq?: number): Promise<void> {
+    const pending = this.outputScans.get(sessionId)
+    if (pending)
+      return pending.then(() =>
+        throughSeq !== undefined && this.inbox.outputScan(sessionId).nextSeq <= throughSeq
+          ? this.recoverOutputs(sessionId, throughSeq)
+          : undefined
+      )
+    if (this.closed || this.stop.signal.aborted) return Promise.resolve()
+    const source = this.rootSource(sessionId),
+      paused = this.inbox.outputScan(sessionId).paused
+    if (!source || (!paused && !this.owns({ id: sessionId, session: { id: sessionId } }, true)))
+      return Promise.resolve()
+    const work = (async () => {
+      const live = get(this.host, 'sessions').get(sessionId)
+      if (live && !(await get(this.host, 'sessions').flush(live)))
+        throw new ChannelError('原生输出未确认保存', 503)
+      if (source.receipt.phase !== 'admitted') {
+        const agent = get(this.host, 'agents').get(sessionId)
+        if (!agent) return
+        await reconcileChannelAdmission(
+          this.inbox,
+          source.id,
+          { agent, sessions: get(this.host, 'sessions') },
+          this.stop.signal
+        )
+      }
+      const reader = await get(this.host, 'sessionPersistence').open(sessionId, 'read', {
+        signal: this.stop.signal
+      })
+      try {
+        if (reader.header.id !== sessionId || reader.access !== 'read')
+          throw new ChannelError('原生输出读取归属不匹配', 409)
+        let cursor = Math.max(this.inbox.outputScan(sessionId).nextSeq, reader.inheritedEventCount ?? 0)
+        for (;;) {
+          this.stop.signal.throwIfAborted()
+          const page = await reader.read(cursor, 256, { signal: this.stop.signal })
+          const paused = this.inbox.outputScan(sessionId).paused
+          for (const event of page.events) {
+            if (!paused) {
+              const outputs = channelTaskOutput(event)
+              if (outputs.length && !this.owns({ id: sessionId, session: { id: sessionId } }, true)) return
+              for (const output of outputs)
+                this.inbox.queueReply(output.key, source.id, sessionId, output.body)
+            }
+            cursor = event.seq + 1
+          }
+          // A crash before this checkpoint re-reads the page; stable part keys deduplicate it.
+          this.inbox.advanceOutputScan(sessionId, cursor)
+          if (page.events.length < 256) {
+            this.errors.delete('output-scan:' + sessionId)
+            return
+          }
+          await new Promise<void>((resolve) => setImmediate(resolve))
+        }
+      } finally {
+        await reader.close()
+      }
+    })().finally(() => {
+      if (this.outputScans.get(sessionId) === work) this.outputScans.delete(sessionId)
+    })
+    this.outputScans.set(sessionId, work)
+    return work
   }
   flushOutputs(): Promise<void> {
     if (this.outputFlush) {
@@ -563,17 +601,35 @@ export class FeishuTasks {
   async stopTask(taskId: string): Promise<void> {
     if (!this.rootSource(taskId) && !this.prepared.has(taskId)) throw new ChannelError('任务不存在', 404)
     this.stoppingRoots.add(taskId)
-    this.outputControllers.get(taskId)?.abort(Error('任务交付已停止'))
+    if (!this.outputControllers.has(taskId)) this.outputControllers.set(taskId, new AbortController())
+    this.outputControllers.get(taskId)!.abort(Error('任务交付已停止'))
+    this.inbox.pauseOutputs(taskId)
     this.inbox.cancelTarget(taskId)
     this.inbox.cancelQueuedReplies(taskId)
     this.creation.get(taskId)?.abort(Error('任务已停止'))
     try {
       await this.opening.get(taskId)?.catch(() => undefined)
+      // Restore native state for cancellation only. The task pre-step fence blocks any restored wake.
+      if (this.rootSource(taskId) && !get(this.host, 'agents').get(taskId)) {
+        const restored = await get(this.host, 'sessionController').resolveAgent(taskId)
+        if (restored.error) throw new ChannelError('无法载入原任务以确认停止：' + restored.error.message, 409)
+        this.created(restored.agent)
+      }
       const actors = [...this.actors.values()].filter(
-        (agent) => this.memory().inspect(agent.id).binding?.channel?.task?.rootSessionId === taskId
+        (agent) =>
+          get(this.host, 'agents').get(agent.id) === agent &&
+          this.memory().inspect(agent.id).binding?.channel?.task?.rootSessionId === taskId
       )
       await stopNativeTaskActors(this.host, actors, this.stopping)
       await this.sends.get(taskId)?.catch(() => undefined)
+      for (const agent of actors)
+        if (!(await get(this.host, 'sessions').flush(agent.session)))
+          throw new ChannelError('原生停止记录未确认保存', 503)
+      await this.recoverOutputs(taskId)
+      this.errors.delete('stop:' + taskId)
+    } catch (error) {
+      this.errors.set('stop:' + taskId, error instanceof Error ? error.message : String(error))
+      throw error
     } finally {
       this.stoppingRoots.delete(taskId)
     }
@@ -581,6 +637,25 @@ export class FeishuTasks {
   signalFor(taskId: string): AbortSignal {
     const controller = this.outputControllers.get(taskId)
     return controller ? AbortSignal.any([this.stop.signal, controller.signal]) : this.stop.signal
+  }
+  async prepareStep(agent: any, messages: any[]): Promise<boolean> {
+    const rootId = this.memory().inspect(agent.id)?.binding?.channel?.task?.rootSessionId
+    if (!rootId || this.stoppingRoots.has(rootId) || !this.owns(agent, true)) return false
+    if (this.inbox.outputScan(rootId).paused || this.outputControllers.get(rootId)?.signal.aborted) {
+      if (
+        agent.id !== rootId ||
+        !messages.some((message) => ['user', 'user-rpc'].includes(message.source?.kind))
+      )
+        return false
+      await this.recoverOutputs(rootId)
+      if (this.stoppingRoots.has(rootId) || !this.owns(agent, true)) return false
+      this.inbox.resumeOutputs(rootId)
+      this.outputControllers.set(rootId, new AbortController())
+    }
+    return this.owns(agent)
+  }
+  disposed(agent: any): void {
+    if (this.actors.get(agent.id) === agent) this.actors.delete(agent.id)
   }
   async stopForRequester(taskId: string, conversationId: string, requesterId: string): Promise<void> {
     const source = typeof taskId === 'string' ? this.rootSource(taskId) : undefined
@@ -629,7 +704,10 @@ export class FeishuTasks {
           conversationId: r.channel.conversationId,
           personaId: r.personaId,
           state: get(this.host, 'agents').get(r.sessionId)?.status ?? 'stored',
-          paused: this.outputControllers.get(r.sessionId)?.signal.aborted === true,
+          paused:
+            this.outputControllers.get(r.sessionId)?.signal.aborted === true ||
+            this.inbox.outputScan(r.sessionId).paused,
+          stopping: this.stoppingRoots.has(r.sessionId),
           authorized: this.owns({ id: r.sessionId, session: { id: r.sessionId } })
         })),
       // Account-wide diagnostics are local UI data, never exported to a channel participant.
@@ -659,6 +737,7 @@ export class FeishuTasks {
     this.stop.abort(Error('渠道任务接入已停止'))
     this.interactions.dispose()
     await this.recovery?.catch(() => undefined)
+    await Promise.allSettled([...this.outputScans.values()])
     await this.dispatch.dispose()
     await Promise.allSettled([...this.opening.values()])
     await stopNativeTaskActors(this.host, [...this.actors.values()], this.stopping)

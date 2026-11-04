@@ -47,6 +47,9 @@ export function registerChannels(ctx: any): void {
   ctx.on('session/event', (session: any, event: any) => {
     for (const task of tasks.values()) task.event(session, event)
   })
+  ctx.on('agent/disposed', ({ agent }: any) => {
+    for (const task of tasks.values()) task.disposed(agent)
+  })
   for (const [event, kind] of [
     ['approval/request', 'approval'],
     ['user-questions/request', 'question']
@@ -62,6 +65,10 @@ export function registerChannels(ctx: any): void {
   ctx.provide('pxChannels', {
     version: 1,
     taskAllowed: (agent: any) => [...tasks.values()].some((row) => row.owns(agent)),
+    prepareTaskStep: async (agent: any, messages: any[]) => {
+      const account = memory?.inspect(agent.id)?.binding?.channel?.accountId
+      return account ? (await tasks.get(account)?.prepareStep(agent, messages)) === true : false
+    },
     taskAuthority: (agent: any, pending: any[]) =>
       [...runtimes.values()].find((row) => row.owns(agent))?.taskAuthority(agent, pending),
     tool: (name: string, args: any, exec: any) => {

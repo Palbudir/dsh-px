@@ -7,6 +7,17 @@ const get = (ctx: any, key: string) => (ctx.get ? ctx.get(key) : ctx[key])
 export function installChannelTaskAudience(ctx: any): void {
   if (get(ctx, 'pxChannelTaskAudience')?.version === 1) return
   ctx.provide('pxChannelTaskAudience', { version: 1 })
+  ctx.on(
+    'agent/pre-step',
+    async ({ agent, messages }: any, next: any) => {
+      if (!(await get(ctx, 'pxChannels')?.prepareTaskStep(agent, messages))) {
+        agent.cancel({ kind: 'user' })
+        return { kind: 'reject' }
+      }
+      return next()
+    },
+    { prepend: true }
+  )
   const boundary = publicInputBoundary(ctx, undefined, {
     sourceKind: 'plugin:dsh-px-channel',
     noticeKind: 'px-channel-task-authority',

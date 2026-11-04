@@ -517,7 +517,13 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
                           {{ running: '运行中', idle: '当前未运行', stored: '已保存，未加载' }[
                             task.state as string
                           ] ?? task.state}
-                          {task.paused ? ' · 已停止' : task.authorized ? '' : ' · 当前授权不可用'}
+                          {task.stopping
+                            ? ' · 正在停止'
+                            : task.paused
+                              ? ' · 交付已暂停'
+                              : task.authorized
+                                ? ''
+                                : ' · 当前授权不可用'}
                         </p>
                         <div className="px-actions">
                           <button
@@ -527,7 +533,7 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
                             打开任务会话
                           </button>
                           <button
-                            disabled={busy || !task.authorized}
+                            disabled={busy || task.stopping}
                             onClick={() =>
                               void run(() =>
                                 command({

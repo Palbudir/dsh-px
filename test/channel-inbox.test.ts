@@ -126,6 +126,19 @@ test('settled or previous-process questions cannot publish queued stale notices'
   assert.equal(f.inbox.queuedReplies().length, 0)
 })
 
+test('native output scan checkpoints are monotonic and a stop survives reopening until explicit resume', (t) => {
+  const f = fixture(t)
+  assert.deepEqual(f.inbox.outputScan('task'), { nextSeq: 0, paused: false })
+  f.inbox.advanceOutputScan('task', 512)
+  f.inbox.pauseOutputs('task')
+  f.inbox.advanceOutputScan('task', 256)
+  f.reopen()
+  assert.deepEqual(f.inbox.outputScan('task'), { nextSeq: 512, paused: true })
+  f.inbox.advanceOutputScan('task', 600)
+  f.inbox.resumeOutputs('task')
+  assert.deepEqual(f.inbox.outputScan('task'), { nextSeq: 600, paused: false })
+})
+
 test('durable intake deduplicates live/history evidence, preserves admission receipts and rejects changed identity', (t) => {
   const f = fixture(t),
     accepted = f.inbox.accept(message(), recipient),
