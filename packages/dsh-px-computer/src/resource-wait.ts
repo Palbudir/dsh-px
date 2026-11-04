@@ -1,13 +1,19 @@
 import { ComputerUseRefusal, type SessionStates } from './runtime'
 import type { BrowserSessions } from './browser'
+import type { ForegroundResource } from './foreground-resource'
 
 /** Native Job owns waiting, cancellation and notification; this producer never retries an action. */
-export class BrowserResourceWaits {
+class NativeResourceWaits {
   private readonly waits = new Map<string, { id: string; stop: AbortController; done: Promise<any> }>()
   private closed = false
   constructor(
-    private readonly browsers: BrowserSessions,
-    private readonly states: SessionStates
+    private readonly resource: {
+      waitAvailable(owner: string, signal: AbortSignal, timeoutMs: number): Promise<{ available: boolean }>
+    },
+    private readonly states: SessionStates,
+    private readonly capability: 'browser' | 'desktop',
+    private readonly resourceName: string,
+    private readonly label: string
   ) {}
   start(agent: any, timeoutMs: number, signal: AbortSignal) {
     signal.throwIfAborted()
@@ -25,29 +31,29 @@ export class BrowserResourceWaits {
     const sourceSeq = agent.session.seq
     const jobId = jobs.start({
       kind: 'px-resource-wait',
-      label: '等待浏览器可用',
+      label: `等待${this.label}可用`,
       owner,
       outputLimitBytes: 2000,
       run: (job: any) => {
         let waitingSignal: AbortSignal | undefined
         const done = Promise.resolve()
           .then(() =>
-            this.states.track(owner, 'browser', stop.signal, (input) => {
+            this.states.track(owner, this.capability, stop.signal, (input) => {
               waitingSignal = input
-              return this.browsers.waitAvailable(owner, input, timeoutMs)
+              return this.resource.waitAvailable(owner, input, timeoutMs)
             })
           )
           .then((value) => ({
             status: 'completed',
             result: JSON.stringify({
-              resource: 'browser',
+              resource: this.resourceName,
               sourceSessionId: owner,
               sourceSeq,
               ...value,
               reserved: false,
               instruction: value.available
-                ? '浏览器当前可用。重新观察并通过正常工具权限检查后操作；此通知不是资源占用或任务完成回执。'
-                : '等待期限已到，浏览器仍被占用。可以继续其他工作，未执行或重放浏览器动作。'
+                ? `${this.label}当前可用。重新观察并通过正常工具权限检查后操作；此通知不是资源占用或任务完成回执。`
+                : `等待期限已到，${this.label}仍被占用。可以继续其他工作，未执行或重放动作。`
             })
           }))
           .catch((error) => ({
@@ -70,5 +76,16 @@ export class BrowserResourceWaits {
     this.closed = true
     for (const wait of this.waits.values()) wait.stop.abort(Error('电脑操作插件已停止'))
     await Promise.allSettled([...this.waits.values()].map((wait) => wait.done))
+  }
+}
+
+export class BrowserResourceWaits extends NativeResourceWaits {
+  constructor(browsers: BrowserSessions, states: SessionStates) {
+    super(browsers, states, 'browser', 'browser', '浏览器')
+  }
+}
+export class ForegroundResourceWaits extends NativeResourceWaits {
+  constructor(resource: ForegroundResource, states: SessionStates) {
+    super(resource, states, 'desktop', 'desktop-foreground', '前台键鼠')
   }
 }

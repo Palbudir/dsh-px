@@ -391,6 +391,30 @@ function ComputerPanel({ sessionId, visible }) {
             view.status.desktop.queued.length,
             " \u9879\u8C03\u7528\u6392\u961F\u3002\u53D6\u6D88\u6392\u961F\u4E0D\u4F1A\u4E2D\u65AD\u6B63\u5728\u64CD\u4F5C\u7684\u4F1A\u8BDD\u3002"
           ] }),
+          view.status.desktop?.foreground && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-card", role: "status", children: [
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("strong", { children: "\u524D\u53F0\u952E\u9F20\u5360\u7528" }),
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("p", { children: [
+              view.status.desktop.foreground.sessionId === sessionId ? "\u5F53\u524D\u4F1A\u8BDD" : "\u5176\u4ED6\u4F1A\u8BDD",
+              view.status.desktop.foreground.releasing ? "\u6B63\u5728\u91CA\u653E\uFF1B\u7B49\u5F85\u5DF2\u53D1\u51FA\u7684\u52A8\u4F5C\u7ED3\u675F\u3002" : "\u4FDD\u7559\u8FDE\u7EED\u64CD\u4F5C\uFF1B\u5230\u671F\u6216\u672C\u8F6E\u7ED3\u675F\u540E\u91CA\u653E\u3002",
+              " ",
+              "\u622A\u6B62 ",
+              new Date(view.status.desktop.foreground.expiresAt).toLocaleTimeString(),
+              "\u3002 \u540E\u53F0\u67E5\u770B\u4E0E\u72EC\u7ACB\u6D4F\u89C8\u5668\u4E0D\u53D7\u6B64\u5360\u7528\u9650\u5236\u3002"
+            ] }),
+            /* @__PURE__ */ (0, import_jsx_runtime3.jsx)(
+              "button",
+              {
+                style: controlStyle,
+                disabled: busy || view.status.desktop.foreground.releasing,
+                onClick: () => void act({
+                  action: "release-foreground",
+                  owner: view.status.desktop.foreground.sessionId,
+                  generation: view.status.desktop.foreground.generation
+                }),
+                children: "\u505C\u6B62\u5360\u7528\u5E76\u6682\u505C\u5176\u7535\u8111\u64CD\u4F5C"
+              }
+            )
+          ] }),
           !!view.status.browsers?.length && /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("div", { className: "px-card", children: [
             /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("strong", { children: "\u6D4F\u89C8\u5668\u5360\u7528" }),
             /* @__PURE__ */ (0, import_jsx_runtime3.jsx)("ul", { children: view.status.browsers.map((owner) => /* @__PURE__ */ (0, import_jsx_runtime3.jsxs)("li", { children: [

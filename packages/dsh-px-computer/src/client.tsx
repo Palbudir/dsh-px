@@ -23,6 +23,13 @@ interface View {
   status: {
     driverLoaded: boolean
     desktop?: {
+      foreground?: {
+        sessionId: string
+        generation: string
+        expiresAt: number
+        activeCalls: number
+        releasing: boolean
+      } | null
       active: { sessionId?: string; operation: string; since: number } | null
       queued: Array<{ sessionId?: string }>
     }
@@ -250,6 +257,32 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
               {view.status.desktop.active.sessionId === sessionId ? '当前会话' : '其他会话'}正在使用桌面驱动；
               另有 {view.status.desktop.queued.length} 项调用排队。取消排队不会中断正在操作的会话。
             </p>
+          )}
+          {view.status.desktop?.foreground && (
+            <div className="px-card" role="status">
+              <strong>前台键鼠占用</strong>
+              <p>
+                {view.status.desktop.foreground.sessionId === sessionId ? '当前会话' : '其他会话'}
+                {view.status.desktop.foreground.releasing
+                  ? '正在释放；等待已发出的动作结束。'
+                  : '保留连续操作；到期或本轮结束后释放。'}{' '}
+                截止 {new Date(view.status.desktop.foreground.expiresAt).toLocaleTimeString()}。
+                后台查看与独立浏览器不受此占用限制。
+              </p>
+              <button
+                style={controlStyle}
+                disabled={busy || view.status.desktop.foreground.releasing}
+                onClick={() =>
+                  void act({
+                    action: 'release-foreground',
+                    owner: view.status.desktop!.foreground!.sessionId,
+                    generation: view.status.desktop!.foreground!.generation
+                  })
+                }
+              >
+                停止占用并暂停其电脑操作
+              </button>
+            </div>
           )}
           {!!view.status.browsers?.length && (
             <div className="px-card">

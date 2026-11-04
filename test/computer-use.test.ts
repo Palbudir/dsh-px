@@ -1098,6 +1098,59 @@ function hostFixture(t: any, services: Record<string, unknown> = {}) {
 }
 
 test(
+  'foreground panel release pauses only its exact owner and releases that owners browser',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    const closed: string[] = [],
+      original = BrowserSessions.prototype.close
+    BrowserSessions.prototype.close = async function (owner: string) {
+      closed.push(owner)
+      return original.call(this, owner)
+    }
+    t.after(() => {
+      BrowserSessions.prototype.close = original
+    })
+    const { tools, request } = hostFixture(t)
+    await request('POST', { action: 'settings', revision: 0, desktop: true, desktopForeground: true })
+    const run = (id: string) => ({
+      agent: { session: { id, header: { id } } },
+      signal: new AbortController().signal
+    })
+    const tool = tools.get('computer_desktop_resource')
+    await tool.execute({ action: 'acquire' }, run('owner-a'))
+    const current = (await request('GET')).json.status.desktop.foreground
+    assert.equal(current.sessionId, 'owner-a')
+    assert.equal(
+      (
+        await request('POST', {
+          action: 'release-foreground',
+          owner: 'owner-a',
+          generation: current.generation
+        })
+      ).status,
+      200
+    )
+    assert.deepEqual(closed, ['owner-a'])
+    await assert.rejects(tool.execute({ action: 'status' }, run('owner-a')), /暂停/)
+    await tool.execute({ action: 'acquire' }, run('s1'))
+    const next = (await request('GET')).json.status.desktop.foreground
+    assert.equal(
+      (
+        await request('POST', {
+          action: 'release-foreground',
+          owner: 'owner-a',
+          generation: current.generation
+        })
+      ).status,
+      400
+    )
+    assert.equal((await request('GET')).json.status.desktop.foreground.generation, next.generation)
+    assert.deepEqual(closed, ['owner-a'])
+    await tool.execute({ action: 'release', generation: next.generation }, run('s1'))
+  }
+)
+
+test(
   'tools and guidance appear only after the user enables them, on Windows',
   { skip: process.platform !== 'win32' },
   async (t) => {
