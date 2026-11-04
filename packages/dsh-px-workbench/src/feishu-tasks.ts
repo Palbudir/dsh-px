@@ -7,7 +7,7 @@ import { recoverStoredAdmission } from '../../shared/channel-recovery'
 import { nativeModelSelection } from '../../shared/native-model-selection'
 import { stopNativeTaskActors } from '../../shared/native-task-stop'
 import { installChannelTaskAudience } from './channel-task-audience'
-import { ChannelError, type ChannelAccount } from './channel-settings'
+import { ChannelError, channelRoute, sameChannelAccount, type ChannelAccount } from './channel-settings'
 import { ChannelInteractions } from '../../shared/channel-interactions'
 import { reconcileChannelAdmission } from '../../shared/channel-admission'
 import { channelTaskOutput } from './channel-task-output'
@@ -107,13 +107,7 @@ export class FeishuTasks {
     )
   }
   matches(account: ChannelAccount): boolean {
-    return (
-      !this.closed &&
-      !this.stop.signal.aborted &&
-      account.fingerprint === this.account.fingerprint &&
-      account.routeRevision === this.account.routeRevision &&
-      account.personaId === this.account.personaId
-    )
+    return !this.closed && !this.stop.signal.aborted && sameChannelAccount(account, this.account)
   }
   interaction(kind: 'approval' | 'question', request: any, next: () => Promise<unknown>) {
     if (!this.owns(request.agent)) return next()
@@ -210,17 +204,19 @@ export class FeishuTasks {
     return work
   }
   private authorized(
-    row: Pick<PendingChannelMessage, 'recipient'> & { event: { actorId: string } }
+    row: Pick<PendingChannelMessage, 'recipient'> & { event: { actorId: string; conversationId: string } }
   ): boolean {
     const c = this.current()
+    const route = c && channelRoute(c, row.event.conversationId)
     return (
       !this.stop.signal.aborted &&
       !!c?.enabled &&
-      c.fingerprint === this.account.fingerprint &&
-      c.personaId === row.recipient.personaId &&
-      c.routeRevision === row.recipient.routeRevision &&
+      sameChannelAccount(c, this.account) &&
+      route!.personaId === row.recipient.personaId &&
+      route!.routeRevision === row.recipient.routeRevision &&
+      get(this.host, 'pxChannels')?.routeAvailable?.(c.accountId, row.event.conversationId) !== false &&
       c.authorizedUsers.includes(row.event.actorId) &&
-      get(this.host, 'pxPersonaResources')?.allowsChannel(c.personaId, 'feishu', c.accountId) === true
+      get(this.host, 'pxPersonaResources')?.allowsChannel(route!.personaId, 'feishu', c.accountId) === true
     )
   }
   private rootSource(id: string): { id: string; receipt: Receipt } | undefined {
@@ -656,6 +652,27 @@ export class FeishuTasks {
   }
   disposed(agent: any): void {
     if (this.actors.get(agent.id) === agent) this.actors.delete(agent.id)
+  }
+  routingBusy(conversationId: string): string[] {
+    const reasons: string[] = []
+    for (const [id] of this.opening)
+      if (this.prepared.get(id)?.event.conversationId === conversationId) reasons.push('任务正在创建')
+    for (const agent of this.actors.values()) {
+      if (this.memory().inspect(agent.id)?.binding?.channel?.conversationId !== conversationId) continue
+      if (agent.status === 'running') reasons.push('任务或团队成员正在执行')
+      if (this.sends.has(agent.id)) reasons.push('任务结果正在交付')
+      try {
+        if (
+          get(agent.ctx, 'jobs')
+            ?.list(agent.id)
+            .some((job: any) => job.owner === agent.id && ['running', 'stopping'].includes(job.status))
+        )
+          reasons.push('后台作业尚未结束')
+      } catch {
+        reasons.push('后台作业状态尚未确认')
+      }
+    }
+    return [...new Set(reasons)]
   }
   async stopForRequester(taskId: string, conversationId: string, requesterId: string): Promise<void> {
     const source = typeof taskId === 'string' ? this.rootSource(taskId) : undefined

@@ -5,7 +5,7 @@ import { ChannelInbox, type PendingChannelMessage } from '../../shared/channel-i
 import { ChannelDispatch } from '../../shared/channel-dispatch'
 import { startFeishuConsumer } from '../../shared/feishu-consumer'
 import { decideChannelAttention } from '../../shared/channel-attention'
-import { ChannelError, type ChannelAccount } from './channel-settings'
+import { ChannelError, channelRoute, sameChannelAccount, type ChannelAccount } from './channel-settings'
 import { nativeModelSelection } from '../../shared/native-model-selection'
 import { recoverStoredAdmission } from '../../shared/channel-recovery'
 import { reconcileChannelAdmission } from '../../shared/channel-admission'
@@ -29,14 +29,25 @@ export class FeishuChannel {
       !this.closed &&
       !this.stop.signal.aborted &&
       account.enabled &&
-      account.fingerprint === this.account.fingerprint &&
-      account.personaId === this.account.personaId &&
-      account.routeRevision === this.account.routeRevision
+      sameChannelAccount(account, this.account)
     )
   }
   refreshAttention(): void {
     this.dispatch.schedule()
     this.tasks.refreshAuthorization()
+    for (const [id, handle] of this.handles)
+      if (!this.owns(handle.agent))
+        void handle
+          .dispose()
+          .then(() => {
+            if (this.handles.get(id) === handle) this.handles.delete(id)
+          })
+          .catch((error: any) => this.failures.set(id, String(error)))
+    for (const [id, agent] of this.borrowed)
+      if (!this.owns(agent)) {
+        agent.cancel({ kind: 'user' })
+        void agent.whenIdle().then(() => this.borrowed.delete(id))
+      }
   }
   readonly inbox: ChannelInbox
   readonly epoch = randomUUID()
@@ -99,19 +110,52 @@ export class FeishuChannel {
   connected(): boolean {
     return !!this.lease && this.allowed()
   }
+  routingBusy(conversationId: string): string[] {
+    const reasons: string[] = [],
+      current = this.current()
+    if (
+      current &&
+      this.opening.has(
+        this.sessionId({
+          event: { conversationId },
+          recipient: channelRoute(current, conversationId)
+        } as PendingChannelMessage)
+      )
+    )
+      reasons.push('聊天会话正在创建')
+    if (
+      [...this.handles.values()].some(
+        (handle) =>
+          this.memory().inspect(handle.agent.id)?.binding?.channel?.conversationId === conversationId &&
+          handle.agent.status === 'running'
+      ) ||
+      [...this.borrowed.values()].some(
+        (agent) =>
+          this.memory().inspect(agent.id)?.binding?.channel?.conversationId === conversationId &&
+          agent.status === 'running'
+      )
+    )
+      reasons.push('聊天正在处理消息')
+    if (this.sendQueue.busy(conversationId)) reasons.push('消息正在发送或排队交付')
+    return reasons
+  }
   private allowed(row?: PendingChannelMessage): boolean {
     const current = this.current()
+    const route = current && row ? channelRoute(current, row.event.conversationId) : undefined
     return (
       !this.stop.signal.aborted &&
       current?.enabled === true &&
-      current.fingerprint === this.account.fingerprint &&
-      current.personaId === this.account.personaId &&
-      current.routeRevision === this.account.routeRevision &&
+      sameChannelAccount(current, this.account) &&
       (!row ||
-        (row.recipient.personaId === current.personaId &&
-          row.recipient.routeRevision === current.routeRevision)) &&
-      get(this.host, 'pxPersonaResources')?.allowsChannel(current.personaId, 'feishu', current.accountId) ===
-        true
+        (row.recipient.personaId === route!.personaId &&
+          row.recipient.routeRevision === route!.routeRevision &&
+          get(this.host, 'pxChannels')?.routeAvailable?.(current.accountId, row.event.conversationId) !==
+            false &&
+          get(this.host, 'pxPersonaResources')?.allowsChannel(
+            route!.personaId,
+            'feishu',
+            current.accountId
+          ) === true))
     )
   }
   async start(): Promise<void> {
@@ -124,7 +168,7 @@ export class FeishuChannel {
         epoch: this.epoch,
         signal: this.consumerStop.signal,
         authorize: () => this.allowed(),
-        destination: () => ({ personaId: this.account.personaId, routeRevision: this.account.routeRevision }),
+        destination: (event) => channelRoute(this.current()!, event.conversationId),
         available: () => this.dispatch.schedule(),
         intercept: (id, event, signal) => this.controls.receive(id, event, signal),
         failed: (error) => {
@@ -344,11 +388,14 @@ export class FeishuChannel {
   }
   owns(agent: any): boolean {
     const binding = this.memory().inspect(agent?.session.id)?.binding,
-      channel = binding?.channel
+      channel = binding?.channel,
+      current = this.current(),
+      route = current && channel ? channelRoute(current, channel.conversationId) : undefined
     return (
       !!binding &&
       !binding.pending &&
-      binding.personaId === this.account.personaId &&
+      !!route &&
+      binding.personaId === route.personaId &&
       channel?.provider === 'feishu' &&
       channel.accountId === this.account.accountId &&
       channel.access === 'public' &&
@@ -356,13 +403,26 @@ export class FeishuChannel {
       agent.session.id ===
         this.sessionId({
           event: { conversationId: channel.conversationId },
-          recipient: { personaId: binding.personaId, routeRevision: this.account.routeRevision }
+          recipient: route
         } as PendingChannelMessage)
     )
   }
   private origin(agent: any, requestMessageId?: string, pending: any[] = []) {
     if (!this.lease || !this.allowed() || !this.owns(agent))
       throw new ChannelError('渠道会话已停止或归属变化', 403)
+    const binding = this.memory().inspect(agent.session.id).binding
+    if (
+      get(this.host, 'pxChannels')?.routeAvailable?.(
+        this.account.accountId,
+        binding.channel.conversationId
+      ) === false ||
+      get(this.host, 'pxPersonaResources')?.allowsChannel(
+        binding.personaId,
+        'feishu',
+        this.account.accountId
+      ) !== true
+    )
+      throw new ChannelError('此聊天正在更改路由或人格未获账号使用权', 403)
     const events = [
       ...agent.session.snapshotEvents(),
       ...pending.filter((m) => m.role === 'user').map((data) => ({ type: 'user/message', data }))
@@ -502,7 +562,14 @@ export class FeishuChannel {
     text: string,
     signal: AbortSignal
   ) {
-    if (!this.allowed() || !this.lease) throw new ChannelError('渠道交付已停止', 409)
+    if (
+      !this.allowed({
+        event: origin.receipt.source,
+        recipient: origin.receipt.recipient
+      } as PendingChannelMessage) ||
+      !this.lease
+    )
+      throw new ChannelError('渠道交付已停止或原消息路由已变化', 409)
     if (origin.receipt.phase !== 'admitted') {
       const agent = get(this.host, 'agents').get(sessionId)
       if (agent)
@@ -573,6 +640,9 @@ export class FeishuChannel {
         preview: row.preview,
         conversationId: row.receipt.source.conversationId,
         personaId: row.receipt.recipient.personaId,
+        retiredRoute:
+          JSON.stringify(channelRoute(this.current() ?? this.account, row.receipt.source.conversationId)) !==
+          JSON.stringify(row.receipt.recipient),
         sessionId: row.receipt.claim?.sessionId
       })),
       replies: this.inbox.pendingReplies(20),
@@ -594,7 +664,8 @@ export class FeishuChannel {
             .join('\n')
             .slice(0, 120)
         }
-      })
+      }),
+      conversations: this.inbox.conversations()
     }
   }
   requestStop(): void {

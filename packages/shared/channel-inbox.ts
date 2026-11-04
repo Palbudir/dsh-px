@@ -248,13 +248,13 @@ export class ChannelInbox {
         recipient: JSON.parse(String(r.recipient))
       }))
   }
-  /** Ordinary conversations are ordered; explicitly routed tasks have independent native queues. */
+  /** Each frozen recipient is ordered; a new route or independent task never replays an older recipient's input. */
   heads(limit = 20, afterSequence = 0): PendingChannelMessage[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw Error('收件批次大小无效')
     if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) throw Error('收件游标无效')
     return this.db
       .prepare(
-        "SELECT m.id,m.seq,m.event,m.recipient FROM channel_messages m WHERE m.phase='received' AND m.seq>? AND NOT EXISTS (SELECT 1 FROM channel_messages older WHERE older.chat=m.chat AND json_extract(older.recipient,'$.executionSessionId') IS json_extract(m.recipient,'$.executionSessionId') AND older.seq<m.seq AND older.phase IN ('received','dispatching','uncertain')) ORDER BY m.seq LIMIT ?"
+        "SELECT m.id,m.seq,m.event,m.recipient FROM channel_messages m WHERE m.phase='received' AND m.seq>? AND NOT EXISTS (SELECT 1 FROM channel_messages older WHERE older.chat=m.chat AND older.recipient=m.recipient AND older.seq<m.seq AND older.phase IN ('received','dispatching','uncertain')) ORDER BY m.seq LIMIT ?"
       )
       .all(afterSequence, limit)
       .map((r) => ({
@@ -725,6 +725,28 @@ export class ChannelInbox {
         "SELECT id FROM channel_messages WHERE chat=? AND phase='received' AND json_extract(event,'$.mentioned')=1 LIMIT 1"
       )
       .get(conversationId)
+  }
+  hasConversation(conversationId: string): boolean {
+    return !!this.db.prepare('SELECT 1 FROM channel_messages WHERE chat=? LIMIT 1').get(conversationId)
+  }
+  conversations(limit = 100) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw Error('聊天分页无效')
+    return this.db
+      .prepare(
+        'SELECT m.chat,m.metadata FROM channel_messages m JOIN (SELECT chat,max(seq) seq FROM channel_messages GROUP BY chat) last ON m.seq=last.seq ORDER BY m.seq DESC LIMIT ?'
+      )
+      .all(limit)
+      .map((row) => ({
+        conversationId: String(row.chat),
+        kind: JSON.parse(String(row.metadata)).kind as string
+      }))
+  }
+  retireRouteInputs(conversationId: string, recipient: ChannelRecipient): void {
+    this.db
+      .prepare(
+        "UPDATE channel_messages SET phase='cancelled',event=NULL,bytes=0 WHERE chat=? AND phase='received' AND json_extract(recipient,'$.personaId')=? AND json_extract(recipient,'$.routeRevision')=?"
+      )
+      .run(conversationId, recipient.personaId, recipient.routeRevision)
   }
   close(): void {
     this.db.close()

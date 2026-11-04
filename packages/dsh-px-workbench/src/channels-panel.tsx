@@ -7,6 +7,7 @@ import type { FeishuTasks } from './feishu-tasks'
 import type { createCapabilities } from '../../shared/client-capabilities'
 import { PersonaMailPanel } from './persona-mail-panel'
 import { ChannelInteractionPanel } from '../../shared/channel-interactions-panel'
+import { ChannelRoutesPanel } from './channel-routes-panel'
 
 export interface ChannelNavigation {
   openSession?: (id: string) => void | Promise<void>
@@ -23,6 +24,7 @@ interface View {
   accounts: Array<{ botId: string; channel: string }>
   runtimes: Runtime[]
   activities: Array<ReturnType<FeishuTasks['status']> & { accountId: string }>
+  knownChats: Array<{ accountId: string; conversations: Array<{ conversationId: string; kind: string }> }>
   failures: Array<{ id: string; error: string }>
   discoveryError?: string
 }
@@ -488,6 +490,15 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
                 aria-label={'飞书账号 ' + account.accountId}
               >
                 <h3>飞书 · {account.accountId}</h3>
+                <ChannelRoutesPanel
+                  account={account}
+                  revision={view.revision}
+                  personas={view.personas}
+                  chats={
+                    view.knownChats.find((row) => row.accountId === account.accountId)?.conversations ?? []
+                  }
+                  onSaved={() => refresh()}
+                />
                 {activity && (
                   <ChannelInteractionPanel
                     items={activity.pendingInteractions ?? []}
@@ -627,7 +638,8 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
                   </details>
                 )}
                 <p>
-                  人格：{view.personas.find((p) => p.id === account.personaId)?.name ?? account.personaId} ·{' '}
+                  账号默认人格：
+                  {view.personas.find((p) => p.id === account.personaId)?.name ?? account.personaId} ·{' '}
                   {modes[account.attention.mode]} ·{' '}
                   {runtime?.accepting
                     ? '接收方已注册'
@@ -731,7 +743,10 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
                           <div key={row.id} className="px-card">
                             <p>{row.preview}</p>
                             <p className="px-muted">
-                              {row.conversationId} · 已检查至事件 {row.cursor}；未重新投递。
+                              {row.conversationId} · 原人格{' '}
+                              {view.personas.find((p) => p.id === row.personaId)?.name ?? row.personaId} ·
+                              已检查至事件 {row.cursor}；未重新投递。
+                              {row.retiredRoute ? '旧路由不再接收新消息。' : ''}
                             </p>
                             {nav.openSession && (
                               <button onClick={() => openSession(row.sessionId)}>查看原生会话</button>

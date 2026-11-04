@@ -2096,6 +2096,16 @@ var identifier2 = (value, max = 200) => typeof value === "string" && !!value.tri
 var object2 = (value) => !!value && typeof value === "object" && !Array.isArray(value);
 var only = (value, keys) => Object.keys(value).every((key) => keys.includes(key));
 var list = (value, max = 200) => Array.isArray(value) && value.length <= max && value.every((x) => identifier2(x, 512)) && new Set(value).size === value.length;
+function channelRoute(account, conversationId) {
+  const route2 = account.routes?.find((row) => row.conversationId === conversationId);
+  return {
+    personaId: route2?.personaId ?? account.personaId,
+    routeRevision: route2?.revision ?? account.routeRevision
+  };
+}
+function sameChannelAccount(a, b) {
+  return a.accountId === b.accountId && a.fingerprint === b.fingerprint && a.workspace === b.workspace && a.publicInstructions === b.publicInstructions;
+}
 function parseChannelConfiguration(value = { version: 1, accounts: [] }) {
   if (!object2(value) || !only(value, ["version", "accounts"]) || value.version !== 1 || !Array.isArray(value.accounts) || value.accounts.length > 20)
     throw new ChannelError("\u6E20\u9053\u914D\u7F6E\u683C\u5F0F\u6216\u7248\u672C\u65E0\u6548\uFF0C\u672A\u8986\u76D6\u539F\u8BBE\u7F6E");
@@ -2111,10 +2121,24 @@ function parseChannelConfiguration(value = { version: 1, accounts: [] }) {
       "routeRevision",
       "authorizedUsers",
       "publicInstructions",
-      "attention"
+      "attention",
+      "routes",
+      "routeCounter"
     ]) || raw.provider !== "feishu" || !identifier2(raw.accountId, 128) || !/^[A-Za-z0-9_-]+$/.test(raw.accountId) || typeof raw.fingerprint !== "string" || !/^[a-f0-9]{64}$/.test(raw.fingerprint) || typeof raw.enabled !== "boolean" || !identifier2(raw.personaId) || typeof raw.workspace !== "string" || raw.workspace.length > 4096 || raw.workspace.includes("\0") || !isAbsolute2(raw.workspace) || !Number.isSafeInteger(raw.routeRevision) || Number(raw.routeRevision) < 1 || !list(raw.authorizedUsers, 32) || typeof raw.publicInstructions !== "string" || raw.publicInstructions.length > 2e3 || raw.publicInstructions.includes("\0"))
       throw new ChannelError("\u6E20\u9053\u8D26\u53F7\u3001\u4EBA\u683C\u3001\u5DE5\u4F5C\u533A\u6216\u6388\u6743\u6210\u5458\u65E0\u6548");
     if (ids.has(raw.accountId)) throw new ChannelError("\u540C\u4E00\u98DE\u4E66\u673A\u5668\u4EBA\u53EA\u80FD\u914D\u7F6E\u4E00\u4E2A\u63A5\u6536\u65B9");
+    if (raw.routeCounter !== void 0 && (!Number.isSafeInteger(raw.routeCounter) || Number(raw.routeCounter) < 1))
+      throw new ChannelError("\u6E20\u9053\u8DEF\u7531\u8BA1\u6570\u65E0\u6548");
+    if (raw.routes !== void 0) {
+      if (!Array.isArray(raw.routes) || raw.routes.length > 500)
+        throw new ChannelError("\u6BCF\u4E2A\u8D26\u53F7\u6700\u591A\u914D\u7F6E 500 \u6761\u804A\u5929\u8DEF\u7531");
+      const chats = /* @__PURE__ */ new Set();
+      for (const route2 of raw.routes) {
+        if (!object2(route2) || !only(route2, ["conversationId", "personaId", "revision"]) || !identifier2(route2.conversationId, 512) || route2.personaId !== null && !identifier2(route2.personaId) || !Number.isSafeInteger(route2.revision) || Number(route2.revision) < 1 || chats.has(route2.conversationId))
+          throw new ChannelError("\u804A\u5929\u8DEF\u7531\u6216\u4FEE\u8BA2\u65E0\u6548");
+        chats.add(route2.conversationId);
+      }
+    }
     ids.add(raw.accountId);
     const attention = raw.attention;
     if (!object2(attention) || !only(attention, [
@@ -2170,14 +2194,42 @@ var NativeChannelSettings = class {
     });
     return this.readMail();
   }
-  async save(revision, proposed) {
+  async changeRoute(revision, accountId, conversationId, personaId, restart = false) {
+    if (!identifier2(conversationId, 512) || personaId !== null && !identifier2(personaId))
+      throw new ChannelError("\u804A\u5929\u6216\u4EBA\u683C\u65E0\u6548");
+    const next = this.read().configuration, account = next.accounts.find((row) => row.accountId === accountId);
+    if (!account) throw new ChannelError("\u8D26\u53F7\u4E0D\u5B58\u5728", 404);
+    account.routes = [
+      ...(account.routes ?? []).filter((row) => row.conversationId !== conversationId),
+      { conversationId, personaId, revision: 1 }
+    ];
+    return this.save(revision, next, { accountId, conversationId, restart });
+  }
+  async save(revision, proposed, routeEdit) {
     const entry = this.entry(), before = this.read(), next = parseChannelConfiguration(proposed);
     if (revision !== before.revision) throw new ChannelError("\u6E20\u9053\u8BBE\u7F6E\u5DF2\u53D8\u5316\uFF0C\u8BF7\u5237\u65B0\uFF1B\u672A\u8986\u76D6\u5176\u4ED6\u4FEE\u6539", 409);
     for (const account of next.accounts) {
       const old = before.configuration.accounts.find((row) => row.accountId === account.accountId);
-      const routing = (row) => JSON.stringify([row.fingerprint, row.personaId, row.workspace, row.publicInstructions]);
-      account.routeRevision = old ? old.routeRevision + (routing(old) === routing(account) ? 0 : 1) : 1;
-      if (!Number.isSafeInteger(account.routeRevision)) throw new ChannelError("\u8DEF\u7531\u4FEE\u8BA2\u5DF2\u8FBE\u5230\u4E0A\u9650", 409);
+      if (routeEdit?.accountId !== account.accountId && JSON.stringify(old?.routes ?? []) !== JSON.stringify(account.routes ?? []))
+        throw new ChannelError("\u8BF7\u4ECE\u804A\u5929\u4EBA\u683C\u5165\u53E3\u66F4\u6539\u8DEF\u7531", 409);
+      let counter = Math.max(
+        old?.routeCounter ?? 0,
+        old?.routeRevision ?? 0,
+        ...(old?.routes ?? []).map((row) => row.revision)
+      );
+      const bump = () => {
+        if (!Number.isSafeInteger(++counter)) throw new ChannelError("\u8DEF\u7531\u4FEE\u8BA2\u5DF2\u8FBE\u5230\u4E0A\u9650", 409);
+        return counter;
+      };
+      const identityChanged = !!old && !sameChannelAccount(old, account), defaultChanged = !!old && old.personaId !== account.personaId;
+      account.routeRevision = !old || identityChanged || defaultChanged ? bump() : old.routeRevision;
+      if (account.routes)
+        account.routes = account.routes.map((route2) => {
+          const previous = old?.routes?.find((r) => r.conversationId === route2.conversationId);
+          const changed = !previous || previous.personaId !== route2.personaId || identityChanged || defaultChanged && route2.personaId === null || routeEdit?.accountId === account.accountId && routeEdit.conversationId === route2.conversationId && routeEdit.restart;
+          return { ...route2, revision: changed ? bump() : previous.revision };
+        });
+      account.routeCounter = counter;
     }
     await this.editor.edit(entry, (fresh) => {
       if (digest(fresh) !== revision) throw new ChannelError("\u5176\u4ED6\u7A97\u53E3\u5DF2\u4FEE\u6539\u539F\u751F\u914D\u7F6E\uFF0C\u672A\u8986\u76D6\u5176\u4FEE\u6539", 409);
@@ -2606,12 +2658,12 @@ var ChannelInbox = class {
       recipient: JSON.parse(String(r.recipient))
     }));
   }
-  /** Ordinary conversations are ordered; explicitly routed tasks have independent native queues. */
+  /** Each frozen recipient is ordered; a new route or independent task never replays an older recipient's input. */
   heads(limit = 20, afterSequence = 0) {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw Error("\u6536\u4EF6\u6279\u6B21\u5927\u5C0F\u65E0\u6548");
     if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) throw Error("\u6536\u4EF6\u6E38\u6807\u65E0\u6548");
     return this.db.prepare(
-      "SELECT m.id,m.seq,m.event,m.recipient FROM channel_messages m WHERE m.phase='received' AND m.seq>? AND NOT EXISTS (SELECT 1 FROM channel_messages older WHERE older.chat=m.chat AND json_extract(older.recipient,'$.executionSessionId') IS json_extract(m.recipient,'$.executionSessionId') AND older.seq<m.seq AND older.phase IN ('received','dispatching','uncertain')) ORDER BY m.seq LIMIT ?"
+      "SELECT m.id,m.seq,m.event,m.recipient FROM channel_messages m WHERE m.phase='received' AND m.seq>? AND NOT EXISTS (SELECT 1 FROM channel_messages older WHERE older.chat=m.chat AND older.recipient=m.recipient AND older.seq<m.seq AND older.phase IN ('received','dispatching','uncertain')) ORDER BY m.seq LIMIT ?"
     ).all(afterSequence, limit).map((r) => ({
       id: String(r.id),
       seq: Number(r.seq),
@@ -2937,6 +2989,23 @@ var ChannelInbox = class {
       "SELECT id FROM channel_messages WHERE chat=? AND phase='received' AND json_extract(event,'$.mentioned')=1 LIMIT 1"
     ).get(conversationId);
   }
+  hasConversation(conversationId) {
+    return !!this.db.prepare("SELECT 1 FROM channel_messages WHERE chat=? LIMIT 1").get(conversationId);
+  }
+  conversations(limit = 100) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw Error("\u804A\u5929\u5206\u9875\u65E0\u6548");
+    return this.db.prepare(
+      "SELECT m.chat,m.metadata FROM channel_messages m JOIN (SELECT chat,max(seq) seq FROM channel_messages GROUP BY chat) last ON m.seq=last.seq ORDER BY m.seq DESC LIMIT ?"
+    ).all(limit).map((row) => ({
+      conversationId: String(row.chat),
+      kind: JSON.parse(String(row.metadata)).kind
+    }));
+  }
+  retireRouteInputs(conversationId, recipient) {
+    this.db.prepare(
+      "UPDATE channel_messages SET phase='cancelled',event=NULL,bytes=0 WHERE chat=? AND phase='received' AND json_extract(recipient,'$.personaId')=? AND json_extract(recipient,'$.routeRevision')=?"
+    ).run(conversationId, recipient.personaId, recipient.routeRevision);
+  }
   close() {
     this.db.close();
   }
@@ -3112,7 +3181,12 @@ var ChannelDispatch = class {
       for (const row of batch) {
         if (this.running.size >= this.concurrency || this.controller.signal.aborted) return;
         this.cursor = row.seq;
-        const lane = JSON.stringify([row.event.conversationId, row.recipient.executionSessionId ?? null]);
+        const lane = JSON.stringify([
+          row.event.conversationId,
+          row.recipient.personaId,
+          row.recipient.routeRevision,
+          row.recipient.executionSessionId ?? null
+        ]);
         if (this.running.has(lane) || this.blocked.has(row.id)) continue;
         let selection;
         try {
@@ -3814,7 +3888,7 @@ var FeishuTasks = class {
   receptionPaused = false;
   outputScans = /* @__PURE__ */ new Map();
   matches(account) {
-    return !this.closed && !this.stop.signal.aborted && account.fingerprint === this.account.fingerprint && account.routeRevision === this.account.routeRevision && account.personaId === this.account.personaId;
+    return !this.closed && !this.stop.signal.aborted && sameChannelAccount(account, this.account);
   }
   interaction(kind, request, next) {
     if (!this.owns(request.agent)) return next();
@@ -3910,7 +3984,8 @@ var FeishuTasks = class {
   }
   authorized(row) {
     const c = this.current();
-    return !this.stop.signal.aborted && !!c?.enabled && c.fingerprint === this.account.fingerprint && c.personaId === row.recipient.personaId && c.routeRevision === row.recipient.routeRevision && c.authorizedUsers.includes(row.event.actorId) && get5(this.host, "pxPersonaResources")?.allowsChannel(c.personaId, "feishu", c.accountId) === true;
+    const route2 = c && channelRoute(c, row.event.conversationId);
+    return !this.stop.signal.aborted && !!c?.enabled && sameChannelAccount(c, this.account) && route2.personaId === row.recipient.personaId && route2.routeRevision === row.recipient.routeRevision && get5(this.host, "pxChannels")?.routeAvailable?.(c.accountId, row.event.conversationId) !== false && c.authorizedUsers.includes(row.event.actorId) && get5(this.host, "pxPersonaResources")?.allowsChannel(route2.personaId, "feishu", c.accountId) === true;
   }
   rootSource(id3) {
     return this.inbox.firstForSession(id3);
@@ -4281,6 +4356,23 @@ var FeishuTasks = class {
   disposed(agent) {
     if (this.actors.get(agent.id) === agent) this.actors.delete(agent.id);
   }
+  routingBusy(conversationId) {
+    const reasons = [];
+    for (const [id3] of this.opening)
+      if (this.prepared.get(id3)?.event.conversationId === conversationId) reasons.push("\u4EFB\u52A1\u6B63\u5728\u521B\u5EFA");
+    for (const agent of this.actors.values()) {
+      if (this.memory().inspect(agent.id)?.binding?.channel?.conversationId !== conversationId) continue;
+      if (agent.status === "running") reasons.push("\u4EFB\u52A1\u6216\u56E2\u961F\u6210\u5458\u6B63\u5728\u6267\u884C");
+      if (this.sends.has(agent.id)) reasons.push("\u4EFB\u52A1\u7ED3\u679C\u6B63\u5728\u4EA4\u4ED8");
+      try {
+        if (get5(agent.ctx, "jobs")?.list(agent.id).some((job) => job.owner === agent.id && ["running", "stopping"].includes(job.status)))
+          reasons.push("\u540E\u53F0\u4F5C\u4E1A\u5C1A\u672A\u7ED3\u675F");
+      } catch {
+        reasons.push("\u540E\u53F0\u4F5C\u4E1A\u72B6\u6001\u5C1A\u672A\u786E\u8BA4");
+      }
+    }
+    return [...new Set(reasons)];
+  }
   async stopForRequester(taskId, conversationId, requesterId) {
     const source = typeof taskId === "string" ? this.rootSource(taskId) : void 0;
     if (!source || source.receipt.source.conversationId !== conversationId || source.receipt.source.actorId !== requesterId || !this.authorized({ event: source.receipt.source, recipient: source.receipt.recipient }))
@@ -4519,6 +4611,9 @@ var FeishuControls = class {
 
 // packages/shared/channel-send-queue.ts
 var ChannelSendQueue = class {
+  busy(conversation) {
+    return this.tails.has(conversation);
+  }
   tails = /* @__PURE__ */ new Map();
   run(conversation, signal, send) {
     if (signal.aborted) return Promise.reject(signal.reason ?? Error("\u53D1\u9001\u5DF2\u53D6\u6D88"));
@@ -4594,11 +4689,21 @@ var FeishuChannel = class {
     return this.account.accountId;
   }
   matches(account) {
-    return !this.closed && !this.stop.signal.aborted && account.enabled && account.fingerprint === this.account.fingerprint && account.personaId === this.account.personaId && account.routeRevision === this.account.routeRevision;
+    return !this.closed && !this.stop.signal.aborted && account.enabled && sameChannelAccount(account, this.account);
   }
   refreshAttention() {
     this.dispatch.schedule();
     this.tasks.refreshAuthorization();
+    for (const [id3, handle] of this.handles)
+      if (!this.owns(handle.agent))
+        void handle.dispose().then(() => {
+          if (this.handles.get(id3) === handle) this.handles.delete(id3);
+        }).catch((error) => this.failures.set(id3, String(error)));
+    for (const [id3, agent] of this.borrowed)
+      if (!this.owns(agent)) {
+        agent.cancel({ kind: "user" });
+        void agent.whenIdle().then(() => this.borrowed.delete(id3));
+      }
   }
   inbox;
   epoch = randomUUID3();
@@ -4625,9 +4730,32 @@ var FeishuChannel = class {
   connected() {
     return !!this.lease && this.allowed();
   }
+  routingBusy(conversationId) {
+    const reasons = [], current = this.current();
+    if (current && this.opening.has(
+      this.sessionId({
+        event: { conversationId },
+        recipient: channelRoute(current, conversationId)
+      })
+    ))
+      reasons.push("\u804A\u5929\u4F1A\u8BDD\u6B63\u5728\u521B\u5EFA");
+    if ([...this.handles.values()].some(
+      (handle) => this.memory().inspect(handle.agent.id)?.binding?.channel?.conversationId === conversationId && handle.agent.status === "running"
+    ) || [...this.borrowed.values()].some(
+      (agent) => this.memory().inspect(agent.id)?.binding?.channel?.conversationId === conversationId && agent.status === "running"
+    ))
+      reasons.push("\u804A\u5929\u6B63\u5728\u5904\u7406\u6D88\u606F");
+    if (this.sendQueue.busy(conversationId)) reasons.push("\u6D88\u606F\u6B63\u5728\u53D1\u9001\u6216\u6392\u961F\u4EA4\u4ED8");
+    return reasons;
+  }
   allowed(row) {
     const current = this.current();
-    return !this.stop.signal.aborted && current?.enabled === true && current.fingerprint === this.account.fingerprint && current.personaId === this.account.personaId && current.routeRevision === this.account.routeRevision && (!row || row.recipient.personaId === current.personaId && row.recipient.routeRevision === current.routeRevision) && get7(this.host, "pxPersonaResources")?.allowsChannel(current.personaId, "feishu", current.accountId) === true;
+    const route2 = current && row ? channelRoute(current, row.event.conversationId) : void 0;
+    return !this.stop.signal.aborted && current?.enabled === true && sameChannelAccount(current, this.account) && (!row || row.recipient.personaId === route2.personaId && row.recipient.routeRevision === route2.routeRevision && get7(this.host, "pxChannels")?.routeAvailable?.(current.accountId, row.event.conversationId) !== false && get7(this.host, "pxPersonaResources")?.allowsChannel(
+      route2.personaId,
+      "feishu",
+      current.accountId
+    ) === true);
   }
   async start() {
     if (!this.allowed()) throw new ChannelError("\u4EBA\u683C\u6216\u6E20\u9053\u63A5\u6536\u6743\u9650\u4E0D\u53EF\u7528", 403);
@@ -4639,7 +4767,7 @@ var FeishuChannel = class {
         epoch: this.epoch,
         signal: this.consumerStop.signal,
         authorize: () => this.allowed(),
-        destination: () => ({ personaId: this.account.personaId, routeRevision: this.account.routeRevision }),
+        destination: (event) => channelRoute(this.current(), event.conversationId),
         available: () => this.dispatch.schedule(),
         intercept: (id3, event, signal) => this.controls.receive(id3, event, signal),
         failed: (error) => {
@@ -4831,15 +4959,25 @@ var FeishuChannel = class {
     await workspace.attachSession(agent.session.id);
   }
   owns(agent) {
-    const binding2 = this.memory().inspect(agent?.session.id)?.binding, channel = binding2?.channel;
-    return !!binding2 && !binding2.pending && binding2.personaId === this.account.personaId && channel?.provider === "feishu" && channel.accountId === this.account.accountId && channel.access === "public" && !channel.task && agent.session.id === this.sessionId({
+    const binding2 = this.memory().inspect(agent?.session.id)?.binding, channel = binding2?.channel, current = this.current(), route2 = current && channel ? channelRoute(current, channel.conversationId) : void 0;
+    return !!binding2 && !binding2.pending && !!route2 && binding2.personaId === route2.personaId && channel?.provider === "feishu" && channel.accountId === this.account.accountId && channel.access === "public" && !channel.task && agent.session.id === this.sessionId({
       event: { conversationId: channel.conversationId },
-      recipient: { personaId: binding2.personaId, routeRevision: this.account.routeRevision }
+      recipient: route2
     });
   }
   origin(agent, requestMessageId, pending = []) {
     if (!this.lease || !this.allowed() || !this.owns(agent))
       throw new ChannelError("\u6E20\u9053\u4F1A\u8BDD\u5DF2\u505C\u6B62\u6216\u5F52\u5C5E\u53D8\u5316", 403);
+    const binding2 = this.memory().inspect(agent.session.id).binding;
+    if (get7(this.host, "pxChannels")?.routeAvailable?.(
+      this.account.accountId,
+      binding2.channel.conversationId
+    ) === false || get7(this.host, "pxPersonaResources")?.allowsChannel(
+      binding2.personaId,
+      "feishu",
+      this.account.accountId
+    ) !== true)
+      throw new ChannelError("\u6B64\u804A\u5929\u6B63\u5728\u66F4\u6539\u8DEF\u7531\u6216\u4EBA\u683C\u672A\u83B7\u8D26\u53F7\u4F7F\u7528\u6743", 403);
     const events = [
       ...agent.session.snapshotEvents(),
       ...pending.filter((m) => m.role === "user").map((data) => ({ type: "user/message", data }))
@@ -4942,7 +5080,11 @@ var FeishuChannel = class {
     );
   }
   async performDelivery(inbox, origin, sessionId, key, text, signal) {
-    if (!this.allowed() || !this.lease) throw new ChannelError("\u6E20\u9053\u4EA4\u4ED8\u5DF2\u505C\u6B62", 409);
+    if (!this.allowed({
+      event: origin.receipt.source,
+      recipient: origin.receipt.recipient
+    }) || !this.lease)
+      throw new ChannelError("\u6E20\u9053\u4EA4\u4ED8\u5DF2\u505C\u6B62\u6216\u539F\u6D88\u606F\u8DEF\u7531\u5DF2\u53D8\u5316", 409);
     if (origin.receipt.phase !== "admitted") {
       const agent = get7(this.host, "agents").get(sessionId);
       if (agent)
@@ -5011,6 +5153,7 @@ var FeishuChannel = class {
         preview: row.preview,
         conversationId: row.receipt.source.conversationId,
         personaId: row.receipt.recipient.personaId,
+        retiredRoute: JSON.stringify(channelRoute(this.current() ?? this.account, row.receipt.source.conversationId)) !== JSON.stringify(row.receipt.recipient),
         sessionId: row.receipt.claim?.sessionId
       })),
       replies: this.inbox.pendingReplies(20),
@@ -5026,7 +5169,8 @@ var FeishuChannel = class {
           ...member,
           preview: (event?.data.content ?? []).filter((b) => b.type === "text").map((b) => b.text).join("\n").slice(0, 120)
         };
-      })
+      }),
+      conversations: this.inbox.conversations()
     };
   }
   requestStop() {
@@ -5086,6 +5230,7 @@ function registerChannels(ctx) {
     )
   );
   const runtimes = /* @__PURE__ */ new Map(), tasks = /* @__PURE__ */ new Map(), failures = /* @__PURE__ */ new Map();
+  const routeLocks = /* @__PURE__ */ new Set(), routeKey = (account, chat) => JSON.stringify([account, chat]);
   let settings, available = false, im, memory;
   let supervisor, synchronise;
   ctx.on("px/channels-settings", () => synchronise?.());
@@ -5116,6 +5261,7 @@ function registerChannels(ctx) {
     );
   ctx.provide("pxChannels", {
     version: 1,
+    routeAvailable: (account, chat) => !routeLocks.has(routeKey(account, chat)),
     taskAllowed: (agent) => [...tasks.values()].some((row) => row.owns(agent)),
     prepareTaskStep: async (agent, messages) => {
       const account = memory?.inspect(agent.id)?.binding?.channel?.accountId;
@@ -5356,12 +5502,73 @@ function registerChannels(ctx) {
                 discoveryError,
                 runtimes: [...runtimes.values()].map((runtime) => runtime.status()),
                 activities: [...tasks].map(([accountId, task]) => ({ accountId, ...task.status() })),
+                knownChats: settings.read().configuration.accounts.map((account) => ({
+                  accountId: account.accountId,
+                  conversations: (() => {
+                    const known = new Map(
+                      (runtimes.get(account.accountId)?.inbox.conversations(500) ?? []).map((row) => [
+                        row.conversationId,
+                        row
+                      ])
+                    );
+                    for (const row of memory?.channelBindings(account.accountId, "feishu") ?? [])
+                      if (!known.has(row.channel.conversationId))
+                        known.set(row.channel.conversationId, {
+                          conversationId: row.channel.conversationId,
+                          kind: "saved"
+                        });
+                    return [...known.values()].slice(0, 500);
+                  })()
+                })),
                 failures: [...failures].map(([id3, error]) => ({ id: id3, error }))
               });
             }
             if (req.method !== "POST") return send(res, 405, { error: "\u8BF7\u4F7F\u7528 GET \u6216 POST" });
             if (req.headers["x-dsh-px-request"] !== "1") throw new ChannelError("\u8BF7\u4ECE\u672C\u673A\u6E20\u9053\u9875\u9762\u63D0\u4EA4", 403);
             const body = await readJsonBody(req);
+            if (body.type === "change-route") {
+              const snapshot = settings.read(), account = snapshot.configuration.accounts.find((row) => row.accountId === body.accountId);
+              if (!account || typeof body.conversationId !== "string" || body.personaId !== null && typeof body.personaId !== "string" || body.stopPending !== true)
+                throw new ChannelError("\u8BF7\u9009\u62E9\u804A\u5929\u548C\u4EBA\u683C\uFF0C\u5E76\u786E\u8BA4\u505C\u6B62\u65E7\u8F93\u5165\u540E\u65B0\u5EFA\u4F1A\u8BDD");
+              const runtime = runtimes.get(account.accountId), task = tasks.get(account.accountId), chat = body.conversationId;
+              if (!runtime?.inbox.hasConversation(chat) && !(memory?.channelBindings(account.accountId, "feishu") ?? []).some(
+                (r) => r.channel.conversationId === chat
+              ))
+                throw new ChannelError("\u53EA\u80FD\u914D\u7F6E\u5F53\u524D\u8D26\u53F7\u5DF2\u7ECF\u8BC6\u522B\u7684\u804A\u5929", 403);
+              const persona = body.personaId ?? account.personaId;
+              if (!memory?.personas().some((p) => p.id === persona) || host.get("pxPersonaResources")?.allowsChannel(persona, "feishu", account.accountId) !== true)
+                throw new ChannelError("\u76EE\u6807\u4EBA\u683C\u4E0D\u53EF\u7528\u6216\u6CA1\u6709\u6B64\u8D26\u53F7\u7684\u4F7F\u7528\u6743", 403);
+              const key = routeKey(account.accountId, chat);
+              if (routeLocks.has(key)) throw new ChannelError("\u6B64\u804A\u5929\u6B63\u5728\u66F4\u6539\u8DEF\u7531", 409);
+              routeLocks.add(key);
+              try {
+                const busy = [...runtime?.routingBusy(chat) ?? [], ...task?.routingBusy(chat) ?? []];
+                if (busy.length)
+                  throw new ChannelError("\u8BF7\u5148\u7ED3\u675F\u6216\u505C\u6B62\u6B64\u804A\u5929\u7684\u5DE5\u4F5C\uFF1A" + busy.join("\uFF1B"), 409);
+                const previous = channelRoute(account, chat);
+                const saved = await settings.changeRoute(
+                  body.revision,
+                  account.accountId,
+                  chat,
+                  body.personaId,
+                  body.restart === true
+                );
+                const next = channelRoute(
+                  saved.configuration.accounts.find((row) => row.accountId === account.accountId),
+                  chat
+                );
+                if (previous.personaId !== next.personaId || previous.routeRevision !== next.routeRevision) {
+                  runtime?.inbox.retireRouteInputs(chat, previous);
+                  task?.inbox.retireRouteInputs(chat, previous);
+                }
+                if (previous.personaId !== next.personaId || previous.routeRevision !== next.routeRevision)
+                  synchronise?.();
+                return send(res, 200, saved);
+              } finally {
+                routeLocks.delete(key);
+                runtime?.refreshAttention();
+              }
+            }
             if (body.type === "save") {
               const saved = await settings.save(body.revision, body.configuration);
               synchronise?.();

@@ -94,7 +94,12 @@ export class ChannelDispatch {
       for (const row of batch) {
         if (this.running.size >= this.concurrency || this.controller.signal.aborted) return
         this.cursor = row.seq
-        const lane = JSON.stringify([row.event.conversationId, row.recipient.executionSessionId ?? null])
+        const lane = JSON.stringify([
+          row.event.conversationId,
+          row.recipient.personaId,
+          row.recipient.routeRevision,
+          row.recipient.executionSessionId ?? null
+        ])
         if (this.running.has(lane) || this.blocked.has(row.id)) continue
         let selection: ReturnType<ChannelDispatchPorts['selection']>
         try {

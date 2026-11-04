@@ -76,6 +76,29 @@ test('unknown output from one task does not block another task in the same conve
   assert.equal(f.inbox.pendingReplies().length, 1)
 })
 
+test('explicit fresh route can receive new input without replaying unresolved input addressed to the old persona', (t) => {
+  const f = fixture(t),
+    old = f.inbox.accept(message('old'), recipient),
+    claim = { ...recipient, epoch: 'old', sessionId: 'old-session', requestId: 'old-request' }
+  f.inbox.claim(old.id, claim)
+  f.inbox.uncertain(old.id, claim)
+  const held = f.inbox.accept(message('held'), recipient),
+    next = f.inbox.accept(message('new'), { personaId: 'persona-b', routeRevision: 2 })
+  assert.deepEqual(
+    f.inbox.heads().map((r) => r.id),
+    [next.id]
+  )
+  f.inbox.retireRouteInputs('oc_group', recipient)
+  assert.equal(f.inbox.receipt(held.id)?.phase, 'cancelled')
+  assert.equal(f.inbox.receipt(old.id)?.phase, 'uncertain')
+  assert.deepEqual(f.inbox.receipt(old.id)?.recipient, recipient)
+  assert.equal(f.inbox.accept(message('old'), { personaId: 'persona-b', routeRevision: 2 }).duplicate, true)
+  assert.deepEqual(
+    f.inbox.heads().map((r) => r.id),
+    [next.id]
+  )
+})
+
 test('never-attempted task output survives restart, while unknown sends are never retried automatically', (t) => {
   const f = fixture(t),
     target = { ...recipient, executionSessionId: 'task' },

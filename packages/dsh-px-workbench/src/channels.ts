@@ -2,7 +2,7 @@ import { ChannelSupervisor } from '../../shared/channel-supervisor'
 import { join } from 'node:path'
 import { rejectUnauthenticatedRequest } from '../../shared/request-trust'
 import { readJsonBody } from './http'
-import { NativeChannelSettings, ChannelError, type ChannelAccount } from './channel-settings'
+import { NativeChannelSettings, ChannelError, channelRoute, type ChannelAccount } from './channel-settings'
 import { FeishuChannel } from './feishu-channel'
 import { FeishuTasks } from './feishu-tasks'
 import { randomUUID } from 'node:crypto'
@@ -30,6 +30,8 @@ export function registerChannels(ctx: any): void {
   const runtimes = new Map<string, FeishuChannel>(),
     tasks = new Map<string, FeishuTasks>(),
     failures = new Map<string, string>()
+  const routeLocks = new Set<string>(),
+    routeKey = (account: string, chat: string) => JSON.stringify([account, chat])
   let settings: NativeChannelSettings | undefined,
     available = false,
     im: any,
@@ -64,6 +66,7 @@ export function registerChannels(ctx: any): void {
     )
   ctx.provide('pxChannels', {
     version: 1,
+    routeAvailable: (account: string, chat: string) => !routeLocks.has(routeKey(account, chat)),
     taskAllowed: (agent: any) => [...tasks.values()].some((row) => row.owns(agent)),
     prepareTaskStep: async (agent: any, messages: any[]) => {
       const account = memory?.inspect(agent.id)?.binding?.channel?.accountId
@@ -324,12 +327,90 @@ export function registerChannels(ctx: any): void {
                   discoveryError,
                   runtimes: [...runtimes.values()].map((runtime) => runtime.status()),
                   activities: [...tasks].map(([accountId, task]) => ({ accountId, ...task.status() })),
+                  knownChats: settings.read().configuration.accounts.map((account) => ({
+                    accountId: account.accountId,
+                    conversations: (() => {
+                      const known = new Map(
+                        (runtimes.get(account.accountId)?.inbox.conversations(500) ?? []).map((row) => [
+                          row.conversationId,
+                          row
+                        ])
+                      )
+                      for (const row of memory?.channelBindings(account.accountId, 'feishu') ?? [])
+                        if (!known.has(row.channel.conversationId))
+                          known.set(row.channel.conversationId, {
+                            conversationId: row.channel.conversationId,
+                            kind: 'saved'
+                          })
+                      return [...known.values()].slice(0, 500)
+                    })()
+                  })),
                   failures: [...failures].map(([id, error]) => ({ id, error }))
                 })
               }
               if (req.method !== 'POST') return send(res, 405, { error: '请使用 GET 或 POST' })
               if (req.headers['x-dsh-px-request'] !== '1') throw new ChannelError('请从本机渠道页面提交', 403)
               const body = await readJsonBody(req)
+              if (body.type === 'change-route') {
+                const snapshot = settings.read(),
+                  account = snapshot.configuration.accounts.find((row) => row.accountId === body.accountId)
+                if (
+                  !account ||
+                  typeof body.conversationId !== 'string' ||
+                  (body.personaId !== null && typeof body.personaId !== 'string') ||
+                  body.stopPending !== true
+                )
+                  throw new ChannelError('请选择聊天和人格，并确认停止旧输入后新建会话')
+                const runtime = runtimes.get(account.accountId),
+                  task = tasks.get(account.accountId),
+                  chat = body.conversationId
+                if (
+                  !runtime?.inbox.hasConversation(chat) &&
+                  !(memory?.channelBindings(account.accountId, 'feishu') ?? []).some(
+                    (r: any) => r.channel.conversationId === chat
+                  )
+                )
+                  throw new ChannelError('只能配置当前账号已经识别的聊天', 403)
+                const persona = body.personaId ?? account.personaId
+                if (
+                  !memory?.personas().some((p: any) => p.id === persona) ||
+                  host.get('pxPersonaResources')?.allowsChannel(persona, 'feishu', account.accountId) !== true
+                )
+                  throw new ChannelError('目标人格不可用或没有此账号的使用权', 403)
+                const key = routeKey(account.accountId, chat)
+                if (routeLocks.has(key)) throw new ChannelError('此聊天正在更改路由', 409)
+                routeLocks.add(key)
+                try {
+                  const busy = [...(runtime?.routingBusy(chat) ?? []), ...(task?.routingBusy(chat) ?? [])]
+                  if (busy.length)
+                    throw new ChannelError('请先结束或停止此聊天的工作：' + busy.join('；'), 409)
+                  const previous = channelRoute(account, chat)
+                  const saved = await settings.changeRoute(
+                    body.revision,
+                    account.accountId,
+                    chat,
+                    body.personaId,
+                    body.restart === true
+                  )
+                  const next = channelRoute(
+                    saved.configuration.accounts.find((row) => row.accountId === account.accountId)!,
+                    chat
+                  )
+                  if (
+                    previous.personaId !== next.personaId ||
+                    previous.routeRevision !== next.routeRevision
+                  ) {
+                    runtime?.inbox.retireRouteInputs(chat, previous)
+                    task?.inbox.retireRouteInputs(chat, previous)
+                  }
+                  if (previous.personaId !== next.personaId || previous.routeRevision !== next.routeRevision)
+                    synchronise?.()
+                  return send(res, 200, saved)
+                } finally {
+                  routeLocks.delete(key)
+                  runtime?.refreshAttention()
+                }
+              }
               if (body.type === 'save') {
                 const saved = await settings.save(body.revision, body.configuration)
                 synchronise?.()

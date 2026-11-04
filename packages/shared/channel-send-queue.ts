@@ -1,5 +1,8 @@
 /** Transport serialization per conversation. A canceled queued send never invokes its producer. */
 export class ChannelSendQueue {
+  busy(conversation: string): boolean {
+    return this.tails.has(conversation)
+  }
   private readonly tails = new Map<string, Promise<unknown>>()
   run<T>(conversation: string, signal: AbortSignal, send: () => Promise<T>): Promise<T> {
     if (signal.aborted) return Promise.reject(signal.reason ?? Error('发送已取消'))
