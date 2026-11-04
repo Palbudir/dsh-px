@@ -14,6 +14,7 @@ import { ChannelInteractions } from '../../shared/channel-interactions'
 import { FeishuControls } from './feishu-controls'
 import { channelControl } from '../../shared/channel-control'
 import { ChannelSendQueue } from '../../shared/channel-send-queue'
+import { FeishuAttention } from './feishu-attention'
 
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 const get = (ctx: any, key: string) => (ctx.get ? ctx.get(key) : ctx[key])
@@ -33,6 +34,7 @@ export class FeishuChannel {
     )
   }
   refreshAttention(): void {
+    this.attention.refresh()
     this.dispatch.schedule()
     this.tasks.refreshAuthorization()
     for (const [id, handle] of this.handles)
@@ -54,6 +56,7 @@ export class FeishuChannel {
   readonly dispatch: ChannelDispatch
   readonly tasks: FeishuTasks
   readonly interactions: ChannelInteractions
+  readonly attention: FeishuAttention
   private readonly controls: FeishuControls
   private readonly sendQueue = new ChannelSendQueue()
   private readonly stop = new AbortController()
@@ -92,6 +95,18 @@ export class FeishuChannel {
     })
     this.tasks = tasks
     this.interactions = tasks.interactions
+    this.attention = new FeishuAttention(
+      host,
+      current,
+      this.inbox,
+      () => this.connected(),
+      (row) =>
+        this.allowed({
+          event: { conversationId: row.chatId },
+          recipient: row.recipient
+        } as PendingChannelMessage),
+      () => this.dispatch.schedule()
+    )
     this.controls = new FeishuControls(
       host,
       this.inbox,
@@ -169,7 +184,10 @@ export class FeishuChannel {
         signal: this.consumerStop.signal,
         authorize: () => this.allowed(),
         destination: (event) => channelRoute(this.current()!, event.conversationId),
-        available: () => this.dispatch.schedule(),
+        available: () => {
+          this.dispatch.schedule()
+          this.attention.schedule()
+        },
         intercept: (id, event, signal) => this.controls.receive(id, event, signal),
         failed: (error) => {
           this.failures.set('consumer', String(error))
@@ -179,6 +197,7 @@ export class FeishuChannel {
     await this.tasks.activate()
     void this.reconcile()
     await this.controls.retirePrevious(this.stop.signal)
+    this.attention.schedule()
   }
   reconcile(): Promise<void> {
     if (this.recovery) return this.recovery
@@ -252,7 +271,7 @@ export class FeishuChannel {
   private selection(row: PendingChannelMessage): 'wake' | 'context' | 'hold' {
     if (channelControl(row.event.text)) return 'hold'
     if (!this.lease || !this.allowed(row)) return 'hold'
-    const attention = this.current()!.attention,
+    const attention = this.attention.effective(),
       choice = decideChannelAttention(attention, {
         conversationId: row.event.conversationId,
         kind: row.event.kind,
@@ -650,6 +669,7 @@ export class FeishuChannel {
       tasks: this.tasks.status(),
       pendingInteractions: this.interactions.list(),
       controls: this.inbox.controls(),
+      attention: this.attention.status(),
       observedMembers: this.inbox.observedMembers().map((member) => {
         if (member.preview || !member.nativeSessionId || !member.nativeMessageId) return member
         const session = get(this.host, 'sessions')?.get(member.nativeSessionId)
@@ -684,6 +704,7 @@ export class FeishuChannel {
   private async finishDispose(): Promise<void> {
     if (this.closed) return
     this.requestStop()
+    await this.attention.dispose()
     await this.controls.drain()
     await this.sendQueue.drain()
     await this.dispatch.dispose()

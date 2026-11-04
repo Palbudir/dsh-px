@@ -191,7 +191,9 @@ function samePublicConversation(a, b) {
   return sameConversationAudience(a, b);
 }
 var isExperienceSession = (id2) => /^px-experience-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id2);
-var isAttentionSession = (id2) => /^px-qq-attention-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id2);
+var isAttentionSession = (id2) => /^px-(?:qq|channel)-attention-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+  id2
+);
 var isInternalSession = (id2) => isExperienceSession(id2) || isAttentionSession(id2);
 var MemoryError = class extends Error {
   constructor(message, status = 400) {

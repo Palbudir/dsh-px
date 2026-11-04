@@ -212,6 +212,19 @@ function AccountEditor({
           专注聊天会处理可见文字，由人格决定回复或旁听。普通模式优先处理私聊、@
           和关注聊天；仅通知保留预览，打开聊天后再处理。
         </p>
+        <label style={{ display: 'block' }}>
+          <input
+            type="checkbox"
+            checked={draft.attention.allowAgentChanges === true}
+            onChange={(e: any) =>
+              update({ attention: { ...draft.attention, allowAgentChanges: e.target.checked } })
+            }
+          />
+          允许人格判断通知并临时关注聊天
+        </label>
+        <p className="px-muted">
+          开启后会使用少量模型请求检查通知预览；只调整关注，不授予任务权限。原有配置默认保持关闭。
+        </p>
         <label>
           本账号的公共交流说明{' '}
           <textarea
@@ -454,7 +467,7 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
                         routeRevision: 1,
                         authorizedUsers: [],
                         publicInstructions: '',
-                        attention: defaultChannelAttention()
+                        attention: { ...defaultChannelAttention(), allowAgentChanges: true }
                       }
                     })
                   }
@@ -490,6 +503,65 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
                 aria-label={'飞书账号 ' + account.accountId}
               >
                 <h3>飞书 · {account.accountId}</h3>
+                {runtime && (
+                  <details className="px-card">
+                    <summary>
+                      通知判断 ·{' '}
+                      {runtime.attention.enabled
+                        ? ({
+                            idle: '空闲',
+                            queued: '等待检查',
+                            running: '检查中',
+                            completed: '已检查',
+                            failed: '检查失败',
+                            stopped: '已停止'
+                          }[runtime.attention.observer.phase] ?? runtime.attention.observer.phase)
+                        : '仅保留预览'}
+                    </summary>
+                    <p>只判断是否临时关注聊天；回复和本机任务仍在原聊天中核对。</p>
+                    {runtime.attention.observer.error && (
+                      <p role="alert">{runtime.attention.observer.error}</p>
+                    )}
+                    {runtime.attention.temporary.map((lease) => (
+                      <p key={lease.chatId}>
+                        {lease.chatId} ·{' '}
+                        {view.personas.find((p) => p.id === lease.personaId)?.name ?? lease.personaId} ·{' '}
+                        {lease.quiet ? '临时安静旁听' : '临时关注'}，至{' '}
+                        {new Date(lease.until).toLocaleTimeString()}
+                      </p>
+                    ))}
+                    <div className="px-actions">
+                      <button
+                        disabled={busy || !runtime.attention.enabled}
+                        onClick={() =>
+                          void run(() =>
+                            command({
+                              type: 'attention-observer',
+                              accountId: account.accountId,
+                              action: 'retry'
+                            })
+                          )
+                        }
+                      >
+                        重新检查通知
+                      </button>
+                      <button
+                        disabled={busy || !['running', 'queued'].includes(runtime.attention.observer.phase)}
+                        onClick={() =>
+                          void run(() =>
+                            command({
+                              type: 'attention-observer',
+                              accountId: account.accountId,
+                              action: 'stop'
+                            })
+                          )
+                        }
+                      >
+                        停止本次检查
+                      </button>
+                    </div>
+                  </details>
+                )}
                 <ChannelRoutesPanel
                   account={account}
                   revision={view.revision}

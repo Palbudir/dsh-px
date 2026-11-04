@@ -5840,6 +5840,18 @@ function AccountEditor({
         )
       ] }),
       /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "px-muted", children: "\u4E13\u6CE8\u804A\u5929\u4F1A\u5904\u7406\u53EF\u89C1\u6587\u5B57\uFF0C\u7531\u4EBA\u683C\u51B3\u5B9A\u56DE\u590D\u6216\u65C1\u542C\u3002\u666E\u901A\u6A21\u5F0F\u4F18\u5148\u5904\u7406\u79C1\u804A\u3001@ \u548C\u5173\u6CE8\u804A\u5929\uFF1B\u4EC5\u901A\u77E5\u4FDD\u7559\u9884\u89C8\uFF0C\u6253\u5F00\u804A\u5929\u540E\u518D\u5904\u7406\u3002" }),
+      /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { style: { display: "block" }, children: [
+        /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+          "input",
+          {
+            type: "checkbox",
+            checked: draft.attention.allowAgentChanges === true,
+            onChange: (e) => update({ attention: { ...draft.attention, allowAgentChanges: e.target.checked } })
+          }
+        ),
+        "\u5141\u8BB8\u4EBA\u683C\u5224\u65AD\u901A\u77E5\u5E76\u4E34\u65F6\u5173\u6CE8\u804A\u5929"
+      ] }),
+      /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { className: "px-muted", children: "\u5F00\u542F\u540E\u4F1A\u4F7F\u7528\u5C11\u91CF\u6A21\u578B\u8BF7\u6C42\u68C0\u67E5\u901A\u77E5\u9884\u89C8\uFF1B\u53EA\u8C03\u6574\u5173\u6CE8\uFF0C\u4E0D\u6388\u4E88\u4EFB\u52A1\u6743\u9650\u3002\u539F\u6709\u914D\u7F6E\u9ED8\u8BA4\u4FDD\u6301\u5173\u95ED\u3002" }),
       /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("label", { children: [
         "\u672C\u8D26\u53F7\u7684\u516C\u5171\u4EA4\u6D41\u8BF4\u660E",
         " ",
@@ -6055,7 +6067,7 @@ function ChannelsPanel({ navigation }) {
                   routeRevision: 1,
                   authorizedUsers: [],
                   publicInstructions: "",
-                  attention: defaultChannelAttention()
+                  attention: { ...defaultChannelAttention(), allowAgentChanges: true }
                 }
               }),
               children: "\u914D\u7F6E\u6B64\u8D26\u53F7"
@@ -6088,6 +6100,64 @@ function ChannelsPanel({ navigation }) {
               /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("h3", { children: [
                 "\u98DE\u4E66 \xB7 ",
                 account.accountId
+              ] }),
+              runtime && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("details", { className: "px-card", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("summary", { children: [
+                  "\u901A\u77E5\u5224\u65AD \xB7",
+                  " ",
+                  runtime.attention.enabled ? {
+                    idle: "\u7A7A\u95F2",
+                    queued: "\u7B49\u5F85\u68C0\u67E5",
+                    running: "\u68C0\u67E5\u4E2D",
+                    completed: "\u5DF2\u68C0\u67E5",
+                    failed: "\u68C0\u67E5\u5931\u8D25",
+                    stopped: "\u5DF2\u505C\u6B62"
+                  }[runtime.attention.observer.phase] ?? runtime.attention.observer.phase : "\u4EC5\u4FDD\u7559\u9884\u89C8"
+                ] }),
+                /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { children: "\u53EA\u5224\u65AD\u662F\u5426\u4E34\u65F6\u5173\u6CE8\u804A\u5929\uFF1B\u56DE\u590D\u548C\u672C\u673A\u4EFB\u52A1\u4ECD\u5728\u539F\u804A\u5929\u4E2D\u6838\u5BF9\u3002" }),
+                runtime.attention.observer.error && /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { role: "alert", children: runtime.attention.observer.error }),
+                runtime.attention.temporary.map((lease) => /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("p", { children: [
+                  lease.chatId,
+                  " \xB7",
+                  " ",
+                  view.personas.find((p) => p.id === lease.personaId)?.name ?? lease.personaId,
+                  " \xB7",
+                  " ",
+                  lease.quiet ? "\u4E34\u65F6\u5B89\u9759\u65C1\u542C" : "\u4E34\u65F6\u5173\u6CE8",
+                  "\uFF0C\u81F3",
+                  " ",
+                  new Date(lease.until).toLocaleTimeString()
+                ] }, lease.chatId)),
+                /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { className: "px-actions", children: [
+                  /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+                    "button",
+                    {
+                      disabled: busy || !runtime.attention.enabled,
+                      onClick: () => void run(
+                        () => command({
+                          type: "attention-observer",
+                          accountId: account.accountId,
+                          action: "retry"
+                        })
+                      ),
+                      children: "\u91CD\u65B0\u68C0\u67E5\u901A\u77E5"
+                    }
+                  ),
+                  /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+                    "button",
+                    {
+                      disabled: busy || !["running", "queued"].includes(runtime.attention.observer.phase),
+                      onClick: () => void run(
+                        () => command({
+                          type: "attention-observer",
+                          accountId: account.accountId,
+                          action: "stop"
+                        })
+                      ),
+                      children: "\u505C\u6B62\u672C\u6B21\u68C0\u67E5"
+                    }
+                  )
+                ] })
               ] }),
               /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
                 ChannelRoutesPanel,

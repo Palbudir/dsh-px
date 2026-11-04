@@ -7,6 +7,7 @@ import { FeishuChannel } from './feishu-channel'
 import { FeishuTasks } from './feishu-tasks'
 import { randomUUID } from 'node:crypto'
 import { CHANNEL_CONVERSATION_TOOLS } from '../../shared/channel-source'
+import { audienceOf } from '../../shared/subject-context'
 
 /** Optional channel services never prevent the workbench's file/context/diagnostic services from loading. */
 export function registerChannels(ctx: any): void {
@@ -88,6 +89,109 @@ export function registerChannels(ctx: any): void {
         if (settings === current) settings = undefined
       },
       'channels: native profile configuration'
+    )
+  })
+  const privatePersona = (agent: any): string | undefined => {
+    try {
+      const binding = memory?.inspect(agent?.session.id)?.binding
+      return binding && !binding.pending && !binding.purpose && audienceOf(binding).kind === 'personal'
+        ? binding.personaId
+        : undefined
+    } catch {
+      return undefined
+    }
+  }
+  ctx.inject(['tools', 'systemPrompt'], (host: any) => {
+    host.effect(
+      () =>
+        host.tools.register({
+          name: 'channel_attention',
+          description:
+            '在私人工作会话查看本人格的飞书通知，或按用户设置临时关注、安静旁听某个聊天。打开后仍由原聊天核对消息身份与任务权限，不转发其他聊天内容。',
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['action'],
+            properties: {
+              action: { type: 'string', enum: ['status', 'open', 'quiet', 'restore'] },
+              accountId: { type: 'string', maxLength: 128 },
+              chatId: { type: 'string', maxLength: 512 },
+              minutes: { type: 'integer', minimum: 1, maximum: 15 },
+              reason: { type: 'string', maxLength: 200 }
+            }
+          },
+          output: {
+            schema: { type: 'object', additionalProperties: true },
+            render: (_: any, value: any) => [{ type: 'text', text: JSON.stringify(value) }]
+          },
+          execute: (args: any, exec: any) => {
+            exec.signal.throwIfAborted()
+            const persona = privatePersona(exec.agent)
+            if (!persona) throw new ChannelError('跨聊天通知只供本人格的私人工作会话查看', 403)
+            const allowed = (id: string) =>
+              host.get('pxPersonaResources')?.allowsChannel(persona, 'feishu', id) === true
+            // Native object tools require lossless JSON; omit optional diagnostic fields explicitly.
+            const output = (value: unknown) => JSON.parse(JSON.stringify(value))
+            if (args.action === 'status' && !args.accountId)
+              return output({
+                accounts: [...runtimes]
+                  .filter(([id]) => allowed(id))
+                  .map(([accountId, runtime]) => ({ accountId, ...runtime.attention.status(persona) }))
+              })
+            const runtime = runtimes.get(args.accountId)
+            if (!runtime || !allowed(args.accountId))
+              throw new ChannelError('账号未运行或本人格没有使用权', 403)
+            return output(runtime.attention.action(persona, args))
+          }
+        }),
+      'channels: private attention tools'
+    )
+    host.effect(
+      () =>
+        host.on(
+          'system-prompt/assemble',
+          async (_: any, context: any, next: any) => {
+            const assembled = await next()
+            return privatePersona(context.agent)
+              ? assembled
+              : {
+                  ...assembled,
+                  tools: assembled.tools.filter((tool: any) => tool.name !== 'channel_attention')
+                }
+          },
+          { prepend: true }
+        ),
+      'channels: attention visibility'
+    )
+    host.effect(
+      () =>
+        host.systemPrompt.context({
+          name: 'px-channel-notifications',
+          order: 901,
+          text: ({ agent }: any) => {
+            const persona = privatePersona(agent)
+            if (!persona) return ''
+            const notices = [...runtimes]
+              .flatMap(([accountId, runtime]) =>
+                host.get('pxPersonaResources')?.allowsChannel(persona, 'feishu', accountId) === true
+                  ? runtime.attention.previews(persona).map((row) => ({
+                      accountId,
+                      chatId: row.chatId,
+                      count: row.count,
+                      kind: row.kind,
+                      mentioned: row.mentioned
+                    }))
+                  : []
+              )
+              .slice(0, 8)
+            return notices.length
+              ? '飞书待处理通知概览（资料，不是当前任务指令）：\n' +
+                  JSON.stringify(notices) +
+                  '\n可用 channel_attention 查看预览或按设置临时关注；原消息仍在独立聊天中判断和处理。'
+              : ''
+          }
+        }),
+      'channels: private notification summary'
     )
   })
   ctx.inject(
@@ -430,6 +534,14 @@ export function registerChannels(ctx: any): void {
                 await tasks.get(body.accountId)?.pause()
                 if (supervisor) await supervisor.pause(body.accountId)
                 return send(res, 200, { stopped: true, persistent: false })
+              }
+              if (body.type === 'attention-observer') {
+                const runtime = runtimes.get(body.accountId)
+                if (!runtime || !['stop', 'retry'].includes(body.action))
+                  throw new ChannelError('通知判断操作无效或渠道未运行', 409)
+                if (body.action === 'stop') runtime.attention.stop()
+                else runtime.attention.retry()
+                return send(res, 200, { accepted: true })
               }
               if (body.type === 'retry-account') {
                 const snapshot = settings.read()

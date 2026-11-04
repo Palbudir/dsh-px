@@ -99,7 +99,9 @@ export function samePublicConversation(
 export const isExperienceSession = (id: string): boolean =>
   /^px-experience-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)
 export const isAttentionSession = (id: string): boolean =>
-  /^px-qq-attention-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id)
+  /^px-(?:qq|channel)-attention-(?:root-)?[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(
+    id
+  )
 export const isInternalSession = (id: string): boolean => isExperienceSession(id) || isAttentionSession(id)
 export interface MemoryState {
   schemaVersion: 2

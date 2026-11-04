@@ -9,6 +9,8 @@ export interface ChannelAttentionRouting {
   notifyMentions: boolean
   notifyGroups: boolean
   mentionOverridesMute: boolean
+  /** Missing retains legacy passive preview behavior. */
+  allowAgentChanges?: boolean
 }
 export const defaultChannelAttention = (): ChannelAttentionRouting => ({
   mode: 'normal',

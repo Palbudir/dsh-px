@@ -39,7 +39,7 @@ export function installChannelTaskAudience(ctx: any): void {
     name.startsWith('qq_') ||
     name.startsWith('schedule_') ||
     name.startsWith('mnemon_') ||
-    ['persona_memory', 'session_query', 'channel_task'].includes(name)
+    ['persona_memory', 'session_query', 'channel_task', 'channel_attention'].includes(name)
   ctx.tools.guard((exec: any) => {
     try {
       audience(exec.agent)

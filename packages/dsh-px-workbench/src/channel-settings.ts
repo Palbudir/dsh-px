@@ -144,7 +144,8 @@ export function parseChannelConfiguration(
         'notifyDirect',
         'notifyMentions',
         'notifyGroups',
-        'mentionOverridesMute'
+        'mentionOverridesMute',
+        'allowAgentChanges'
       ]) ||
       !['focus', 'normal', 'notifications'].includes(String(attention.mode)) ||
       !list(attention.focusedChats) ||
@@ -152,7 +153,8 @@ export function parseChannelConfiguration(
       (attention.openedChats !== undefined && !list(attention.openedChats)) ||
       ['notifyDirect', 'notifyMentions', 'notifyGroups', 'mentionOverridesMute'].some(
         (key) => typeof attention[key] !== 'boolean'
-      )
+      ) ||
+      (attention.allowAgentChanges !== undefined && typeof attention.allowAgentChanges !== 'boolean')
     )
       throw new ChannelError('渠道接收模式与关注设置无效')
     return structuredClone(raw) as unknown as ChannelAccount

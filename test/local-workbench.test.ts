@@ -64,6 +64,7 @@ test('workbench diagnostics never read secrets and never claim host lifecycle co
     inject: (services: string[], callback: (ctx: unknown) => void) =>
       !services.includes('configEditor') &&
       !services.includes('pxAudiencePolicies') &&
+      !services.includes('tools') &&
       callback({
         provide: () => {},
         connection: { requestRejection: () => undefined },

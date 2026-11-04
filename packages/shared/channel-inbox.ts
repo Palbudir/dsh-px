@@ -119,6 +119,9 @@ export class ChannelInbox {
       db.exec(
         'CREATE TABLE IF NOT EXISTS channel_output_scan(session TEXT PRIMARY KEY,next_seq INTEGER NOT NULL,paused INTEGER NOT NULL DEFAULT 0)'
       )
+      db.exec(
+        'CREATE TABLE IF NOT EXISTS channel_notice_cursor(chat TEXT NOT NULL,recipient TEXT NOT NULL,through_seq INTEGER NOT NULL,PRIMARY KEY(chat,recipient))'
+      )
       const columns = (table: string) =>
         new Set(
           db
@@ -728,6 +731,63 @@ export class ChannelInbox {
   }
   hasConversation(conversationId: string): boolean {
     return !!this.db.prepare('SELECT 1 FROM channel_messages WHERE chat=? LIMIT 1').get(conversationId)
+  }
+  notices(
+    limit = 100,
+    includeAttempted = false,
+    scope: { afterSeq?: number; personaId?: string; chatId?: string } = {}
+  ) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw Error('通知分页无效')
+    if (!Number.isSafeInteger(scope.afterSeq ?? 0) || (scope.afterSeq ?? 0) < 0) throw Error('通知游标无效')
+    const rows = this.db
+      .prepare(
+        `SELECT m.chat,m.recipient,min(m.seq) first_seq,max(m.seq) through_seq,count(*) count,max(json_extract(m.event,'$.mentioned')) mentioned FROM channel_messages m LEFT JOIN channel_notice_cursor c ON c.chat=m.chat AND c.recipient=m.recipient WHERE m.phase='received' AND (? IS NULL OR json_extract(m.recipient,'$.personaId')=?) AND (? IS NULL OR m.chat=?) GROUP BY m.chat,m.recipient HAVING min(m.seq)>? AND (?=1 OR max(m.seq)>coalesce(c.through_seq,0)) ORDER BY first_seq LIMIT ?`
+      )
+      .all(
+        scope.personaId ?? null,
+        scope.personaId ?? null,
+        scope.chatId ?? null,
+        scope.chatId ?? null,
+        scope.afterSeq ?? 0,
+        includeAttempted ? 1 : 0,
+        limit
+      )
+    return rows.map((row) => {
+      const last = this.db.prepare('SELECT event FROM channel_messages WHERE seq=?').get(row.through_seq)!,
+        event = JSON.parse(String(last.event)) as ChannelInboxEvent
+      return {
+        chatId: String(row.chat),
+        firstSeq: Number(row.first_seq),
+        through: Number(row.through_seq),
+        count: Number(row.count),
+        preview: event.text.slice(0, 160),
+        kind: event.kind,
+        mentioned: row.mentioned === 1,
+        receivedAt: Date.parse(event.at),
+        recipient: JSON.parse(String(row.recipient)) as ChannelRecipient
+      }
+    })
+  }
+  noticeAttempt(rows: ReadonlyArray<{ chatId: string; through: number; recipient: ChannelRecipient }>): void {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      for (const row of rows) {
+        if (!id(row.chatId) || !Number.isSafeInteger(row.through) || row.through < 1)
+          throw Error('通知游标无效')
+        this.db
+          .prepare(
+            'INSERT INTO channel_notice_cursor(chat,recipient,through_seq) VALUES(?,?,?) ON CONFLICT(chat,recipient) DO UPDATE SET through_seq=max(through_seq,excluded.through_seq)'
+          )
+          .run(row.chatId, recipientJson(row.recipient), row.through)
+      }
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+  retryNotices(): void {
+    this.db.exec('DELETE FROM channel_notice_cursor')
   }
   conversations(limit = 100) {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 500) throw Error('聊天分页无效')
