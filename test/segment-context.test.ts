@@ -52,6 +52,33 @@ test('segment evidence distinguishes peer advice and job notices from human mess
   )
 })
 
+test('segment summaries retain verified native delegation provenance despite user-shaped messages', () => {
+  const source = {
+    sessionId: 'child',
+    seqs: [8, 12],
+    messages: [
+      { role: 'user', source: { kind: 'user' }, content: [{ type: 'text', text: 'Delegated plan' }] },
+      {
+        role: 'user',
+        source: { kind: 'user', rpcId: 'human' },
+        content: [{ type: 'text', text: 'Correction' }]
+      }
+    ],
+    coordinationSeqs: [8],
+    eventHashes: ['original-delegation-hash', 'original-human-hash'],
+    fingerprint: 'unchanged-native-messages',
+    tokens: 100,
+    capturedThrough: 13
+  }
+  const original = JSON.stringify(source)
+  const evidence: any = segmentEvidence(source)
+  assert.deepEqual(
+    evidence.map((row: any) => row.authority),
+    ['coordination-receipt-only', 'human-message']
+  )
+  assert.equal(JSON.stringify(source), original)
+})
+
 test(
   'isolated native segment transaction retains newer work, preserves checkpoints and rejects stale or canceled source',
   { timeout: 20000 },

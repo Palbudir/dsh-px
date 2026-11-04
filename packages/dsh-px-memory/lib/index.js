@@ -25003,7 +25003,7 @@ function segmentEvidence(source) {
     seq: source.seqs[i],
     role: message.role,
     source: message.source,
-    authority: personaMailOrigin(message.source) ? "peer-advice-only" : message.role === "assistant" ? "assistant-statement" : message.role === "user" ? conversationalSource(message.source) ? message.source?.kind === "user" ? "human-message" : "channel-participant-message" : "runtime-context-not-user-authorization" : message.role === "tool" ? "tool-return-requires-source-verification" : "context",
+    authority: source.coordinationSeqs?.includes(source.seqs[i]) ? "coordination-receipt-only" : personaMailOrigin(message.source) ? "peer-advice-only" : message.role === "assistant" ? "assistant-statement" : message.role === "user" ? conversationalSource(message.source) ? message.source?.kind === "user" ? "human-message" : "channel-participant-message" : "runtime-context-not-user-authorization" : message.role === "tool" ? "tool-return-requires-source-verification" : "context",
     content: visibleBlocks(message.content)
   }));
 }
@@ -25521,10 +25521,12 @@ var SegmentRuntime = class {
       };
     }
     source.readableSeqs = [];
+    source.coordinationSeqs = [];
     for (const seq of source.seqs) {
       try {
         const event = await this.history.read(this.host, id2, id2, seq, 0, signal);
         source.readableSeqs.push(seq);
+        if (event.kind === "coordination") source.coordinationSeqs.push(seq);
         if (identity.persona.memoryEnabled && ["user", "tool-result", "native-state", "ledger"].includes(event.kind))
           allowedSeqs.push(seq);
       } catch (error62) {

@@ -280,10 +280,12 @@ export class SegmentRuntime {
       }
     }
     source.readableSeqs = []
+    source.coordinationSeqs = []
     for (const seq of source.seqs) {
       try {
         const event: any = await this.history.read(this.host, id, id, seq, 0, signal)
         source.readableSeqs.push(seq)
+        if (event.kind === 'coordination') source.coordinationSeqs.push(seq)
         if (
           identity.persona.memoryEnabled &&
           ['user', 'tool-result', 'native-state', 'ledger'].includes(event.kind)
