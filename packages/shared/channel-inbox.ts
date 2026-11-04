@@ -19,10 +19,12 @@ export interface ChannelInboxEvent extends ChannelInboxOwner {
   text: string
   reply: Record<string, string>
 }
-export type IngressPhase = 'received' | 'dispatching' | 'admitted' | 'uncertain' | 'cancelled'
+export type IngressPhase = 'received' | 'dispatching' | 'admitted' | 'uncertain' | 'cancelled' | 'control'
 export interface ChannelRecipient {
   personaId: string
   routeRevision: number
+  /** Trusted coordinator-selected task root; never copied from incoming message prose. */
+  executionSessionId?: string
 }
 export interface IngressClaim extends ChannelRecipient {
   epoch: string
@@ -43,7 +45,12 @@ const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(valu
 const recipientJson = (value: ChannelRecipient): string => {
   if (!value || !id(value.personaId) || !Number.isSafeInteger(value.routeRevision) || value.routeRevision < 0)
     throw Error('收件目标人格或路由版本无效')
-  return JSON.stringify({ personaId: value.personaId, routeRevision: value.routeRevision })
+  if (value.executionSessionId !== undefined && !id(value.executionSessionId)) throw Error('任务接收会话无效')
+  return JSON.stringify({
+    personaId: value.personaId,
+    routeRevision: value.routeRevision,
+    ...(value.executionSessionId ? { executionSessionId: value.executionSessionId } : {})
+  })
 }
 const claimJson = (claim: IngressClaim): string => {
   if (![claim.epoch, claim.personaId, claim.sessionId, claim.requestId].every(id))
@@ -97,9 +104,18 @@ export class ChannelInbox {
       )
       db.exec('CREATE INDEX IF NOT EXISTS channel_conversation_order ON channel_messages(chat,seq)')
       db.exec(
+        "CREATE INDEX IF NOT EXISTS channel_actor_order ON channel_messages(json_extract(metadata,'$.actorId'),seq)"
+      )
+      db.exec(
+        "CREATE INDEX IF NOT EXISTS channel_native_session ON channel_messages(json_extract(claim,'$.sessionId'),seq)"
+      )
+      db.exec(
         'CREATE TABLE IF NOT EXISTS channel_replies(id TEXT PRIMARY KEY,chat TEXT NOT NULL,source TEXT NOT NULL,session TEXT NOT NULL,digest TEXT NOT NULL,phase TEXT NOT NULL,result TEXT); CREATE INDEX IF NOT EXISTS channel_reply_pending ON channel_replies(chat,phase)'
       )
       db.exec('CREATE INDEX IF NOT EXISTS channel_reply_phase ON channel_replies(phase)')
+      db.exec(
+        'CREATE TABLE IF NOT EXISTS channel_controls(id TEXT PRIMARY KEY,kind TEXT NOT NULL,epoch TEXT NOT NULL,status TEXT NOT NULL,result TEXT)'
+      )
       const columns = (table: string) =>
         new Set(
           db
@@ -207,13 +223,20 @@ export class ChannelInbox {
       throw error
     }
   }
-  pending(limit = 20): PendingChannelMessage[] {
-    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw Error('收件批次大小无效')
+  pending(limit = 20, afterSequence = 0): PendingChannelMessage[] {
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 100 ||
+      !Number.isSafeInteger(afterSequence) ||
+      afterSequence < 0
+    )
+      throw Error('收件批次大小无效')
     return this.db
       .prepare(
-        "SELECT id,seq,event,recipient FROM channel_messages WHERE phase='received' ORDER BY seq LIMIT ?"
+        "SELECT id,seq,event,recipient FROM channel_messages WHERE phase='received' AND seq>? ORDER BY seq LIMIT ?"
       )
-      .all(limit)
+      .all(afterSequence, limit)
       .map((r) => ({
         id: String(r.id),
         seq: Number(r.seq),
@@ -221,13 +244,13 @@ export class ChannelInbox {
         recipient: JSON.parse(String(r.recipient))
       }))
   }
-  /** One head per conversation; an unresolved native admission blocks only its own conversation. */
+  /** Ordinary conversations are ordered; explicitly routed tasks have independent native queues. */
   heads(limit = 20, afterSequence = 0): PendingChannelMessage[] {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw Error('收件批次大小无效')
     if (!Number.isSafeInteger(afterSequence) || afterSequence < 0) throw Error('收件游标无效')
     return this.db
       .prepare(
-        "SELECT m.id,m.seq,m.event,m.recipient FROM channel_messages m WHERE m.phase='received' AND m.seq>? AND NOT EXISTS (SELECT 1 FROM channel_messages older WHERE older.chat=m.chat AND older.seq<m.seq AND older.phase IN ('received','dispatching','uncertain')) ORDER BY m.seq LIMIT ?"
+        "SELECT m.id,m.seq,m.event,m.recipient FROM channel_messages m WHERE m.phase='received' AND m.seq>? AND NOT EXISTS (SELECT 1 FROM channel_messages older WHERE older.chat=m.chat AND json_extract(older.recipient,'$.executionSessionId') IS json_extract(m.recipient,'$.executionSessionId') AND older.seq<m.seq AND older.phase IN ('received','dispatching','uncertain')) ORDER BY m.seq LIMIT ?"
       )
       .all(afterSequence, limit)
       .map((r) => ({
@@ -272,6 +295,9 @@ export class ChannelInbox {
   /** Call only after obtaining exclusive native consumer ownership; opening a DB never mutates in-flight work. */
   recoverInterrupted(epoch: string): number {
     if (!id(epoch)) throw Error('接收生命周期标识无效')
+    this.db
+      .prepare("UPDATE channel_controls SET status='uncertain' WHERE status='processing' AND epoch<>?")
+      .run(epoch)
     this.db
       .prepare(
         "UPDATE channel_replies SET phase='uncertain' WHERE phase='sending' AND (epoch IS NULL OR epoch<>?)"
@@ -332,6 +358,16 @@ export class ChannelInbox {
         }
       : undefined
   }
+  /** Original task input owns its reply route, even when later continuation input is queued. */
+  firstForSession(sessionId: string) {
+    if (!id(sessionId)) throw Error('会话标识无效')
+    const row = this.db
+      .prepare(
+        "SELECT id FROM channel_messages WHERE json_extract(claim,'$.sessionId')=? ORDER BY seq LIMIT 1"
+      )
+      .get(sessionId)
+    return row ? { id: String(row.id), receipt: this.receipt(String(row.id))! } : undefined
+  }
   cancelPending(key: string): boolean {
     return (
       this.db
@@ -341,6 +377,88 @@ export class ChannelInbox {
         .run(key).changes === 1
     )
   }
+  cancelTarget(sessionId: string): number {
+    if (!id(sessionId)) throw Error('任务会话标识无效')
+    return Number(
+      this.db
+        .prepare(
+          "UPDATE channel_messages SET phase='cancelled',event=NULL,bytes=0 WHERE phase='received' AND json_extract(recipient,'$.executionSessionId')=?"
+        )
+        .run(sessionId).changes
+    )
+  }
+  claimControl(key: string, kind: string, epoch: string): boolean {
+    if (!['approve', 'reject', 'answer'].includes(kind) || !id(epoch)) throw Error('渠道控制请求无效')
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      const changed =
+        this.db
+          .prepare("UPDATE channel_messages SET phase='control' WHERE id=? AND phase='received'")
+          .run(key).changes === 1
+      if (changed)
+        this.db
+          .prepare("INSERT INTO channel_controls(id,kind,epoch,status) VALUES(?,?,?,'processing')")
+          .run(key, kind, epoch)
+      this.db.exec('COMMIT')
+      return changed
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+  finishControl(key: string, status: 'accepted' | 'refused' | 'uncertain', result: unknown): void {
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      if (
+        this.db
+          .prepare("UPDATE channel_controls SET status=?,result=? WHERE id=? AND status='processing'")
+          .run(status, JSON.stringify(result), key).changes !== 1
+      )
+        throw Error('控制请求已结算或不存在')
+      if (status !== 'uncertain')
+        this.db
+          .prepare("UPDATE channel_messages SET event=NULL,bytes=0 WHERE id=? AND phase='control'")
+          .run(key)
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
+  controls(limit = 20) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw Error('控制回执读取数量无效')
+    return this.db
+      .prepare(
+        'SELECT c.id,c.kind,c.status,c.result,m.metadata FROM channel_controls c JOIN channel_messages m ON m.id=c.id ORDER BY m.seq DESC LIMIT ?'
+      )
+      .all(limit)
+      .map((row) => ({
+        id: String(row.id),
+        kind: String(row.kind),
+        status: String(row.status),
+        result: row.result ? JSON.parse(String(row.result)) : null,
+        source: JSON.parse(String(row.metadata))
+      }))
+  }
+  observedMembers(limit = 20) {
+    if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) throw Error('成员读取数量无效')
+    return this.db
+      .prepare(
+        "SELECT metadata,event,claim,native_message FROM channel_messages WHERE seq IN (SELECT max(seq) FROM channel_messages GROUP BY json_extract(metadata,'$.actorId')) ORDER BY seq DESC LIMIT ?"
+      )
+      .all(limit)
+      .map((row) => {
+        const source = JSON.parse(String(row.metadata))
+        return {
+          id: String(source.actorId),
+          conversationId: String(source.conversationId),
+          at: String(source.at),
+          preview: row.event ? String(JSON.parse(String(row.event)).text ?? '').slice(0, 120) : '',
+          nativeSessionId: row.claim ? (JSON.parse(String(row.claim)).sessionId as string) : undefined,
+          nativeMessageId: typeof row.native_message === 'string' ? row.native_message : undefined
+        }
+      })
+  }
   beginReply(
     callId: string,
     sourceId: string,
@@ -348,11 +466,29 @@ export class ChannelInbox {
     text: string,
     epoch?: string
   ): { id: string; phase: string; result?: unknown } {
+    return this.startReply(callId, sourceId, sessionId, text, epoch, false)
+  }
+  beginControlReply(sourceId: string, text: string, epoch: string) {
+    return this.startReply('control-response', sourceId, 'control:' + sourceId, text, epoch, true)
+  }
+  private startReply(
+    callId: string,
+    sourceId: string,
+    sessionId: string,
+    text: string,
+    epoch: string | undefined,
+    control: boolean
+  ): { id: string; phase: string; result?: unknown } {
     if (!id(callId) || !id(sessionId) || typeof text !== 'string' || !text.trim() || text.length > 4000)
       throw Error('渠道回复参数无效')
     if (epoch !== undefined && !id(epoch)) throw Error('回复生命周期无效')
     const source = this.receipt(sourceId)
-    if (source?.phase !== 'admitted' || source.claim?.sessionId !== sessionId)
+    if (
+      !source ||
+      (control
+        ? source.phase !== 'control'
+        : source.phase !== 'admitted' || source.claim?.sessionId !== sessionId)
+    )
       throw Error('回复缺少已持久接收的原生来源')
     const key = hash([sessionId, sourceId, callId]),
       digest = hash([sourceId, text])
@@ -368,12 +504,24 @@ export class ChannelInbox {
           ...(previous.result ? { result: JSON.parse(String(previous.result)) } : {})
         }
       }
-      if (
-        this.db
-          .prepare("SELECT id FROM channel_replies WHERE chat=? AND phase IN ('sending','uncertain') LIMIT 1")
-          .get(source.source.conversationId)
-      )
-        throw Error('此聊天有回复尚未确认，请先核对，不要重复发送')
+      const blocked = control
+        ? this.db
+            .prepare(
+              "SELECT id FROM channel_replies WHERE source=? AND phase IN ('sending','uncertain') LIMIT 1"
+            )
+            .get(sourceId)
+        : source.recipient.executionSessionId
+          ? this.db
+              .prepare(
+                "SELECT id FROM channel_replies WHERE session=? AND phase IN ('sending','uncertain') LIMIT 1"
+              )
+              .get(sessionId)
+          : this.db
+              .prepare(
+                "SELECT id FROM channel_replies WHERE chat=? AND phase IN ('sending','uncertain') LIMIT 1"
+              )
+              .get(source.source.conversationId)
+      if (blocked) throw Error('此聊天有回复尚未确认，请先核对，不要重复发送')
       if (Number(this.db.prepare('SELECT count(*) n FROM channel_replies').get()!.n) >= this.bounds.records)
         throw Error('回复凭据容量已满，未丢弃原记录')
       this.db

@@ -63,7 +63,12 @@ export async function admitChannelMessage(
 ): Promise<boolean> {
   const { createUserMessage } = await import('@deepseek-ai/dsh-llm')
   signal.throwIfAborted()
-  if (native.agent.session.id !== claim.sessionId || !native.validate(row, claim))
+  if (
+    native.agent.session.id !== claim.sessionId ||
+    (row.recipient.executionSessionId !== undefined &&
+      row.recipient.executionSessionId !== claim.sessionId) ||
+    !native.validate(row, claim)
+  )
     throw Error('渠道消息的原生会话、人格或受众已改变，未投递')
   const message = createUserMessage({
     source: { ...sourceFor(row, claim), ...(wake ? {} : { delivery: 'context' as const }) },
@@ -124,6 +129,11 @@ export function matchingNativeAdmissions(
 ): Set<string> {
   const { claim, source: event } = receipt
   if (!claim) throw Error('收件缺少原生投递归属')
+  if (
+    receipt.recipient.executionSessionId !== undefined &&
+    receipt.recipient.executionSessionId !== claim.sessionId
+  )
+    throw Error('任务投递与原定接收会话不一致')
   const expected = sourceFor(
     { id: key, seq: 0, event: { ...event, text: '' }, recipient: receipt.recipient },
     claim

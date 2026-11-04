@@ -207,6 +207,11 @@ export class ChannelNotes {
           'user',
           'assistant',
           'tool-result',
+          ...(record.kind === 'coordination' &&
+          record.tool === 'channel-control' &&
+          record.channelProvider === scope.provider
+            ? ['coordination']
+            : []),
           ...(scope.provider === 'persona-mail' ? ['peer', 'peer-reply'] : [])
         ].includes(record.kind) ||
         (record.kind === 'tool-result' && (scope.provider !== 'qq' || record.tool !== 'qq_context'))

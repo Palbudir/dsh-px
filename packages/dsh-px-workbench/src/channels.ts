@@ -14,7 +14,10 @@ export function registerChannels(ctx: any): void {
         host.pxAudiencePolicies.register('feishu', {
           section: 'px-channel-public-persona',
           check: (exec: any, binding: any) => {
-            if (binding.channel.task) return '此渠道的任务授权尚未就绪，未执行本机操作'
+            if (binding.channel.task)
+              return host.get('pxChannels')?.taskAllowed(exec.agent)
+                ? undefined
+                : '此渠道任务的授权已失效，未执行本机操作'
             if (!CHANNEL_CONVERSATION_TOOLS.includes(exec.name))
               return '公共渠道会话没有本机执行或私有信息权限'
           }
@@ -31,8 +34,33 @@ export function registerChannels(ctx: any): void {
   let supervisor: ChannelSupervisor<ChannelAccount, FeishuChannel> | undefined,
     synchronise: (() => void) | undefined
   ctx.on('px/channels-settings', () => synchronise?.())
+  ctx.on(
+    'agent/created',
+    ({ agent }: any) => {
+      for (const runtime of runtimes.values()) runtime.tasks.created(agent)
+    },
+    { prepend: true }
+  )
+  ctx.on('session/event', (session: any, event: any) => {
+    for (const runtime of runtimes.values()) runtime.tasks.event(session, event)
+  })
+  for (const [event, kind] of [
+    ['approval/request', 'approval'],
+    ['user-questions/request', 'question']
+  ] as const)
+    ctx.on(
+      event,
+      (request: any, next: any) => {
+        const runtime = [...runtimes.values()].find((row) => row.tasks.owns(request.agent))
+        return runtime ? runtime.interaction(kind, request, next) : next()
+      },
+      { prepend: true }
+    )
   ctx.provide('pxChannels', {
     version: 1,
+    taskAllowed: (agent: any) => [...runtimes.values()].some((row) => row.tasks.owns(agent)),
+    taskAuthority: (agent: any, pending: any[]) =>
+      [...runtimes.values()].find((row) => row.owns(agent))?.taskAuthority(agent, pending),
     tool: (name: string, args: any, exec: any) => {
       const runtime = [...runtimes.values()].find((row) => row.owns(exec.agent))
       if (!runtime) throw new ChannelError('此会话的渠道接入未运行', 503)
@@ -219,6 +247,15 @@ export function registerChannels(ctx: any): void {
                 const saved = await settings.save(body.revision, body.configuration)
                 synchronise?.()
                 return send(res, 200, saved)
+              }
+              if (body.type === 'answer-interaction' || body.type === 'stop-task') {
+                const runtime = runtimes.get(body.accountId)
+                if (!runtime) throw new ChannelError('此渠道未运行', 409)
+                if (body.type === 'answer-interaction')
+                  return send(res, 200, { message: runtime.answerInteraction(body) })
+                if (typeof body.taskId !== 'string') throw new ChannelError('任务标识无效')
+                await runtime.tasks.stopTask(body.taskId)
+                return send(res, 200, { stopped: true })
               }
               if (body.type === 'stop') {
                 if (typeof body.accountId !== 'string') throw new ChannelError('账号无效')

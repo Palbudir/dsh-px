@@ -35,6 +35,7 @@ export interface FeishuConsumerOptions {
   destination: (event: ChannelInboxEvent) => ChannelRecipient
   available: (signal: AbortSignal) => void | Promise<void>
   failed: (error: unknown) => void | Promise<void>
+  intercept?: (id: string, event: ChannelInboxEvent, signal: AbortSignal) => Promise<boolean>
 }
 
 /** Only call after an explicit account takeover choice; native consumption changes persistent bot mode. */
@@ -132,6 +133,8 @@ export async function startFeishuConsumer(
         if (!options.authorize(envelope)) throw Error('此飞书消息不在获准接收范围内')
         const destination = options.destination(envelope)
         const result = inbox.accept(envelope, destination, deliverySignal)
+        if (!result.duplicate && (await options.intercept?.(result.id, envelope, deliverySignal)))
+          return { accepted: true }
         if (!result.duplicate) notify()
         return { accepted: true }
       }

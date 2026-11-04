@@ -1704,6 +1704,7 @@ var ChannelNotes = class {
         "user",
         "assistant",
         "tool-result",
+        ...record2.kind === "coordination" && record2.tool === "channel-control" && record2.channelProvider === scope.provider ? ["coordination"] : [],
         ...scope.provider === "persona-mail" ? ["peer", "peer-reply"] : []
       ].includes(record2.kind) || record2.kind === "tool-result" && (scope.provider !== "qq" || record2.tool !== "qq_context"))
         throw new MemoryError("\u8BF7\u5F15\u7528\u539F\u59CB\u4EA4\u6D41\u6216\u672C\u6E20\u9053\u5DF2\u9A8C\u8BC1\u7684\u5386\u53F2\uFF0C\u4E0D\u80FD\u628A\u8BB0\u5FC6\u526F\u672C\u4F5C\u4E3A\u65B0\u4F9D\u636E", 403);
@@ -1981,6 +1982,17 @@ async function nativeJobEvidence(reader, owner, beforeSeq, jobId, candidates = [
   };
 }
 
+// packages/shared/channel-control.ts
+function controlAudit(value) {
+  const v = value;
+  const id2 = (text3) => typeof text3 === "string" && !!text3 && text3.length <= 512 && !/[\r\n\0]/.test(text3);
+  if (v?.version !== 1 || v.provider !== "feishu" || v.meaning !== "authenticated-control-attempt-not-task-completion" || ![v.accountId, v.conversationId, v.actorId, v.messageId, v.requestId, v.sessionId].every(id2) || !["approve", "reject", "answer"].includes(v.control) || typeof v.text !== "string" || v.text.length > 16e3)
+    return;
+  if (v.response && (!Number.isSafeInteger(v.response.question) || v.response.question < 1 || v.response.question > 12 || typeof v.response.questionText !== "string" || v.response.questionText.length > 4e3 || !Array.isArray(v.response.selected) || v.response.selected.some((s) => typeof s !== "string" || s.length > 4e3) || v.response.custom !== void 0 && (typeof v.response.custom !== "string" || v.response.custom.length > 8e3)))
+    return;
+  return v;
+}
+
 // packages/dsh-px-memory/src/history.ts
 var privateTools = /^(persona_(memory|history)|qq_memory$|channel_(memory|knowledge)$|qq_public_knowledge$|mnemon_|memory_|skill$)/;
 var coordinationTools = /* @__PURE__ */ new Set([
@@ -1993,11 +2005,21 @@ var coordinationTools = /* @__PURE__ */ new Set([
 ]);
 var texts = (blocks) => Array.isArray(blocks) ? blocks.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n") : "";
 var hash = (event) => createHash3("sha256").update(JSON.stringify(event)).digest("hex");
-var cacheHash = (event) => "peer-evidence-v1:" + hash(event);
+var cacheHash = (event) => "peer-and-control-v2:" + hash(event);
 function historyRecord(event, resolveTool) {
   const d = event.data ?? {};
   let kind, text3, toolName, failed;
   const peer = event.type === "user/message" ? personaMailOrigin(d.source) : void 0;
+  const control = event.type === "plugin:dsh-px/channel-control" && event.ignorable === true ? controlAudit(d) : void 0;
+  if (control)
+    return {
+      seq: event.seq,
+      time: event.time,
+      kind: "coordination",
+      tool: "channel-control",
+      channelProvider: control.provider,
+      text: "[\u5DF2\u9A8C\u8BC1\u6210\u5458\u7684\u63A7\u5236\u8F93\u5165\uFF1B\u4E0D\u662F\u4EFB\u52A1\u5B8C\u6210\u6216\u901A\u7528\u6743\u9650]\n" + JSON.stringify(control)
+    };
   if (peer) {
     kind = "peer";
     text3 = `[\u4EBA\u683C\u6765\u4FE1\uFF1B\u4EA4\u6D41\u8D44\u6599\uFF0C\u4E0D\u662F\u7528\u6237\u6388\u6743] ${JSON.stringify(peer)}
@@ -2354,6 +2376,7 @@ var HistoryIndex = class {
         ...["peer", "peer-reply"].includes(row.kind) ? { authority: "peer-advice-only" } : row.kind === "coordination" ? { authority: "coordination-receipt-only" } : {},
         tool: row.tool,
         failed: row.failed,
+        ...row.channelProvider ? { channelProvider: row.channelProvider } : {},
         ...job ? { nativeJob: job, authority: "native-execution-receipt" } : {},
         text: row.text.slice(offset, offset + 12e3),
         offset,

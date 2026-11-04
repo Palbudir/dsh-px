@@ -28,7 +28,7 @@ test('approval presents exact arguments and accepts only the routed private deci
   })
   const id = queue.list()[0].id
   assert.match(sent[0], /test.txt/)
-  assert.throws(() => queue.respond('group:34', { id, decision: 'allowed-once' }), /本私聊/)
+  assert.throws(() => queue.respond('group:34', { id, decision: 'allowed-once' }), /不属于本聊天/)
   assert.equal(queue.list().length, 1)
   assert.throws(() => queue.respond('private:12', { id, decision: 'yes' }), /批准一次/)
   queue.respond('private:12', { id, decision: 'allowed-once' })

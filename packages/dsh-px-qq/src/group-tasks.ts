@@ -1,3 +1,4 @@
+import { stopNativeTaskActors } from '../../shared/native-task-stop'
 import { randomUUID } from 'node:crypto'
 import { QQ_CONVERSATION_GUIDANCE, installConversationTools } from './conversation-tools'
 import { mkdirSync } from 'node:fs'
@@ -56,12 +57,6 @@ export class QqGroupTasks {
           'QQ 群任务 ' + channel.conversationId.slice(6) + ' · ' + channel.task.requesterId
         )
     }
-  }
-  private stopAgent(agent: any): void {
-    const goals = get(agent.ctx, 'goals')
-    const goal = goals?.get(agent)
-    if (goal?.phase === 'active') goals.pause(agent, { id: goal.id, revision: goal.revision })
-    agent.cancel({ kind: 'user' })
   }
   private liveTaskAgents(chatId: string, rootSessionId?: string): any[] {
     const agents = get(this.host, 'agents'),
@@ -259,77 +254,10 @@ export class QqGroupTasks {
     this.cancelAdmissions(chatId)
     await this.stopActors(this.liveTaskAgents(chatId))
   }
-  private async stopActors(agents: any[]): Promise<void> {
-    // A native Team Lead can be idle while its members are working. Cancel every owned
-    // task actor before awaiting quiescence; cancelling the Lead alone does not stop Teams.
-    const byId = new Map(agents.map((agent) => [agent.session.id, agent])),
-      canceledWakes = new Set<string>()
-    for (const id of byId.keys()) this.stopping.set(id, (this.stopping.get(id) ?? 0) + 1)
-    // Native teardown still delivers a settlement notice. Cancel only notices from the exact
-    // actors being stopped, through the native inbox; its durable splice preserves the receipt.
-    const unlisten = this.host.on?.('agent/inbox/inserted', ({ agent, message }: any) => {
-      const target = byId.get(agent.id)
-      if (
-        target &&
-        get(this.host, 'agents')?.get(agent.id) === target &&
-        message.source?.kind === 'subagent-settled' &&
-        byId.has(message.source.senderSessionId)
-      )
-        if (target.inbox.remove(message.id)) canceledWakes.add(agent.id)
-    })
-    // Native followup still wakes an idle Agent after a listener removes its message.
-    // Reject only that empty wake; an independent new user input is never consumed here.
-    const unguard = this.host.on?.(
-      'agent/pre-step',
-      async ({ agent, messages }: any, next: any) => {
-        const target = byId.get(agent.id)
-        if (
-          target &&
-          get(this.host, 'agents')?.get(agent.id) === target &&
-          canceledWakes.delete(agent.id) &&
-          !messages.length
-        ) {
-          target.cancel({ kind: 'user' })
-          return { kind: 'reject' }
-        }
-        return next()
-      },
-      { prepend: true }
-    )
-    try {
-      for (const agent of agents) this.stopAgent(agent)
-      // Selected-child teardown preserves future delegation by the same live parent.
-      const parents = new Map<any, string[]>(),
-        registry = get(this.host, 'agents')
-      for (const agent of agents) {
-        // Fresh native children need not have fork lineage; runtime ownership is authoritative.
-        const parent = agents.find((candidate) => registry?.isOwnedBy?.(agent.session.id, candidate) === true)
-        if (!parent) continue
-        const ids = parents.get(parent) ?? []
-        ids.push(agent.session.id)
-        parents.set(parent, ids)
-      }
-      const subagents = get(this.host, 'subagents'),
-        draining: Promise<unknown>[] = []
-      if (subagents?.drainChildren) {
-        for (const [parent, ids] of parents) draining.push(subagents.drainChildren(parent, ids))
-      }
-      const settled = await Promise.allSettled(draining)
-      // Native settlement may have opened an empty parent turn while children were draining.
-      // Sample whenIdle after those receipts, keeping the step fence until that wake has settled.
-      const idle = await Promise.allSettled(agents.map((agent) => agent.whenIdle()))
-      const failed = [...settled, ...idle].find((result) => result.status === 'rejected')
-      if (failed?.status === 'rejected') throw failed.reason
-    } finally {
-      unguard?.()
-      unlisten?.()
-      for (const id of byId.keys()) {
-        const remaining = (this.stopping.get(id) ?? 1) - 1
-        if (remaining) this.stopping.set(id, remaining)
-        else this.stopping.delete(id)
-      }
-    }
+  private stopActors(agents: any[]): Promise<void> {
+    return stopNativeTaskActors(this.host, agents, this.stopping)
   }
+
   event(session: any, event: any): void {
     if (this.stopping.has(session.id)) return
     if (!this.roots.has(session.id) || !['assistant/message', 'turn/end'].includes(event.type)) return

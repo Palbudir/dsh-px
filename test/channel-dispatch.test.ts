@@ -26,7 +26,7 @@ function fixture(t: any) {
     selection: () => 'wake',
     prepare: async (row) => ({
       agent: {
-        session: { id: row.event.conversationId },
+        session: { id: row.recipient.executionSessionId ?? row.event.conversationId },
         followup() {
           sent.push(row.event.messageId)
         },
@@ -52,7 +52,7 @@ function fixture(t: any) {
     ports,
     sent,
     failures,
-    add(chat: string) {
+    add(chat: string, executionSessionId?: string) {
       const messageId = 'message-' + ++sequence
       return {
         ...inbox.accept(
@@ -68,7 +68,7 @@ function fixture(t: any) {
             text: messageId,
             reply: { messageId }
           },
-          { personaId: 'persona-a', routeRevision: 1 }
+          { personaId: 'persona-a', routeRevision: 1, ...(executionSessionId ? { executionSessionId } : {}) }
         ),
         messageId
       }
@@ -113,6 +113,56 @@ test('a slow conversation does not block others; earlier sequence becoming ready
   await until(() => f.sent.length === 4)
   assert.deepEqual(f.sent, [b.messageId, c.messageId, a.messageId, a2.messageId])
   assert.equal(f.failures.length, 0)
+})
+
+test('uncertain task admission blocks its own continuation but not another task in the same chat', async (t) => {
+  const f = fixture(t),
+    a = f.add('group', 'task-a'),
+    a2 = f.add('group', 'task-a'),
+    b = f.add('group', 'task-b')
+  const claim = {
+    personaId: 'persona-a',
+    routeRevision: 1,
+    executionSessionId: 'task-a',
+    sessionId: 'task-a',
+    epoch: 'old',
+    requestId: 'old-request'
+  }
+  assert.equal(f.inbox.claim(a.id, claim), true)
+  f.inbox.recoverInterrupted('new')
+  f.start()
+  await until(() => f.sent.includes(b.messageId))
+  assert.deepEqual(f.sent, [b.messageId])
+  assert.equal(f.inbox.receipt(a2.id)?.phase, 'received')
+})
+
+test('same-chat task preparations overlap while each task preserves input order', async (t) => {
+  const f = fixture(t),
+    a = f.add('group', 'task-a'),
+    a2 = f.add('group', 'task-a'),
+    b = f.add('group', 'task-b'),
+    prepare = f.ports.prepare
+  let release!: () => void
+  const gate = new Promise<void>((done) => {
+    release = done
+  })
+  t.after(() => release())
+  f.ports.prepare = async (row, signal) => {
+    if (row.id === a.id)
+      await Promise.race([
+        gate,
+        new Promise<never>((_, reject) =>
+          signal.addEventListener('abort', () => reject(signal.reason), { once: true })
+        )
+      ])
+    return prepare(row, signal)
+  }
+  f.start()
+  await until(() => f.sent.includes(b.messageId))
+  assert.deepEqual(f.sent, [b.messageId])
+  release()
+  await until(() => f.sent.length === 3)
+  assert.deepEqual(f.sent, [b.messageId, a.messageId, a2.messageId])
 })
 
 test('failed preparation requires an explicit retry and does not hold other chats', async (t) => {

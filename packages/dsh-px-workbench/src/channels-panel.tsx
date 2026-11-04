@@ -5,6 +5,7 @@ import type { ChannelAccount, ChannelConfiguration } from './channel-settings'
 import type { FeishuChannel } from './feishu-channel'
 import type { createCapabilities } from '../../shared/client-capabilities'
 import { PersonaMailPanel } from './persona-mail-panel'
+import { ChannelInteractionPanel } from '../../shared/channel-interactions-panel'
 
 export interface ChannelNavigation {
   openSession?: (id: string) => void | Promise<void>
@@ -48,18 +49,21 @@ function AccountEditor({
   edit,
   personas,
   available,
+  observedMembers,
   onClose,
   onSaved
 }: {
   edit: Edit
   personas: View['personas']
   available: boolean
+  observedMembers: Array<{ id: string; conversationId: string; at: string; preview: string }>
   onClose: () => void
   onSaved: () => Promise<void>
 }) {
   const [draft, setDraft] = useState(() => structuredClone(edit.account)),
     [focused, setFocused] = useState(() => edit.account.attention.focusedChats.join('\n')),
     [muted, setMuted] = useState(() => edit.account.attention.mutedChats.join('\n')),
+    [members, setMembers] = useState(() => edit.account.authorizedUsers.join('\n')),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('')
   const alive = useRef(true)
@@ -83,6 +87,7 @@ function AccountEditor({
           .filter(Boolean)
       const account = {
         ...draft,
+        authorizedUsers: [...new Set(lines(members))],
         attention: { ...draft.attention, focusedChats: lines(focused), mutedChats: lines(muted) }
       }
       if (index < 0) configuration.accounts.push(account)
@@ -112,6 +117,49 @@ function AccountEditor({
       <p className="px-muted">{draft.accountId} · 刷新状态不会覆盖这份草稿。</p>
       {error && <p role="alert">{error}</p>}
       <fieldset disabled={busy} style={{ border: 0, padding: 0, display: 'grid', gap: 12 }}>
+        <label>
+          任务授权成员（每行一个接收记录中的 ID，最多 32 个）
+          <textarea
+            aria-label="飞书任务授权成员"
+            value={members}
+            onChange={(e: any) => setMembers(e.target.value)}
+            rows={3}
+            style={{ width: '100%' }}
+          />
+        </label>
+        <p className="px-muted">
+          请先私聊机器人发送一条可辨认的消息，再核对下方记录并添加对应
+          ID。昵称不用于授权；任务权限不会自动开放人格私有资料。
+        </p>
+        {!!observedMembers.length && (
+          <details>
+            <summary>最近接收成员</summary>
+            {observedMembers.map((member) => (
+              <div key={member.id}>
+                <code>{member.id}</code> · {member.conversationId}
+                <p>{member.preview || '旧记录未保留预览'}</p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setMembers((value) =>
+                      [
+                        ...new Set([
+                          ...value
+                            .split(/\r?\n/)
+                            .map((s) => s.trim())
+                            .filter(Boolean),
+                          member.id
+                        ])
+                      ].join('\n')
+                    )
+                  }
+                >
+                  添加此成员 ID
+                </button>
+              </div>
+            ))}
+          </details>
+        )}
         <label>
           使用人格{' '}
           <select
@@ -291,7 +339,11 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
   }
   const command = async (body: unknown) => {
     await post(body)
-    await refresh()
+    try {
+      await refresh()
+    } catch {
+      if (alive.current) setNotice('操作已受理，但状态暂未刷新；请稍后刷新查看。')
+    }
   }
   const openSession = (id?: string) => {
     if (id && nav.openSession)
@@ -335,7 +387,9 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
           ))}
           <section className="px-card">
             <h3>添加飞书账号</h3>
-            <p className="px-muted">先在原生 IM 配置账号，再在这里核对身份。当前入口接入飞书文字交流。</p>
+            <p className="px-muted">
+              先在原生 IM 配置账号，再核对身份。可接收文字交流，并让明确授权的成员发起原生任务。
+            </p>
             <div className="px-actions">
               <select
                 aria-label="选择飞书账号"
@@ -411,6 +465,9 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
               edit={edit}
               personas={view.personas}
               available={view.available && view.componentEnabled}
+              observedMembers={
+                view.runtimes.find((r) => r.accountId === edit.account.accountId)?.observedMembers ?? []
+              }
               onClose={() => setEdit(null)}
               onSaved={refresh}
             />
@@ -427,6 +484,60 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
                 aria-label={'飞书账号 ' + account.accountId}
               >
                 <h3>飞书 · {account.accountId}</h3>
+                {runtime && (
+                  <ChannelInteractionPanel
+                    items={runtime.pendingInteractions}
+                    answer={(input) =>
+                      command({ type: 'answer-interaction', accountId: account.accountId, ...input })
+                    }
+                  />
+                )}
+                {!!runtime?.tasks.records.length && (
+                  <details>
+                    <summary>
+                      原生任务（{runtime.tasks.total}
+                      {runtime.tasks.partial ? '，显示最近 100 项' : ''}）
+                    </summary>
+                    {runtime.tasks.records.map((task: any) => (
+                      <div key={task.taskId} className="px-card">
+                        <p>
+                          {task.conversationId} · {task.requesterId} ·{' '}
+                          {{ running: '运行中', idle: '当前未运行', stored: '已保存，未加载' }[
+                            task.state as string
+                          ] ?? task.state}
+                          {task.paused ? ' · 已停止' : task.authorized ? '' : ' · 当前授权不可用'}
+                        </p>
+                        <div className="px-actions">
+                          <button
+                            disabled={busy || !nav.openSession}
+                            onClick={() => openSession(task.taskId)}
+                          >
+                            打开任务会话
+                          </button>
+                          <button
+                            disabled={busy || !task.authorized}
+                            onClick={() =>
+                              void run(() =>
+                                command({
+                                  type: 'stop-task',
+                                  accountId: account.accountId,
+                                  taskId: task.taskId
+                                })
+                              )
+                            }
+                          >
+                            停止任务
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    {runtime.tasks.errors?.map((row) => (
+                      <p key={row.id} role="alert">
+                        {row.error}
+                      </p>
+                    ))}
+                  </details>
+                )}
                 <p>
                   人格：{view.personas.find((p) => p.id === account.personaId)?.name ?? account.personaId} ·{' '}
                   {modes[account.attention.mode]} ·{' '}

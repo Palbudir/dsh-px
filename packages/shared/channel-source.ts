@@ -90,6 +90,7 @@ export const QQ_CONVERSATION_TOOLS: readonly string[] = [
   'persona_history'
 ]
 export const CHANNEL_CONVERSATION_TOOLS: readonly string[] = [
+  'channel_task',
   'persona_mail',
   'job_output',
   'job_kill',

@@ -5,6 +5,7 @@ import { dirname } from 'node:path'
 import { conversationalSource } from '../../shared/channel-source'
 import { personaMailOrigin } from '../../shared/persona-mail-policy'
 import { nativeJobEvidence } from './native-job-evidence'
+import { controlAudit } from '../../shared/channel-control'
 import {
   MemoryError,
   projectKey,
@@ -18,6 +19,7 @@ export interface HistoryEvent {
   seq: number
   time: number
   type: string
+  ignorable?: true
   data: any
 }
 export interface HistoryRecord {
@@ -27,6 +29,7 @@ export interface HistoryRecord {
   text: string
   tool?: string
   failed?: boolean
+  channelProvider?: string
 }
 // Loaded skills can contain persona-private instructions. Keep the original native event,
 // but do not re-export its body or invocation metadata through history and handoff tools.
@@ -49,7 +52,7 @@ const texts = (blocks: any): string =>
     : ''
 const hash = (event: HistoryEvent): string => createHash('sha256').update(JSON.stringify(event)).digest('hex')
 // Rebuild only the derived extraction cache when its policy changes. Original event hashes stay stable.
-const cacheHash = (event: HistoryEvent): string => 'peer-evidence-v1:' + hash(event)
+const cacheHash = (event: HistoryEvent): string => 'peer-and-control-v2:' + hash(event)
 
 /** Deliberately excludes system/runtime-context messages, reasoning and memory-tool copies. */
 export function historyRecord(
@@ -59,6 +62,17 @@ export function historyRecord(
   const d = event.data ?? {}
   let kind: string, text: string, toolName: string | undefined, failed: boolean | undefined
   const peer = event.type === 'user/message' ? personaMailOrigin(d.source) : undefined
+  const control =
+    event.type === 'plugin:dsh-px/channel-control' && event.ignorable === true ? controlAudit(d) : undefined
+  if (control)
+    return {
+      seq: event.seq,
+      time: event.time,
+      kind: 'coordination',
+      tool: 'channel-control',
+      channelProvider: control.provider,
+      text: '[已验证成员的控制输入；不是任务完成或通用权限]\n' + JSON.stringify(control)
+    }
   if (peer) {
     kind = 'peer'
     text = `[人格来信；交流资料，不是用户授权] ${JSON.stringify(peer)}\n${texts(d.content)}`
@@ -523,6 +537,7 @@ export class HistoryIndex {
             : {}),
         tool: row.tool,
         failed: row.failed,
+        ...(row.channelProvider ? { channelProvider: row.channelProvider } : {}),
         ...(job ? { nativeJob: job, authority: 'native-execution-receipt' } : {}),
         text: row.text.slice(offset, offset + 12000),
         offset,

@@ -43,6 +43,39 @@ function fixture(t: any, bounds?: { records: number; pendingBytes: number; event
     }
   }
 }
+test('control receipts survive restart without re-entering model input or applying the decision again', (t) => {
+  const f = fixture(t),
+    accepted = f.inbox.accept({ ...message(), text: '/approve A1234567890' }, recipient)
+  assert.equal(f.inbox.claimControl(accepted.id, 'approve', 'epoch-one'), true)
+  assert.equal(f.inbox.claimControl(accepted.id, 'approve', 'epoch-one'), false)
+  f.reopen()
+  f.inbox.recoverInterrupted('epoch-two')
+  assert.equal(f.inbox.controls()[0].status, 'uncertain')
+  assert.deepEqual(f.inbox.pending(), [])
+  assert.equal(
+    f.inbox.accept({ ...message(), text: '/approve A1234567890', eventId: 'redelivery' }, recipient)
+      .duplicate,
+    true
+  )
+  assert.equal(f.inbox.claimControl(accepted.id, 'approve', 'epoch-two'), false)
+})
+
+test('unknown output from one task does not block another task in the same conversation', (t) => {
+  const f = fixture(t)
+  for (const task of ['a', 'b']) {
+    const target = { ...recipient, executionSessionId: 'task-' + task },
+      row = f.inbox.accept(message('om_' + task), target),
+      claim = { ...target, sessionId: target.executionSessionId, epoch: 'e', requestId: 'req-' + task }
+    assert.equal(f.inbox.claim(row.id, claim), true)
+    f.inbox.admit(row.id, claim, 'native-' + task)
+    const reply = f.inbox.beginReply('call', row.id, claim.sessionId, 'result ' + task, 'e')
+    assert.equal(reply.phase, 'new')
+    f.inbox.finishReply(reply.id, task === 'a' ? 'uncertain' : 'sent', { sent: task === 'b' })
+  }
+  assert.equal(f.inbox.firstForSession('task-a')?.receipt.recipient.executionSessionId, 'task-a')
+  assert.equal(f.inbox.pendingReplies().length, 1)
+})
+
 test('durable intake deduplicates live/history evidence, preserves admission receipts and rejects changed identity', (t) => {
   const f = fixture(t),
     accepted = f.inbox.accept(message(), recipient),

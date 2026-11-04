@@ -94,7 +94,8 @@ export class ChannelDispatch {
       for (const row of batch) {
         if (this.running.size >= this.concurrency || this.controller.signal.aborted) return
         this.cursor = row.seq
-        if (this.running.has(row.event.conversationId) || this.blocked.has(row.id)) continue
+        const lane = JSON.stringify([row.event.conversationId, row.recipient.executionSessionId ?? null])
+        if (this.running.has(lane) || this.blocked.has(row.id)) continue
         let selection: ReturnType<ChannelDispatchPorts['selection']>
         try {
           selection = this.ports.selection(row)
@@ -106,11 +107,10 @@ export class ChannelDispatch {
         const task = this.deliver(row)
           .catch((error) => this.report(row, error))
           .finally(() => {
-            if (this.running.get(row.event.conversationId) === task)
-              this.running.delete(row.event.conversationId)
+            if (this.running.get(lane) === task) this.running.delete(lane)
             this.schedule()
           })
-        this.running.set(row.event.conversationId, task)
+        this.running.set(lane, task)
       }
     }
   }
