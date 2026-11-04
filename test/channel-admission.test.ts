@@ -115,6 +115,22 @@ test('native session acceptance preserves typed source, flushes before receipt, 
   assert.equal(f.inbox.receipt(f.row.id)?.phase, 'admitted')
 })
 
+test('an explicit task continuation uses native steering exactly once while retaining durable admission identity', async (t) => {
+  const f = await fixture(t)
+  let steered = 0
+  f.agent.followup = () => assert.fail('continuation must not wait behind a new-turn queue')
+  f.agent.steer = (message: UserMessage) => {
+    steered++
+    f.session.append('agent/inbox/spliced', { target: 'next-step', start: 0, inserted: [message] })
+  }
+  const native = { ...f.native, steer: true }
+  assert.equal(await admitChannelMessage(f.inbox, f.row, f.claim, native, f.signal), true)
+  assert.equal(await admitChannelMessage(f.inbox, f.row, f.claim, native, f.signal), false)
+  assert.equal(steered, 1)
+  assert.equal(f.session.snapshotEvents()[0].data.target, 'next-step')
+  assert.equal(f.inbox.receipt(f.row.id)?.phase, 'admitted')
+})
+
 test('failed flush becomes uncertain; exact native evidence reconciles without repeating the input', async (t) => {
   const f = await fixture(t)
   f.failFlush(true)

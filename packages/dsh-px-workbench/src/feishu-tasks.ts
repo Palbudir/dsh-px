@@ -278,7 +278,7 @@ export class FeishuTasks {
     if (!this.owns(agent, true) && !this.stoppingRoots.has(channel.task.rootSessionId))
       throw new ChannelError('此飞书任务授权已失效', 403)
     this.actors.set(agent.id, agent)
-    installChannelTaskAudience(agent.ctx)
+    installChannelTaskAudience(agent.ctx, agent)
   }
   submit(origin: TaskRequest, options: { action: 'start' | 'continue'; taskId?: string }) {
     const row = {
@@ -334,6 +334,7 @@ export class FeishuTasks {
     const agent = await pending
     return {
       agent,
+      steer: !!this.rootSource(id) && this.rootSource(id)!.id !== row.id,
       sessions: get(this.host, 'sessions'),
       validate: () =>
         !this.receptionPaused && this.authorized(row) && this.owns(agent) && this.matchesInput(agent, row)
@@ -412,7 +413,7 @@ export class FeishuTasks {
         () => installModelSelection(ctx, nativeModelSelection(this.host, id, route)),
         'channels: task model selection'
       )
-      installChannelTaskAudience(ctx)
+      installChannelTaskAudience(ctx, agent)
       return {
         commit: () => {
           signal.throwIfAborted()
@@ -618,9 +619,16 @@ export class FeishuTasks {
       )
       await stopNativeTaskActors(this.host, actors, this.stopping)
       await this.sends.get(taskId)?.catch(() => undefined)
-      for (const agent of actors)
-        if (!(await get(this.host, 'sessions').flush(agent.session)))
-          throw new ChannelError('原生停止记录未确认保存', 503)
+      for (const agent of actors) {
+        if (get(this.host, 'sessions').get(agent.id) === agent.session) {
+          if (!(await get(this.host, 'sessions').flush(agent.session)))
+            throw new ChannelError('原生停止记录未确认保存', 503)
+        } else {
+          // Drained continuable teammates may already have detached their live Session.
+          // Flush native persistence; do not resurrect a stopped member just to flush it.
+          await get(this.host, 'sessionPersistence').flush()
+        }
+      }
       await this.recoverOutputs(taskId)
       this.errors.delete('stop:' + taskId)
     } catch (error) {

@@ -32,6 +32,8 @@ export interface NativeChannelAdmission {
   sessions: Pick<SessionStore, 'flush'>
   // Recheck live ownership, persona, audience and current permission at the exact insertion boundary.
   validate: (message: PendingChannelMessage, claim: IngressClaim) => boolean
+  /** An explicit continuation can steer an existing task instead of waiting for a new turn. */
+  steer?: boolean
 }
 
 function sourceFor(row: PendingChannelMessage, claim: IngressClaim): ChannelMessageSource {
@@ -83,7 +85,8 @@ export async function admitChannelMessage(
   if (!inbox.claim(row.id, claim)) return false
   try {
     // No await between the ownership check, durable claim and native insertion.
-    if (wake) native.agent.followup(message)
+    if (wake && native.steer) native.agent.steer(message)
+    else if (wake) native.agent.followup(message)
     else native.agent.inject(message)
     if (!(await native.sessions.flush(native.agent.session))) throw Error('原生会话未提供持久写入回执')
     if (!inbox.admit(row.id, claim, message.id)) throw Error('渠道收件回执归属已改变')

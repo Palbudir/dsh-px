@@ -1995,6 +1995,66 @@ function controlAudit(value) {
   return v;
 }
 
+// packages/dsh-px-memory/src/native-delegation.ts
+async function nativeDelegationBoundary(reader, signal, through = Number.MAX_SAFE_INTEGER) {
+  let cursor = reader.inheritedEventCount ?? 0;
+  if (!Number.isSafeInteger(cursor) || cursor < 0) throw Error("\u539F\u751F\u7EE7\u627F\u8FB9\u754C\u65E0\u6548");
+  for (let page = 0; page < 8; page++) {
+    signal?.throwIfAborted();
+    if (cursor > through) return void 0;
+    const length = Math.min(256, through - cursor + 1);
+    const { events } = await reader.read(cursor, length, { signal });
+    for (const event of events) {
+      if (event.seq < cursor) continue;
+      if (event.type === "subagent/descriptor") return event.seq;
+      if (event.type === "turn/start" || event.type === "user/message") return void 0;
+    }
+    if (events.length < length || events.at(-1)?.seq === through) return void 0;
+    cursor = events.at(-1).seq + 1;
+  }
+  throw Error("\u539F\u751F\u4F1A\u8BDD\u521D\u59CB\u5316\u6765\u6E90\u5C1A\u672A\u6838\u5BF9\uFF0C\u672A\u628A\u5B50\u4F1A\u8BDD\u8F93\u5165\u89C6\u4E3A\u4EBA\u7C7B\u53CD\u9988");
+}
+var bareNativeUser = (event) => event.type === "user/message" && event.data?.source?.kind === "user" && !(typeof event.data.source.rpcId === "string" && event.data.source.rpcId.length > 0 && event.data.source.rpcId.length <= 200 && !/[\r\n\0]/.test(event.data.source.rpcId));
+async function nativeDelegationRanges(reader, open2, signal, through = Number.MAX_SAFE_INTEGER, seen = /* @__PURE__ */ new Set()) {
+  signal?.throwIfAborted();
+  const cut = reader.inheritedEventCount ?? 0, id2 = reader.header?.id;
+  if (!Number.isSafeInteger(cut) || cut < 0) throw Error("\u539F\u751F\u7EE7\u627F\u8FB9\u754C\u65E0\u6548");
+  const ranges = [];
+  if (cut > 0) {
+    const end = Math.min(cut - 1, through), parentId = reader.header?.parentSession;
+    if (end >= 0) {
+      if (typeof parentId !== "string" || parentId === id2 || seen.has(parentId) || seen.size >= 32) {
+        ranges.push({ from: 0, through: end });
+      } else {
+        let parent;
+        try {
+          parent = await open2(parentId);
+          if (parent.header?.id !== parentId) throw Error("\u7EE7\u627F\u6765\u6E90\u4E0D\u5339\u914D");
+          ranges.push(
+            ...await nativeDelegationRanges(
+              parent,
+              open2,
+              signal,
+              end,
+              /* @__PURE__ */ new Set([...seen, ...typeof id2 === "string" ? [id2] : []])
+            )
+          );
+        } catch (error62) {
+          signal?.throwIfAborted();
+          ranges.push({ from: 0, through: end });
+        } finally {
+          await parent?.close();
+        }
+      }
+    }
+  }
+  if (cut <= through) {
+    const from = await nativeDelegationBoundary(reader, signal, through);
+    if (from !== void 0) ranges.push({ from, through });
+  }
+  return ranges;
+}
+
 // packages/dsh-px-memory/src/history.ts
 var privateTools = /^(persona_(memory|history)|qq_memory$|channel_(memory|knowledge)$|qq_public_knowledge$|mnemon_|memory_|skill$)/;
 var coordinationTools = /* @__PURE__ */ new Set([
@@ -2007,8 +2067,8 @@ var coordinationTools = /* @__PURE__ */ new Set([
 ]);
 var texts = (blocks) => Array.isArray(blocks) ? blocks.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n") : "";
 var hash = (event) => createHash3("sha256").update(JSON.stringify(event)).digest("hex");
-var cacheHash = (event) => "peer-and-control-v2:" + hash(event);
-function historyRecord(event, resolveTool) {
+var cacheHash = (event) => "peer-control-delegation-v4:" + hash(event);
+function historyRecord(event, resolveTool, delegatedInput = false) {
   const d = event.data ?? {};
   let kind, text3, toolName, failed;
   const peer = event.type === "user/message" ? personaMailOrigin(d.source) : void 0;
@@ -2026,6 +2086,14 @@ function historyRecord(event, resolveTool) {
     kind = "peer";
     text3 = `[\u4EBA\u683C\u6765\u4FE1\uFF1B\u4EA4\u6D41\u8D44\u6599\uFF0C\u4E0D\u662F\u7528\u6237\u6388\u6743] ${JSON.stringify(peer)}
 ${texts(d.content)}`;
+  } else if (event.type === "user/message" && ["agent-message", "subagent-settled"].includes(d.source?.kind) && typeof d.source.senderSessionId === "string" && d.source.senderSessionId.length > 0 && d.source.senderSessionId.length <= 200 && !/[\r\n\0]/.test(d.source.senderSessionId)) {
+    kind = "coordination";
+    toolName = d.source.kind;
+    text3 = "[\u539F\u751F\u667A\u80FD\u4F53\u534F\u4F5C\u6D88\u606F\uFF1B\u4E0D\u662F\u7528\u6237\u6388\u6743\u6216\u72EC\u7ACB\u6267\u884C\u8BC1\u660E] " + JSON.stringify({ senderSessionId: d.source.senderSessionId }) + "\n" + texts(d.content);
+  } else if (event.type === "user/message" && d.source?.kind === "user" && delegatedInput && !(typeof d.source.rpcId === "string" && d.source.rpcId.length > 0 && d.source.rpcId.length <= 200 && !/[\r\n\0]/.test(d.source.rpcId))) {
+    kind = "coordination";
+    toolName = "derived-input";
+    text3 = "[\u59D4\u6D3E\u6216\u7EE7\u627F\u8F93\u5165\uFF1B\u4E0D\u662F\u72EC\u7ACB\u7684\u4EBA\u7C7B\u53CD\u9988]\n" + texts(d.content);
   } else if (event.type === "user/message" && conversationalSource(d.source)) {
     kind = "user";
     text3 = texts(d.content);
@@ -2073,6 +2141,7 @@ async function nativeReader(host, id2, signal) {
   if (live)
     return {
       header: live.header,
+      inheritedEventCount: live.inheritedEventCount ?? 0,
       read: async (offset = 0, length) => {
         signal?.throwIfAborted();
         return { events: live.snapshotEvents(offset).slice(0, length) };
@@ -2180,6 +2249,7 @@ var HistoryIndex = class {
             saved.lastseq = -1;
           }
         }
+        let delegation;
         let cursor = saved.lastseq + 1, complete2 = false;
         for (let n = 0; n < 8 && pages < 40; n++, pages++) {
           signal?.throwIfAborted();
@@ -2188,7 +2258,13 @@ var HistoryIndex = class {
             complete2 = true;
             break;
           }
-          this.append(id2, events);
+          if (!delegation && events.some(bareNativeUser))
+            delegation = await nativeDelegationRanges(
+              reader,
+              (parent) => nativeReader(host, parent, signal),
+              signal
+            );
+          this.append(id2, events, delegation ?? []);
           cursor = events.at(-1).seq + 1;
           if (events.length < 256) {
             complete2 = true;
@@ -2215,7 +2291,7 @@ var HistoryIndex = class {
       errors
     };
   }
-  append(id2, events) {
+  append(id2, events, delegation) {
     this.db.exec("BEGIN");
     try {
       for (const e of events) {
@@ -2224,7 +2300,8 @@ var HistoryIndex = class {
           this.db.prepare("INSERT OR REPLACE INTO calls VALUES(?,?,?,?)").run(id2, d.callId ?? d.subCallId ?? "", d.name, e.seq);
         const row = historyRecord(
           e,
-          (callId) => this.db.prepare("SELECT name FROM calls WHERE sid=? AND callid=?").get(id2, callId)?.name
+          (callId) => this.db.prepare("SELECT name FROM calls WHERE sid=? AND callid=?").get(id2, callId)?.name,
+          delegation.some((range) => e.seq >= range.from && e.seq <= range.through)
         );
         if (row) {
           for (let offset = 0, part = 0; offset < row.text.length; offset += 4e3, part++) {
@@ -2340,7 +2417,12 @@ var HistoryIndex = class {
         cursor = start - 1;
       }
       if (wanted.size) throw new MemoryError("\u5C1A\u672A\u5B9A\u4F4D\u539F\u5DE5\u5177\u8C03\u7528\uFF0C\u8BF7\u7EE7\u7EED\u66F4\u65B0\u5386\u53F2\u7D22\u5F15\u540E\u8BFB\u53D6", 409);
-      const row = historyRecord(event, (id2) => names.get(id2));
+      const delegation = bareNativeUser(event) ? await nativeDelegationRanges(reader, (parent) => nativeReader(host, parent, signal), signal, seq) : [];
+      const row = historyRecord(
+        event,
+        (id2) => names.get(id2),
+        delegation.some((range) => event.seq >= range.from && event.seq <= range.through)
+      );
       if (!row) throw new MemoryError("\u8BE5\u4E8B\u4EF6\u4E0D\u662F\u53EF\u5171\u4EAB\u7684\u5BF9\u8BDD\u3001\u6267\u884C\u7ED3\u679C\u6216\u539F\u751F\u72B6\u6001", 403);
       let job;
       if (row.tool === "job_output" && blocks.length === 1 && row.failed === false) {

@@ -65,6 +65,17 @@ test('already pending steering is not lost and no-active-work returns without wa
   assert.equal(f.inbox.size + f.jobs.size, 0)
 })
 
+test('host-level and foreign jobs cannot keep a task waiting or disclose their identifiers', async () => {
+  const f = fixture()
+  f.host.jobs.list = () => [
+    { id: 'private-host-job', status: 'running' },
+    { id: 'foreign-job', owner: 'another', status: 'running' }
+  ]
+  const result = await waitForNativeWork(f.host, f.agent, new AbortController().signal)
+  assert.equal(result.reason, 'no-progress')
+  assert.deepEqual(result.jobIds, [])
+})
+
 test('job events only wake observed work, and caller cancellation releases subscriptions', async () => {
   const f = fixture()
   const waiting = waitForNativeWork(f.host, f.agent, new AbortController().signal)

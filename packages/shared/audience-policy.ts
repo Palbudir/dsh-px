@@ -32,7 +32,8 @@ export class AudiencePolicies {
     try {
       // Native Jobs deliberately exposes unowned jobs to every caller. A public audience
       // must not list or consume those host-level records or another audience's output.
-      if (exec.name === 'job_list') return '公共会话不能列出宿主作业；请按本会话返回的作业编号读取'
+      if (exec.name === 'job_list')
+        return '公共会话不能列出宿主作业；用 task_state 查看自己的 Job，并按原生编号读取'
       if (['job_output', 'job_kill'].includes(exec.name)) {
         const owner = exec.agent?.session?.id,
           ctx = exec.agent?.ctx,

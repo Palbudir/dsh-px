@@ -1,5 +1,11 @@
 /** Fold persisted DSH facts; never execute a command or infer test success from a tool return. */
 import { CommandGuidanceIndex, type CommandGuidance } from './command-guidance'
+import { channelMessageOrigin } from '../../shared/channel-source'
+/** Ambient channel context and teammate advice are not a new user request. */
+export function currentWorkInput(source: any): boolean {
+  const origin = channelMessageOrigin(source)
+  return source?.kind === 'user' || (!!origin && origin.delivery !== 'context')
+}
 export interface Event {
   seq: number
   time: number
@@ -84,10 +90,17 @@ const internal = new Set(['task_state', 'task_review', 'task_evidence', 'task_ch
 /** Native state changes and teammate receipts can obsolete a ledger without a lead tool call. */
 export function nativeWorkChanged(event: Event): boolean {
   return (
-    ['goal/change', 'team/task', 'team/member', 'team/message/queued', 'team/message/delivered'].includes(
-      event.type
-    ) ||
-    (event.type === 'user/message' && event.data?.source?.kind === 'team-message')
+    [
+      'goal/change',
+      'job/registered',
+      'job/settled',
+      'team/task',
+      'team/member',
+      'team/message/queued',
+      'team/message/delivered'
+    ].includes(event.type) ||
+    (event.type === 'user/message' &&
+      ['team-message', 'agent-message', 'subagent-settled', 'job-settled'].includes(event.data?.source?.kind))
   )
 }
 const clip = (value: unknown, length: number): string =>
@@ -256,7 +269,7 @@ export class EvidenceIndex {
       this.processedEvents++
       const data = event.data ?? {}
       if (nativeWorkChanged(event)) this.folded.lastNonReadSeq = event.seq
-      if (event.type === 'user/message' && data.source?.kind === 'user') {
+      if (event.type === 'user/message' && currentWorkInput(data.source)) {
         const text = (data.content ?? [])
           .filter((b: any) => b.type === 'text')
           .map((b: any) => b.text)
