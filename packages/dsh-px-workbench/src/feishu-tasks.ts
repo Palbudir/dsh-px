@@ -535,6 +535,7 @@ export class FeishuTasks {
     if (this.closed || this.stop.signal.aborted || !this.leaseActive()) return Promise.resolve()
     const work = (async () => {
       this.flushAgain = false
+      const blockedSessions = new Set<string>()
       let cursor = 0
       for (;;) {
         const rows = this.inbox.queuedReplies(100, cursor)
@@ -548,12 +549,16 @@ export class FeishuTasks {
         }
         await Promise.all(
           [...groups].map(async ([sessionId, group]) => {
+            if (blockedSessions.has(sessionId)) return
             const previous = this.sends.get(sessionId) ?? Promise.resolve()
             const pending = previous
               .catch(() => {})
               .then(async () => {
                 for (const row of group) {
-                  if (!this.leaseActive() || !this.owns({ id: sessionId, session: { id: sessionId } })) return
+                  if (!this.leaseActive() || !this.owns({ id: sessionId, session: { id: sessionId } })) {
+                    blockedSessions.add(sessionId)
+                    return
+                  }
                   const receipt = this.inbox.receipt(row.sourceId)
                   if (!receipt || !row.draft) continue
                   try {
@@ -567,6 +572,7 @@ export class FeishuTasks {
                     )
                     this.errors.delete(sessionId)
                   } catch (error) {
+                    blockedSessions.add(sessionId)
                     this.errors.set(sessionId, String(error))
                     return
                   }

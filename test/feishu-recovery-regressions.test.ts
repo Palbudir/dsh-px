@@ -184,3 +184,47 @@ test('disconnected task replies stay queued and resume once, while ambiguous sen
     /状态已变化/
   )
 })
+
+test('a transient delivery failure cannot let later pages of the same task overtake its queued head', async (t) => {
+  const f = setup(t),
+    sent: string[] = []
+  for (const name of ['long', 'other']) {
+    const row = f.add(name),
+      recipient = { personaId: 'default', routeRevision: 1, executionSessionId: 'task-' + name },
+      claim = { ...recipient, sessionId: 'task-' + name, requestId: 'request-' + name, epoch: 'epoch' }
+    f.tasks.inbox.claim(row.id, claim)
+    f.tasks.inbox.admit(row.id, claim, 'native-' + name)
+    for (let n = 1; n <= (name === 'long' ? 101 : 1); n++)
+      f.tasks.inbox.queueReply(
+        'part-' + n,
+        row.id,
+        'task-' + name,
+        name === 'long' ? 'part-' + n : 'other-result'
+      )
+  }
+  f.tasks.owns = () => true
+  let failOnce = true
+  ;(f.tasks as any).deliver = async (
+    inbox: any,
+    origin: any,
+    sessionId: string,
+    key: string,
+    body: string
+  ) => {
+    const intent = inbox.beginReply(key, origin.id, sessionId, body, 'epoch')
+    assert.equal(intent.phase, 'new')
+    if (body === 'part-1' && failOnce) {
+      failOnce = false
+      inbox.deferUnsentReply(intent.id, 'epoch', 'bot-not-connected')
+      throw Error('connection recovered after this failed attempt')
+    }
+    sent.push(body)
+    inbox.finishReply(intent.id, 'sent', { sent: true, messageId: 'reply-' + sent.length })
+  }
+  await f.tasks.flushOutputs()
+  assert.deepEqual(sent, ['other-result'], 'independent task proceeds, but part101 must not overtake part1')
+  assert.equal(f.tasks.inbox.queuedReplies(1)[0].draft, 'part-1')
+  await f.tasks.flushOutputs()
+  assert.deepEqual(sent, ['other-result', ...Array.from({ length: 101 }, (_, i) => 'part-' + (i + 1))])
+  assert.equal(f.tasks.inbox.queuedReplies().length, 0)
+})

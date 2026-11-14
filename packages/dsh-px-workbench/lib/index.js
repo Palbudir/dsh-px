@@ -4316,6 +4316,7 @@ var FeishuTasks = class {
     if (this.closed || this.stop.signal.aborted || !this.leaseActive()) return Promise.resolve();
     const work = (async () => {
       this.flushAgain = false;
+      const blockedSessions = /* @__PURE__ */ new Set();
       let cursor = 0;
       for (; ; ) {
         const rows = this.inbox.queuedReplies(100, cursor);
@@ -4329,11 +4330,15 @@ var FeishuTasks = class {
         }
         await Promise.all(
           [...groups].map(async ([sessionId, group]) => {
+            if (blockedSessions.has(sessionId)) return;
             const previous = this.sends.get(sessionId) ?? Promise.resolve();
             const pending = previous.catch(() => {
             }).then(async () => {
               for (const row of group) {
-                if (!this.leaseActive() || !this.owns({ id: sessionId, session: { id: sessionId } })) return;
+                if (!this.leaseActive() || !this.owns({ id: sessionId, session: { id: sessionId } })) {
+                  blockedSessions.add(sessionId);
+                  return;
+                }
                 const receipt = this.inbox.receipt(row.sourceId);
                 if (!receipt || !row.draft) continue;
                 try {
@@ -4347,6 +4352,7 @@ var FeishuTasks = class {
                   );
                   this.errors.delete(sessionId);
                 } catch (error) {
+                  blockedSessions.add(sessionId);
                   this.errors.set(sessionId, String(error));
                   return;
                 }
