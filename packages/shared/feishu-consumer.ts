@@ -1,5 +1,6 @@
 import { feishuEvidence, type FeishuAccountBinding } from './feishu-evidence'
 import type { ChannelInbox, ChannelInboxEvent, ChannelRecipient } from './channel-inbox'
+import { setTimeout as delay } from 'node:timers/promises'
 
 export interface NativeFeishuIntake {
   contractVersion: number
@@ -59,7 +60,20 @@ export async function startFeishuConsumer(
   const controller = new AbortController(),
     signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal
   signal.throwIfAborted()
-  const description = await native.describeBot(account.botId)
+  // The IM service is published before its channel adapters finish registering at cold start.
+  // Retry only this pinned pre-registration result, before any takeover or input mutation.
+  let description: Awaited<ReturnType<NativeFeishuIntake['describeBot']>> | undefined
+  for (let attempt = 0; ; attempt++) {
+    signal.throwIfAborted()
+    try {
+      description = await native.describeBot(account.botId)
+      break
+    } catch (error: any) {
+      signal.throwIfAborted()
+      if (error?.code !== 'unknown-bot' || attempt >= 99) throw error
+      await delay(100, undefined, { signal })
+    }
+  }
   signal.throwIfAborted()
   if (
     description.version !== 1 ||

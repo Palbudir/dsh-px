@@ -3342,6 +3342,7 @@ function feishuEvidence(value, account) {
 }
 
 // packages/shared/feishu-consumer.ts
+import { setTimeout as delay } from "node:timers/promises";
 async function startFeishuConsumer(native, account, inbox, options) {
   if (typeof options.epoch !== "string" || !options.epoch.trim() || options.epoch.length > 512 || /[\r\n\0]/.test(options.epoch))
     throw Error("\u63A5\u6536\u751F\u547D\u5468\u671F\u6807\u8BC6\u65E0\u6548");
@@ -3351,7 +3352,18 @@ async function startFeishuConsumer(native, account, inbox, options) {
     throw Error("\u8BF7\u4F7F\u7528\u5E26\u63A5\u6536\u6A21\u5F0F\u6062\u590D\u5165\u53E3\u7684\u914D\u5957 IM \u63D2\u4EF6\uFF0C\u5C1A\u672A\u63A5\u7BA1\u8D26\u53F7");
   const controller = new AbortController(), signal = options.signal ? AbortSignal.any([options.signal, controller.signal]) : controller.signal;
   signal.throwIfAborted();
-  const description = await native.describeBot(account.botId);
+  let description;
+  for (let attempt = 0; ; attempt++) {
+    signal.throwIfAborted();
+    try {
+      description = await native.describeBot(account.botId);
+      break;
+    } catch (error) {
+      signal.throwIfAborted();
+      if (error?.code !== "unknown-bot" || attempt >= 99) throw error;
+      await delay(100, void 0, { signal });
+    }
+  }
   signal.throwIfAborted();
   if (description.version !== 1 || description.channel !== "feishu" || description.botId !== account.botId || description.account?.fingerprint !== account.fingerprint || typeof description.connected !== "boolean" || !["exclusive-text-consumer", "reply-text-checked", "consumer-mode-control-px1"].every(
     (cap) => description.capabilities?.includes(cap)

@@ -6,6 +6,91 @@ import { join, resolve, sep } from 'node:path'
 import { ChannelInbox } from '../packages/shared/channel-inbox'
 import { startFeishuConsumer, type NativeFeishuIntake } from '../packages/shared/feishu-consumer'
 
+test('cold adapter registration is observed before takeover; waiting can be cancelled without mutation', async () => {
+  let described = 0,
+    consumed = 0
+  const description = {
+    version: 1,
+    botId: 'bot_a',
+    channel: 'feishu',
+    connected: true,
+    account: { fingerprint: 'a'.repeat(64) },
+    capabilities: ['exclusive-text-consumer', 'reply-text-checked', 'consumer-mode-control-px1'],
+    reception: {
+      version: 1,
+      mode: 'standalone',
+      revision: '11111111-1111-4111-8111-111111111111',
+      active: false,
+      stopUncertain: false
+    }
+  }
+  const native: NativeFeishuIntake = {
+    contractVersion: 1,
+    inboundVersion: 1,
+    pxModeControlVersion: 1,
+    restoreInbound: async () => {},
+    describeBot: async () => {
+      if (++described < 3) throw Object.assign(Error('Unknown bot'), { code: 'unknown-bot' })
+      return description
+    },
+    consumeInbound: async () => {
+      consumed++
+      return () => {}
+    }
+  }
+  const options = {
+    epoch: 'epoch',
+    authorize: () => true,
+    destination: () => ({ personaId: 'p', routeRevision: 1 }),
+    available: () => {},
+    failed: () => {}
+  }
+  let recovered = 0
+  const inbox = new Proxy({} as ChannelInbox, {
+    get(_target, key) {
+      if (key === 'recoverInterrupted')
+        return () => {
+          assert.equal(consumed, 1)
+          assert.equal(described, 3)
+          recovered++
+        }
+      assert.fail('registration must not fabricate input/storage work')
+    }
+  })
+  const lease = await startFeishuConsumer(
+    native,
+    { botId: 'bot_a', fingerprint: 'a'.repeat(64) },
+    inbox,
+    options
+  )
+  assert.equal(described, 3)
+  assert.equal(consumed, 1)
+  assert.equal(recovered, 1)
+  lease.dispose()
+  const cancel = new AbortController()
+  let queried = false
+  native.describeBot = async () => {
+    queried = true
+    throw Object.assign(Error('Unknown bot'), { code: 'unknown-bot' })
+  }
+  const waiting = startFeishuConsumer(native, { botId: 'bot_a', fingerprint: 'a'.repeat(64) }, inbox, {
+    ...options,
+    signal: cancel.signal
+  })
+  while (!queried) await new Promise((r) => setImmediate(r))
+  cancel.abort(Error('stop registration wait'))
+  await assert.rejects(waiting, /stop registration wait/)
+  assert.equal(consumed, 1)
+  native.describeBot = async () => {
+    throw Object.assign(Error('account changed'), { code: 'account-changed' })
+  }
+  await assert.rejects(
+    startFeishuConsumer(native, { botId: 'bot_a', fingerprint: 'a'.repeat(64) }, inbox, options),
+    /account changed/
+  )
+  assert.equal(consumed, 1)
+})
+
 test('takeover rejects an unadapted host, an active consumer, and an uncertain old connection before mutation', async () => {
   const account = { botId: 'bot_a', fingerprint: 'a'.repeat(64) }
   for (const condition of ['unadapted', 'active', 'uncertain'] as const) {
