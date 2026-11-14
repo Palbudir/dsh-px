@@ -1,5 +1,6 @@
-import { mkdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import { renameWithRetry } from '../../src/main/native-atomic.ts'
 
 /** Replace an artifact atomically; never write through QA/runtime hard links. */
 export function writeArtifact(destination, content) {
@@ -7,7 +8,7 @@ export function writeArtifact(destination, content) {
   const temporary = `${destination}.${process.pid}.tmp`
   try {
     writeFileSync(temporary, content, 'utf8')
-    renameSync(temporary, destination)
+    renameWithRetry(temporary, destination)
   } finally {
     try {
       unlinkSync(temporary)
