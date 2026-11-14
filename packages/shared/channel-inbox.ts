@@ -647,6 +647,18 @@ export class ChannelInbox {
     )
       throw Error('回复状态已变化，未覆盖旧回执')
   }
+  /** Only a verified pre-send transport refusal may return an attempt to the durable queue. */
+  deferUnsentReply(key: string, epoch: string, code: 'bot-not-connected' | 'capability-unavailable'): void {
+    if (!['bot-not-connected', 'capability-unavailable'].includes(code)) throw Error('回复缺少发送前拒绝依据')
+    if (
+      this.db
+        .prepare(
+          "UPDATE channel_replies SET phase='queued',result=? WHERE id=? AND phase='sending' AND epoch=? AND draft IS NOT NULL"
+        )
+        .run(JSON.stringify({ sent: false, code }), key, epoch).changes !== 1
+    )
+      throw Error('回复状态已变化，不能重新排队')
+  }
   pendingReplies(limit = 20, afterSequence = 0) {
     if (
       !Number.isSafeInteger(limit) ||

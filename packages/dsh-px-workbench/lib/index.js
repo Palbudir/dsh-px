@@ -2933,6 +2933,14 @@ var ChannelInbox = class {
     ).run(phase, data, phase, key).changes !== 1)
       throw Error("\u56DE\u590D\u72B6\u6001\u5DF2\u53D8\u5316\uFF0C\u672A\u8986\u76D6\u65E7\u56DE\u6267");
   }
+  /** Only a verified pre-send transport refusal may return an attempt to the durable queue. */
+  deferUnsentReply(key, epoch, code) {
+    if (!["bot-not-connected", "capability-unavailable"].includes(code)) throw Error("\u56DE\u590D\u7F3A\u5C11\u53D1\u9001\u524D\u62D2\u7EDD\u4F9D\u636E");
+    if (this.db.prepare(
+      "UPDATE channel_replies SET phase='queued',result=? WHERE id=? AND phase='sending' AND epoch=? AND draft IS NOT NULL"
+    ).run(JSON.stringify({ sent: false, code }), key, epoch).changes !== 1)
+      throw Error("\u56DE\u590D\u72B6\u6001\u5DF2\u53D8\u5316\uFF0C\u4E0D\u80FD\u91CD\u65B0\u6392\u961F");
+  }
   pendingReplies(limit = 20, afterSequence = 0) {
     if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100 || !Number.isSafeInteger(afterSequence) || afterSequence < 0)
       throw Error("\u56DE\u590D\u5206\u9875\u65E0\u6548");
@@ -3988,6 +3996,16 @@ var FeishuTasks = class {
     this.dispatch.schedule();
     void this.flushOutputs();
   }
+  /** Human retry only; never clear an ambiguous or already-admitted native input. */
+  retryAdmission() {
+    for (const id3 of this.dispatch.blockedIds()) {
+      if (this.inbox.receipt(id3)?.phase !== "received") continue;
+      this.errors.delete(id3);
+      this.dispatch.retry(id3);
+    }
+    this.errors.delete("storage");
+    this.dispatch.retry();
+  }
   memory() {
     return get5(this.host, "pxMemoryChannels");
   }
@@ -4477,6 +4495,7 @@ var FeishuTasks = class {
       // Account-wide diagnostics are local UI data, never exported to a channel participant.
       ...!filter ? {
         errors: [...this.errors].map(([id3, error]) => ({ id: id3, error })),
+        admissionBlocked: this.dispatch.unavailable() || this.dispatch.blockedIds().some((id3) => this.inbox.receipt(id3)?.phase === "received"),
         receipts: this.inbox.counts(),
         queuedReplies: this.inbox.queuedReplies(20),
         replies: this.inbox.pendingReplies(20),
@@ -5202,6 +5221,7 @@ var FeishuChannel = class {
   failures = /* @__PURE__ */ new Map();
   recovery;
   checked = { admitted: 0, missing: 0, errors: 0 };
+  deliveryRetry;
   memory() {
     return get8(this.host, "pxMemoryChannels");
   }
@@ -5249,6 +5269,7 @@ var FeishuChannel = class {
         available: () => {
           this.dispatch.schedule();
           this.attention.schedule();
+          void this.tasks.flushOutputs().catch((error) => this.failures.set("task-delivery", String(error)));
         },
         intercept: (id3, event, signal) => this.controls.receive(id3, event, signal),
         failed: (error) => {
@@ -5585,6 +5606,12 @@ var FeishuChannel = class {
     if (intent.phase === "sent") return intent.result;
     if (intent.phase !== "new") throw new ChannelError("\u6B64\u524D\u56DE\u590D\u672A\u786E\u8BA4\uFF0C\u4E0D\u4F1A\u81EA\u52A8\u91CD\u590D\u53D1\u9001", 409);
     try {
+      const description = await native.describeBot(this.account.accountId);
+      signal.throwIfAborted();
+      if (description?.botId !== this.account.accountId || description?.account?.fingerprint !== this.account.fingerprint)
+        throw Object.assign(new ChannelError("\u4EA4\u4ED8\u8D26\u53F7\u8EAB\u4EFD\u5DF2\u53D8\u5316\uFF0C\u672A\u53D1\u9001", 409), { code: "account-changed" });
+      if (description.connected !== true)
+        throw Object.assign(new ChannelError("\u98DE\u4E66\u6682\u672A\u8FDE\u63A5\uFF0C\u5C1A\u672A\u53D1\u9001", 503), { code: "bot-not-connected" });
       const result = await native.replyChecked(
         this.account.accountId,
         origin.receipt.source.reply,
@@ -5597,21 +5624,34 @@ var FeishuChannel = class {
       return { sent: true, messageId: result.messageId };
     } catch (error) {
       try {
-        inbox.finishReply(
-          intent.id,
-          [
-            "stale-route",
-            "bad-request",
-            "account-changed",
-            "bot-not-connected",
-            "capability-unavailable"
-          ].includes(error?.code) ? "refused" : "uncertain",
-          { code: error?.code ?? "unknown" }
-        );
+        if (inbox === this.tasks.inbox && ["bot-not-connected", "capability-unavailable"].includes(error?.code)) {
+          inbox.deferUnsentReply(intent.id, this.epoch, error.code);
+          this.scheduleDeliveryRetry();
+        } else
+          inbox.finishReply(
+            intent.id,
+            [
+              "stale-route",
+              "bad-request",
+              "account-changed",
+              "bot-not-connected",
+              "capability-unavailable"
+            ].includes(error?.code) ? "refused" : "uncertain",
+            { code: error?.code ?? "unknown" }
+          );
       } catch {
       }
       throw error;
     }
+  }
+  scheduleDeliveryRetry() {
+    if (this.deliveryRetry || !this.lease || this.stop.signal.aborted) return;
+    this.deliveryRetry = setTimeout(() => {
+      this.deliveryRetry = void 0;
+      if (!this.lease || !this.allowed()) return;
+      void this.tasks.flushOutputs().catch((error) => this.failures.set("task-delivery", String(error)));
+    }, 3e3);
+    this.deliveryRetry.unref?.();
   }
   status() {
     return {
@@ -5657,6 +5697,8 @@ var FeishuChannel = class {
     };
   }
   requestStop() {
+    clearTimeout(this.deliveryRetry);
+    this.deliveryRetry = void 0;
     this.stop.abort(Error("\u6E20\u9053\u63A5\u6536\u5DF2\u505C\u6B62"));
     if (!this.lease) this.consumerStop.abort();
   }
@@ -6170,8 +6212,15 @@ function registerChannels(ctx) {
                 (row) => row.accountId === body.accountId && row.enabled
               ))
                 throw new ChannelError("\u8D26\u53F7\u63A5\u6536\u672A\u542F\u7528\u6216\u670D\u52A1\u672A\u5C31\u7EEA", 409);
+              tasks.get(body.accountId)?.retryAdmission();
               tasks.get(body.accountId)?.resumeReception();
               supervisor.retry(body.accountId);
+              return send(res, 200, { accepted: true });
+            }
+            if (body.type === "retry-task-admission") {
+              const task = tasks.get(body.accountId);
+              if (!task) throw new ChannelError("\u4EFB\u52A1\u534F\u8C03\u5668\u672A\u8FD0\u884C", 409);
+              task.retryAdmission();
               return send(res, 200, { accepted: true });
             }
             if (body.type === "resolve-task-reply") {

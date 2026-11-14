@@ -553,8 +553,15 @@ export function registerChannels(ctx: any): void {
                   )
                 )
                   throw new ChannelError('账号接收未启用或服务未就绪', 409)
+                tasks.get(body.accountId)?.retryAdmission()
                 tasks.get(body.accountId)?.resumeReception()
                 supervisor.retry(body.accountId)
+                return send(res, 200, { accepted: true })
+              }
+              if (body.type === 'retry-task-admission') {
+                const task = tasks.get(body.accountId)
+                if (!task) throw new ChannelError('任务协调器未运行', 409)
+                task.retryAdmission()
                 return send(res, 200, { accepted: true })
               }
               if (body.type === 'resolve-task-reply') {

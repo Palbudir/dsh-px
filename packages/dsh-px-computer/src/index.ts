@@ -735,6 +735,10 @@ export function apply(ctx: any): void {
   ctx.on('agent/turn-stopping', ({ agent }: { agent: any }) => {
     driver.foreground.cancelOwner(agent.id)
   })
+  // Native abort/error skips turn-stopping but always persists the terminal turn event.
+  ctx.on('session/event', (session: any, event: any) => {
+    if (event.type === 'turn/end') driver.foreground.cancelOwner(session.id)
+  })
 
   ctx.effect(
     () => async () => {

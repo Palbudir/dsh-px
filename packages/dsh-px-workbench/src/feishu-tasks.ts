@@ -146,6 +146,16 @@ export class FeishuTasks {
     this.dispatch.schedule()
     void this.flushOutputs()
   }
+  /** Human retry only; never clear an ambiguous or already-admitted native input. */
+  retryAdmission(): void {
+    for (const id of this.dispatch.blockedIds()) {
+      if (this.inbox.receipt(id)?.phase !== 'received') continue
+      this.errors.delete(id)
+      this.dispatch.retry(id)
+    }
+    this.errors.delete('storage')
+    this.dispatch.retry()
+  }
   private memory() {
     return get(this.host, 'pxMemoryChannels')
   }
@@ -739,6 +749,9 @@ export class FeishuTasks {
       ...(!filter
         ? {
             errors: [...this.errors].map(([id, error]) => ({ id, error })),
+            admissionBlocked:
+              this.dispatch.unavailable() ||
+              this.dispatch.blockedIds().some((id) => this.inbox.receipt(id)?.phase === 'received'),
             receipts: this.inbox.counts(),
             queuedReplies: this.inbox.queuedReplies(20),
             replies: this.inbox.pendingReplies(20),

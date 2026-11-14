@@ -185,7 +185,13 @@ test('verified native execution output remains feedback evidence but repeated re
   }
   f.histories.set('s', [
     event(0, 'job/registered', registration),
-    event(1, 'job/settled', { ...registration, status: 'completed', producerReported: true, finishedAt: 2 }),
+    event(1, 'job/settled', {
+      ...registration,
+      status: 'completed',
+      detail: 'exit code: 0',
+      producerReported: true,
+      finishedAt: 2
+    }),
     event(2, 'tool/call', {
       callId: 'read1',
       name: 'job_output',
@@ -232,6 +238,30 @@ test('verified native execution output remains feedback evidence but repeated re
     read
   )
   assert.equal(first.origin, second.origin)
+  for (const detail of [
+    'exit code: 1',
+    'exit code: -1',
+    'exit code: 0; [sandbox: the sandbox runner itself failed]',
+    '',
+    'completed successfully'
+  ]) {
+    f.histories.get('s')![1].data.detail = detail
+    const nonSuccess: any = await read('s', 3)
+    assert.notEqual(nonSuccess.failed, false, detail)
+    await assert.rejects(
+      prepareFeedback(
+        {
+          kind: 'useful',
+          reason: 'must not strengthen on failed or unknown command',
+          evidence: { sessionId: 's', seq: 3 }
+        },
+        'model',
+        read
+      ),
+      /成功回执/
+    )
+  }
+  f.histories.get('s')![1].data.detail = 'exit code: 0'
   f.histories.get('s')![1].data.status = 'failed'
   const failed: any = await read('s', 3)
   assert.equal(failed.failed, true)

@@ -41,11 +41,27 @@ export async function nativeJobEvidence(
     settled.data.producerReported !== true
   )
     return
+  // Native shell producers use completed even for a nonzero process exit.
+  // Only the pinned producer's exact successful detail proves command success.
+  const detail = typeof settled.data.detail === 'string' ? settled.data.detail : ''
+  const exit = /^exit code: (-?\d+)(?:; (.*))?$/.exec(detail)
+  const exitCode = exit && Number.isSafeInteger(Number(exit[1])) ? Number(exit[1]) : undefined
+  const outcome =
+    settled.data.status !== 'completed' ||
+    (exitCode !== undefined && exitCode !== 0) ||
+    (exit && exit[2]?.includes('[sandbox:'))
+      ? 'failure'
+      : exitCode === 0 && exit?.[2] === undefined
+        ? 'success'
+        : 'unknown'
   return {
     jobId,
     owner,
     kind: registered.data.kind as 'bash' | 'pwsh',
     status: settled.data.status as string,
+    outcome,
+    ...(exitCode !== undefined ? { exitCode } : {}),
+    ...(detail ? { detail: detail.slice(0, 1000) } : {}),
     registrationSeq: registered.seq as number,
     settlementSeq: settled.seq as number,
     source: 'native-job-events' as const

@@ -567,7 +567,7 @@ export class HistoryIndex {
           )
           if (job) {
             row.kind = 'tool-result'
-            row.failed = job.status !== 'completed'
+            row.failed = job.outcome === 'unknown' ? undefined : job.outcome !== 'success'
           }
         }
       }

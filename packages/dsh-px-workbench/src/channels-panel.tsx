@@ -579,6 +579,25 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
                     }
                   />
                 )}
+                {activity?.admissionBlocked && (
+                  <div role="status">
+                    <p>
+                      有任务在投入原生会话前失败。可重试尚未投入的任务；已受理或收件待核对的输入不会重复执行。
+                    </p>
+                    {!activity.records.length &&
+                      activity.errors?.map((row) => <p key={row.id}>{row.error}</p>)}
+                    <button
+                      disabled={busy || activity.receptionPaused || !view.available}
+                      onClick={() =>
+                        void run(() =>
+                          command({ type: 'retry-task-admission', accountId: account.accountId })
+                        )
+                      }
+                    >
+                      重试未投入任务
+                    </button>
+                  </div>
+                )}
                 {!!activity?.records.length && (
                   <details>
                     <summary>

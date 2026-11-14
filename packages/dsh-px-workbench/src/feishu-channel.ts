@@ -71,6 +71,7 @@ export class FeishuChannel {
   private readonly failures = new Map<string, string>()
   private recovery?: Promise<void>
   private checked = { admitted: 0, missing: 0, errors: 0 }
+  private deliveryRetry?: ReturnType<typeof setTimeout>
   constructor(
     private readonly host: any,
     private readonly account: ChannelAccount,
@@ -187,6 +188,7 @@ export class FeishuChannel {
         available: () => {
           this.dispatch.schedule()
           this.attention.schedule()
+          void this.tasks.flushOutputs().catch((error) => this.failures.set('task-delivery', String(error)))
         },
         intercept: (id, event, signal) => this.controls.receive(id, event, signal),
         failed: (error) => {
@@ -608,6 +610,16 @@ export class FeishuChannel {
     if (intent.phase === 'sent') return intent.result
     if (intent.phase !== 'new') throw new ChannelError('此前回复未确认，不会自动重复发送', 409)
     try {
+      // The registration lease survives SDK reconnects; it is not proof the bot is online.
+      const description = await native.describeBot(this.account.accountId)
+      signal.throwIfAborted()
+      if (
+        description?.botId !== this.account.accountId ||
+        description?.account?.fingerprint !== this.account.fingerprint
+      )
+        throw Object.assign(new ChannelError('交付账号身份已变化，未发送', 409), { code: 'account-changed' })
+      if (description.connected !== true)
+        throw Object.assign(new ChannelError('飞书暂未连接，尚未发送', 503), { code: 'bot-not-connected' })
       const result = await native.replyChecked(
         this.account.accountId,
         origin.receipt.source.reply,
@@ -620,22 +632,39 @@ export class FeishuChannel {
       return { sent: true, messageId: result.messageId }
     } catch (error: any) {
       try {
-        inbox.finishReply(
-          intent.id,
-          [
-            'stale-route',
-            'bad-request',
-            'account-changed',
-            'bot-not-connected',
-            'capability-unavailable'
-          ].includes(error?.code)
-            ? 'refused'
-            : 'uncertain',
-          { code: error?.code ?? 'unknown' }
-        )
+        if (
+          inbox === this.tasks.inbox &&
+          ['bot-not-connected', 'capability-unavailable'].includes(error?.code)
+        ) {
+          // Pinned replyChecked raises these only before entering the platform send.
+          inbox.deferUnsentReply(intent.id, this.epoch, error.code)
+          this.scheduleDeliveryRetry()
+        } else
+          inbox.finishReply(
+            intent.id,
+            [
+              'stale-route',
+              'bad-request',
+              'account-changed',
+              'bot-not-connected',
+              'capability-unavailable'
+            ].includes(error?.code)
+              ? 'refused'
+              : 'uncertain',
+            { code: error?.code ?? 'unknown' }
+          )
       } catch {}
       throw error
     }
+  }
+  private scheduleDeliveryRetry(): void {
+    if (this.deliveryRetry || !this.lease || this.stop.signal.aborted) return
+    this.deliveryRetry = setTimeout(() => {
+      this.deliveryRetry = undefined
+      if (!this.lease || !this.allowed()) return
+      void this.tasks.flushOutputs().catch((error) => this.failures.set('task-delivery', String(error)))
+    }, 3000)
+    this.deliveryRetry.unref?.()
   }
   status() {
     return {
@@ -689,6 +718,8 @@ export class FeishuChannel {
     }
   }
   requestStop(): void {
+    clearTimeout(this.deliveryRetry)
+    this.deliveryRetry = undefined
     this.stop.abort(Error('渠道接收已停止'))
     if (!this.lease) this.consumerStop.abort()
   }

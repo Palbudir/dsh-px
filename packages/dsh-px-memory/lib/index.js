@@ -1973,11 +1973,18 @@ async function nativeJobEvidence(reader, owner, beforeSeq, jobId, candidates = [
   }
   if (!registered || !settled || registered.seq >= settled.seq || !Number.isSafeInteger(registered.data.startedAt) || registered.data.startedAt < 0 || !Number.isSafeInteger(settled.data.finishedAt) || settled.data.finishedAt < registered.data.startedAt || registered.data.startedAt !== settled.data.startedAt || !["bash", "pwsh"].includes(registered.data.kind) || settled.data.kind !== registered.data.kind || !["completed", "failed", "killed"].includes(settled.data.status) || settled.data.producerReported !== true)
     return;
+  const detail = typeof settled.data.detail === "string" ? settled.data.detail : "";
+  const exit = /^exit code: (-?\d+)(?:; (.*))?$/.exec(detail);
+  const exitCode = exit && Number.isSafeInteger(Number(exit[1])) ? Number(exit[1]) : void 0;
+  const outcome = settled.data.status !== "completed" || exitCode !== void 0 && exitCode !== 0 || exit && exit[2]?.includes("[sandbox:") ? "failure" : exitCode === 0 && exit?.[2] === void 0 ? "success" : "unknown";
   return {
     jobId,
     owner,
     kind: registered.data.kind,
     status: settled.data.status,
+    outcome,
+    ...exitCode !== void 0 ? { exitCode } : {},
+    ...detail ? { detail: detail.slice(0, 1e3) } : {},
     registrationSeq: registered.seq,
     settlementSeq: settled.seq,
     source: "native-job-events"
@@ -2447,7 +2454,7 @@ var HistoryIndex = class {
           );
           if (job) {
             row.kind = "tool-result";
-            row.failed = job.status !== "completed";
+            row.failed = job.outcome === "unknown" ? void 0 : job.outcome !== "success";
           }
         }
       }

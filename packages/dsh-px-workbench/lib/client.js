@@ -6176,6 +6176,20 @@ function ChannelsPanel({ navigation }) {
                   answer: (input) => command({ type: "answer-interaction", accountId: account.accountId, ...input })
                 }
               ),
+              activity?.admissionBlocked && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { role: "status", children: [
+                /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { children: "\u6709\u4EFB\u52A1\u5728\u6295\u5165\u539F\u751F\u4F1A\u8BDD\u524D\u5931\u8D25\u3002\u53EF\u91CD\u8BD5\u5C1A\u672A\u6295\u5165\u7684\u4EFB\u52A1\uFF1B\u5DF2\u53D7\u7406\u6216\u6536\u4EF6\u5F85\u6838\u5BF9\u7684\u8F93\u5165\u4E0D\u4F1A\u91CD\u590D\u6267\u884C\u3002" }),
+                !activity.records.length && activity.errors?.map((row) => /* @__PURE__ */ (0, import_jsx_runtime7.jsx)("p", { children: row.error }, row.id)),
+                /* @__PURE__ */ (0, import_jsx_runtime7.jsx)(
+                  "button",
+                  {
+                    disabled: busy || activity.receptionPaused || !view.available,
+                    onClick: () => void run(
+                      () => command({ type: "retry-task-admission", accountId: account.accountId })
+                    ),
+                    children: "\u91CD\u8BD5\u672A\u6295\u5165\u4EFB\u52A1"
+                  }
+                )
+              ] }),
               !!activity?.records.length && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("details", { children: [
                 /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("summary", { children: [
                   "\u539F\u751F\u4EFB\u52A1\uFF08",

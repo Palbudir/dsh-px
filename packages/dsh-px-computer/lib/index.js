@@ -4076,6 +4076,9 @@ function apply(ctx) {
   ctx.on("agent/turn-stopping", ({ agent }) => {
     driver.foreground.cancelOwner(agent.id);
   });
+  ctx.on("session/event", (session, event) => {
+    if (event.type === "turn/end") driver.foreground.cancelOwner(session.id);
+  });
   ctx.effect(
     () => async () => {
       const results = await Promise.allSettled([
