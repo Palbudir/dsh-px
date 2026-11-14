@@ -6041,7 +6041,7 @@ function ChannelsPanel({ navigation }) {
             }
           )
         ] }),
-        description && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { children: [
+        description && !view.configuration.accounts.some((account) => account.accountId === description.accountId) && /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("div", { children: [
           /* @__PURE__ */ (0, import_jsx_runtime7.jsxs)("p", { children: [
             description.name,
             " \xB7 ",

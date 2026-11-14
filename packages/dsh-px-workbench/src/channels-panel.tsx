@@ -445,37 +445,38 @@ export function ChannelsPanel({ navigation }: { navigation: Navigation }) {
                 核对账号
               </button>
             </div>
-            {description && (
-              <div>
-                <p>
-                  {description.name} · {description.connected ? '已连接' : '未连接'} ·{' '}
-                  {description.supported ? '支持 PX 接收与恢复' : '需要配套 IM 接收适配'}
-                </p>
-                <button
-                  disabled={busy || !description.supported || !view.personas.length || !!edit}
-                  onClick={() =>
-                    setEdit({
-                      revision: view.revision,
-                      configuration: structuredClone(view.configuration),
-                      account: {
-                        provider: 'feishu',
-                        accountId: description.accountId,
-                        fingerprint: description.fingerprint,
-                        enabled: false,
-                        personaId: view.personas[0].id,
-                        workspace: '',
-                        routeRevision: 1,
-                        authorizedUsers: [],
-                        publicInstructions: '',
-                        attention: { ...defaultChannelAttention(), allowAgentChanges: true }
-                      }
-                    })
-                  }
-                >
-                  配置此账号
-                </button>
-              </div>
-            )}
+            {description &&
+              !view.configuration.accounts.some((account) => account.accountId === description.accountId) && (
+                <div>
+                  <p>
+                    {description.name} · {description.connected ? '已连接' : '未连接'} ·{' '}
+                    {description.supported ? '支持 PX 接收与恢复' : '需要配套 IM 接收适配'}
+                  </p>
+                  <button
+                    disabled={busy || !description.supported || !view.personas.length || !!edit}
+                    onClick={() =>
+                      setEdit({
+                        revision: view.revision,
+                        configuration: structuredClone(view.configuration),
+                        account: {
+                          provider: 'feishu',
+                          accountId: description.accountId,
+                          fingerprint: description.fingerprint,
+                          enabled: false,
+                          personaId: view.personas[0].id,
+                          workspace: '',
+                          routeRevision: 1,
+                          authorizedUsers: [],
+                          publicInstructions: '',
+                          attention: { ...defaultChannelAttention(), allowAgentChanges: true }
+                        }
+                      })
+                    }
+                  >
+                    配置此账号
+                  </button>
+                </div>
+              )}
           </section>
           {edit && (
             <AccountEditor

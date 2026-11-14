@@ -26,7 +26,7 @@ export class ChannelSupervisor<
     this.desired = new Map(
       configs.filter((row) => row.enabled).map((row) => [row.accountId, structuredClone(row)])
     )
-    for (const id of new Set([...this.runtimes.keys(), ...this.desired.keys()])) {
+    for (const id of new Set([...this.runtimes.keys(), ...this.desired.keys(), ...this.attempted.keys()])) {
       const current = this.runtimes.get(id),
         wanted = this.target(id)
       if (current && (!wanted || !current.matches(wanted))) current.requestStop()
@@ -95,7 +95,10 @@ export class ChannelSupervisor<
         await current.dispose()
         if (this.runtimes.get(id) === current) this.runtimes.delete(id)
       }
-      if (!wanted) return
+      if (!wanted) {
+        this.attempted.delete(id)
+        return
+      }
       if (this.target(id) !== wanted) continue
       if (this.attempted.get(id) === signature) return
       this.attempted.set(id, signature)

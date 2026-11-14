@@ -2377,7 +2377,7 @@ var ChannelSupervisor = class {
     this.desired = new Map(
       configs.filter((row) => row.enabled).map((row) => [row.accountId, structuredClone(row)])
     );
-    for (const id3 of /* @__PURE__ */ new Set([...this.runtimes.keys(), ...this.desired.keys()])) {
+    for (const id3 of /* @__PURE__ */ new Set([...this.runtimes.keys(), ...this.desired.keys(), ...this.attempted.keys()])) {
       const current = this.runtimes.get(id3), wanted = this.target(id3);
       if (current && (!wanted || !current.matches(wanted))) current.requestStop();
       this.schedule(id3);
@@ -2437,7 +2437,10 @@ var ChannelSupervisor = class {
         await current.dispose();
         if (this.runtimes.get(id3) === current) this.runtimes.delete(id3);
       }
-      if (!wanted) return;
+      if (!wanted) {
+        this.attempted.delete(id3);
+        return;
+      }
       if (this.target(id3) !== wanted) continue;
       if (this.attempted.get(id3) === signature) return;
       this.attempted.set(id3, signature);

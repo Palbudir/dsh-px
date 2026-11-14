@@ -162,3 +162,51 @@ test('temporary pause survives unrelated edits and explicit resume uses the late
   await until(() => f.runtimes.has('a'))
   assert.equal(f.runtimes.get('a')?.config.revision, 2)
 })
+for (const removed of [false, true])
+  test(`an account can restart unchanged after ${removed ? 'removal' : 'disabling'} without a retry click`, async (t) => {
+    const f = fixture(t)
+    f.supervisor.update([f.config('a'), f.config('b')])
+    await until(() => f.created.length === 2)
+    const old = f.runtimes.get('a')!,
+      other = f.runtimes.get('b')!
+    f.supervisor.update([...(removed ? [] : [{ ...f.config('a'), enabled: false }]), f.config('b')])
+    await until(() => !f.runtimes.has('a'))
+    assert.equal(old.disposed, true)
+    f.supervisor.update([f.config('a'), f.config('b')])
+    await until(() => f.runtimes.get('a')?.started === true)
+    assert.notEqual(f.runtimes.get('a'), old)
+    assert.equal(f.created.length, 3)
+    assert.equal(f.runtimes.get('b'), other)
+    assert.equal(other.stops, 0)
+    assert.deepEqual(f.errors, [])
+  })
+test('a failed unchanged start is retried only after an explicit disabled cycle or retry', async () => {
+  let starts = 0
+  const errors: unknown[] = [],
+    supervisor = new ChannelSupervisor<Config, any>(
+      new Map(),
+      async () => {
+        starts++
+        throw Error('start failed')
+      },
+      (_id, error) => errors.push(error)
+    ),
+    config = { accountId: 'a', enabled: true, revision: 1, mode: 'normal' }
+  try {
+    supervisor.update([config])
+    await until(() => errors.length === 1)
+    supervisor.update([config])
+    await delay(20)
+    assert.equal(starts, 1)
+    supervisor.update([{ ...config, enabled: false }])
+    await delay(20)
+    supervisor.update([config])
+    await until(() => errors.length === 2)
+    assert.equal(starts, 2)
+    supervisor.update([config])
+    await delay(20)
+    assert.equal(starts, 2)
+  } finally {
+    await supervisor.close()
+  }
+})
