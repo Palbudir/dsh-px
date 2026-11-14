@@ -129,3 +129,43 @@ test('release during driver loading prevents pending foreground effects and reta
   assert.equal(driver.foreground.availability('b').available, true)
   await driver.close()
 })
+
+test('bounded input retains foreground occupancy without a wire delivery mode until actual input settles', async () => {
+  let finish!: () => void
+  const pending = new Promise<void>((resolve) => {
+    finish = resolve
+  })
+  let effects = 0
+  const driver = new DesktopDriver(async () => ({
+    callTool: async (name) => {
+      if (name === 'bounded_input') {
+        effects++
+        if (effects === 1) await pending
+      }
+      return { rawJson: '{"content":[]}' }
+    },
+    shutdown: async () => {}
+  }))
+  try {
+    // runDesktopTool passes the validated native plan without delivery_mode.
+    const active = driver.call('bounded_input', { keys: [87], duration_ms: 1000 }, signal(), 'a')
+    await new Promise((resolve) => setImmediate(resolve))
+    const lease = driver.foreground.snapshot()!
+    assert.equal(lease.sessionId, 'a')
+    assert.equal(lease.activeCalls, 1)
+    driver.foreground.release('a', lease.generation)
+    assert.equal(driver.foreground.availability('b').available, false)
+    await assert.rejects(async () => driver.call('bounded_input', {}, signal(), 'b'), /占用|释放/)
+    assert.equal(effects, 1)
+    finish()
+    await active
+    assert.equal(driver.foreground.snapshot(), null)
+    await assert.rejects(driver.call('bounded_input', {}, signal(), 'b'), /重新观察/)
+    await driver.call('get_window_state', {}, signal(), 'b')
+    await driver.call('bounded_input', {}, signal(), 'b')
+    assert.equal(effects, 2)
+  } finally {
+    finish()
+    await driver.close()
+  }
+})

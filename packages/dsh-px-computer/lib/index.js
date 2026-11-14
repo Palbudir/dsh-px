@@ -1846,7 +1846,7 @@ var DesktopDriver = class {
   active;
   call(name2, args, signal, scope) {
     if (signal.aborted) return Promise.reject(signal.reason ?? Error("\u684C\u9762\u64CD\u4F5C\u5DF2\u53D6\u6D88"));
-    const foreground = args.delivery_mode === "foreground" || ["bring_to_front", "invoke_menu", "launch_app"].includes(name2);
+    const foreground = args.delivery_mode === "foreground" || ["bring_to_front", "invoke_menu", "launch_app", "bounded_input"].includes(name2);
     const reservation = foreground && scope ? this.foreground.reserve(scope) : void 0;
     const epoch = this.epoch;
     const scopeEpoch = scope ? this.scopeEpochs.get(scope) ?? 0 : 0;

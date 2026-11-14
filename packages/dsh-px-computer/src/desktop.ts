@@ -62,8 +62,10 @@ export class DesktopDriver {
     scope?: string
   ): Promise<DriverResult> {
     if (signal.aborted) return Promise.reject(signal.reason ?? Error('桌面操作已取消'))
+    // The validated bounded-input plan omits delivery_mode on the wire, but always uses foreground input.
     const foreground =
-      args.delivery_mode === 'foreground' || ['bring_to_front', 'invoke_menu', 'launch_app'].includes(name)
+      args.delivery_mode === 'foreground' ||
+      ['bring_to_front', 'invoke_menu', 'launch_app', 'bounded_input'].includes(name)
     const reservation = foreground && scope ? this.foreground.reserve(scope) : undefined
     const epoch = this.epoch
     const scopeEpoch = scope ? (this.scopeEpochs.get(scope) ?? 0) : 0
