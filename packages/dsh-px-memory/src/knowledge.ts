@@ -2,7 +2,16 @@ import { createHash } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { MemorySourceRuntime } from 'dsh-mnemon/contracts'
+import { DocumentSearchPager } from './document-search'
 import { MemoryError, projectKey, publicSession, type MemoryStore } from './store'
+import {
+  MemoryFeedback,
+  feedbackHash,
+  rankMemoryMatch,
+  presentFeedback,
+  prepareFeedback,
+  type FeedbackKind
+} from './memory-feedback'
 
 export const KNOWLEDGE_SCOPES = ['persona', 'persona-project', 'project', 'global'] as const
 export type KnowledgeScope = (typeof KNOWLEDGE_SCOPES)[number]
@@ -26,6 +35,7 @@ interface Namespace {
   scope: KnowledgeScope
   personaId?: string
   project?: string
+  conversation?: { provider: string; accountId: string; id: string }
 }
 interface Origin extends Namespace {
   id: string
@@ -35,10 +45,12 @@ interface Origin extends Namespace {
 interface Envelope {
   schema: 1
   sources: FileReference[]
+  events?: Array<{ sessionId: string; seq: number; kind: string; eventHash: string; time: number | null }>
   author?: { kind: 'human' | 'model' | 'unknown'; at: string }
   sharedBy?: { kind: 'human' | 'model'; at: string }
   origin?: Origin
   previous?: { revision: number; contentHash: string }
+  migration?: Origin
 }
 export interface KnowledgeDocument {
   id: string
@@ -79,7 +91,7 @@ function bounded(value: unknown, label: string, max: number): string {
 }
 function validateNamespace(ns: Namespace): void {
   if (!ns || !KNOWLEDGE_SCOPES.includes(ns.scope)) throw new MemoryError('知识来源范围无效', 409)
-  const privateScope = ns.scope === 'persona' || ns.scope === 'persona-project',
+  const privateScope = ns.scope === 'persona' || ns.scope === 'persona-project' || !!ns.conversation,
     projectScope = ns.scope === 'project' || ns.scope === 'persona-project'
   if (
     privateScope !==
@@ -87,23 +99,120 @@ function validateNamespace(ns: Namespace): void {
     projectScope !== (typeof ns.project === 'string' && ns.project.length > 0)
   )
     throw new MemoryError('知识来源身份无效', 409)
+  if (
+    ns.conversation &&
+    (ns.scope !== 'project' ||
+      [ns.conversation.provider, ns.conversation.accountId, ns.conversation.id].some(
+        (value) => typeof value !== 'string' || !value || value.length > 200
+      ))
+  )
+    throw new MemoryError('交流记忆来源身份无效', 409)
 }
+
+const legacyConversationTitle = (title: unknown): boolean =>
+  typeof title === 'string' && /^QQ 经历 \/ [^/]{1,200} \/ /.test(title)
+
+export const conversationNotePrefix = (provider: string, personaId: string): string =>
+  provider === 'qq' ? `QQ 经历 / ${personaId} / ` : `渠道经历 / ${provider} / ${personaId} / `
 
 /** Mnemon owns document writes, locks, revisions, archives and search. PX only selects scope and adds provenance. */
 export class KnowledgeBank {
+  private conversationSearch = new DocumentSearchPager()
+  private readonly feedbackStore: MemoryFeedback
   private runtimes = new Map<string, MemorySourceRuntime>()
   private factory?: Promise<typeof import('dsh-mnemon-source-documents')>
+  private readonly conversationCallers = new WeakMap<KnowledgeCaller, Namespace>()
+  private readonly migrations = new Map<string, Promise<void>>()
   constructor(
     private root: string,
     private identities: MemoryStore,
-    private observeFile?: (caller: KnowledgeCaller, path: string) => Promise<FileReference | undefined>
+    private observeFile?: (caller: KnowledgeCaller, path: string) => Promise<FileReference | undefined>,
+    private readEvidence?: (
+      caller: KnowledgeCaller,
+      source: string,
+      seq: number,
+      signal?: AbortSignal
+    ) => Promise<any>
   ) {
     mkdirSync(root, { recursive: true })
+    this.feedbackStore = new MemoryFeedback(join(root, 'feedback.sqlite'))
+  }
+  private feedbackTarget(
+    caller: KnowledgeCaller,
+    ns: Namespace,
+    document: Pick<KnowledgeDocument, 'id' | 'revision' | 'contentHash'>
+  ): string {
+    const binding = this.identities.read().bindings[caller.sessionId]
+    if (!binding || binding.pending) return ''
+    const audience = publicSession(binding)
+      ? {
+          provider: binding.channel!.provider,
+          accountId: binding.channel!.accountId,
+          conversationId: binding.channel!.conversationId
+        }
+      : 'private'
+    return feedbackHash([
+      ns,
+      document.id,
+      document.revision,
+      document.contentHash,
+      binding.personaId,
+      audience
+    ])
+  }
+  async feedback(
+    caller: KnowledgeCaller,
+    scope: KnowledgeScope,
+    input: {
+      id: string
+      documentRevision: number
+      kind: FeedbackKind
+      reason: string
+      evidence?: { sessionId: string; seq: number }
+    },
+    signal?: AbortSignal
+  ): Promise<any> {
+    const ns = this.namespace(caller, scope),
+      id = bounded(input.id, '知识编号', 300),
+      actor = caller.actor === 'human' ? 'human' : 'model'
+    const before = (await this.call(ns, 'document', { id })).value as KnowledgeDocument
+    this.assertReadableDocument(ns, before)
+    if (before.status !== 'active' || before.revision !== input.documentRevision)
+      throw new MemoryError('知识已变化或归档，请重新读取后反馈', 409)
+    const target = this.feedbackTarget(caller, ns, before)
+    if (!target) throw new MemoryError('反馈需要已固定的人格会话', 409)
+    const feedback = await prepareFeedback(
+      input,
+      actor,
+      this.readEvidence ? (source, seq, stop) => this.readEvidence!(caller, source, seq, stop) : undefined,
+      signal
+    )
+    signal?.throwIfAborted()
+    const now = (await this.call(ns, 'document', { id })).value as KnowledgeDocument
+    if (
+      now.status !== 'active' ||
+      now.revision !== before.revision ||
+      now.contentHash !== before.contentHash ||
+      this.feedbackTarget(caller, this.namespace(caller, scope), now) !== target
+    )
+      throw new MemoryError('知识或反馈受众已变化，未采纳迟到反馈', 409)
+    const result = this.feedbackStore.record(target, feedback.origin, feedback.entry)
+    return {
+      ...result,
+      feedback: presentFeedback(result.feedback, caller.actor),
+      ...(await this.read(caller, scope, id, true))
+    }
   }
   namespace(caller: KnowledgeCaller, scope: KnowledgeScope): Namespace {
     if (!KNOWLEDGE_SCOPES.includes(scope)) throw new MemoryError('知识范围无效')
     const state = this.identities.read(),
       binding = state.bindings[caller.sessionId]
+    const granted = this.conversationCallers.get(caller)
+    if (granted) {
+      if (scope !== 'project' || digest(granted) !== digest(this.conversationNamespace(caller)))
+        throw new MemoryError('交流记忆调用范围已变化', 403)
+      return structuredClone(granted)
+    }
     if (publicSession(binding) && (scope === 'persona' || scope === 'persona-project'))
       throw new MemoryError('公共聊天不能读取人格私有知识', 403)
     if ((scope === 'persona' || scope === 'persona-project') && (!binding || binding.pending))
@@ -117,6 +226,174 @@ export class KnowledgeBank {
       scope,
       ...(scope === 'persona' || scope === 'persona-project' ? { personaId: binding.personaId } : {}),
       ...(scope === 'project' || scope === 'persona-project' ? { project: project! } : {})
+    }
+  }
+  /** An in-process capability, not a caller-controlled JSON flag. Ordinary knowledge routes cannot mint it. */
+  conversationCaller(caller: KnowledgeCaller): KnowledgeCaller {
+    const value = { ...caller }
+    this.conversationCallers.set(value, this.conversationNamespace(value))
+    return value
+  }
+  private conversationNamespace(caller: KnowledgeCaller): Namespace {
+    const state = this.identities.read(),
+      binding = state.bindings[caller.sessionId],
+      channel = binding?.channel
+    const persona = state.personas.find((row) => row.id === binding?.personaId)
+    if (
+      !binding ||
+      binding.pending ||
+      !publicSession(binding) ||
+      !channel?.workspace ||
+      projectKey(caller.project) !== projectKey(channel.workspace) ||
+      !persona ||
+      (caller.actor !== 'human' && (persona.archived || !persona.memoryEnabled))
+    )
+      throw new MemoryError('交流记忆调用范围已变化或已关闭', 403)
+    return {
+      scope: 'project',
+      personaId: binding.personaId,
+      project: projectKey(channel.workspace)!,
+      conversation: { provider: channel.provider, accountId: channel.accountId, id: channel.conversationId }
+    }
+  }
+  private exportable(
+    ns: Namespace,
+    document: Pick<KnowledgeDocument, 'title'> & Partial<KnowledgeDocument>
+  ): boolean {
+    if (ns.conversation || !legacyConversationTitle(document.title)) return true
+    try {
+      const meta = unwrap(document as KnowledgeDocument).metadata
+      return !!meta.sharedBy
+    } catch {
+      return false
+    }
+  }
+  private assertReadableDocument(
+    ns: Namespace,
+    document: Pick<KnowledgeDocument, 'title'> & Partial<KnowledgeDocument>
+  ): void {
+    if (!this.exportable(ns, document))
+      throw new MemoryError('此条目属于人格交流记忆，请从对应聊天的记忆入口读取', 403)
+  }
+  /** Imports generated notes into an owner+account+conversation namespace; original provenance remains readable internally. */
+  async prepareConversation(caller: KnowledgeCaller, topicPrefix: string): Promise<void> {
+    const target = this.namespace(caller, 'project')
+    if (
+      !target.conversation ||
+      topicPrefix !== conversationNotePrefix(target.conversation.provider, target.personaId!)
+    )
+      throw new MemoryError('交流记忆迁移范围无效', 403)
+    // Only QQ had legacy project-level notes. New providers start in their own namespace directly.
+    if (target.conversation.provider !== 'qq') return
+    const key = digest(target),
+      active = this.migrations.get(key)
+    if (active) return active
+    const work = this.migrateConversation(caller, target, topicPrefix).finally(() => {
+      if (this.migrations.get(key) === work) this.migrations.delete(key)
+    })
+    this.migrations.set(key, work)
+    return work
+  }
+  private async migrateConversation(
+    caller: KnowledgeCaller,
+    target: Namespace,
+    topicPrefix: string
+  ): Promise<void> {
+    const originNs = this.namespace({ ...caller }, 'project')
+    const initial = await this.call(originNs, 'snapshot')
+    const pending = initial.value.documents.filter(
+      (row: any) => row.status === 'active' && row.title.startsWith(topicPrefix)
+    )
+    let copied = 0,
+      remaining = 0
+    for (const row of pending) {
+      const source = (await this.call(originNs, 'document', { id: row.id })).value as KnowledgeDocument
+      const { metadata, body } = unwrap(source)
+      if (metadata.sharedBy) continue
+      let observation: any
+      try {
+        observation = JSON.parse(body)
+      } catch {
+        throw new MemoryError('旧交流记忆格式需要检查；原记录已保留', 409)
+      }
+      if (observation.kind !== 'conversation-observation' || observation.version !== 1)
+        throw new MemoryError('旧交流记忆类型需要检查；原记录已保留', 409)
+      const destination = await this.call(target, 'snapshot')
+      const existing = destination.value.documents.find(
+        (doc: any) => doc.title === source.title && doc.status === 'active'
+      )
+      const migration = {
+        ...originNs,
+        id: source.id,
+        revision: source.revision,
+        contentHash: source.contentHash
+      }
+      if (existing) {
+        const migrated = unwrap((await this.call(target, 'document', { id: existing.id })).value).metadata
+          .migration
+        if (
+          !migrated ||
+          migrated.id !== source.id ||
+          migrated.revision !== source.revision ||
+          migrated.contentHash !== source.contentHash
+        )
+          throw new MemoryError('新旧交流记忆均有变化，请核对后合并；未覆盖任一原文', 409)
+      } else {
+        if (copied >= 32) {
+          remaining++
+          continue
+        }
+        await this.write(
+          caller,
+          'project',
+          {
+            key: source.title,
+            body,
+            sources: metadata.sources,
+            revision: contentRevision(destination.value)
+          },
+          undefined,
+          metadata.author ?? { kind: 'unknown', at: source.updatedAt },
+          migration
+        )
+        copied++
+      }
+      const current = await this.call(originNs, 'snapshot')
+      const latest = current.value.documents.find((doc: any) => doc.id === source.id)
+      if (
+        latest?.status !== 'active' ||
+        latest.revision !== source.revision ||
+        latest.contentHash !== source.contentHash
+      )
+        throw new MemoryError('旧交流记忆在迁移期间变化，已保留副本，请重新核对', 409)
+      // Keep a hidden provenance anchor for already-authorized shared copies. A later
+      // correction/archive of the private record invalidates the anchor first.
+    }
+    if (remaining) throw new MemoryError('已迁移一批交流记忆，请再次读取以继续；原记录保留', 409)
+  }
+  private async invalidateMigratedSource(origin?: Origin): Promise<void> {
+    if (!origin) return
+    const { id, revision, contentHash, ...ns } = origin
+    const source = await this.call(ns, 'snapshot'),
+      row = source.value.documents.find((item: any) => item.id === id)
+    if (!row || row.status !== 'active') return
+    if (row.revision !== revision || row.contentHash !== contentHash)
+      throw new MemoryError('迁移来源已有其他修改，请核对后再纠正；原件保留', 409)
+    await this.call(
+      ns,
+      'archive',
+      { id, documentRevision: revision, summary: '人格交流记忆已有更新，旧共享依据不再作为当前结论。' },
+      source.revision
+    )
+  }
+  async conversationAlias(caller: KnowledgeCaller, id: string): Promise<string | undefined> {
+    bounded(id, '交流记忆编号', 300)
+    const ns = this.namespace(caller, 'project')
+    if (!ns.conversation) throw new MemoryError('交流记忆范围无效', 403)
+    const snapshot = await this.call(ns, 'snapshot')
+    for (const row of snapshot.value.documents) {
+      const migrated = unwrap((await this.call(ns, 'document', { id: row.id })).value).metadata.migration
+      if (migrated?.id === id) return row.id
     }
   }
   private async runtime(ns: Namespace): Promise<MemorySourceRuntime> {
@@ -159,24 +436,39 @@ export class KnowledgeBank {
     })
   }
   async catalog(caller: KnowledgeCaller, scope: KnowledgeScope): Promise<any> {
-    const result = await this.call(this.namespace(caller, scope), 'snapshot')
+    const ns = this.namespace(caller, scope),
+      result = await this.call(ns, 'snapshot')
+    const documents = []
+    for (const row of result.value.documents) {
+      const document =
+        !ns.conversation && legacyConversationTitle(row.title)
+          ? (await this.call(ns, 'document', { id: row.id })).value
+          : row
+      if (this.exportable(ns, document)) documents.push(row)
+    }
     return {
       scope,
       label: SCOPE_LABELS[scope],
       revision: contentRevision(result.value),
-      documents: result.value.documents.map((d: any) => ({
+      documents: documents.map((d: any) => ({
         id: d.id,
         key: d.title,
         revision: d.revision,
         contentHash: d.contentHash,
         status: d.status,
         updatedAt: d.updatedAt,
-        healthy: d.healthy
+        healthy: d.healthy,
+        feedback: (() => {
+          const f = this.feedbackStore.view(this.feedbackTarget(caller, ns, d))
+          return { confirmed: f.confirmed, disputed: f.disputed, strength: f.strength, count: f.count }
+        })()
       }))
     }
   }
   private async present(ns: Namespace, document: KnowledgeDocument, caller: KnowledgeCaller): Promise<any> {
+    this.assertReadableDocument(ns, document)
     const { metadata, body } = unwrap(document)
+    const feedback = this.feedbackStore.view(this.feedbackTarget(caller, ns, document))
     let stale = false,
       sourceState = 'original'
     if (metadata.origin) {
@@ -213,10 +505,12 @@ export class KnowledgeBank {
       revision: document.revision,
       contentHash: document.contentHash,
       status: document.status,
-      current: document.status === 'active' && !stale,
+      current: document.status === 'active' && !stale && !feedback.disputed,
+      feedback: presentFeedback(feedback, caller.actor),
       sourceState,
       body,
       sources: sourceFiles,
+      events: metadata.events ?? [],
       author: metadata.author ?? { kind: 'unknown' },
       sourceMeaning: 'File versions track freshness; they do not prove the content supports every claim.',
       previous: metadata.previous,
@@ -270,7 +564,13 @@ export class KnowledgeBank {
         includeArchived: includeHistorical
       })
     const matches = await Promise.all(
-      result.value.results.map((d: KnowledgeDocument) => this.present(ns, d, caller))
+      result.value.results
+        .filter((d: KnowledgeDocument) => this.exportable(ns, d))
+        .map(async (d: KnowledgeDocument & { score?: number }) => {
+          const item = await this.present(ns, d, caller),
+            lexicalScore = Number.isFinite(d.score) ? d.score! : 0
+          return { ...item, relevance: lexicalScore, rank: rankMemoryMatch(lexicalScore, item.feedback) }
+        })
     )
     const snapshot = (await this.call(ns, 'snapshot')).value
     if (
@@ -289,16 +589,96 @@ export class KnowledgeBank {
     return {
       scope,
       revision: contentRevision(snapshot),
-      results: matches.filter((d) => includeHistorical || d.current),
+      results: matches
+        .filter((d) => includeHistorical || d.current)
+        .sort((a, b) => b.rank - a.rank || b.relevance - a.relevance),
       excludedHistorical: includeHistorical ? 0 : matches.filter((d) => !d.current).length
+    }
+  }
+  async searchConversation(
+    caller: KnowledgeCaller,
+    query: string,
+    offset = 0,
+    cursor?: string,
+    revision?: string,
+    signal = new AbortController().signal
+  ) {
+    const ns = this.namespace(caller, 'project')
+    if (!ns.conversation) throw new MemoryError('此搜索需要人格交流记忆范围', 403)
+    const normalized = bounded(query, '关键词', 256),
+      catalog = await this.catalog(caller, 'project')
+    if (offset > 0 && revision !== catalog.revision)
+      throw new MemoryError('交流记忆目录已变化，请从第一页重新查询', 409)
+    const candidates = catalog.documents
+      .filter(
+        (d: any) =>
+          d.status === 'active' &&
+          d.healthy !== false &&
+          d.key.startsWith(conversationNotePrefix(ns.conversation!.provider, ns.personaId!)) &&
+          !d.feedback.disputed
+      )
+      .map((d: any, order: number) => ({
+        id: d.id,
+        revision: d.revision,
+        strength: d.feedback.strength,
+        updatedAt: d.updatedAt,
+        order
+      }))
+    const signature = digest([
+      ns,
+      normalized,
+      catalog.revision,
+      catalog.documents.map((d: any) => [d.id, d.feedback])
+    ])
+    const page = await this.conversationSearch.page({
+      signature,
+      cursor,
+      requireCursor: catalog.documents.some((d: any) => d.feedback.count > 0),
+      offset,
+      query: normalized,
+      scope: { storage: 'workspace', workspaceId: ns.project, sessionId: caller.sessionId },
+      sourceKey: 'px-knowledge-' + digest(ns),
+      candidates,
+      runtime: () => this.runtime(ns),
+      signal
+    })
+    const documents = []
+    for (const hit of page.rows) {
+      signal.throwIfAborted()
+      const result = await this.read(caller, 'project', hit.id)
+      if (result.revision !== catalog.revision || !result.document.current)
+        throw new MemoryError('交流记忆目录已变化，请重新查询', 409)
+      documents.push({ ...result.document, relevance: hit.relevance, rank: hit.rank })
+    }
+    const after = await this.catalog(caller, 'project')
+    if (
+      digest([ns, normalized, after.revision, after.documents.map((d: any) => [d.id, d.feedback])]) !==
+        signature ||
+      digest(this.namespace(caller, 'project')) !== digest(ns)
+    )
+      throw new MemoryError('交流记忆目录已变化（正文或反馈），请重新查询', 409)
+    return {
+      revision: catalog.revision,
+      documents,
+      cursor: page.cursor,
+      nextOffset: page.nextOffset,
+      partial: page.partial
     }
   }
   async write(
     caller: KnowledgeCaller,
     scope: KnowledgeScope,
-    args: { key: string; body: string; revision: string; sources?: FileReference[]; sourcePaths?: string[] },
+    args: {
+      key: string
+      body: string
+      revision: string
+      sources?: FileReference[]
+      sourcePaths?: string[]
+      sourceEvents?: Array<{ sessionId: string; seq: number }>
+    },
     origin?: Origin,
-    sourceAuthor?: Envelope['author']
+    sourceAuthor?: Envelope['author'],
+    migration?: Origin
   ): Promise<any> {
     const ns = this.namespace(caller, scope),
       key = bounded(args.key, '知识主题', 160),
@@ -309,6 +689,11 @@ export class KnowledgeBank {
     const matches = snapshot.value.documents.filter((d: any) => d.status === 'active' && d.title === key)
     if (matches.length > 1) throw new MemoryError('主题存在重复记录，请先整理为单一现行条目', 409)
     const old = matches[0]
+    const oldMetadata = old
+      ? unwrap((await this.call(ns, 'document', { id: old.id })).value).metadata
+      : undefined
+    if (!ns.conversation && legacyConversationTitle(key) && !origin && !oldMetadata?.sharedBy)
+      throw new MemoryError('此主题属于人格交流记忆，请通过对应聊天的记忆入口修改', 403)
     let sources =
       args.sources ??
       (old ? unwrap((await this.call(ns, 'document', { id: old.id })).value).metadata.sources : [])
@@ -334,13 +719,43 @@ export class KnowledgeBank {
       )
     )
       throw new MemoryError('文件版本引用无效')
+    let events = oldMetadata?.events
+    if (args.sourceEvents !== undefined) {
+      if (!Array.isArray(args.sourceEvents) || args.sourceEvents.length > 12 || !this.readEvidence)
+        throw new MemoryError('原始事件引用或读取服务不可用')
+      events = []
+      for (const ref of args.sourceEvents) {
+        if (!ref || typeof ref.sessionId !== 'string' || !Number.isSafeInteger(ref.seq) || ref.seq < 0)
+          throw new MemoryError('原始事件引用无效')
+        const record = await this.readEvidence(caller, ref.sessionId, ref.seq)
+        if (record?.source !== 'native-session-event' || !/^[a-f0-9]{64}$/.test(record.eventHash))
+          throw new MemoryError('原始事件来源无法验证', 409)
+        if (!events.some((row) => row.sessionId === ref.sessionId && row.seq === ref.seq))
+          events.push({
+            sessionId: ref.sessionId,
+            seq: ref.seq,
+            kind: record.kind,
+            eventHash: record.eventHash,
+            time: Number.isFinite(record.time) ? record.time : null
+          })
+      }
+    }
+    if (digest(this.namespace(caller, scope)) !== digest(ns))
+      throw new MemoryError('保存期间知识受众已变化，未写入', 409)
     const metadata: Envelope = {
       schema: 1,
       sources,
-      author: origin
-        ? (sourceAuthor ?? { kind: 'unknown', at: new Date().toISOString() })
-        : { kind: caller.actor ?? 'model', at: new Date().toISOString() },
+      ...(events ? { events } : {}),
+      author:
+        sourceAuthor ??
+        (origin
+          ? { kind: 'unknown', at: new Date().toISOString() }
+          : { kind: caller.actor ?? 'model', at: new Date().toISOString() }),
+      ...((migration ?? oldMetadata?.migration) ? { migration: migration ?? oldMetadata?.migration } : {}),
       ...(origin ? { sharedBy: { kind: caller.actor ?? 'model', at: new Date().toISOString() } } : {}),
+      ...(!origin && legacyConversationTitle(key) && oldMetadata?.sharedBy
+        ? { sharedBy: oldMetadata.sharedBy }
+        : {}),
       ...(origin ? { origin } : {}),
       ...(old ? { previous: { revision: old.revision, contentHash: old.contentHash } } : {})
     }
@@ -354,6 +769,7 @@ export class KnowledgeBank {
       sessionIds: caller.sessionId ? [caller.sessionId] : []
     }
     let result: any
+    if (ns.conversation) await this.invalidateMigratedSource(oldMetadata?.migration)
     try {
       result = await this.call(ns, 'mutate', mutation, snapshot.revision)
     } catch (error: any) {
@@ -380,6 +796,7 @@ export class KnowledgeBank {
     if (from === to) throw new MemoryError('来源与目标范围相同')
     const ns = this.namespace(caller, from),
       document = (await this.call(ns, 'document', { id })).value as KnowledgeDocument
+    this.assertReadableDocument(ns, document)
     if (document.revision !== expectedSourceRevision || document.status !== 'active')
       throw new MemoryError('来源已经变化，请重新预览后分享', 409)
     const { metadata, body } = unwrap(document)
@@ -404,6 +821,12 @@ export class KnowledgeBank {
       current = await this.call(ns, 'snapshot')
     if (contentRevision(current.value) !== revision)
       throw new MemoryError('知识已经变化，请刷新后再归档', 409)
+    const target = current.value.documents.find((row: any) => row.id === id)
+    if (target) {
+      const document = (await this.call(ns, 'document', { id })).value
+      this.assertReadableDocument(ns, document)
+      if (ns.conversation) await this.invalidateMigratedSource(unwrap(document).metadata.migration)
+    }
     const result = await this.call(
       ns,
       'archive',
@@ -416,7 +839,9 @@ export class KnowledgeBank {
     }
   }
   async dispose(): Promise<void> {
+    this.conversationSearch.clear()
     for (const runtime of this.runtimes.values()) await runtime.dispose?.()
     this.runtimes.clear()
+    this.feedbackStore.close()
   }
 }

@@ -30,6 +30,7 @@ import {
 } from './desktop'
 import { InputInstances, INSTANCE_TOOLS } from './instances'
 import { DriverProcess } from './driver-process'
+import { BrowserResourceWaits, ForegroundResourceWaits } from './resource-wait'
 import computerDriver from '../../../config/computer-driver.json'
 import { guidance } from './guidance'
 import { accessPolicy } from './authorization'
@@ -102,6 +103,7 @@ export function apply(ctx: any): void {
     return new DriverProcess(
       import.meta.resolve('@trycua/cua-driver'),
       () => {
+        driver.foreground.reset()
         for (const observed of snapshots.values()) observed.clear()
         snapshots.clear()
         instances.forget()
@@ -145,6 +147,8 @@ export function apply(ctx: any): void {
     join(tmpdir(), 'dsh-px-computer', String(process.pid)),
     process.env
   )
+  const resourceWaits = new BrowserResourceWaits(browsers, states)
+  const foregroundWaits = new ForegroundResourceWaits(driver.foreground, states)
   sweepOutput(join(tmpdir(), 'dsh-px-computer'), (pid) => pid === process.pid || processAlive(pid))
   const approval = (): any => ctx.get?.('approval') ?? ctx.approval
 
@@ -545,6 +549,82 @@ export function apply(ctx: any): void {
     }
   )
 
+  const browserResourceTool = tool(
+    'browser',
+    {
+      name: 'computer_browser_resource',
+      description:
+        '查看浏览器是否可用，或创建原生后台作业等待释放。wait 会立即返回作业编号，可以继续其他工作，通过 job_output 收取通知或 job_kill 取消。通知不预留浏览器、不授予权限、不重放动作。',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['action'],
+        properties: {
+          action: { type: 'string', enum: ['status', 'wait'] },
+          timeout_ms: { type: 'integer', minimum: 1000, maximum: 60000 }
+        }
+      }
+    },
+    () => '浏览器占用',
+    ['action'],
+    async (args, _run, session, signal) => {
+      if (args.action === 'status')
+        return { text: JSON.stringify(browsers.availability(session.id)), images: [] }
+      const waiting = resourceWaits.start(session.agent, Number(args.timeout_ms ?? 30000), signal)
+      return {
+        text: JSON.stringify({
+          ...waiting,
+          message: '等待由原生后台作业处理。继续其他独立工作，完成后重新观察浏览器。'
+        }),
+        images: []
+      }
+    }
+  )
+
+  const foregroundResourceTool = tool(
+    'desktop',
+    {
+      name: 'computer_desktop_resource',
+      description:
+        '协调前台键鼠：status 查看占用，acquire 保留 1～60 秒的连续步骤，release 按返回的 generation 释放，wait 创建原生后台等待 Job。占用不授予窗口权限、不激活窗口；等待后重新观察，不能重放旧动作。',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['action'],
+        properties: {
+          action: { type: 'string', enum: ['status', 'acquire', 'release', 'wait'] },
+          duration_ms: { type: 'integer', minimum: 1000, maximum: 60000 },
+          timeout_ms: { type: 'integer', minimum: 1000, maximum: 60000 },
+          generation: { type: 'string', maxLength: 100 }
+        }
+      }
+    },
+    () => '前台键鼠占用',
+    ['action'],
+    async (args, _run, session, signal) => {
+      if (args.action === 'acquire') {
+        if (!settings.read().desktopForeground)
+          throw new ComputerUseRefusal('当前仅允许后台操作，不能保留前台键鼠')
+        driver.foreground.reserve(
+          session.id,
+          Number(args.duration_ms ?? 30000),
+          args.generation as string | undefined
+        )
+      } else if (args.action === 'release') {
+        if (typeof args.generation !== 'string') throw new ComputerUseRefusal('释放需要当前占用的 generation')
+        driver.foreground.release(session.id, args.generation)
+      } else if (args.action === 'wait') {
+        return {
+          text: JSON.stringify(
+            foregroundWaits.start(session.agent, Number(args.timeout_ms ?? 30000), signal)
+          ),
+          images: []
+        }
+      }
+      return { text: JSON.stringify(driver.foreground.availability(session.id)), images: [] }
+    }
+  )
+
   ctx.inject(['tools'], (host: any) => {
     let registered: Array<() => void> = []
     let shape = ''
@@ -554,12 +634,16 @@ export function apply(ctx: any): void {
       for (const dispose of registered) dispose()
       registered = []
       shape = next
-      if (windows && current.desktop)
+      if (windows && current.desktop) {
         for (const spec of DESKTOP_TOOLS) registered.push(host.tools.register(desktopTool(spec)))
+        registered.push(host.tools.register(foregroundResourceTool))
+      }
       if (windows && current.desktop && current.independentInstances)
         for (const spec of INSTANCE_TOOLS) registered.push(host.tools.register(instanceTool(spec)))
-      if (windows && current.browser !== 'off')
+      if (windows && current.browser !== 'off') {
         for (const spec of BROWSER_TOOLS) registered.push(host.tools.register(browserTool(spec)))
+        registered.push(host.tools.register(browserResourceTool))
+      }
       if (enabled(current)) registered.push(host.tools.register(confirmTool))
     }
     sync(settings.read())
@@ -615,6 +699,7 @@ export function apply(ctx: any): void {
       before.independentInstances !== current.independentInstances
     ) {
       states.clearForeground()
+      driver.foreground.reset()
       instances.forget()
       states.stop(
         'desktop',
@@ -647,10 +732,28 @@ export function apply(ctx: any): void {
     )
   })
 
+  ctx.on('agent/turn-stopping', ({ agent }: { agent: any }) => {
+    driver.foreground.cancelOwner(agent.id)
+  })
+  // Native abort/error skips turn-stopping but always persists the terminal turn event.
+  ctx.on('session/event', (session: any, event: any) => {
+    if (event.type === 'turn/end') driver.foreground.cancelOwner(session.id)
+  })
+
   ctx.effect(
     () => async () => {
-      await browsers.closeAll()
-      await driver.close()
+      const results = await Promise.allSettled([
+        resourceWaits.dispose(),
+        foregroundWaits.dispose(),
+        browsers.closeAll(),
+        driver.close()
+      ])
+      const failures = results.filter((row): row is PromiseRejectedResult => row.status === 'rejected')
+      if (failures.length)
+        throw new AggregateError(
+          failures.map((row) => row.reason),
+          '部分电脑操作资源未完成释放'
+        )
     },
     'computer: shutdown'
   )
@@ -763,8 +866,7 @@ export function apply(ctx: any): void {
       case 'pause':
         instances.forget(sessionId)
         states.pause(sessionId)
-        void browsers.close(sessionId).catch(() => undefined)
-        await driver.releaseSession(sessionId)
+        await Promise.all([browsers.close(sessionId), driver.releaseSession(sessionId)])
         return
       case 'resume':
         instances.forget(sessionId)
@@ -774,8 +876,18 @@ export function apply(ctx: any): void {
         states.resume(sessionId)
         return
       case 'release-browser': {
-        const holder = browsers.holder()
-        if (holder) void browsers.close(holder).catch(() => undefined)
+        if (typeof body.owner !== 'string' || typeof body.generation !== 'string')
+          throw new SettingsError('请刷新并选择具体的浏览器占用记录')
+        await browsers.release(body.owner, body.generation)
+        return
+      }
+      case 'release-foreground': {
+        const current = driver.foreground.snapshot()
+        if (!current || current.sessionId !== body.owner || current.generation !== body.generation)
+          throw new SettingsError('前台占用记录已变化，请刷新后重新选择')
+        instances.forget(current.sessionId)
+        states.pause(current.sessionId)
+        await Promise.all([browsers.close(current.sessionId), driver.releaseSession(current.sessionId)])
         return
       }
       default:
@@ -804,8 +916,21 @@ export function apply(ctx: any): void {
       },
       status: {
         driverLoaded: driver.loaded,
+        desktop: driver.occupancy(),
         browserOpen: browsers.active.includes(sessionId),
         browserHeldElsewhere: !!holder && holder !== sessionId,
+        browsers: browsers.ownership().map((row) => {
+          const agent = observedAgents.get(row.sessionId),
+            titles = ctx.get?.('sessionTitle') ?? ctx.sessionTitle,
+            memory = ctx.get?.('pxMemoryChannels') ?? ctx.pxMemoryChannels
+          let persona: string | undefined
+          try {
+            persona = memory?.inspect(row.sessionId)?.persona?.name
+          } catch {
+            /* status is still useful without identity service */
+          }
+          return { ...row, title: agent && titles?.get(agent.session)?.title, persona }
+        }),
         edgeExtension: edgeExtensionInstalled(process.env),
         platform: process.platform
       }

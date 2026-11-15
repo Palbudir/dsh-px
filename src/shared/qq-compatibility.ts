@@ -37,6 +37,10 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
     )
     replace('await connection.stop();', 'await connection.stop();\n            px.dispose();')
     replace(
+      'send: (chatId, text) => bridge.sendToChat(chatId, text),',
+      'send: (chatId, text, sourceSessionId) => px.withDelivery(chatId, sourceSessionId, () => bridge.sendToChat(chatId, text)),\n        notice: (chatId, text) => px.systemNotice(chatId, () => bridge.sendToChat(chatId, text)),\n        routeState: chatId => ({ busy: bridge.chats.get(chatId)?.busy === true, sending: bridge.outbound.sendChains.has(chatId) || (bridge.outbound.pendingSends.get(chatId)?.length ?? 0) > 0 }),\n        retireDelivery: (chatId, sessionId) => bridge.deferred.cancelChat(chatId, sessionId),'
+    )
+    replace(
       'adopt: (chatId, sessionId) => bridge.registry.pxAdopt(chatId, sessionId),',
       'adopt: (chatId, sessionId) => bridge.registry.pxAdopt(chatId, sessionId),\n        segments: (chatId, segments) => bridge.sendSegments(chatId, segments),\n        classifySendError: error => classifyPxSendError(error),\n        flush: () => bridge.registry.pxFlush(),\n        message: input => bridge.pxMessage(input),\n        scope: (ctx, sessionId, chatId) => bridge.installChannelScope(ctx, sessionId, chatId),\n        model: (ctx, sessionId) => bridge.registry.pxModel(ctx, sessionId),\n        recordedPreset: sessionId => bridge.registry.recordedPresetFor(sessionId),\n        attachWorkspace: (sessionId, cwd) => bridge.registry.attachToWorkspace(sessionId, cwd),'
     )
@@ -231,6 +235,14 @@ export function patchQqModule(file: keyof typeof source.files, original: string)
       "entry.reason = onlySessionId === undefined ? '用户已停止该聊天的生成（/stop），补发跟踪终止' : '本轮已采用显式回应，自动补发已取消';"
     )
   } else if (file === 'bridge.js') {
+    replace(
+      'return this.outbound.sendToChat(chatId, text, options);',
+      'return this.deps.px.withDelivery(chatId, this.chats.get(chatId)?.sessionId, () => this.outbound.sendToChat(chatId, text, options));'
+    )
+    replace(
+      'return this.outbound.sendSegments(chatId, segments);',
+      'return this.deps.px.withDelivery(chatId, undefined, () => this.outbound.sendSegments(chatId, segments));'
+    )
     replace(
       "isTurnRunning: chatId => this.chats.get(chatId)?.agent.status === 'running',",
       "isTurnRunning: chatId => { const chat = this.chats.get(chatId); return chat?.agent.status === 'running' && !this.deps.px.explicitReplies(chat.sessionId); },"

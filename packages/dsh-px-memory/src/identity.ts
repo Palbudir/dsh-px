@@ -1,5 +1,6 @@
 import { MemoryError, MemoryStore, type Persona } from './store'
-import { conversationalSource } from '../../shared/channel-source'
+import { conversationalSource, channelMessageOrigin } from '../../shared/channel-source'
+import type { PersonaInteraction } from '../../shared/persona-scenes'
 export interface AgentIdentity {
   session: {
     id: string
@@ -9,11 +10,51 @@ export interface AgentIdentity {
 }
 /** Capture before prompt rendering, not agent/pre-step (which runs after assembly in pinned DSH). */
 export class TurnIdentity {
-  private active = new WeakMap<AgentIdentity, { turnSeq: number; persona: Persona }>()
+  private active = new WeakMap<
+    AgentIdentity,
+    { turnSeq: number; persona: Persona; interaction: PersonaInteraction }
+  >()
+  private claimed = new WeakMap<
+    AgentIdentity,
+    { turn: number; provider: string; accountId: string; conversationId: string; participants: Set<string> }
+  >()
   constructor(
     private store: MemoryStore,
     private boundary?: (agent: AgentIdentity) => { lastTurn: number } | undefined
   ) {}
+  /** Native inbox claims precede prompt assembly; user/message persistence happens only afterwards. */
+  claim(agent: AgentIdentity, message: { source?: unknown }, turn: number): void {
+    if (!Number.isSafeInteger(turn) || turn < 1) return
+    const origin = channelMessageOrigin(message.source)
+    if (!origin) return
+    const channel = this.store.read().bindings[agent.session.id]?.channel
+    if (
+      channel?.provider !== origin.provider ||
+      origin.accountId !== channel.accountId ||
+      origin.conversationId !== channel.conversationId
+    )
+      return
+    // Do not change an already assembled turn when later steering is claimed.
+    if (this.boundary?.(agent)?.lastTurn === turn && this.active.get(agent)?.turnSeq === turn - 1) return
+    let pending = this.claimed.get(agent)
+    if (
+      !pending ||
+      pending.turn !== turn ||
+      pending.provider !== origin.provider ||
+      pending.accountId !== origin.accountId ||
+      pending.conversationId !== origin.conversationId
+    ) {
+      pending = {
+        turn,
+        provider: origin.provider,
+        accountId: origin.accountId,
+        conversationId: origin.conversationId,
+        participants: new Set()
+      }
+      this.claimed.set(agent, pending)
+    }
+    pending.participants.add(origin.senderId)
+  }
   current(agent: AgentIdentity): Persona {
     const boundary = this.boundary?.(agent)
     let turnSeq = boundary ? boundary.lastTurn - 1 : -1
@@ -33,8 +74,44 @@ export class TurnIdentity {
     })
     const persona = this.store.persona(state, agent.session.id)
     if (persona.archived) throw new MemoryError('本会话人格已归档；请新建其他人格的接续会话', 409)
-    this.active.set(agent, { turnSeq, persona })
+    const channel = state.bindings[agent.session.id]?.channel
+    const participants = new Set<string>()
+    if (channel?.task) participants.add(channel.task.requesterId)
+    if (channel && persona.expression?.scenes?.some((rule) => rule.participantId)) {
+      const claimed = this.claimed.get(agent)
+      if (
+        claimed?.turn === boundary?.lastTurn &&
+        claimed?.provider === channel.provider &&
+        claimed?.accountId === channel.accountId &&
+        claimed?.conversationId === channel.conversationId
+      )
+        for (const id of claimed.participants) participants.add(id)
+      const events = agent.session.snapshotEvents?.() ?? []
+      for (let i = events.length - 1; i >= 0; i--) {
+        if (events[i].type === 'turn/start') break
+        if (events[i].type !== 'user/message') continue
+        const origin = channelMessageOrigin(events[i].data?.source)
+        if (
+          origin?.provider === channel.provider &&
+          origin.accountId === channel.accountId &&
+          origin.conversationId === channel.conversationId
+        )
+          participants.add(origin.senderId)
+      }
+    }
+    const interaction: PersonaInteraction = {
+      provider: channel?.provider ?? 'local',
+      accountId: channel?.accountId,
+      conversationId: channel?.conversationId,
+      participants: [...participants],
+      activity: channel?.task ? 'work' : channel ? 'conversation' : 'auto'
+    }
+    this.active.set(agent, { turnSeq, persona, interaction })
     return persona
+  }
+  interaction(agent: AgentIdentity): PersonaInteraction {
+    this.current(agent)
+    return structuredClone(this.active.get(agent)!.interaction)
   }
 }
 export function hasStarted(events: readonly any[]): boolean {

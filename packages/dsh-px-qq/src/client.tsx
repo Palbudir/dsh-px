@@ -5,6 +5,7 @@ import { DEFAULT_QQ_SETTINGS, type QqSettings } from './policy'
 import type { PendingInteraction } from './interactions'
 import { renderPersonaExpression, type PersonaExpression } from '../../shared/persona-expression'
 import { AttentionPanel, type AttentionSnapshot } from './attention-panel'
+import { PersonaRoutingPanel } from './persona-routing-panel'
 
 export const inject = ['slots']
 interface Snapshot {
@@ -20,6 +21,7 @@ interface Snapshot {
   active: number
   pendingInteractions?: PendingInteraction[]
   attention?: AttentionSnapshot
+  routing?: { available: boolean; state?: { revision: number } }
   connection: { state: string; message: string; nickname?: string; persistenceBlocked?: boolean }
 }
 interface Catalog {
@@ -275,6 +277,18 @@ export function QqSettingsPanel(): unknown {
       </section>
       {view?.attention && !loadError && (
         <AttentionPanel key={view.settings.accountId} value={view.attention} refresh={setView} />
+      )}
+      {view?.attention && view.routing && (
+        <PersonaRoutingPanel
+          key={view.settings.accountId}
+          accountId={view.settings.accountId}
+          available={view.routing.available}
+          revision={view.routing.state?.revision ?? 0}
+          chats={view.attention.inbox.items}
+          nextOffset={view.attention.inbox.nextOffset}
+          personas={view.personas}
+          refresh={setView}
+        />
       )}
       {!!view?.pendingInteractions?.length && (
         <section className="px-card" aria-label="QQ 待处理请求">

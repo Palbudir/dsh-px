@@ -1,4 +1,4 @@
-import { readCheckpoint, nativeWorkChanged, type Event, type TaskReview } from './evidence'
+import { readCheckpoint, nativeWorkChanged, currentWorkInput, type Event, type TaskReview } from './evidence'
 
 /** Prompt projection keeps no command output archive; long histories must not rebuild the evidence index each step. */
 export class LedgerIndex {
@@ -27,7 +27,7 @@ export class LedgerIndex {
       this.processedEvents++
       if (nativeWorkChanged(e)) this.lastActivity = e.seq
       if (e.type === 'turn/end' || e.type === 'turn/start') this.pending.clear()
-      if (e.type === 'user/message' && d.source?.kind === 'user') {
+      if (e.type === 'user/message' && currentWorkInput(d.source)) {
         const text = (d.content ?? [])
           .filter((b: any) => b.type === 'text')
           .map((b: any) => b.text)

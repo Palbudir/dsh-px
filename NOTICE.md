@@ -46,7 +46,7 @@ DSH-PX Pack 随附 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-
 
 “接管我的 Edge”模式使用微软发布的 Playwright Extension，由用户自行从扩展商店安装，PX 不分发该扩展。
 
-Pack 以独立社区成员声明 [dsh-context](https://github.com/bowenliang123/dsh-context) 0.75.1（Apache-2.0）、[dsh-mnemon](https://github.com/omdsh-dev/dsh-mnemon) 0.5.34（MIT）及 [@xmanrui/dsh-im](https://github.com/xmanrui/dsh-im) 5.6.0（MIT）。社区原包核对固定 SRI 后保持原样，依赖由 DSH 原生插件管理器安装，保留上游名称、许可、版本、配置页与组件信息。
+Pack 以独立社区成员声明 [dsh-context](https://github.com/bowenliang123/dsh-context) 0.75.1（Apache-2.0）、[dsh-mnemon](https://github.com/omdsh-dev/dsh-mnemon) 0.5.34（MIT）及 [@xmanrui/dsh-im](https://github.com/xmanrui/dsh-im) 5.6.0（MIT）的受管兼容派生版本 5.6.0-px.1。Context 与 Mnemon 原包核对固定 SRI 后保持原样；IM 增加飞书接收模式检查与显式恢复入口，来源、文件摘要及修改见 [IM 来源清单](config/im-community.json)和包内 `dshPx` 元数据。上游名称、作者、许可证、配置页和原有 SDK 保留，兼容层另附 PX 的 MIT 许可；依赖仍由 DSH 原生插件管理器安装。
 
 QQ 账号通道另外分发 [dsh-onebot-qq](https://github.com/mario841859784/dsh-onebot) 0.9.6 的 PX 兼容派生版本 0.9.6-px.2（BSD-3-Clause）。原始归档 SRI、源码提交与逐文件修改记录见 [QQ 来源清单](config/qq-community.json)及包内 `dshPx` 元数据；上游 LICENSE 保留。兼容层另附 PX 的 MIT 许可。QQ 文本格式化内联 Marked 16.4.2（MIT），完整许可保存在该派生包的 `LICENSE.marked`。QQ 与 NapCat 由用户另行安装，不随 Pack 分发。
 

@@ -1,6 +1,6 @@
 {
   "name": "dsh-px",
-  "version": "0.8.1-alpha.1",
+  "version": "0.9.0-alpha.1",
   "private": true,
   "description": "DSH-PX: a native DeepSeek Harness plugin Pack and an official-source derived Windows Desktop.",
   "license": "MIT",
@@ -35,8 +35,18 @@
     "zod@4.4.3": "4.6.7"
   },
   "devDependencies": {
+    "@deepseek-ai/dsh-api-session-controller": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-client-ui-skill": "0.2.1-rc.3",
     "@deepseek-ai/dsh-client-ui-slots": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-client-ui-workspace": "0.2.1-rc.3",
     "@deepseek-ai/dsh-compaction": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-compaction-basic": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-fs-sandbox": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-jobs": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-jobs-local": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-sandbox-policy": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-skill": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-tool-session-query": "0.2.1-rc.3",
     "@deepseek-ai/dsh-tools": "0.2.1-rc.3",
     "@types/node": "^26.6.2",
     "@types/semver": "^7.8.0",

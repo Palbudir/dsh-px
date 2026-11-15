@@ -58,10 +58,13 @@ test('workbench diagnostics never read secrets and never claim host lifecycle co
   const disposers: Array<() => void> = []
   const created: string[] = []
   const mod = await import(pathToFileURL(resolve('packages/dsh-px-workbench/lib/index.js')).href)
-  mod.apply({
+  await mod.apply({
     provide: () => {},
     on: () => {},
-    inject: (_: unknown, callback: (ctx: unknown) => void) =>
+    inject: (services: string[], callback: (ctx: unknown) => void) =>
+      !services.includes('configEditor') &&
+      !services.includes('pxAudiencePolicies') &&
+      !services.includes('tools') &&
       callback({
         provide: () => {},
         connection: { requestRejection: () => undefined },

@@ -1,0 +1,212 @@
+import test from 'node:test'
+import assert from 'node:assert/strict'
+import { setTimeout as delay } from 'node:timers/promises'
+import { ChannelSupervisor } from '../packages/shared/channel-supervisor'
+type Config = { accountId: string; enabled: boolean; revision: number; mode: string }
+test('stop during asynchronous coordinator creation never starts the stale transport', async () => {
+  let release!: () => void,
+    entered = false,
+    starts = 0,
+    stops = 0
+  const gate = new Promise<void>((done) => {
+    release = done
+  })
+  const runtime = {
+    matches: () => true,
+    refreshAttention() {},
+    requestStop() {},
+    async start() {
+      starts++
+    },
+    async dispose() {
+      stops++
+    }
+  }
+  const rows = new Map<string, typeof runtime>(),
+    errors: unknown[] = []
+  const supervisor = new ChannelSupervisor(
+    rows,
+    async (_config: Config) => {
+      entered = true
+      await gate
+      return runtime
+    },
+    (_id, error) => errors.push(error)
+  )
+  supervisor.update([{ accountId: 'bot', enabled: true, revision: 1, mode: 'normal' }])
+  await until(() => entered)
+  const stopped = supervisor.pause('bot')
+  release()
+  await stopped
+  assert.equal(starts, 0)
+  assert.equal(stops, 1)
+  assert.equal(rows.size, 0)
+  assert.deepEqual(errors, [])
+  await supervisor.close()
+})
+async function until(check: () => boolean) {
+  const end = Date.now() + 2000
+  while (!check()) {
+    if (Date.now() > end) assert.fail('supervisor timeout')
+    await delay(5)
+  }
+}
+function fixture(t: any) {
+  const runtimes = new Map<string, Runtime>(),
+    errors: unknown[] = [],
+    created: Runtime[] = []
+  class Runtime {
+    stopped = false
+    started = false
+    disposed = false
+    refreshes = 0
+    stops = 0
+    failStop = false
+    gate?: Promise<void>
+    constructor(readonly config: Config) {}
+    matches(next: Config) {
+      return !this.stopped && next.revision === this.config.revision
+    }
+    refreshAttention() {
+      this.refreshes++
+    }
+    requestStop() {
+      this.stopped = true
+    }
+    async start() {
+      this.started = true
+    }
+    async dispose() {
+      this.stops++
+      if (this.failStop) throw Error('stop failed')
+      await this.gate
+      this.disposed = true
+    }
+  }
+  const supervisor = new ChannelSupervisor<Config, Runtime>(
+    runtimes,
+    (config) => {
+      const r = new Runtime(config)
+      created.push(r)
+      return r
+    },
+    (_id, error) => errors.push(error)
+  )
+  t.after(async () => {
+    for (const r of created) {
+      r.failStop = false
+      r.gate = undefined
+    }
+    await supervisor.close()
+  })
+  const config = (accountId: string, revision = 1, mode = 'normal'): Config => ({
+    accountId,
+    revision,
+    mode,
+    enabled: true
+  })
+  return { runtimes, errors, created, supervisor, config }
+}
+test('attention edits keep the live account and another slow account cannot block replacement', async (t) => {
+  const f = fixture(t)
+  f.supervisor.update([f.config('a'), f.config('b')])
+  await until(() => f.created.length === 2)
+  const a = f.runtimes.get('a')!,
+    b = f.runtimes.get('b')!
+  f.supervisor.update([f.config('a', 1, 'focus'), f.config('b')])
+  await until(() => a.refreshes > 0)
+  assert.equal(f.created.length, 2)
+  assert.equal(a.stops, 0)
+  assert.equal(b.stops, 0)
+  let release!: () => void
+  a.gate = new Promise<void>((done) => {
+    release = done
+  })
+  f.supervisor.update([f.config('a', 2), f.config('b', 2)])
+  try {
+    await until(() => f.runtimes.get('b')?.config.revision === 2)
+    assert.equal(f.runtimes.get('a'), a)
+    assert.equal(b.disposed, true)
+  } finally {
+    release()
+  }
+  await until(() => f.runtimes.get('a')?.config.revision === 2)
+  assert.equal(f.errors.length, 0)
+})
+test('a failed stop does not spin or overlap owners and can be explicitly retried', async (t) => {
+  const f = fixture(t)
+  f.supervisor.update([f.config('a')])
+  await until(() => f.created.length === 1)
+  const a = f.runtimes.get('a')!
+  a.failStop = true
+  f.supervisor.update([f.config('a', 2)])
+  await until(() => f.errors.length === 1)
+  await delay(30)
+  assert.equal(a.stops, 1)
+  assert.equal(f.created.length, 1)
+  a.failStop = false
+  f.supervisor.retry('a')
+  await until(() => f.created.length === 2)
+  assert.equal(f.runtimes.get('a')?.config.revision, 2)
+})
+test('temporary pause survives unrelated edits and explicit resume uses the latest configuration', async (t) => {
+  const f = fixture(t)
+  f.supervisor.update([f.config('a'), f.config('b')])
+  await until(() => f.created.length === 2)
+  await f.supervisor.pause('a')
+  assert.equal(f.runtimes.has('a'), false)
+  f.supervisor.update([f.config('a', 2), f.config('b', 1, 'focus')])
+  await delay(20)
+  assert.equal(f.runtimes.has('a'), false)
+  f.supervisor.retry('a')
+  await until(() => f.runtimes.has('a'))
+  assert.equal(f.runtimes.get('a')?.config.revision, 2)
+})
+for (const removed of [false, true])
+  test(`an account can restart unchanged after ${removed ? 'removal' : 'disabling'} without a retry click`, async (t) => {
+    const f = fixture(t)
+    f.supervisor.update([f.config('a'), f.config('b')])
+    await until(() => f.created.length === 2)
+    const old = f.runtimes.get('a')!,
+      other = f.runtimes.get('b')!
+    f.supervisor.update([...(removed ? [] : [{ ...f.config('a'), enabled: false }]), f.config('b')])
+    await until(() => !f.runtimes.has('a'))
+    assert.equal(old.disposed, true)
+    f.supervisor.update([f.config('a'), f.config('b')])
+    await until(() => f.runtimes.get('a')?.started === true)
+    assert.notEqual(f.runtimes.get('a'), old)
+    assert.equal(f.created.length, 3)
+    assert.equal(f.runtimes.get('b'), other)
+    assert.equal(other.stops, 0)
+    assert.deepEqual(f.errors, [])
+  })
+test('a failed unchanged start is retried only after an explicit disabled cycle or retry', async () => {
+  let starts = 0
+  const errors: unknown[] = [],
+    supervisor = new ChannelSupervisor<Config, any>(
+      new Map(),
+      async () => {
+        starts++
+        throw Error('start failed')
+      },
+      (_id, error) => errors.push(error)
+    ),
+    config = { accountId: 'a', enabled: true, revision: 1, mode: 'normal' }
+  try {
+    supervisor.update([config])
+    await until(() => errors.length === 1)
+    supervisor.update([config])
+    await delay(20)
+    assert.equal(starts, 1)
+    supervisor.update([{ ...config, enabled: false }])
+    await delay(20)
+    supervisor.update([config])
+    await until(() => errors.length === 2)
+    assert.equal(starts, 2)
+    supervisor.update([config])
+    await delay(20)
+    assert.equal(starts, 2)
+  } finally {
+    await supervisor.close()
+  }
+})

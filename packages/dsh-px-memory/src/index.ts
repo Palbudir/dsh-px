@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { ChannelNotes, type ChannelNoteInput } from './channel-notes'
-import { QQ_CONVERSATION_TOOLS, qqMessageOrigin } from '../../shared/channel-source'
+import { channelMessageOrigin } from '../../shared/channel-source'
 import {
   MemoryStore,
   MemoryError,
@@ -27,7 +27,20 @@ import { installKnowledgeToolRouting } from './knowledge-tools'
 import { delegatedContract, delegatedKnowledgeCaller } from './knowledge-delegation'
 import { ExperienceService } from './experience-service'
 import { runAnalysisTask } from './experience-task'
+import { audienceOf } from '../../shared/subject-context'
 import { inspectMemorySession } from './session-context'
+import { installPersonaSkillProviders } from './persona-skills'
+import { registerPersonaHub } from './persona-hub'
+import { PersonaNavigation } from './persona-navigation'
+import { PersonaResourceAccess, installPersonaResourceAccess } from './persona-resources'
+import { SegmentRuntime } from './segment-runtime'
+import { registerSegmentBoundary } from './segment-context'
+import { nativeHistoryGuard, nativeHistoryScope } from './native-history-policy'
+import { readNativeHandoff } from './native-handoff-read'
+import { searchNativeHandoff, appendNativeHandoffs } from './native-handoff-search'
+import { traceNativeHandoff } from './native-handoff-trace'
+import { HotMemory } from './hot-memory'
+import { currentMemoryEvidence } from './hot-memory-evidence'
 
 export const name = 'dsh-px-memory'
 export const inject: string[] = []
@@ -42,6 +55,86 @@ export function apply(ctx: any): void {
   const root = process.env.DSH_HOME
   if (!root) throw new Error('DSH_HOME 未设置，无法保存人格与记忆')
   const store = new MemoryStore(join(root, 'storages', name, 'memory.json'))
+  let handoffHistory: HistoryIndex | undefined
+  ctx.provide('pxNativeHistorySubjects', {
+    version: 1,
+    scope: (agent: any, tool: string) => nativeHistoryScope(store, agent, tool),
+    readBounded: (
+      scope: ReturnType<typeof nativeHistoryScope>,
+      caller: string,
+      args: any,
+      signal?: AbortSignal
+    ) => {
+      if (!handoffHistory) throw new MemoryError('交接历史读取服务尚未就绪', 503)
+      return readNativeHandoff(ctx, handoffHistory, scope, caller, args, signal)
+    },
+    traceBounded: (
+      scope: ReturnType<typeof nativeHistoryScope>,
+      caller: string,
+      target: string,
+      seq: number | undefined,
+      signal: AbortSignal
+    ) => {
+      if (!handoffHistory) throw new MemoryError('交接历史追溯服务尚未就绪', 503)
+      return traceNativeHandoff(ctx, handoffHistory, scope, caller, target, seq, signal)
+    },
+    appendHandoffs: (
+      scope: ReturnType<typeof nativeHistoryScope>,
+      caller: string,
+      args: any,
+      query: string,
+      filters: any[],
+      events: any[],
+      own: string,
+      max: number,
+      signal: AbortSignal
+    ) => {
+      if (!handoffHistory) throw new MemoryError('交接历史搜索服务尚未就绪', 503)
+      return appendNativeHandoffs(
+        ctx,
+        handoffHistory,
+        scope,
+        caller,
+        args,
+        query,
+        filters,
+        events,
+        own,
+        max,
+        signal
+      )
+    },
+    searchBounded: (
+      scope: ReturnType<typeof nativeHistoryScope>,
+      caller: string,
+      target: string,
+      query: string,
+      filters: any[],
+      maxResults: number,
+      signal: AbortSignal
+    ) => {
+      if (!handoffHistory) throw new MemoryError('交接历史搜索服务尚未就绪', 503)
+      return searchNativeHandoff(
+        ctx,
+        handoffHistory,
+        scope,
+        caller,
+        target,
+        query,
+        filters,
+        maxResults,
+        signal
+      )
+    }
+  })
+  ctx.effect(() => {
+    const navigation = new PersonaNavigation(store, join(root, 'storages', name, 'navigation.sqlite'))
+    const off = registerPersonaHub(ctx, store, navigation)
+    return () => {
+      off()
+      navigation.close()
+    }
+  }, 'memory: persona workspace API')
   const channelBindings = new WeakMap<object, SessionBinding | null>()
   const bindingFor = (agent: Agent | undefined): SessionBinding | undefined => {
     if (!agent) return
@@ -53,11 +146,14 @@ export function apply(ctx: any): void {
     'system-prompt/assemble',
     async (_assembly: any, context: any, next: () => Promise<any>) => {
       const assembly = await next()
+      const channel = bindingFor(context.agent)?.channel
+      const policies = service(ctx, 'pxAudiencePolicies'),
+        required = policies?.version === 1 && channel ? policies.section(channel.provider) : undefined
       if (
         publicSession(bindingFor(context.agent)) &&
-        !assembly.sections.some((section: any) => section.name === 'px-qq-public-persona')
+        (!required || !assembly.sections.some((section: any) => section.name === required))
       )
-        throw new MemoryError('QQ 公共会话的权限预设未就绪，请启用配套 QQ 能力或新建普通会话', 409)
+        throw new MemoryError('公共渠道会话的权限预设未就绪，请启用配套能力或新建普通会话', 409)
       return assembly
     },
     { prepend: true }
@@ -66,17 +162,14 @@ export function apply(ctx: any): void {
     host.effect(
       () =>
         host.tools.guard((exec: any) => {
+          const adapted = host.tools.get?.(exec.name, exec.agent)?.pxSubjectPolicyVersion === 1
+          const historyDenial = nativeHistoryGuard(store, exec, adapted)
+          if (historyDenial) return historyDenial
           const binding = bindingFor(exec.agent)
           if (!publicSession(binding)) return
-          if (binding!.channel?.task) {
-            if (!service(host, 'pxQq')?.canRunGroupTask(exec.agent?.session.id))
-              return '群任务授权不可用，请检查 QQ 接入与授权成员'
-            return
-          }
-          if (!['qq_public_knowledge', 'qq_task', ...QQ_CONVERSATION_TOOLS].includes(exec.name))
-            return '公共 QQ 会话没有本机执行或私有信息权限'
-          if (exec.name === 'qq_task' && !service(host, 'pxQq')?.canDelegate(exec, binding!.channel))
-            return '当前 QQ 请求没有私有任务授权'
+          const policies = service(host, 'pxAudiencePolicies')
+          if (policies?.version !== 1) return '公共会话执行策略未就绪，未授予工具权限'
+          return policies.check(exec, binding)
         }),
       'memory: durable public channel boundary'
     )
@@ -85,6 +178,14 @@ export function apply(ctx: any): void {
   const identity = new TurnIdentity(store, (agent) =>
     service(ctx, 'sessionProjections')?.stateOf?.(agent.session, 'turnBoundary')
   )
+  ctx.on('agent/inbox/claimed', ({ agent, message, turn }: any) => identity.claim(agent, message, turn))
+  const resourceAccess = new PersonaResourceAccess(
+    store,
+    identity,
+    (id) => service(ctx, 'agents')?.get(id),
+    (child, parent) => service(ctx, 'agents')?.isOwnedBy?.(child.session.id, parent) === true
+  )
+  ctx.effect(() => installPersonaResourceAccess(ctx, resourceAccess), 'memory: persona resource access')
   const contracts = new Map<string, { turn: number; instance: string }>()
   const currentTurn = (agent: Agent): number =>
     service(ctx, 'sessionProjections')?.stateOf?.(agent.session, 'turnBoundary')?.lastTurn ??
@@ -94,7 +195,8 @@ export function apply(ctx: any): void {
   const knowledge = new KnowledgeBank(
     join(root, 'storages', 'dsh-px-knowledge-scopes'),
     store,
-    (caller, path) => observeFile(ctx, caller, path)
+    (caller, path) => observeFile(ctx, caller, path),
+    (caller, source, seq, signal) => history.read(ctx, caller.sessionId, source, seq, 0, signal)
   )
   // Local plugin contract only: remote callers still go through their authenticated channel owner.
   const channelNotes = new ChannelNotes(
@@ -109,10 +211,11 @@ export function apply(ctx: any): void {
       return events
         .slice(start + 1)
         .filter((event) => {
-          const origin = qqMessageOrigin(event.data?.source)
+          const origin = channelMessageOrigin(event.data?.source)
           return (
             event.type === 'user/message' &&
-            origin?.accountId === channel.accountId &&
+            origin?.provider === channel.provider &&
+            origin.accountId === channel.accountId &&
             origin.conversationId === channel.conversationId
           )
         })
@@ -120,7 +223,7 @@ export function apply(ctx: any): void {
         .map((event) => ({
           sessionId,
           seq: event.seq,
-          userId: qqMessageOrigin(event.data.source)!.senderId,
+          userId: channelMessageOrigin(event.data.source)!.senderId,
           excerpt: (event.data.content ?? [])
             .filter((block: any) => block.type === 'text')
             .map((block: any) => block.text)
@@ -131,6 +234,7 @@ export function apply(ctx: any): void {
   )
   ctx.provide('pxMemoryChannels', {
     version: 1,
+    capabilities: { conversationMemoryIsolation: 1, personaSkills: 1, sceneExpression: 1 },
     conversationNotes: (sessionId: string, input: ChannelNoteInput, signal: AbortSignal) =>
       channelNotes.execute(sessionId, input, signal),
     createPersona: (name: string) => store.createPersona(name),
@@ -164,13 +268,24 @@ export function apply(ctx: any): void {
         .read()
         .personas.filter((p) => !p.archived)
         .map((p) => ({ id: p.id, name: p.name, revision: p.revision, expression: p.expression })),
-    channelBindings: (accountId: string) =>
+    communicationAudiences: () => {
+      const entries = new Map<string, ReturnType<typeof audienceOf>>()
+      entries.set(JSON.stringify({ kind: 'personal' }), { kind: 'personal' })
+      for (const binding of Object.values(store.read().bindings)) {
+        if (binding.pending || binding.channel?.provider === 'persona-mail') continue
+        const audience = audienceOf(binding)
+        entries.set(JSON.stringify(audience), audience)
+      }
+      return [...entries.values()]
+    },
+    channelBindings: (accountId: string, provider = 'qq') =>
       Object.entries(store.read().bindings)
         .filter(
-          ([, binding]) => binding.channel?.provider === 'qq' && binding.channel.accountId === accountId
+          ([, binding]) => binding.channel?.provider === provider && binding.channel.accountId === accountId
         )
         .map(([sessionId, binding]) => ({
           sessionId,
+          personaId: binding.personaId,
           channel: binding.channel,
           createdAt: binding.createdAt,
           pending: binding.pending
@@ -182,6 +297,7 @@ export function apply(ctx: any): void {
         pending: !service(ctx, 'agents')?.get(sessionId)
       }),
     currentPersona: (agent: Agent) => identity.current(agent),
+    expressionContext: (agent: Agent) => identity.interaction(agent),
     inherit: (sessionId: string, parent?: string) => {
       if (parent && store.read().bindings[parent]?.channel) store.bind(sessionId, { parent, locked: true })
     },
@@ -204,7 +320,14 @@ export function apply(ctx: any): void {
     continue: (sessionId: string, args: any, signal?: AbortSignal) =>
       createPersonaSession(ctx, store, sessionId, args, signal)
   })
-  ctx.effect(() => () => knowledge.dispose(), 'memory: knowledge sources')
+  let settleSegments = (): Promise<void> => Promise.resolve()
+  ctx.effect(
+    () => async () => {
+      await settleSegments()
+      await knowledge.dispose()
+    },
+    'memory: knowledge sources'
+  )
   ctx.inject(['mnemonMemory', 'tools', 'agents'], (host: any) =>
     host.effect(() => installKnowledgeToolRouting(host), 'memory: native knowledge tool routing')
   )
@@ -244,6 +367,7 @@ export function apply(ctx: any): void {
                 knowledge,
                 knowledgeEnabled,
                 async (caller, input, signal) => {
+                  if (input.action === 'feedback') return // Persona/audience-local, not a shared-content edit.
                   if (input.action !== 'share' && input.scope !== 'global') return
                   const approval = service(host, 'approval'),
                     agent = service(host, 'agents')?.get(caller.sessionId)
@@ -309,7 +433,66 @@ export function apply(ctx: any): void {
     )
   )
   const history = new HistoryIndex(join(root, 'storages', name, 'history.sqlite'), store)
-  ctx.effect(() => () => history.close(), 'memory: history index')
+  handoffHistory = history
+  ctx.effect(
+    () => async () => {
+      await settleSegments()
+      await history.close()
+    },
+    'memory: history index'
+  )
+  const hot = new HotMemory(
+    store,
+    join(root, 'storages', name, 'hot-feedback.sqlite'),
+    (caller, source, seq, signal) => history.read(ctx, caller, source, seq, 0, signal)
+  )
+  ctx.effect(() => () => hot.close(), 'memory: hot memory feedback')
+  const segments = new SegmentRuntime(
+    ctx,
+    store,
+    knowledge,
+    history,
+    join(root, 'storages', name, 'segments.sqlite')
+  )
+  settleSegments = () => segments.dispose()
+  ctx.effect(() => () => segments.dispose(), 'memory: background segments')
+  ctx.effect(() => store.subscribe(() => segments.changed()), 'memory: segment identity invalidation')
+  ctx.provide('pxContextSegments', {
+    snapshot: (id: string) => segments.snapshot(id),
+    cancel: (id: string) => segments.cancel(id)
+  })
+  ctx.inject(['jobs'], (host: any) =>
+    host.effect(
+      () => host.jobs.attachController('px-context-segments'),
+      'memory: native segment job controller'
+    )
+  )
+  ctx.inject(['llm', 'tokenMeter', 'sessionProjections', 'agents'], (host: any) => {
+    host.effect(() => registerSegmentBoundary(host), 'memory: native stable segment cursor')
+    void segments
+      .ready()
+      .catch((error) => ctx.logger?.warn('后台片段提交服务未启动；原生压缩继续：%s', String(error)))
+  })
+  ctx.on(
+    'agent/pre-step',
+    async ({ agent, signal }: any, next: () => Promise<any>) => {
+      await segments.boundary(agent, signal)
+      return next()
+    },
+    { prepend: true }
+  )
+  ctx.on('agent/turn-stopping', ({ agent, signal }: any) => {
+    if (signal.aborted) segments.cancel(agent.session.id, '本轮已停止')
+    else segments.schedule(agent)
+  })
+  ctx.on('session/event', (session: any, event: any) => {
+    if (event.surfaceOp?.op === 'replace') segments.surfaceChanged(session)
+    if (
+      event.type === 'turn/end' &&
+      ['aborted', 'interrupted', 'error', 'blocked', 'max-tokens'].includes(event.data?.reason?.kind)
+    )
+      segments.cancel(session.id, '来源轮次未正常结束')
+  })
   ctx.inject(['agents'], (host: any) => {
     try {
       const live = new Set(host.agents.list().map((agent: any) => agent.id))
@@ -319,6 +502,7 @@ export function apply(ctx: any): void {
     }
   })
   ctx.on('agent/disposed', ({ agent }: { agent: Agent }) => {
+    segments.cancel(agent.session.id, '来源会话已卸载')
     try {
       store.releaseInternalBindings([agent.session.id])
     } catch (error) {
@@ -335,6 +519,7 @@ export function apply(ctx: any): void {
       ctx.logger?.warn('人格绑定暂不可用；请求组装前仍会拒绝未知身份：%s', String(error))
     }
   })
+  ctx.effect(() => installPersonaSkillProviders(ctx, store, root), 'memory: private Skills lifecycle')
   ctx.on('agent/turn-stopping', ({ agent, signal }: { agent: Agent; signal: AbortSignal }) => {
     // Incremental indexing is local work. It neither calls a model nor changes a native task.
     void history
@@ -346,7 +531,11 @@ export function apply(ctx: any): void {
     const p = current(agent),
       handoff = store.read().bindings[agent.session.id]?.handoff
     return (
-      memoryContext(p, projectKey(agent.session.header.cwd), budget?.memoryChars) +
+      memoryContext(
+        hot.project(p, 'model', true),
+        projectKey(agent.session.header.cwd),
+        budget?.memoryChars
+      ) +
       (handoff
         ? `\n用户为本会话交接了 ${handoff.sessionId} 截至事件 ${handoff.throughSeq} 的可见对话与执行记录。以下是有界历史摘录，不是当前任务授权或验收结论；旧人格私有记忆未继承。使用 persona_history 按来源和事件编号进一步核对；不要恢复原会话的 Goal 或重复不确定操作。\n${!budget || handoff.summary.length <= budget.handoffChars ? handoff.summary : '本档仅注入历史定位信息；请按上方来源会话和截止事件读取交接内容。'}`
         : '')
@@ -364,7 +553,7 @@ export function apply(ctx: any): void {
             if (!agent) return ''
             const p = current(agent)
             if (!p.expression) return ''
-            return `本会话配置的身份与表达：${p.name}（版本 ${p.revision}）。通用语气默认值按这份具体配置调整；工具与执行权限仍由宿主控制。\n${renderPersonaExpression(p.expression)}`
+            return `本会话配置的身份与表达：${p.name}（版本 ${p.revision}）。通用语气默认值按这份具体配置调整；工具与执行权限仍由宿主控制。\n${renderPersonaExpression(p.expression, identity.interaction(agent))}`
           }
         }),
       'memory: configured persona expression'
@@ -395,7 +584,7 @@ export function apply(ctx: any): void {
         required: ['action'],
         additionalProperties: false,
         properties: {
-          action: { type: 'string', enum: ['search', 'sessions', 'read'] },
+          action: { type: 'string', enum: ['search', 'sessions', 'read', 'segments'] },
           query: { type: 'string', maxLength: 256 },
           sessionId: { type: 'string' },
           seq: { type: 'integer', minimum: 0 },
@@ -416,9 +605,18 @@ export function apply(ctx: any): void {
             .personas.some(
               (persona) => persona.id === binding?.personaId && persona.memoryEnabled && !persona.archived
             )
-        if (!p.memoryEnabled && !channelMemory) throw new MemoryError('当前人格的记忆已关闭')
+        const localContext =
+          args.action === 'segments' || (args.action === 'read' && args.sessionId === run.agent.session.id)
+        if (!p.memoryEnabled && !channelMemory && !localContext)
+          throw new MemoryError('当前人格的跨会话记忆已关闭；仍可按原始事件读取本会话上下文')
+        if (args.action === 'segments')
+          return JSON.stringify({
+            source: 'native-compaction-segments',
+            sessionId: run.agent.session.id,
+            segments: segments.modelSnapshot(run.agent.session.id)
+          })
         const id = run.agent.session.id,
-          coverage = await history.refresh(ctx, id, run.signal)
+          coverage = localContext ? { currentSessionOnly: true } : await history.refresh(ctx, id, run.signal)
         const result =
           args.action === 'read'
             ? await history.read(ctx, id, validId(args.sessionId), args.seq, args.offset ?? 0, run.signal)
@@ -437,17 +635,31 @@ export function apply(ctx: any): void {
     host.tools.register({
       name: 'persona_memory',
       description:
-        '读取当前人格的长期记忆。read 一次返回人格通用与当前目录的全部可见条目，无需分别读取两个范围。仅用户明确要求记住、修改或忘记时写入；不要保存临时进度。先 read 获取 revision，再 save/forget。scope 仅用于 save：project 为当前目录，persona 为跨目录。已保存内容从下轮起使用。',
+        '读取当前人格的长期约定。read 返回通用及当前目录的现行条目；historical=true 才显示已标记错误的现存条目。仅用户明确要求记住、修改或忘记时 save/forget，不保存临时进度。先 read 获取整体 revision，再写入；scope 为 project 或 persona。新内容下轮常驻使用，纠正/忘记会使旧内容立即退出后续注入。feedback 只记录 useful/not-applicable，须引用原始事件；entryRevision 是具体条目版本，不是写入用的整体 revision。evidence 是 save 的可选原始依据，省略时关联本轮用户输入；没有依据时标为模型整理，不假称已证实。',
       parameters: {
         type: 'object',
         required: ['action'],
         additionalProperties: false,
         properties: {
-          action: { type: 'string', enum: ['read', 'save', 'forget'] },
+          action: { type: 'string', enum: ['read', 'save', 'forget', 'feedback'] },
           revision: { type: 'integer', minimum: 0 },
           id: { type: 'string' },
           text: { type: 'string', maxLength: 2000 },
-          scope: { type: 'string', enum: ['project', 'persona'] }
+          scope: { type: 'string', enum: ['project', 'persona'] },
+          historical: { type: 'boolean' },
+          entryRevision: { type: 'integer', minimum: 1 },
+          kind: { type: 'string', enum: ['useful', 'not-applicable'] },
+          reason: { type: 'string', maxLength: 1000 },
+          evidence: {
+            type: 'array',
+            maxItems: 6,
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['sessionId', 'seq'],
+              properties: { sessionId: { type: 'string' }, seq: { type: 'integer', minimum: 0 } }
+            }
+          }
         }
       },
       output: { schema: { type: 'string' }, render: (_: unknown, v: string) => [{ type: 'text', text: v }] },
@@ -458,23 +670,44 @@ export function apply(ctx: any): void {
           p = current(agent),
           state = store.read(),
           project = projectKey(agent.session.header.cwd)
+        if (store.persona(state, agent.session.id).id !== p.id)
+          throw new MemoryError('人格切换将在下一轮生效，请到下一轮再读取或修改记忆', 409)
         if (args.action === 'read')
           return JSON.stringify({
             revision: state.revision,
             persona: p.name,
             memoryEnabled: p.memoryEnabled,
-            memories: selectedMemories(store.persona(state, agent.session.id), project)
+            memories: selectedMemories(
+              hot.project(store.persona(state, agent.session.id), 'model', args.historical !== true),
+              project
+            )
           })
         if (publicSession(state.bindings[agent.session.id]))
           throw new MemoryError('公共聊天不能修改人格私有记忆', 403)
-        if (!p.memoryEnabled) throw new MemoryError('当前人格的记忆已关闭')
-        if (store.persona(state, agent.session.id).id !== p.id)
-          throw new MemoryError('人格切换将在下一轮生效，请到下一轮再修改记忆', 409)
+        if (!p.memoryEnabled || !store.persona(state, agent.session.id).memoryEnabled)
+          throw new MemoryError('当前人格的记忆已关闭')
+        if (args.action === 'feedback')
+          return JSON.stringify(
+            await hot.judge(
+              { sessionId: agent.session.id, project, actor: 'model' },
+              { ...args, evidence: args.evidence?.[0] },
+              run.signal
+            )
+          )
         if (args.action !== 'save' && args.action !== 'forget') throw new MemoryError('操作无效')
         const entry = state.personas.find((v) => v.id === p.id)?.memories.find((m) => m.id === args.id)
         if (args.id && (!entry || (entry.project !== null && entry.project !== project)))
           throw new MemoryError('该条目不属于当前可见记忆')
-        const next = store.action(args.revision, { ...args, type: args.action }, agent.session.id, project)
+        const next =
+          args.action === 'save'
+            ? await hot.save(
+                { sessionId: agent.session.id, project, actor: 'model' },
+                args.revision,
+                args,
+                args.evidence ?? (await currentMemoryEvidence(ctx, agent, run.signal)),
+                run.signal
+              )
+            : store.action(args.revision, { ...args, type: args.action }, agent.session.id, project)
         return JSON.stringify({ saved: true, revision: next.revision, applies: 'next-turn' })
       }
     })
@@ -586,10 +819,41 @@ export function apply(ctx: any): void {
                   )
                   return send(200, result)
                 }
+                if (args.type === 'segments') {
+                  const input = args.input
+                  if (
+                    !input ||
+                    !['status', 'configure', 'stop', 'retry', 'accept', 'dismiss'].includes(input.action)
+                  )
+                    throw new MemoryError('后台整理操作无效')
+                  if (input.action === 'configure') segments.configure(id, input.revision, input.enabled)
+                  if (input.action === 'stop') segments.cancel(id)
+                  if (input.action === 'retry') segments.requestRetry(id)
+                  if (input.action === 'accept' || input.action === 'dismiss')
+                    await segments.decideMemory(id, validId(input.id), input.index, input.action, meta.cwd)
+                  return send(200, segments.snapshot(id))
+                }
+                if (args.type === 'conversation-memory') {
+                  if (
+                    !['catalog', 'search', 'read', 'feedback', 'correct', 'archive'].includes(
+                      args.input?.action
+                    )
+                  )
+                    throw new MemoryError('请使用聊天记忆的只读操作')
+                  return send(
+                    200,
+                    await channelNotes.execute(id, args.input, new AbortController().signal, 'human')
+                  )
+                }
                 if (args.type === 'skills')
                   return send(
                     200,
-                    await skillAction(host, { sessionId: id, project: meta.cwd }, root, args.input)
+                    await skillAction(
+                      host,
+                      { sessionId: id, project: meta.cwd, actor: 'human' },
+                      root,
+                      args.input
+                    )
                   )
                 if (args.type === 'experience')
                   return send(
@@ -626,10 +890,14 @@ export function apply(ctx: any): void {
                   service(host, 'agents')?.get(id)?.status === 'running'
                 )
                   throw new MemoryError('请等当前轮结束再更改配置', 409)
-                store.action(args.revision, args, id, project)
+                if (args.type === 'memory-feedback')
+                  await hot.judge({ sessionId: id, project, actor: 'human' }, args)
+                else if (args.type === 'save')
+                  await hot.save({ sessionId: id, project, actor: 'human' }, args.revision, args)
+                else store.action(args.revision, args, id, project)
               }
               const state = store.read(),
-                persona = store.persona(state, id)
+                persona = hot.project(store.persona(state, id), 'human')
               send(200, {
                 revision: state.revision,
                 personas: state.personas.map((p) => ({ id: p.id, name: p.name, archived: p.archived })),

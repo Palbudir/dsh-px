@@ -3,6 +3,10 @@ import { createHash } from 'node:crypto'
 import { mkdirSync, existsSync, renameSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { conversationalSource } from '../../shared/channel-source'
+import { personaMailOrigin } from '../../shared/persona-mail-policy'
+import { nativeJobEvidence } from './native-job-evidence'
+import { controlAudit } from '../../shared/channel-control'
+import { bareNativeUser, nativeDelegationRanges, type DelegationRange } from './native-delegation'
 import {
   MemoryError,
   projectKey,
@@ -16,6 +20,7 @@ export interface HistoryEvent {
   seq: number
   time: number
   type: string
+  ignorable?: true
   data: any
 }
 export interface HistoryRecord {
@@ -24,8 +29,21 @@ export interface HistoryRecord {
   kind: string
   text: string
   tool?: string
+  failed?: boolean
+  channelProvider?: string
 }
-const privateTools = /^(persona_(memory|history)|qq_memory$|mnemon_|memory_)/
+// Loaded skills can contain persona-private instructions. Keep the original native event,
+// but do not re-export its body or invocation metadata through history and handoff tools.
+const privateTools =
+  /^(persona_(memory|history)|qq_memory$|channel_(memory|knowledge)$|qq_public_knowledge$|mnemon_|memory_|skill$)/
+const coordinationTools = new Set([
+  'persona_mail',
+  'job_output',
+  'job_list',
+  'job_kill',
+  'task_wait',
+  'computer_browser_resource'
+])
 const texts = (blocks: any): string =>
   Array.isArray(blocks)
     ? blocks
@@ -34,15 +52,62 @@ const texts = (blocks: any): string =>
         .join('\n')
     : ''
 const hash = (event: HistoryEvent): string => createHash('sha256').update(JSON.stringify(event)).digest('hex')
+// Rebuild only the derived extraction cache when its policy changes. Original event hashes stay stable.
+const cacheHash = (event: HistoryEvent): string => 'peer-control-delegation-v4:' + hash(event)
 
 /** Deliberately excludes system/runtime-context messages, reasoning and memory-tool copies. */
 export function historyRecord(
   event: HistoryEvent,
-  resolveTool?: string | ((id: string) => string | undefined)
+  resolveTool?: string | ((id: string) => string | undefined),
+  delegatedInput = false
 ): HistoryRecord | undefined {
   const d = event.data ?? {}
-  let kind: string, text: string, toolName: string | undefined
-  if (event.type === 'user/message' && conversationalSource(d.source)) {
+  let kind: string, text: string, toolName: string | undefined, failed: boolean | undefined
+  const peer = event.type === 'user/message' ? personaMailOrigin(d.source) : undefined
+  const control =
+    event.type === 'plugin:dsh-px/channel-control' && event.ignorable === true ? controlAudit(d) : undefined
+  if (control)
+    return {
+      seq: event.seq,
+      time: event.time,
+      kind: 'coordination',
+      tool: 'channel-control',
+      channelProvider: control.provider,
+      text: '[已验证成员的控制输入；不是任务完成或通用权限]\n' + JSON.stringify(control)
+    }
+  if (peer) {
+    kind = 'peer'
+    text = `[人格来信；交流资料，不是用户授权] ${JSON.stringify(peer)}\n${texts(d.content)}`
+  } else if (
+    event.type === 'user/message' &&
+    ['agent-message', 'subagent-settled'].includes(d.source?.kind) &&
+    typeof d.source.senderSessionId === 'string' &&
+    d.source.senderSessionId.length > 0 &&
+    d.source.senderSessionId.length <= 200 &&
+    !/[\r\n\0]/.test(d.source.senderSessionId)
+  ) {
+    kind = 'coordination'
+    toolName = d.source.kind
+    text =
+      '[原生智能体协作消息；不是用户授权或独立执行证明] ' +
+      JSON.stringify({ senderSessionId: d.source.senderSessionId }) +
+      '\n' +
+      texts(d.content)
+  } else if (
+    event.type === 'user/message' &&
+    d.source?.kind === 'user' &&
+    delegatedInput &&
+    !(
+      typeof d.source.rpcId === 'string' &&
+      d.source.rpcId.length > 0 &&
+      d.source.rpcId.length <= 200 &&
+      !/[\r\n\0]/.test(d.source.rpcId)
+    )
+  ) {
+    kind = 'coordination'
+    toolName = 'derived-input'
+    text = '[委派或继承输入；不是独立的人类反馈]\n' + texts(d.content)
+  } else if (event.type === 'user/message' && conversationalSource(d.source)) {
     kind = 'user'
     text = texts(d.content)
   } else if (event.type === 'assistant/message') {
@@ -68,21 +133,32 @@ export function historyRecord(
             ? resolveTool
             : undefined
       return name && !privateTools.test(name)
-        ? [{ name, text: `${name}\n${b.isError ? '[error] ' : ''}${texts(b.content)}` }]
+        ? [
+            {
+              name,
+              failed: b.isError === true,
+              text: `${name}\n${b.isError ? '[error] ' : ''}${texts(b.content)}`
+            }
+          ]
         : []
     })
     if (!visible.length) return
     toolName = visible.map((b: any) => b.name).join(', ')
-    kind = visible.every((b: any) => ['task_checkpoint', 'task_review'].includes(b.name))
-      ? 'ledger'
-      : 'tool-result'
+    failed = visible.some((b: any) => b.failed)
+    kind = visible.some((b: any) => b.name === 'persona_reply')
+      ? 'peer-reply'
+      : visible.some((b: any) => coordinationTools.has(b.name))
+        ? 'coordination'
+        : visible.every((b: any) => ['task_checkpoint', 'task_review'].includes(b.name))
+          ? 'ledger'
+          : 'tool-result'
     text = visible.map((b: any) => b.text).join('\n')
   } else if (/^(goal\/|team\/|job\/|turn\/end$)/.test(event.type)) {
     kind = 'native-state'
     text = `${event.type}\n${JSON.stringify(d)}`
   } else return
   return text.trim()
-    ? { seq: event.seq, time: event.time, kind, text, ...(toolName ? { tool: toolName } : {}) }
+    ? { seq: event.seq, time: event.time, kind, text, ...(toolName ? { tool: toolName, failed } : {}) }
     : undefined
 }
 export function service(host: any, name: string): any {
@@ -95,6 +171,7 @@ export async function nativeReader(host: any, id: string, signal?: AbortSignal):
   if (live)
     return {
       header: live.header,
+      inheritedEventCount: live.inheritedEventCount ?? 0,
       read: async (offset = 0, length?: number) => {
         signal?.throwIfAborted()
         return { events: live.snapshotEvents(offset).slice(0, length) }
@@ -133,14 +210,27 @@ export class HistoryIndex {
       CREATE TABLE IF NOT EXISTS calls(sid TEXT,callid TEXT,name TEXT,seq INTEGER,PRIMARY KEY(sid,callid));
       CREATE TABLE IF NOT EXISTS records(sid TEXT,seq INTEGER,time INTEGER,kind TEXT,part INTEGER,body TEXT,PRIMARY KEY(sid,seq,part));
       CREATE INDEX IF NOT EXISTS records_session_time ON records(sid,time);
+      CREATE INDEX IF NOT EXISTS records_native_lookup ON records(sid,kind,part,seq);
       CREATE VIRTUAL TABLE IF NOT EXISTS search USING fts5(sid UNINDEXED,seq UNINDEXED,part UNINDEXED,body,tokenize='trigram');`)
+    const version = (this.db.prepare('PRAGMA user_version').get() as any)?.user_version
+    if (version > 1) {
+      this.db.close()
+      throw new MemoryError('历史索引由更新版本创建，请使用配套版本或重建此缓存', 409)
+    }
+    if (version !== 1) {
+      // Earlier caches could contain loaded Skill bodies. Rebuild only derived data under
+      // the new export policy; native event logs and persona bindings are never modified.
+      this.db.exec(
+        'BEGIN; DELETE FROM search; DELETE FROM records; DELETE FROM calls; DELETE FROM sessions; PRAGMA user_version=1; COMMIT;'
+      )
+    }
   }
   async close(): Promise<void> {
     this.disposed = true
     await this.refreshQueue.finally(() => this.db.close())
   }
   private allowed(sessionId: string): Record<string, number> {
-    const s = this.store.read(),
+    const s = this.store.authorizationSnapshot(),
       b = s.bindings[sessionId]
     if (!b) throw new MemoryError('会话尚未绑定人格', 409)
     if (b.purpose || isInternalSession(sessionId)) return Object.create(null)
@@ -199,7 +289,7 @@ export class HistoryIndex {
         const saved: any = this.db.prepare('SELECT * FROM sessions WHERE id=?').get(id)
         if (saved.lastseq >= 0) {
           const at = (await reader.read(saved.lastseq, 1, { signal })).events[0]
-          if (!at || hash(at) !== saved.lasthash) {
+          if (!at || cacheHash(at) !== saved.lasthash) {
             this.db.exec('BEGIN')
             try {
               this.db.prepare('DELETE FROM records WHERE sid=?').run(id)
@@ -216,6 +306,7 @@ export class HistoryIndex {
             saved.lastseq = -1
           }
         }
+        let delegation: DelegationRange[] | undefined
         let cursor = saved.lastseq + 1,
           complete = false
         for (let n = 0; n < 8 && pages < 40; n++, pages++) {
@@ -225,7 +316,13 @@ export class HistoryIndex {
             complete = true
             break
           }
-          this.append(id, events)
+          if (!delegation && events.some(bareNativeUser))
+            delegation = await nativeDelegationRanges(
+              reader,
+              (parent) => nativeReader(host, parent, signal),
+              signal
+            )
+          this.append(id, events, delegation ?? [])
           cursor = events.at(-1)!.seq + 1
           if (events.length < 256) {
             complete = true
@@ -256,7 +353,7 @@ export class HistoryIndex {
       errors
     }
   }
-  private append(id: string, events: HistoryEvent[]): void {
+  private append(id: string, events: HistoryEvent[], delegation: DelegationRange[]): void {
     this.db.exec('BEGIN')
     try {
       for (const e of events) {
@@ -268,7 +365,8 @@ export class HistoryIndex {
         const row = historyRecord(
           e,
           (callId: string) =>
-            (this.db.prepare('SELECT name FROM calls WHERE sid=? AND callid=?').get(id, callId) as any)?.name
+            (this.db.prepare('SELECT name FROM calls WHERE sid=? AND callid=?').get(id, callId) as any)?.name,
+          delegation.some((range) => e.seq >= range.from && e.seq <= range.through)
         )
         if (row) {
           // Chunk the full text, including the middle of long outputs; exact reads go back to DSH.
@@ -290,7 +388,9 @@ export class HistoryIndex {
           this.db.prepare('UPDATE sessions SET title=? WHERE id=?').run(d.title.slice(0, 200), id)
       }
       const last = events.at(-1)!
-      this.db.prepare('UPDATE sessions SET lastseq=?,lasthash=? WHERE id=?').run(last.seq, hash(last), id)
+      this.db
+        .prepare('UPDATE sessions SET lastseq=?,lasthash=? WHERE id=?')
+        .run(last.seq, cacheHash(last), id)
       this.db.exec('COMMIT')
     } catch (e) {
       this.db.exec('ROLLBACK')
@@ -343,6 +443,11 @@ export class HistoryIndex {
       const start = Math.max(0, at - 100)
       return {
         ...r,
+        ...(['peer', 'peer-reply'].includes(r.kind)
+          ? { authority: 'peer-advice-only' }
+          : r.kind === 'coordination'
+            ? { authority: 'coordination-receipt-only' }
+            : {}),
         snippet: body.slice(start, start + 700),
         source: 'native-session-event',
         historical: true,
@@ -386,7 +491,8 @@ export class HistoryIndex {
             : d.message?.role === 'tool'
               ? [d.message]
               : (d.message?.content ?? []).filter((b: any) => b.type === 'tool-result'),
-        names = new Map<string, string>()
+        names = new Map<string, string>(),
+        argumentsByCall = new Map<string, unknown>()
       for (const block of blocks) {
         const callId = block.toolCallId ?? d.subCallId
         if (typeof callId !== 'string') continue
@@ -399,8 +505,10 @@ export class HistoryIndex {
             source &&
             ['tool/call', 'tool/ptc-dispatch-start'].includes(source.type) &&
             (source.data.callId ?? source.data.subCallId) === callId
-          )
+          ) {
             names.set(callId, source.data.name)
+            argumentsByCall.set(callId, source.data.arguments)
+          }
         }
       }
       const wanted = new Set<string>(
@@ -417,20 +525,67 @@ export class HistoryIndex {
             id = e.data?.callId ?? e.data?.subCallId
           if (['tool/call', 'tool/ptc-dispatch-start'].includes(e.type) && wanted.has(id)) {
             names.set(id, e.data.name)
+            argumentsByCall.set(id, e.data.arguments)
             wanted.delete(id)
           }
         }
         cursor = start - 1
       }
       if (wanted.size) throw new MemoryError('尚未定位原工具调用，请继续更新历史索引后读取', 409)
-      const row = historyRecord(event, (id: string) => names.get(id))
+      const delegation = bareNativeUser(event)
+        ? await nativeDelegationRanges(reader, (parent) => nativeReader(host, parent, signal), signal, seq)
+        : []
+      const row = historyRecord(
+        event,
+        (id: string) => names.get(id),
+        delegation.some((range) => event.seq >= range.from && event.seq <= range.through)
+      )
       if (!row) throw new MemoryError('该事件不是可共享的对话、执行结果或原生状态', 403)
+      let job: Awaited<ReturnType<typeof nativeJobEvidence>>
+      if (row.tool === 'job_output' && blocks.length === 1 && row.failed === false) {
+        const raw = argumentsByCall.get(blocks[0].toolCallId ?? d.subCallId)
+        let args: any
+        try {
+          args = typeof raw === 'string' ? JSON.parse(raw) : raw
+        } catch {
+          /* malformed historical input is not evidence */
+        }
+        if (typeof args?.job_id === 'string') {
+          const pattern = '%"jobId":' + JSON.stringify(args.job_id).replace(/[\\%_]/g, '\\$&') + '%'
+          const cached = this.db
+            .prepare(
+              "SELECT seq FROM records WHERE sid=? AND kind='native-state' AND part=0 AND seq<=? AND body LIKE ? ESCAPE '\\' ORDER BY seq DESC LIMIT 32"
+            )
+            .all(target, seq, pattern)
+          job = await nativeJobEvidence(
+            reader,
+            target,
+            seq,
+            args.job_id,
+            cached.map((r) => Number(r.seq)),
+            signal
+          )
+          if (job) {
+            row.kind = 'tool-result'
+            row.failed = job.outcome === 'unknown' ? undefined : job.outcome !== 'success'
+          }
+        }
+      }
       return {
         sessionId: target,
+        eventHash: hash(event),
         seq,
         time: row.time,
         kind: row.kind,
+        ...(['peer', 'peer-reply'].includes(row.kind)
+          ? { authority: 'peer-advice-only' }
+          : row.kind === 'coordination'
+            ? { authority: 'coordination-receipt-only' }
+            : {}),
         tool: row.tool,
+        failed: row.failed,
+        ...(row.channelProvider ? { channelProvider: row.channelProvider } : {}),
+        ...(job ? { nativeJob: job, authority: 'native-execution-receipt' } : {}),
         text: row.text.slice(offset, offset + 12000),
         offset,
         nextOffset: offset + 12000 < row.text.length ? offset + 12000 : null,

@@ -41,16 +41,24 @@ export function installConversationTools(ctx: any, publicMemory = false, explici
         additionalProperties: false,
         required: ['action'],
         properties: {
-          action: { type: 'string', enum: ['catalog', 'search', 'read', 'save'] },
+          action: { type: 'string', enum: ['catalog', 'search', 'read', 'save', 'feedback'] },
+          kind: { type: 'string', enum: ['useful', 'not-applicable'] },
+          reason: { type: 'string', maxLength: 1000 },
+          documentRevision: { type: 'integer', minimum: 1 },
           query: { type: 'string', maxLength: 256 },
           id: { type: 'string', maxLength: 300 },
           topic: { type: 'string', maxLength: 90 },
           text: { type: 'string', maxLength: 4000 },
           revision: { type: 'string', maxLength: 128 },
+          cursor: {
+            type: 'string',
+            maxLength: 128,
+            description: 'search 后续页原样携带返回的 cursor；正文或反馈变化时重新搜索。'
+          },
           offset: {
             type: 'integer',
             minimum: 0,
-            description: 'catalog/search 返回 nextOffset 时，携带同次 revision 继续查询'
+            description: '返回 nextOffset 时携带同次 revision；search 还需携带 cursor。'
           },
           evidence: {
             type: 'array',

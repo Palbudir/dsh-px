@@ -1,8 +1,10 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useRef } from 'react'
 import { requestJson } from '../../shared/client-http'
 import { controlStyle, cardStyle } from '../../shared/ui'
 import { createDraftRegistry } from '../../shared/draft-store'
 import { ExperiencePanel } from './experience-panel'
+import { MemoryFeedbackPanel } from './memory-feedback-panel'
+import type { SkillPageRequest } from './workspace-navigation'
 const drafts = createDraftRegistry(64)
 const newest = (rows: any[]) =>
   [...rows].sort((a, b) => String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')))
@@ -16,11 +18,13 @@ const scopes = [
 export function KnowledgePanel({
   sessionId,
   personaId,
-  project
+  project,
+  skillRequest
 }: {
   sessionId: string
   personaId: string
   project: string | null
+  skillRequest?: SkillPageRequest
 }): unknown {
   const initial = {
     editing: false,
@@ -68,7 +72,7 @@ export function KnowledgePanel({
     [paths, setPaths] = useState(saved.paths),
     [editRevision, setEditRevision] = useState(saved.revision),
     [destination, setDestination] = useState('project')
-  const [tab, setTab] = useState(saved.tab),
+  const [tab, setTab] = useState(saved.editing ? saved.tab : skillRequest ? 'skills' : saved.tab),
     [skillDirectories, setSkillDirectories] = useState<any>(saved.skillDirectories),
     [skills, setSkills] = useState<any[]>([]),
     [skill, setSkill] = useState<any>(saved.skill),
@@ -124,6 +128,7 @@ export function KnowledgePanel({
       signal
     })
   useEffect(() => {
+    if (tab !== 'knowledge') return
     const ac = new AbortController()
     setCatalog(null)
     setRows([])
@@ -143,7 +148,7 @@ export function KnowledgePanel({
         if (!ac.signal.aborted) setError(String(e.message))
       })
     return () => ac.abort()
-  }, [url, scope])
+  }, [url, scope, tab])
   const run = async (action: () => Promise<void>) => {
     setBusy(true)
     setError('')
@@ -187,9 +192,45 @@ export function KnowledgePanel({
     setSkillDescription(v.skill.description)
     setBody(v.skill.content)
     setSkillEnabled(v.skill.invocation?.modelInvocable === true)
-    setSkillScope(v.skill.source === 'user-dsh' ? 'global' : 'project')
+    setSkillScope(
+      v.skill.source === 'persona-private' ? 'persona' : v.skill.source === 'user-dsh' ? 'global' : 'project'
+    )
     setEditing(false)
   }
+  const cancelEditing = () =>
+    run(async () => {
+      // Restored drafts deliberately omit the original body. Discard the draft
+      // immediately, then read current native data instead of displaying that metadata as content.
+      const documentId = selected?.id,
+        name = skill?.skill.name
+      draft?.clear()
+      setEditing(false)
+      setBody('')
+      setSelected(null)
+      setSkill(null)
+      setNotice('')
+      if (tab === 'skills') {
+        const value = await call('skills', { action: 'list' })
+        setSkills(value.skills)
+        setSkillDirectories(value.directories)
+        if (name) await readSkill(name)
+      } else {
+        await refresh()
+        if (documentId) await read(documentId)
+      }
+    })
+  const handledSkill = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    if (!skillRequest || skillRequest.serial === handledSkill.current || editing || busy) return
+    handledSkill.current = skillRequest.serial
+    void run(async () => {
+      setTab('skills')
+      const value = await call('skills', { action: 'list' })
+      setSkills(value.skills)
+      setSkillDirectories(value.directories)
+      await readSkill(skillRequest.name)
+    })
+  }, [skillRequest?.serial, editing, busy])
   return (
     <section>
       <div className="px-actions">
@@ -213,6 +254,9 @@ export function KnowledgePanel({
       </div>
       {error && <p role="alert">{error}</p>}
       {notice && <p role="status">{notice}</p>}
+      {editing && skillRequest && skillRequest.serial !== handledSkill.current && (
+        <p role="status">已有未保存的知识或技能草稿。保存或取消后，再打开技能 {skillRequest.name}。</p>
+      )}
       {editing && (
         <p role="status" className="px-muted">
           编辑草稿保留在当前窗口。返回或切换会话不会自动提交；保存仍检查原版本，避免覆盖后来修改。
@@ -324,7 +368,11 @@ export function KnowledgePanel({
                 ；文件引用只核对版本是否变化，不代表正文已被逐条证实。
               </p>
               {!selected.current && (
-                <p role="status">这条知识已过时、已归档或来源无法验证，不作为当前结论使用。</p>
+                <p role="status">
+                  {selected.feedback?.disputed
+                    ? '此人格已将该修订标为不正确，纠正前不作为当前结论使用。'
+                    : '这条知识已过时、已归档或来源无法验证，不作为当前结论使用。'}
+                </p>
               )}
               {selected.body !== undefined ? (
                 <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}>{selected.body}</pre>
@@ -371,6 +419,26 @@ export function KnowledgePanel({
                   归档
                 </button>
               </div>
+              <MemoryFeedbackPanel
+                key={selected.id + ':' + selected.revision}
+                value={selected.feedback}
+                busy={busy}
+                disabled={selected.status !== 'active'}
+                submit={(kind, reason) =>
+                  run(async () => {
+                    const result = await call('knowledge', {
+                      action: 'feedback',
+                      scope,
+                      id: selected.id,
+                      documentRevision: selected.revision,
+                      kind,
+                      reason
+                    })
+                    setSelected(result.document)
+                    setNotice(result.duplicate ? '此修订已经记录过同类反馈，未重复加权。' : '反馈已记录。')
+                  })
+                }
+              />
               {selected.current && (
                 <div className="px-actions">
                   <select
@@ -477,7 +545,7 @@ export function KnowledgePanel({
                 >
                   保存现行版本
                 </button>
-                <button disabled={busy} onClick={() => setEditing(false)}>
+                <button disabled={busy} onClick={() => void cancelEditing()}>
                   取消编辑
                 </button>
               </div>
@@ -498,7 +566,8 @@ export function KnowledgePanel({
             }}
           />
           <p className="px-muted">
-            列表与加载使用 DSH 原生 Skills。项目技能优先于全局技能；只有本页创建的技能可在此编辑。
+            列表与加载使用 DSH 原生
+            Skills。人格私有技能只在本人的会话中发现，同名时优先；项目技能优先于本机公共技能。只有本页创建的技能可在此编辑。
           </p>
           <button
             disabled={busy || editing || !draft}
@@ -526,10 +595,14 @@ export function KnowledgePanel({
             刷新技能列表
           </button>
           {skillDirectories && (
-            <p className="px-muted">
-              项目技能目录：{skillDirectories.project ?? '未选择项目'}；全局技能目录：
-              {skillDirectories.global}
-            </p>
+            <details className="px-muted">
+              <summary>技能存储位置</summary>
+              <p>
+                项目技能目录：{skillDirectories.project ?? '未选择项目'}；全局技能目录：
+                {skillDirectories.global}
+                {skillDirectories.persona && <>；人格私有目录：{skillDirectories.persona}</>}
+              </p>
+            </details>
           )}
           {!editing &&
             skills.map((item) => (
@@ -539,7 +612,15 @@ export function KnowledgePanel({
                 disabled={busy}
                 onClick={() => void run(() => readSkill(item.name))}
               >
-                {item.name} · {item.source}
+                {item.name} ·{' '}
+                {(
+                  {
+                    'persona-private': '仅此人格',
+                    'project-dsh': '本项目',
+                    'user-dsh': '本机公共',
+                    bundled: '随包提供'
+                  } as Record<string, string>
+                )[item.source] ?? item.source}
                 {!item.invocation?.modelInvocable ? ' · 不自动调用' : ''}
               </button>
             ))}
@@ -569,7 +650,10 @@ export function KnowledgePanel({
                 <option value="project" disabled={!project}>
                   本项目
                 </option>
-                <option value="global">全局</option>
+                <option value="global">本机公共</option>
+                <option value="persona" disabled={!skillDirectories?.persona}>
+                  仅此人格
+                </option>
               </select>
               <input
                 aria-label="技能名称"
@@ -603,6 +687,11 @@ export function KnowledgePanel({
                 />
                 允许原生 Agent 发现和调用
               </label>
+              {skillScope === 'persona' && (
+                <p className="px-muted">
+                  点击保存只授权写入此人格的这一个技能文件，不改变会话访问模式或模型的文件权限。
+                </p>
+              )}
               <div className="px-actions">
                 <button
                   disabled={busy || !skillName || !skillDescription || !body}
@@ -633,7 +722,7 @@ export function KnowledgePanel({
                 >
                   保存技能
                 </button>
-                <button disabled={busy} onClick={() => setEditing(false)}>
+                <button disabled={busy} onClick={() => void cancelEditing()}>
                   取消编辑
                 </button>
               </div>

@@ -6,7 +6,9 @@ import type { Persona, MemoryEntry, SessionBinding } from './store'
 import { HistoryPanel } from './history-panel'
 import { KnowledgePanel } from './knowledge-panel'
 import { registerMnemonKnowledgePage } from './mnemon-page'
+import { registerMnemonSkillNavigation } from './mnemon-skill-navigation'
 import { registerMemoryWorkspace } from './memory-workspace'
+import { registerPersonaNavigationClient } from './persona-navigation-client'
 import { createDraftRegistry } from '../../shared/draft-store'
 import {
   parsePersonaExpression,
@@ -14,6 +16,10 @@ import {
   type PersonaExpression
 } from '../../shared/persona-expression'
 import { PersonaExpressionEditor } from '../../shared/persona-expression-editor'
+import { ChannelNotesPanel } from './channel-notes-panel'
+import { SegmentPanel } from './segment-panel'
+import { MemoryFeedbackPanel } from './memory-feedback-panel'
+import type { SkillPageRequest } from './workspace-navigation'
 
 const personaDrafts = createDraftRegistry(64)
 
@@ -31,15 +37,19 @@ export function MemoryPanel({
   visible,
   openKnowledge,
   openSession,
+  prepareCreatedSession,
   openSettings,
-  openTasks
+  openTasks,
+  skillRequest
 }: {
   sessionId: string
   visible: boolean
   openKnowledge: () => void
   openSession: (id: string) => void
+  prepareCreatedSession: (id: string) => Promise<void>
   openSettings: () => void
   openTasks: () => void
+  skillRequest?: SkillPageRequest
 }): unknown {
   const draft = useMemo(() => {
     let storage
@@ -89,6 +99,8 @@ export function MemoryPanel({
     [conflict, setConflict] = useState(false)
   const [view, setView] = useState<View | null>(null),
     [error, setError] = useState(''),
+    [loadError, setLoadError] = useState(''),
+    [memoryEvidence, setMemoryEvidence] = useState<any>(null),
     [busy, setBusy] = useState(false)
   const [name, setName] = useState(saved?.name ?? ''),
     [instructions, setInstructions] = useState(saved?.instructions ?? ''),
@@ -117,9 +129,15 @@ export function MemoryPanel({
     (name !== view.template.name ||
       instructions !== view.template.instructions ||
       JSON.stringify(expression) !== JSON.stringify(view.template.expression ?? null) ||
-      enabled !== view.persona.memoryEnabled)
+      enabled !== view.template.memoryEnabled)
   )
   const dirty = !!note || !!newName || configDirty || (restoring.current && !!saved?.configDirty)
+  const handledSkill = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    if (!skillRequest || handledSkill.current === skillRequest.serial || dirty) return
+    handledSkill.current = skillRequest.serial
+    setTab('knowledge')
+  }, [skillRequest?.serial, dirty])
   const identityChanged = !!(view && draftPersona && draftPersona !== view.persona.id)
   const beginEdit = () => {
     if (draftRevision === undefined && view) {
@@ -185,7 +203,7 @@ export function MemoryPanel({
     setName(data.template.name)
     setInstructions(data.template.instructions)
     setExpression(data.template.expression ?? null)
-    setEnabled(data.persona.memoryEnabled)
+    setEnabled(data.template.memoryEnabled)
     if (!data.project) setScope('persona')
   }
   useEffect(() => {
@@ -196,6 +214,7 @@ export function MemoryPanel({
       try {
         const data = await requestJson<View>(url, { signal: ac.signal })
         if (!ac.signal.aborted) {
+          setLoadError('')
           if (restoring.current) {
             restoring.current = false
             setView(data)
@@ -203,7 +222,7 @@ export function MemoryPanel({
               setName(data.template.name)
               setInstructions(data.template.instructions)
               setExpression(data.template.expression ?? null)
-              setEnabled(data.persona.memoryEnabled)
+              setEnabled(data.template.memoryEnabled)
             }
             if (saved?.personaId !== data.persona.id) {
               setConflict(true)
@@ -214,12 +233,10 @@ export function MemoryPanel({
             }
           } else {
             accept(data)
-            setError('')
-            setConflict(false)
           }
         }
       } catch (e: any) {
-        if (!ac.signal.aborted) setError(String(e.message))
+        if (!ac.signal.aborted) setLoadError(String(e.message))
       }
       if (!ac.signal.aborted) timer = setTimeout(() => void refresh(), 5000)
     }
@@ -252,7 +269,10 @@ export function MemoryPanel({
         setError('另一个窗口切换了人格；请取消当前编辑后刷新，草稿未被覆盖。')
         return false
       }
-      if (configDirty && (!action || ['save', 'forget'].includes((action as { type: string }).type)))
+      if (
+        configDirty &&
+        (!action || ['save', 'forget', 'memory-feedback'].includes((action as { type: string }).type))
+      )
         setView(data)
       else accept(data)
       setDraftRevision(undefined)
@@ -273,12 +293,33 @@ export function MemoryPanel({
     setNote(entry.text)
     setScope(entry.project ? 'project' : 'persona')
   }
+  const readMemoryEvidence = async (ref: { sessionId: string; seq: number }, offset = 0) => {
+    setBusy(true)
+    setError('')
+    try {
+      const result = await requestJson<any>(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'read-history', targetSessionId: ref.sessionId, seq: ref.seq, offset })
+      })
+      setMemoryEvidence((previous: any) =>
+        offset > 0 && previous?.sessionId === ref.sessionId && previous?.seq === ref.seq
+          ? { ...result.result, text: previous.text + result.result.text }
+          : result.result
+      )
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setBusy(false)
+    }
+  }
   const createSession = async (handoff: boolean) => {
     if (!targetPersona) return
     setBusy(true)
     setError('')
     const key = `${sessionId}:${targetPersona}:${handoff}`
     if (newRequest.current?.key !== key) newRequest.current = { key, id: crypto.randomUUID() }
+    const requestId = newRequest.current.id
     try {
       const data = await requestJson<{ createdSessionId: string }>(url, {
         method: 'POST',
@@ -287,9 +328,13 @@ export function MemoryPanel({
           type: 'new-session',
           personaId: targetPersona,
           handoff,
-          requestId: newRequest.current.id
+          requestId
         })
+      }).catch((error) => {
+        if (error.status === 409 && newRequest.current?.id === requestId) newRequest.current = null
+        throw error
       })
+      await prepareCreatedSession(data.createdSessionId)
       if (alive.current && isVisible.current) openSession(data.createdSessionId)
       newRequest.current = null
     } catch (e: any) {
@@ -319,7 +364,8 @@ export function MemoryPanel({
         )}
         <div className="px-actions" role="group" aria-label="记忆页面">
           {[
-            ['persona', '人格记忆'],
+            ['persona', view?.binding.channel?.access === 'public' ? '人格配置' : '人格记忆'],
+            ...(view?.binding.channel?.access === 'public' ? [['conversation-memory', '本聊天记忆']] : []),
             ['history', '经历与历史'],
             ['knowledge', '知识与 Skills']
           ].map(([id, label]) => (
@@ -346,6 +392,10 @@ export function MemoryPanel({
         )}
 
         {error && <p role="alert">{error} </p>}
+        {loadError && <p role="alert">{loadError}</p>}
+        {dirty && skillRequest && handledSkill.current !== skillRequest.serial && (
+          <p role="status">先保存或取消当前人格编辑，再打开技能 {skillRequest.name}。草稿仍保留。</p>
+        )}
         {conflict && (
           <button disabled={busy} onClick={discardDraft}>
             放弃草稿并读取最新
@@ -354,7 +404,11 @@ export function MemoryPanel({
         {!view && !error && <p>正在读取…</p>}
         {view && !identityChanged && (
           <>
+            {tab === 'conversation-memory' && (
+              <ChannelNotesPanel key={sessionId + ':' + view.persona.id} url={url} />
+            )}
             <div hidden={tab !== 'history'}>
+              <SegmentPanel key={sessionId + ':segments'} url={url} visible={visible && tab === 'history'} />
               <HistoryPanel
                 key={view.persona.id}
                 url={url}
@@ -368,13 +422,14 @@ export function MemoryPanel({
                 sessionId={sessionId}
                 personaId={view.persona.id}
                 project={view.project}
+                skillRequest={skillRequest}
               />
             )}
             <section hidden={tab !== 'advanced'}>
               <h3>引擎配置与诊断</h3>
               <p className="px-muted">
-                日常资料在前三个页面管理。下面保留 Mnemon
-                原生设置、项目档案及其他记忆来源；不会自动开启后台提炼或迁移资料。
+                日常资料在前面的页面管理。这里保留 Mnemon 原生设置、项目档案及其他记忆来源。
+                后台上下文整理由“经历与历史”中的开关控制；记忆建议和技能更改仍需明确采纳。
               </p>
               <div className="px-actions">
                 <button
@@ -501,6 +556,11 @@ export function MemoryPanel({
                       {renderPersonaExpression(view.persona.expression) ||
                         '未设置独立的公开表达，沿用原有协作和渠道配置。'}
                     </p>
+                    {!!view.persona.expression?.scenes?.length && (
+                      <p className="px-muted">
+                        本版本另有 {view.persona.expression.scenes.length} 条按对象与场合使用的表达规则。
+                      </p>
+                    )}
                   </details>
                   <details style={{ ...cardStyle, marginBottom: 16 }}>
                     <summary>编辑人格模板（保存为新版本）</summary>
@@ -626,7 +686,7 @@ export function MemoryPanel({
                         name !== view.template.name ||
                         instructions !== view.template.instructions ||
                         JSON.stringify(expression) !== JSON.stringify(view.template.expression ?? null) ||
-                        enabled !== view.persona.memoryEnabled
+                        enabled !== view.template.memoryEnabled
                       }
                       onClick={() =>
                         void act({ type: 'create', name: newName }).then((ok) => {
@@ -639,103 +699,209 @@ export function MemoryPanel({
                   </details>
                 </section>
               </details>
-              <h3>保存的约定</h3>
-              <p style={{ opacity: 0.7 }}>
-                只显示本目录及此人格通用的记忆。可直接编辑，也可在对话中明确要求 Agent 记住或忘记。
-              </p>
-              {!view.persona.memoryEnabled && (
-                <p role="status">此人格的记忆已关闭，条目仍保留。可在“人格与协作偏好”中开启。</p>
-              )}
-              {!view.persona.memories.some((m) => !m.project || m.project === view.project) && (
-                <p className="px-empty">
-                  还没有保存约定。可以记下你的协作偏好，也可以在对话中明确要求助手记住。
+              {view.binding.channel?.access === 'public' ? (
+                <p>
+                  此聊天按自己的资料范围使用记忆。
+                  <button onClick={() => setTab('conversation-memory')}>查看本聊天记忆</button>
                 </p>
-              )}
-              {view.persona.memories
-                .filter((m) => !m.project || m.project === view.project)
-                .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-                .map((m) => (
-                  <section key={m.id} style={{ ...cardStyle, marginBottom: 8 }}>
-                    <small>{m.project ? '本目录' : '此人格通用'}</small>
-                    <p style={{ whiteSpace: 'pre-wrap' }}>{m.text}</p>
-                    <button
-                      style={controlStyle}
+              ) : (
+                <>
+                  <h3>保存的约定</h3>
+                  <p style={{ opacity: 0.7 }}>
+                    只显示本目录及此人格通用的记忆。可直接编辑，也可在对话中明确要求 Agent 记住或忘记。
+                  </p>
+                  {!view.persona.memoryEnabled && (
+                    <p role="status">此人格的记忆已关闭，条目仍保留。可在“人格与协作偏好”中开启。</p>
+                  )}
+                  {!view.persona.memories.some((m) => !m.project || m.project === view.project) && (
+                    <p className="px-empty">
+                      还没有保存约定。可以记下你的协作偏好，也可以在对话中明确要求助手记住。
+                    </p>
+                  )}
+                  {view.persona.memories
+                    .filter((m) => !m.project || m.project === view.project)
+                    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+                    .map((m) => (
+                      <section key={m.id} style={{ ...cardStyle, marginBottom: 8 }}>
+                        <small>{m.project ? '本目录' : '此人格通用'}</small>
+                        <small>
+                          {' '}
+                          · v{m.entryRevision ?? 1} ·{' '}
+                          {m.provenance?.actor === 'human'
+                            ? '用户保存'
+                            : m.provenance?.actor === 'model'
+                              ? '模型整理'
+                              : '来源未标注'}
+                        </small>
+                        {m.current === false && (
+                          <p role="status">此修订已标记为不正确，已停止自动注入。可编辑纠正或忘记。</p>
+                        )}
+                        <p style={{ whiteSpace: 'pre-wrap' }}>{m.text}</p>
+                        <button
+                          style={controlStyle}
+                          disabled={busy || view.persona.archived}
+                          onClick={() => edit(m)}
+                        >
+                          编辑
+                        </button>{' '}
+                        <button
+                          style={controlStyle}
+                          disabled={busy}
+                          onClick={() =>
+                            void act({ type: 'forget', id: m.id }).then((ok) => {
+                              if (ok && editing === m.id) {
+                                setEditing(undefined)
+                                setNote('')
+                              }
+                            })
+                          }
+                        >
+                          忘记
+                        </button>
+                        {!!m.provenance?.events.length && (
+                          <details>
+                            <summary>原始依据</summary>
+                            {m.provenance.events.map((ref) => (
+                              <button
+                                key={ref.sessionId + ':' + ref.seq}
+                                disabled={busy}
+                                onClick={() => void readMemoryEvidence(ref)}
+                              >
+                                读取事件 {ref.seq}
+                              </button>
+                            ))}
+                          </details>
+                        )}
+                        {m.previous && (
+                          <details>
+                            <summary>前一版来源（v{m.previous.entryRevision}）</summary>
+                            {m.previous.provenance?.events.length ? (
+                              m.previous.provenance.events.map((ref) => (
+                                <button
+                                  key={ref.sessionId + ':' + ref.seq}
+                                  disabled={busy}
+                                  onClick={() => void readMemoryEvidence(ref)}
+                                >
+                                  读取事件 {ref.seq}
+                                </button>
+                              ))
+                            ) : (
+                              <p>前一版没有关联原始事件。</p>
+                            )}
+                          </details>
+                        )}
+                        {m.origin && m.origin.entryRevision !== m.previous?.entryRevision && (
+                          <details>
+                            <summary>最早保留的来源（v{m.origin.entryRevision}）</summary>
+                            <p className="px-muted">用于追溯条目由来，不表示旧证据能证明当前修订。</p>
+                            {m.origin.provenance?.events.length ? (
+                              m.origin.provenance.events.map((ref) => (
+                                <button
+                                  key={ref.sessionId + ':' + ref.seq}
+                                  disabled={busy}
+                                  onClick={() => void readMemoryEvidence(ref)}
+                                >
+                                  读取事件 {ref.seq}
+                                </button>
+                              ))
+                            ) : (
+                              <p>这一版没有关联原始事件。</p>
+                            )}
+                          </details>
+                        )}
+                        <MemoryFeedbackPanel
+                          key={m.id + ':' + (m.entryRevision ?? 1)}
+                          value={m.feedback}
+                          busy={busy}
+                          disabled={view.persona.archived || dirty}
+                          readSource={(ref) => void readMemoryEvidence(ref)}
+                          submit={async (kind, reason) => {
+                            await act({
+                              type: 'memory-feedback',
+                              id: m.id,
+                              entryRevision: m.entryRevision ?? 1,
+                              kind,
+                              reason
+                            })
+                          }}
+                        />
+                      </section>
+                    ))}
+                  {memoryEvidence && (
+                    <section style={cardStyle}>
+                      <button onClick={() => setMemoryEvidence(null)}>收起依据</button>
+                      <p>
+                        来源会话 {memoryEvidence.sessionId} · 事件 {memoryEvidence.seq} · 已显示{' '}
+                        {memoryEvidence.text.length} / {memoryEvidence.totalCharacters} 字符
+                      </p>
+                      <pre style={{ whiteSpace: 'pre-wrap' }}>{memoryEvidence.text}</pre>
+                      {memoryEvidence.nextOffset !== null && (
+                        <button
+                          disabled={busy}
+                          onClick={() => void readMemoryEvidence(memoryEvidence, memoryEvidence.nextOffset)}
+                        >
+                          继续读取原文
+                        </button>
+                      )}
+                    </section>
+                  )}
+                  <textarea
+                    disabled={busy || view.persona.archived}
+                    aria-label="记忆内容"
+                    rows={3}
+                    maxLength={2000}
+                    style={{ ...controlStyle, width: '100%', resize: 'vertical' }}
+                    placeholder="写下需要在以后的会话中记住的约定…"
+                    value={note}
+                    onChange={(e: any) => {
+                      beginEdit()
+                      setNote(e.target.value)
+                    }}
+                  />
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+                    <select
                       disabled={busy || view.persona.archived}
-                      onClick={() => edit(m)}
+                      aria-label="记忆范围"
+                      style={controlStyle}
+                      value={scope}
+                      onChange={(e: any) => setScope(e.target.value)}
                     >
-                      编辑
-                    </button>{' '}
+                      <option value="project" disabled={!view.project}>
+                        本目录
+                      </option>
+                      <option value="persona">此人格通用</option>
+                    </select>
                     <button
                       style={controlStyle}
-                      disabled={busy}
+                      disabled={busy || !note.trim() || view.persona.archived}
                       onClick={() =>
-                        void act({ type: 'forget', id: m.id }).then((ok) => {
-                          if (ok && editing === m.id) {
-                            setEditing(undefined)
+                        void act({ type: 'save', id: editing, text: note, scope }).then((ok) => {
+                          if (ok) {
                             setNote('')
+                            setEditing(undefined)
                           }
                         })
                       }
                     >
-                      忘记
+                      {editing ? '保存修改' : '记住'}
                     </button>
-                  </section>
-                ))}
-              <textarea
-                disabled={busy || view.persona.archived}
-                aria-label="记忆内容"
-                rows={3}
-                maxLength={2000}
-                style={{ ...controlStyle, width: '100%', resize: 'vertical' }}
-                placeholder="写下需要在以后的会话中记住的约定…"
-                value={note}
-                onChange={(e: any) => {
-                  beginEdit()
-                  setNote(e.target.value)
-                }}
-              />
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
-                <select
-                  disabled={busy || view.persona.archived}
-                  aria-label="记忆范围"
-                  style={controlStyle}
-                  value={scope}
-                  onChange={(e: any) => setScope(e.target.value)}
-                >
-                  <option value="project" disabled={!view.project}>
-                    本目录
-                  </option>
-                  <option value="persona">此人格通用</option>
-                </select>
-                <button
-                  style={controlStyle}
-                  disabled={busy || !note.trim() || !view.persona.memoryEnabled || view.persona.archived}
-                  onClick={() =>
-                    void act({ type: 'save', id: editing, text: note, scope }).then((ok) => {
-                      if (ok) {
-                        setNote('')
-                        setEditing(undefined)
-                      }
-                    })
-                  }
-                >
-                  {editing ? '保存修改' : '记住'}
-                </button>
-                {note && (
-                  <button
-                    style={controlStyle}
-                    onClick={() => {
-                      setNote('')
-                      setEditing(undefined)
-                    }}
-                  >
-                    取消编辑
-                  </button>
-                )}
-              </div>
-              <p style={{ opacity: 0.65 }}>
-                每条最多 2000 字，每个人格合计最多 8000 字。临时任务进度请放在会话账本中。
-              </p>
+                    {note && (
+                      <button
+                        style={controlStyle}
+                        onClick={() => {
+                          setNote('')
+                          setEditing(undefined)
+                        }}
+                      >
+                        取消编辑
+                      </button>
+                    )}
+                  </div>
+                  <p style={{ opacity: 0.65 }}>
+                    每条最多 2000 字，每个人格合计最多 8000 字。临时任务进度请放在会话账本中。
+                  </p>
+                </>
+              )}
             </section>
           </>
         )}
@@ -749,8 +915,10 @@ export function apply(ctx: any): void {
     ['slots', 'layout', 'sessions', 'uiWorkspace', 'sidebarRight', 'sidebarRightTabs'],
     (host: any) =>
       host.effect(() => {
+        const personaNavigation = registerPersonaNavigationClient(host)
         const workspace = registerMemoryWorkspace(host, MemoryPanel)
         const nativePage = registerMnemonKnowledgePage(host, workspace.open)
+        const skillNavigation = registerMnemonSkillNavigation(host, workspace.openSkill)
         const sidebar = createNativeSidebar(host).registerTab({
           id: 'dsh-px-memory',
           title: '记忆与知识',
@@ -764,8 +932,10 @@ export function apply(ctx: any): void {
           )
         })
         return () => {
+          personaNavigation()
           sidebar()
           nativePage()
+          skillNavigation()
           workspace.dispose()
         }
       }, 'memory: unified workspace')

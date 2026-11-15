@@ -6,7 +6,8 @@
  */
 import { mkdirSync, readdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { McpStdioClient, type McpCallResult } from './mcp-stdio'
+import { randomUUID } from 'node:crypto'
+import { McpStdioClient, type McpCallResult, type McpLaunch } from './mcp-stdio'
 import { BLOCKED_ORIGINS, deniedUrl, uploadNames } from './policy'
 import { ComputerUseRefusal, UNTRUSTED, type Image } from './runtime'
 import catalog from './playwright-tools.json'
@@ -188,9 +189,16 @@ export function keepsPage(name: string, args: Record<string, unknown>): boolean 
 }
 
 interface Session {
-  client: McpStdioClient
+  client: BrowserClient
   ready: Promise<void>
   outputDir: string
+  mode: BrowserMode
+  startedAt: number
+  generation: string
+  calls: number
+  phase: 'opening' | 'ready' | 'closing' | 'close-failed'
+  closing?: Promise<void>
+  closeError?: string
   idle?: ReturnType<typeof setTimeout>
   url?: string
   /** The last action may have navigated without reporting where. */
@@ -198,21 +206,98 @@ interface Session {
 }
 
 const IDLE_MS = 20 * 60_000
+export type BrowserClient = Pick<McpStdioClient, 'alive' | 'start' | 'callTool' | 'close'>
 
 export class BrowserSessions {
   private readonly sessions = new Map<string, Session>()
+  private readonly changes = new Set<() => void>()
 
   constructor(
     /** Current launch options; `undefined` while browser use is turned off, so nothing can start one. */
     private readonly options: () => BrowserLaunchOptions | undefined,
     private readonly outputRoot: string,
-    private readonly env: NodeJS.ProcessEnv
+    private readonly env: NodeJS.ProcessEnv,
+    private readonly createClient: (launch: McpLaunch) => BrowserClient = (launch) =>
+      new McpStdioClient(launch)
   ) {}
 
   /** The session holding the single shared browser in the login-carrying modes. */
   holder(): string | undefined {
-    const mode = this.options()?.mode
-    return mode && mode !== 'isolated' ? this.sessions.keys().next().value : undefined
+    return [...this.sessions].find(([, session]) => session.mode !== 'isolated')?.[0]
+  }
+
+  ownership() {
+    return [...this.sessions].map(([sessionId, session]) => ({
+      sessionId,
+      generation: session.generation,
+      mode: session.mode,
+      phase: session.phase,
+      startedAt: session.startedAt,
+      activeCalls: session.calls,
+      ...(session.closeError ? { error: session.closeError } : {})
+    }))
+  }
+
+  availability(sessionId: string) {
+    const options = this.options(),
+      own = this.sessions.get(sessionId),
+      holder = this.holder()
+    return {
+      mode: options?.mode ?? 'off',
+      available:
+        !!options &&
+        (own
+          ? own.mode === options.mode && ['opening', 'ready'].includes(own.phase)
+          : options.mode === 'isolated' || !holder),
+      ownPhase: own?.phase,
+      heldElsewhere: !!holder && holder !== sessionId
+    }
+  }
+
+  /** Notification only: observing availability never reserves or grants access to a browser. */
+  waitAvailable(
+    sessionId: string,
+    signal: AbortSignal,
+    timeoutMs: number
+  ): Promise<ReturnType<BrowserSessions['availability']>> {
+    signal.throwIfAborted()
+    if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1000 || timeoutMs > 60000)
+      throw Error('浏览器等待时限无效')
+    return new Promise((resolve, reject) => {
+      let settled = false
+      const finish = (error?: unknown) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        this.changes.delete(check)
+        signal.removeEventListener('abort', abort)
+        if (error) reject(error)
+        else {
+          try {
+            resolve(this.availability(sessionId))
+          } catch (error) {
+            reject(error)
+          }
+        }
+      }
+      const abort = () => finish(signal.reason ?? Error('等待已取消'))
+      const check = () => {
+        try {
+          const state = this.availability(sessionId)
+          if (state.mode === 'off') finish(Error('浏览器能力已关闭'))
+          else if (state.available) finish()
+        } catch (error) {
+          finish(error)
+        }
+      }
+      const timer = setTimeout(() => finish(), timeoutMs)
+      this.changes.add(check)
+      signal.addEventListener('abort', abort, { once: true })
+      check()
+    })
+  }
+  private changed() {
+    for (const notify of [...this.changes]) notify()
   }
 
   currentUrl(sessionId: string): string | undefined {
@@ -232,21 +317,30 @@ export class BrowserSessions {
   }
 
   private open(sessionId: string, cwd: string | undefined, label: string, signal: AbortSignal): Session {
+    signal.throwIfAborted()
     const options = this.options()
     if (!options) throw new ComputerUseRefusal('浏览器操作已关闭')
     const existing = this.sessions.get(sessionId)
-    if (existing && existing.client.alive) return existing
-    if (existing) this.drop(sessionId)
+    if (existing) {
+      if (['closing', 'close-failed'].includes(existing.phase))
+        throw new ComputerUseRefusal(
+          existing.closeError ?? '本会话的浏览器正在释放，请等待释放完成后重新观察'
+        )
+      if ((existing.phase === 'opening' || existing.client.alive) && existing.mode === options.mode)
+        return existing
+      void this.closeOwned(sessionId, existing).catch(() => undefined)
+      throw new ComputerUseRefusal('原浏览器连接已失效或模式已改变，正在释放；请稍后重新观察，不重放旧动作')
+    }
     const holder = this.holder()
-    if (holder && holder !== sessionId)
+    if (options.mode !== 'isolated' && holder && holder !== sessionId)
       throw new ComputerUseRefusal(
         options.mode === 'extension'
-          ? 'Edge 正在被另一个会话接管。请在那个会话结束后再试，或在「电脑操作」面板中释放浏览器。'
-          : 'PX 专用浏览器正在被另一个会话使用。请在那个会话结束后再试，或在「电脑操作」面板中释放浏览器。'
+          ? 'Edge 正在被另一个会话接管。可用 computer_browser_resource 创建后台等待并继续其他工作；用户也可在「电脑操作」面板核对并释放具体连接。'
+          : 'PX 专用浏览器正在被另一个会话使用。可用 computer_browser_resource 创建后台等待并继续其他工作；用户也可在「电脑操作」面板核对并释放具体连接。'
       )
     const outputDir = join(this.outputRoot, label)
     mkdirSync(outputDir, { recursive: true })
-    const client = new McpStdioClient({
+    const client = this.createClient({
       command: options.node,
       args: browserArgs(options, outputDir),
       // Browser processes inherit this directory; keeping it outside the per-session folder lets that
@@ -255,9 +349,25 @@ export class BrowserSessions {
       env: childEnv(this.env, options.electron),
       roots: cwd ? [cwd] : []
     })
-    const session: Session = { client, outputDir, ready: client.start(signal) }
-    session.ready.catch(() => this.drop(sessionId))
+    const session: Session = {
+      client,
+      outputDir,
+      mode: options.mode,
+      generation: randomUUID(),
+      startedAt: Date.now(),
+      calls: 0,
+      phase: 'opening',
+      ready: Promise.resolve()
+    }
     this.sessions.set(sessionId, session)
+    this.changed()
+    session.ready = Promise.resolve()
+      .then(() => client.start(signal))
+      .then(() => {
+        if (session.phase === 'opening') session.phase = 'ready'
+        this.changed()
+      })
+    void session.ready.catch(() => this.closeOwned(sessionId, session)).catch(() => undefined)
     return session
   }
 
@@ -271,9 +381,14 @@ export class BrowserSessions {
   ): Promise<McpCallResult> {
     const session = this.open(sessionId, cwd, label, signal)
     clearTimeout(session.idle)
+    session.calls++
     try {
       await session.ready
+      signal.throwIfAborted()
+      if (session.phase !== 'ready' || this.sessions.get(sessionId) !== session)
+        throw new ComputerUseRefusal('浏览器的原连接已结束，动作未发送')
       const result = await session.client.callTool(name, args, signal)
+      signal.throwIfAborted()
       const url = pageUrlOf(
         (result.content ?? [])
           .filter((c) => c.type === 'text')
@@ -289,31 +404,73 @@ export class BrowserSessions {
         session.unknown = false
       }
       return result
+    } catch (error) {
+      if (
+        signal.aborted ||
+        !session.client.alive ||
+        (error as any)?.code === 'mcp_timeout' ||
+        session.phase !== 'ready'
+      )
+        await this.closeOwned(sessionId, session)
+      throw error
     } finally {
-      if (this.sessions.get(sessionId) === session)
-        session.idle = setTimeout(() => void this.close(sessionId), IDLE_MS)
+      session.calls--
+      if (this.sessions.get(sessionId) === session && session.phase === 'ready' && session.calls === 0)
+        session.idle = setTimeout(
+          () => void this.closeOwned(sessionId, session).catch(() => undefined),
+          IDLE_MS
+        )
     }
   }
 
   async close(sessionId: string): Promise<void> {
     const session = this.sessions.get(sessionId)
     if (!session) return
-    this.sessions.delete(sessionId)
-    clearTimeout(session.idle)
-    await session.client.close().catch(() => undefined)
-    removeQuietly(session.outputDir)
+    return this.closeOwned(sessionId, session)
   }
 
-  private drop(sessionId: string): void {
+  async release(sessionId: string, generation: string): Promise<void> {
     const session = this.sessions.get(sessionId)
-    if (!session) return
-    this.sessions.delete(sessionId)
+    if (!session || session.generation !== generation)
+      throw new ComputerUseRefusal('浏览器占用已变化，请刷新后核对；没有停止新的占用者')
+    await this.closeOwned(sessionId, session)
+  }
+
+  private closeOwned(sessionId: string, session: Session): Promise<void> {
+    if (this.sessions.get(sessionId) !== session) return Promise.resolve()
+    if (session.closing) return session.closing
+    session.phase = 'closing'
+    this.changed()
     clearTimeout(session.idle)
-    void session.client.close().catch(() => undefined)
+    const closing = Promise.resolve()
+      .then(() => session.client.close())
+      .then(() => {
+        if (this.sessions.get(sessionId) !== session) return
+        removeQuietly(session.outputDir)
+        this.sessions.delete(sessionId)
+        this.changed()
+      })
+      .catch((error) => {
+        session.phase = 'close-failed'
+        session.closeError = error instanceof Error ? error.message : '浏览器释放未完成'
+        this.changed()
+        throw error
+      })
+      .finally(() => {
+        if (session.closing === closing) session.closing = undefined
+      })
+    session.closing = closing
+    return closing
   }
 
   async closeAll(): Promise<void> {
-    await Promise.all([...this.sessions.keys()].map((id) => this.close(id)))
+    const results = await Promise.allSettled([...this.sessions.keys()].map((id) => this.close(id)))
+    const failures = results.filter((row): row is PromiseRejectedResult => row.status === 'rejected')
+    if (failures.length)
+      throw new AggregateError(
+        failures.map((row) => row.reason),
+        '部分浏览器连接未确认释放'
+      )
   }
 
   get active(): string[] {

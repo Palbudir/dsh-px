@@ -210,7 +210,10 @@ test('stopping a group during cold resume cancels admission even when the factor
       follows++
     }
   }
-  const memory = { channelBindings: () => [{ sessionId: 'old', channel, createdAt: '2026-10-26' }] }
+  const memory = {
+    channelBindings: () => [{ sessionId: 'old', channel, createdAt: '2026-10-26' }],
+    inspect: () => ({ binding: { personaId: settings.personaId, channel } })
+  }
   const services: any = {
     pxMemoryChannels: memory,
     agents: {
@@ -247,6 +250,203 @@ test('stopping a group during cold resume cancels admission even when the factor
   await tasks.dispose()
 })
 
+test('stopping a group pauses its native goals before cancellation and leaves other chats unchanged', async () => {
+  const settings = {
+    ...DEFAULT_QQ_SETTINGS,
+    accountId: '12001',
+    authorizedUsers: ['23007'],
+    personaId: 'default',
+    workspace: tmpdir()
+  }
+  const calls: string[] = [],
+    goals = new Map<string, any>([
+      ['own', { id: 'goal-own', revision: 7, phase: 'active', activation: 'disarmed' }],
+      ['other', { id: 'goal-other', revision: 3, phase: 'active', activation: 'armed' }],
+      ['child', { id: 'goal-child', revision: 2, phase: 'active', activation: 'armed' }]
+    ])
+  const service = {
+    get: (agent: any) => goals.get(agent.id),
+    pause: (agent: any, ref: any) => {
+      const goal = goals.get(agent.id)
+      assert.deepEqual(ref, { id: goal.id, revision: goal.revision })
+      calls.push('pause:' + agent.id)
+      goals.set(agent.id, { ...goal, phase: 'paused', activation: 'disarmed', revision: goal.revision + 1 })
+    }
+  }
+  const agents = new Map(
+    ['own', 'other', 'child'].map((id) => [
+      id,
+      {
+        id,
+        session: { id, header: {} },
+        status: id === 'child' ? 'running' : 'idle',
+        inbox: { nextTurn: [], nextStep: [] },
+        ctx: { get: (name: string) => (name === 'goals' ? service : undefined) },
+        cancel: () => {
+          calls.push('cancel:' + id)
+        },
+        whenIdle: async () => {}
+      }
+    ])
+  )
+  const rows = ['own', 'other', 'child'].map((id) => ({
+    sessionId: id,
+    createdAt: '2026-10-26',
+    channel: {
+      ...channelFor(settings, id === 'other' ? 'group:34008' : 'group:34007'),
+      task: { requesterId: '23007', rootSessionId: id === 'child' ? 'own' : id }
+    }
+  }))
+  const services: any = {
+    agents: {
+      get: (id: string) => agents.get(id),
+      isOwnedBy: (id: string, parent: any) => id === 'child' && parent === agents.get('own')
+    },
+    pxMemoryChannels: { channelBindings: () => rows },
+    subagents: {
+      drainChildren: async (parent: any, ids: string[]) => {
+        assert.equal(parent, agents.get('own'))
+        assert.deepEqual(ids, ['child'])
+        calls.push('drain:child')
+      }
+    }
+  }
+  const tasks = new QqGroupTasks(
+    { get: (name: string) => services[name] },
+    settings,
+    () => ({}),
+    () => true,
+    () => {}
+  )
+  try {
+    await assert.rejects(tasks.newSession('group:34007', '23007'), /群任务尚未结束/)
+    assert.deepEqual(calls, [], 'busy descendant must prevent replacement without cancelling the lead')
+    await tasks.stop('group:34007')
+    assert.deepEqual(calls, ['pause:own', 'cancel:own', 'pause:child', 'cancel:child', 'drain:child'])
+    assert.equal(goals.get('own').phase, 'paused')
+    assert.equal(goals.get('child').phase, 'paused')
+    assert.equal(goals.get('other').phase, 'active')
+    await tasks.stop('group:34007')
+    assert.deepEqual(calls, [
+      'pause:own',
+      'cancel:own',
+      'pause:child',
+      'cancel:child',
+      'drain:child',
+      'cancel:own',
+      'cancel:child',
+      'drain:child'
+    ])
+  } finally {
+    await tasks.dispose()
+  }
+})
+
+for (const newUserInput of [false, true]) {
+  test(`native child settlement after stop ${newUserInput ? 'preserves independent user input' : 'cannot start an empty model turn'}`, async () => {
+    const settings = {
+        ...DEFAULT_QQ_SETTINGS,
+        accountId: '12001',
+        authorizedUsers: ['23007'],
+        personaId: 'default',
+        workspace: tmpdir()
+      },
+      hooks = new Map<string, any>(),
+      agents = new Map<string, any>()
+    let modelCalls = 0,
+      removed = 0,
+      parentWake: Promise<void> = Promise.resolve()
+    for (const id of ['root', 'child'])
+      agents.set(id, {
+        id,
+        session: { id, header: {} },
+        ctx: { get: () => undefined },
+        cancel: () => {},
+        inbox: {
+          nextTurn: [],
+          nextStep: [],
+          remove: (messageId: string) => {
+            assert.equal(id, 'root')
+            assert.equal(messageId, 'cancelled-child-notice')
+            removed++
+            return true
+          }
+        },
+        whenIdle: () => (id === 'root' ? parentWake : Promise.resolve())
+      })
+    const rows = ['root', 'child'].map((sessionId) => ({
+      sessionId,
+      createdAt: '2026-10-26',
+      channel: {
+        ...channelFor(settings, 'group:34007'),
+        task: { requesterId: '23007', rootSessionId: 'root' }
+      }
+    }))
+    const services: any = {
+      agents: {
+        get: (id: string) => agents.get(id),
+        isOwnedBy: (id: string, owner: any) => id === 'child' && owner === agents.get('root')
+      },
+      pxMemoryChannels: { channelBindings: () => rows },
+      subagents: {
+        drainChildren: async () => {
+          await new Promise<void>((done) => setImmediate(done))
+          hooks.get('agent/inbox/inserted')({
+            agent: agents.get('root'),
+            message: {
+              id: 'cancelled-child-notice',
+              source: { kind: 'subagent-settled', senderSessionId: 'child' }
+            }
+          })
+          // Native teardown returns after delivering the notice, before the parent's pre-step.
+          parentWake = new Promise<void>((done, reject) =>
+            setTimeout(() => {
+              const next = async () => {
+                modelCalls++
+                return { kind: 'enter', messages: [] }
+              }
+              const gate = hooks.get('agent/pre-step')
+              Promise.resolve(
+                gate
+                  ? gate(
+                      {
+                        agent: agents.get('root'),
+                        messages: newUserInput ? [{ id: 'new-user', source: { kind: 'user' } }] : []
+                      },
+                      next
+                    )
+                  : next()
+              ).then(() => done(), reject)
+            }, 5)
+          )
+        }
+      }
+    }
+    const tasks = new QqGroupTasks(
+      {
+        get: (name: string) => services[name],
+        on: (name: string, handler: any) => {
+          hooks.set(name, handler)
+          return () => hooks.delete(name)
+        }
+      },
+      settings,
+      () => ({}),
+      () => true,
+      () => {}
+    )
+    try {
+      await tasks.stop('group:34007')
+      await parentWake
+      assert.equal(removed, 1)
+      assert.equal(modelCalls, newUserInput ? 1 : 0)
+      assert.equal(hooks.size, 0, 'temporary stop fences must be removed after settlement')
+    } finally {
+      await tasks.dispose()
+    }
+  })
+}
+
 test('explicit group continuation becomes a new channel task root and delivers to the same group', async (t) => {
   const dir = mkdtempSync(join(tmpdir(), 'px-qq-handoff-'))
   t.after(() => {
@@ -276,10 +476,21 @@ test('explicit group continuation becomes a new channel task root and delivers t
     },
     { seq: 2, time: 3, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } }
   ]
+  const created = new Map<string, any>()
   const host: any = {
     sessionController: {
-      inspect: async () => ({ meta: { cwd: dir, agentPreset: 'standard' }, events }),
-      create: async () => {}
+      inspect: async (id: string) => {
+        if (id === 'source') return { meta: { id, cwd: dir, agentPreset: 'standard' }, events }
+        if (created.has(id)) return created.get(id)
+        throw Object.assign(Error('missing native session'), { code: 'session/not-found' })
+      },
+      create: async (request: any) => {
+        created.set(request.sessionId, {
+          meta: { id: request.sessionId, cwd: request.cwd, agentPreset: request.agentPreset },
+          events: []
+        })
+        return { sessionId: request.sessionId }
+      }
     }
   }
   const id = await createPersonaSession(host, store, 'source', {
@@ -331,7 +542,7 @@ test('explicit group continuation becomes a new channel task root and delivers t
   })
   await new Promise((resolve) => setImmediate(resolve))
   assert.ok(tasks.entries('group:34007').some((row: any) => row.sessionId === id))
-  assert.deepEqual(sent, [['group:34007', 'new-root-answer']])
+  assert.deepEqual(sent, [['group:34007', 'new-root-answer', id]])
   await tasks.dispose()
 })
 

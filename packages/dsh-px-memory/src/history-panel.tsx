@@ -3,6 +3,9 @@ import { requestJson } from '../../shared/client-http'
 
 const kinds: Record<string, string> = {
   user: '用户原话',
+  peer: '人格来信（交流资料）',
+  'peer-reply': '人格回复（建议）',
+  coordination: '协调回执（非独立验证）',
   assistant: '助手历史回答',
   'assistant-interrupted': '助手中断输出（未完成）',
   'tool-call': '工具调用',

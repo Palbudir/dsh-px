@@ -769,6 +769,38 @@ test('driver calls are serialized and a failed load is retried', async () => {
   assert.equal(peak, 1)
 })
 
+test('cancelling a queued desktop call returns without waiting for another session or interrupting it', async () => {
+  let release!: () => void
+  const pending = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const calls: string[] = []
+  const driver = new DesktopDriver(async () => ({
+    callTool: async (name: string) => {
+      calls.push(name)
+      if (name === 'held') await pending
+      return { rawJson: '{"content":[]}' }
+    },
+    shutdown: async () => {}
+  }))
+  const first = driver.call('held', {}, new AbortController().signal, 'owner-a')
+  await new Promise((resolve) => setImmediate(resolve))
+  const stop = new AbortController()
+  const second = driver.call('queued', {}, stop.signal, 'owner-b')
+  const rejection = assert.rejects(second, /cancel queued/)
+  stop.abort(Error('cancel queued'))
+  await rejection
+  assert.deepEqual(calls, ['held'])
+  assert.equal(driver.occupancy().active?.sessionId, 'owner-a')
+  assert.equal(driver.occupancy().queued.length, 0)
+  release()
+  await first
+  await driver.call('new', {}, new AbortController().signal, 'owner-c')
+  assert.deepEqual(calls, ['held', 'new'])
+  assert.equal(driver.occupancy().active, null)
+  await driver.close()
+})
+
 test('browser launches keep files out of the project and never skip the extension consent', () => {
   const base = { headless: false, cli: 'C:/m/cli.js', node: 'node.exe', electron: true, profileDir: 'D:/p' }
   const isolated = browserArgs({ ...base, mode: 'isolated' }, 'T:/out')
@@ -1031,10 +1063,18 @@ function hostFixture(t: any, services: Record<string, unknown> = {}) {
     else process.env.DSH_HOME = old
   })
   const tools = new Map<string, any>(),
-    sections: any[] = []
+    sections: any[] = [],
+    events = new Map<string, Array<(...args: any[]) => void>>()
   let handler: any
   const host: any = {
-    on: () => {},
+    on: (name: string, listener: (...args: any[]) => void) => {
+      events.set(name, [...(events.get(name) ?? []), listener])
+      return () =>
+        events.set(
+          name,
+          (events.get(name) ?? []).filter((fn) => fn !== listener)
+        )
+    },
     effect: (fn: any) => fn(),
     get: (name: string) => services[name],
     connection: { requestRejection: () => undefined },
@@ -1062,8 +1102,95 @@ function hostFixture(t: any, services: Record<string, unknown> = {}) {
     await handler(req, { writeHead: (n: number) => (status = n), end: (v: string) => (json = JSON.parse(v)) })
     return { status, json }
   }
-  return { dir, tools, sections, request }
+  return {
+    dir,
+    tools,
+    sections,
+    request,
+    emit: (name: string, ...args: any[]) => {
+      for (const listener of events.get(name) ?? []) listener(...args)
+    }
+  }
 }
+
+test(
+  'native terminal turn events release idle foreground reservations on abort/error without touching another session',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    const { tools, request, emit } = hostFixture(t)
+    await request('POST', { action: 'settings', revision: 0, desktop: true, desktopForeground: true })
+    const resource = tools.get('computer_desktop_resource')
+    const run = (id: string) => ({
+      agent: { session: { id, header: { id } } },
+      signal: new AbortController().signal
+    })
+    for (const kind of ['aborted', 'error', 'blocked', 'max-tokens', 'completed']) {
+      await resource.execute({ action: 'acquire', duration_ms: 60000 }, run('s1'))
+      assert.equal((await request('GET')).json.status.desktop.foreground.sessionId, 's1')
+      // No normal agent/turn-stopping callback occurs in the native abort/error path.
+      emit('session/event', { id: 's1' }, { type: 'turn/end', data: { reason: { kind } } })
+      assert.equal((await request('GET')).json.status.desktop.foreground, null, kind)
+    }
+    await resource.execute({ action: 'acquire' }, run('s2'))
+    emit('session/event', { id: 's1' }, { type: 'turn/end', data: { reason: { kind: 'aborted' } } })
+    const owner = (await request('GET')).json.status.desktop.foreground
+    assert.equal(owner.sessionId, 's2')
+    await resource.execute({ action: 'release', generation: owner.generation }, run('s2'))
+  }
+)
+
+test(
+  'foreground panel release pauses only its exact owner and releases that owners browser',
+  { skip: process.platform !== 'win32' },
+  async (t) => {
+    const closed: string[] = [],
+      original = BrowserSessions.prototype.close
+    BrowserSessions.prototype.close = async function (owner: string) {
+      closed.push(owner)
+      return original.call(this, owner)
+    }
+    t.after(() => {
+      BrowserSessions.prototype.close = original
+    })
+    const { tools, request } = hostFixture(t)
+    await request('POST', { action: 'settings', revision: 0, desktop: true, desktopForeground: true })
+    const run = (id: string) => ({
+      agent: { session: { id, header: { id } } },
+      signal: new AbortController().signal
+    })
+    const tool = tools.get('computer_desktop_resource')
+    await tool.execute({ action: 'acquire' }, run('owner-a'))
+    const current = (await request('GET')).json.status.desktop.foreground
+    assert.equal(current.sessionId, 'owner-a')
+    assert.equal(
+      (
+        await request('POST', {
+          action: 'release-foreground',
+          owner: 'owner-a',
+          generation: current.generation
+        })
+      ).status,
+      200
+    )
+    assert.deepEqual(closed, ['owner-a'])
+    await assert.rejects(tool.execute({ action: 'status' }, run('owner-a')), /暂停/)
+    await tool.execute({ action: 'acquire' }, run('s1'))
+    const next = (await request('GET')).json.status.desktop.foreground
+    assert.equal(
+      (
+        await request('POST', {
+          action: 'release-foreground',
+          owner: 'owner-a',
+          generation: current.generation
+        })
+      ).status,
+      400
+    )
+    assert.equal((await request('GET')).json.status.desktop.foreground.generation, next.generation)
+    assert.deepEqual(closed, ['owner-a'])
+    await tool.execute({ action: 'release', generation: next.generation }, run('s1'))
+  }
+)
 
 test(
   'tools and guidance appear only after the user enables them, on Windows',

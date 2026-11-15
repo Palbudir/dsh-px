@@ -10,7 +10,7 @@ import { ChannelNotes } from '../packages/dsh-px-memory/src/channel-notes'
 import { messageSource, DEFAULT_QQ_SETTINGS } from '../packages/dsh-px-qq/src/policy'
 
 const signal = () => new AbortController().signal
-function fixture(t: any) {
+function fixture(t: any, provider = 'qq') {
   const root = mkdtempSync(join(tmpdir(), 'px-qq-notes-')),
     storePath = join(root, 'memory.json')
   const store = new MemoryStore(storePath)
@@ -19,7 +19,7 @@ function fixture(t: any) {
   mkdirSync(a, { recursive: true })
   mkdirSync(b, { recursive: true })
   const channel: SessionChannel = {
-    provider: 'qq',
+    provider,
     accountId: '12001',
     conversationId: 'group:34007',
     access: 'public',
@@ -28,6 +28,10 @@ function fixture(t: any) {
   }
   store.bind('old', { channel, locked: true })
   store.bind('new', { channel, locked: true })
+  store.bind('other-channel', {
+    channel: { ...channel, provider: provider === 'qq' ? 'feishu' : 'qq' },
+    locked: true
+  })
   store.bind('other-group', {
     channel: { ...channel, conversationId: 'group:34008', workspace: b },
     locked: true
@@ -38,12 +42,30 @@ function fixture(t: any) {
   })
   const other = store.createPersona('另一个人格')
   store.bind('other-persona', { personaId: other.id, channel, locked: true })
-  const source = messageSource(
+  const qqSource = messageSource(
     { ...DEFAULT_QQ_SETTINGS, accountId: '12001' },
     'group:34007',
     '45009',
     'test-731'
   )
+  const source =
+    provider === 'qq'
+      ? qqSource
+      : {
+          kind: 'plugin:dsh-px-channel',
+          version: 1,
+          provider,
+          accountId: '12001',
+          conversationId: 'group:34007',
+          actorId: '45009',
+          messageId: 'test-731',
+          personaId: store.read().bindings.old.personaId,
+          fingerprint: 'a'.repeat(64),
+          ingressId: 'b'.repeat(64),
+          routeRevision: 1,
+          epoch: 'test',
+          requestId: 'request'
+        }
   const events: any = {
     old: [
       {
@@ -164,6 +186,125 @@ test('native Mnemon conversation notes survive a fresh instance and keep only co
   assert.deepEqual(JSON.parse(JSON.stringify(current)), current)
 })
 
+test('peer conversation observations retain advisory provenance across reopen without granting confirmation weight', async (t) => {
+  const f = fixture(t, 'persona-mail')
+  f.events.old[0].data.source = {
+    kind: 'plugin:dsh-px-persona-mail',
+    version: 1,
+    mailId: 'peer-731',
+    senderPersonaId: 'sender',
+    recipientPersonaId: 'default',
+    sourceSessionId: 'source',
+    sourceSeq: 9,
+    conversationId: 'a'.repeat(64)
+  }
+  const catalog = await f.notes.execute('old', { action: 'catalog' }, signal())
+  const saved = await f.notes.execute(
+    'old',
+    {
+      action: 'save',
+      topic: '交流偏好',
+      text: '另一个人格曾表示偏好详细说明；这只是交流依据。',
+      revision: catalog.revision,
+      evidence: [{ sessionId: 'old', seq: 0 }]
+    },
+    signal()
+  )
+  assert.equal(saved.saved, true)
+  await f.reopen()
+  const recalled = await f.notes.execute('new', { action: 'read', id: saved.note.id }, signal())
+  assert.match(recalled.note.body, /peer-advice-only/)
+  await assert.rejects(
+    f.notes.execute('other-group', { action: 'read', id: saved.note.id }, signal()),
+    /不属于/
+  )
+  await assert.rejects(
+    f.notes.execute(
+      'new',
+      {
+        action: 'feedback',
+        id: saved.note.id,
+        documentRevision: 1,
+        kind: 'confirmed',
+        reason: 'peer agreed'
+      },
+      signal()
+    ),
+    /需由用户/
+  )
+})
+
+test('Feishu notes use native Documents and remain separate from the same IDs on QQ and another persona', async (t) => {
+  const f = fixture(t, 'feishu'),
+    before = await f.notes.execute('old', { action: 'catalog' }, signal())
+  const saved = await f.notes.execute(
+    'old',
+    {
+      action: 'save',
+      topic: '表达偏好',
+      text: 'FEISHU_NOTE_731',
+      revision: before.revision,
+      evidence: [{ sessionId: 'old', seq: 1 }]
+    },
+    signal()
+  )
+  await f.reopen()
+  const current = await f.notes.execute('new', { action: 'read', id: saved.note.id }, signal())
+  assert.match(current.note.body, /FEISHU_NOTE_731/)
+  const found = await f.notes.execute('new', { action: 'search', query: 'FEISHU_NOTE_731' }, signal())
+  assert.equal(found.notes.length, 1)
+  for (const target of ['other-channel', 'other-persona', 'other-group']) {
+    assert.equal((await f.notes.execute(target, { action: 'catalog' }, signal())).total, 0, target)
+    await assert.rejects(f.notes.execute(target, { action: 'read', id: saved.note.id }, signal()), /不属于/)
+  }
+})
+
+test('human conversation feedback, correction and archive preserve evidence and reject stale or model-forged edits', async (t) => {
+  const f = fixture(t),
+    before = await f.notes.execute('old', { action: 'catalog' }, signal())
+  const original = await f.notes.execute(
+    'old',
+    {
+      action: 'save',
+      topic: '偏好',
+      text: 'OLD_INFERENCE',
+      revision: before.revision,
+      evidence: [{ sessionId: 'old', seq: 0 }]
+    },
+    signal()
+  )
+  const ref = { id: original.note.id, documentRevision: original.note.revision }
+  const disputed = await f.notes.execute(
+    'new',
+    { action: 'feedback', ...ref, kind: 'disputed', reason: '推断不准确' },
+    signal(),
+    'human'
+  )
+  assert.equal(disputed.note.current, false)
+  assert.equal((await f.notes.execute('new', { action: 'read', id: ref.id }, signal())).note.body, null)
+  const draft = { action: 'correct' as const, ...ref, revision: disputed.revision, text: 'HUMAN_CORRECTED' }
+  await assert.rejects(f.notes.execute('new', draft, signal()), /用户/)
+  const corrected = await f.notes.execute('new', draft, signal(), 'human')
+  assert.match(corrected.note.body, /HUMAN_CORRECTED/)
+  assert.equal(JSON.parse(corrected.note.body).evidence[0].sessionId, 'old')
+  assert.equal(corrected.note.current, true)
+  assert.equal(corrected.note.feedback.count, 0)
+  await assert.rejects(f.notes.execute('new', draft, signal(), 'human'), /已经变化/)
+  await f.notes.execute(
+    'new',
+    {
+      action: 'archive',
+      id: ref.id,
+      revision: corrected.revision,
+      documentRevision: corrected.note.revision
+    },
+    signal(),
+    'human'
+  )
+  assert.equal((await f.notes.execute('new', { action: 'catalog' }, signal())).total, 0)
+  await assert.rejects(f.notes.execute('new', draft, signal(), 'human'), /不属于/)
+})
+
 test('unrelated shared documents cannot hide conversation memories and every matching note has a reachable page', async (t) => {
   const f = fixture(t)
   for (let i = 0; i < 10; i++) {
@@ -202,6 +343,28 @@ test('unrelated shared documents cannot hide conversation memories and every mat
   assert.equal(new Set([...first.notes, ...second.notes].map((n) => n.id)).size, 10)
   const catalog = await f.bank.catalog(caller, 'project')
   await f.bank.write(caller, 'project', { key: '改变目录', body: 'changed', revision: catalog.revision })
+  const unaffected = await f.notes.execute(
+    'new',
+    { action: 'search', query: '记忆目标', offset: first.nextOffset, revision: first.revision },
+    signal()
+  )
+  assert.equal(
+    unaffected.notes.length,
+    2,
+    'shared knowledge edits do not change the persona conversation namespace'
+  )
+  const ownCatalog = await f.notes.execute('old', { action: 'catalog' }, signal())
+  await f.notes.execute(
+    'old',
+    {
+      action: 'save',
+      topic: '新记忆目标',
+      text: '记忆目录变化',
+      revision: ownCatalog.revision,
+      evidence: [{ sessionId: 'old', seq: 1 }]
+    },
+    signal()
+  )
   await assert.rejects(
     f.notes.execute(
       'new',
@@ -244,9 +407,197 @@ test('group and persona boundaries survive crafted IDs and private evidence atte
     assert.equal((await f.notes.execute(id, { action: 'catalog' }, signal())).total, 0)
     await assert.rejects(f.notes.execute(id, { action: 'read', id: saved.note.id }, signal()), /不属于/)
   }
-  await assert.rejects(f.notes.execute('owner', { action: 'catalog' }, signal()), /公共 QQ/)
+  const other = { sessionId: 'other-persona', project: f.root }
+  assert.equal((await f.bank.search(other, 'project', '简短')).results.length, 0)
+  await assert.rejects(f.bank.read(other, 'project', saved.note.id, true), /不在当前可见范围/)
+  await assert.rejects(f.notes.execute('owner', { action: 'catalog' }, signal()), /公共渠道/)
   assert.equal(f.store.read().personas[0].instructions, '')
   assert.equal(f.store.read().bindings.old.channel?.access, 'public')
+})
+
+test(
+  'native ranked conversation search finds old reinforced memories beyond the native result cap and fences feedback pagination',
+  { timeout: 30000 },
+  async (t) => {
+    const f = fixture(t),
+      ids: string[] = []
+    for (let i = 0; i < 64; i++) {
+      const catalog = await f.notes.execute('old', { action: 'catalog' }, signal())
+      const result = await f.notes.execute(
+        'old',
+        {
+          action: 'save',
+          topic: 'rank-target-' + i,
+          text: '同样相关的 rank-target 记忆。',
+          revision: catalog.revision,
+          evidence: [{ sessionId: 'old', seq: 1 }]
+        },
+        signal()
+      )
+      ids.push(result.note.id)
+    }
+    await f.notes.execute(
+      'old',
+      { action: 'feedback', id: ids[0], documentRevision: 1, kind: 'confirmed', reason: '旧条目仍然适用' },
+      signal(),
+      'human'
+    )
+    const first = await f.notes.execute('new', { action: 'search', query: 'rank-target' }, signal())
+    assert.equal(
+      first.notes[0].id,
+      ids[0],
+      'feedback must influence the whole namespace, not just the first native result batch'
+    )
+    assert.equal(first.notes[0].feedback.confirmed, true)
+    const found = [...first.notes.map((row: any) => row.id)]
+    let page = first
+    while (page.nextOffset !== null) {
+      page = await f.notes.execute(
+        'new',
+        {
+          action: 'search',
+          query: 'rank-target',
+          offset: page.nextOffset,
+          revision: page.revision,
+          cursor: page.cursor
+        },
+        signal()
+      )
+      found.push(...page.notes.map((row: any) => row.id))
+    }
+    assert.equal(found.length, 64)
+    assert.equal(new Set(found).size, 64)
+    const repeat = await f.notes.execute(
+      'new',
+      {
+        action: 'search',
+        query: 'rank-target',
+        offset: first.nextOffset,
+        revision: first.revision,
+        cursor: first.cursor
+      },
+      signal()
+    )
+    assert.deepEqual(
+      repeat.notes.map((row: any) => row.id),
+      found.slice(8, 16)
+    )
+    await f.notes.execute(
+      'old',
+      { action: 'feedback', id: ids[0], documentRevision: 1, kind: 'disputed', reason: '发现与新要求冲突' },
+      signal(),
+      'human'
+    )
+    await assert.rejects(
+      f.notes.execute(
+        'new',
+        {
+          action: 'search',
+          query: 'rank-target',
+          offset: first.nextOffset,
+          revision: first.revision,
+          cursor: first.cursor
+        },
+        signal()
+      ),
+      /目录已变化/
+    )
+    const current = await f.notes.execute('new', { action: 'search', query: 'rank-target' }, signal())
+    assert.ok(current.notes.every((row: any) => row.id !== ids[0]))
+    const other = await f.notes.execute('other-persona', { action: 'search', query: 'rank-target' }, signal())
+    assert.deepEqual(other.notes, [])
+  }
+)
+
+test('legacy generated notes migrate privately, preserve old IDs, and explicit shared snapshots remain valid until correction', async (t) => {
+  const f = fixture(t),
+    caller = { sessionId: 'old', project: f.root, actor: 'human' as const }
+  const bank: any = f.bank,
+    ns = bank.namespace(caller, 'project'),
+    snapshot = await bank.call(ns, 'snapshot')
+  const body = JSON.stringify({
+    kind: 'conversation-observation',
+    version: 1,
+    observation: 'LEGACY_PRIVATE_731',
+    evidence: [{ sessionId: 'old', seq: 0 }]
+  })
+  const envelope =
+    '<!-- dsh-px-knowledge:' +
+    JSON.stringify({ schema: 1, sources: [], author: { kind: 'human', at: new Date().toISOString() } }) +
+    ' -->\n'
+  const legacy = await bank.call(
+    ns,
+    'mutate',
+    { action: 'create', title: 'QQ 经历 / default / 旧记忆', content: envelope + body },
+    snapshot.revision
+  )
+  const source = legacy.value.document
+  const globalNs = bank.namespace(caller, 'global'),
+    global = await bank.call(globalNs, 'snapshot')
+  const sharedEnvelope =
+    '<!-- dsh-px-knowledge:' +
+    JSON.stringify({
+      schema: 1,
+      sources: [],
+      origin: { ...ns, id: source.id, revision: source.revision, contentHash: source.contentHash },
+      sharedBy: { kind: 'human', at: new Date().toISOString() }
+    }) +
+    ' -->\n'
+  const shared = await bank.call(
+    globalNs,
+    'mutate',
+    { action: 'create', title: source.title, content: sharedEnvelope + body },
+    global.revision
+  )
+  const other = { sessionId: 'other-persona', project: f.root }
+  assert.equal((await f.bank.catalog(other, 'project')).documents.length, 0)
+  await assert.rejects(f.bank.read(other, 'project', source.id, true), /人格交流记忆/)
+  assert.equal((await f.bank.read(other, 'global', shared.value.document.id)).document.current, true)
+  const imported = await f.notes.execute('new', { action: 'catalog' }, signal())
+  assert.equal(imported.total, 1)
+  const migrated = await f.notes.execute('new', { action: 'read', id: source.id }, signal())
+  assert.match(migrated.note.body, /LEGACY_PRIVATE_731/)
+  assert.equal((await f.bank.read(other, 'global', shared.value.document.id)).document.current, true)
+  await f.reopen()
+  assert.match(
+    (await f.notes.execute('new', { action: 'read', id: source.id }, signal())).note.body,
+    /LEGACY_PRIVATE_731/
+  )
+  const current = await f.notes.execute('new', { action: 'catalog' }, signal())
+  await f.notes.execute(
+    'new',
+    {
+      action: 'save',
+      topic: '旧记忆',
+      text: 'CORRECTED_PRIVATE_926',
+      revision: current.revision,
+      evidence: [{ sessionId: 'old', seq: 1 }]
+    },
+    signal()
+  )
+  assert.match(
+    (await f.notes.execute('new', { action: 'read', id: source.id }, signal())).note.body,
+    /CORRECTED_PRIVATE_926/
+  )
+  const stale = await f.bank.read(other, 'global', shared.value.document.id)
+  assert.equal(stale.document.current, false)
+  assert.equal(stale.document.body, undefined)
+  assert.match(
+    (await f.bank.read(other, 'global', shared.value.document.id, true)).document.body,
+    /LEGACY_PRIVATE_731/
+  )
+  await assert.rejects(f.bank.read(other, 'project', source.id, true), /人格交流记忆/)
+  const sharedNow = await f.bank.catalog(other, 'global')
+  const editedShared = await f.bank.write({ ...other, actor: 'human' }, 'global', {
+    key: source.title,
+    body: 'EXPLICIT_SHARED_CORRECTION',
+    revision: sharedNow.revision
+  })
+  assert.equal(editedShared.document.current, true)
+  assert.equal(
+    (await f.bank.read(other, 'global', shared.value.document.id)).document.body,
+    'EXPLICIT_SHARED_CORRECTION'
+  )
 })
 
 test('canceled or disabled note operations do not write; remembered instructions never mutate persona configuration', async (t) => {
@@ -288,4 +639,9 @@ test('canceled or disabled note operations do not write; remembered instructions
     f.root
   )
   await assert.rejects(f.notes.execute('old', { action: 'catalog' }, signal()), /记忆已关闭/)
+  await assert.rejects(
+    f.notes.execute('old', { action: 'catalog', actor: 'human' } as any, signal()),
+    /记忆已关闭/
+  )
+  assert.equal((await f.notes.execute('old', { action: 'catalog' }, signal(), 'human')).total, 1)
 })

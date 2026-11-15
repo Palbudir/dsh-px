@@ -1,6 +1,6 @@
 {
   "name": "dsh-px-workbench",
-  "version": "0.8.2-alpha.1",
+  "version": "0.9.0-alpha.1",
   "private": true,
   "type": "module",
   "description": "DSH-PX 运行与帮助：运行检查、插件清单与活动快照",
@@ -20,6 +20,11 @@
     "icon.svg"
   ],
   "license": "MIT",
+  "dependencies": {
+    "@deepseek-ai/dsh-agent": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-llm": "0.2.1-rc.3",
+    "@deepseek-ai/dsh-session": "0.2.1-rc.3"
+  },
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
@@ -29,6 +34,8 @@
       "inject": [
         "@deepseek-ai/dsh-client-ui-settings",
         "@deepseek-ai/dsh-client-ui-slots",
+        "@deepseek-ai/dsh-api-session-controller",
+        "@deepseek-ai/dsh-client-ui-workspace",
         "@deepseek-ai/dsh-client-locale"
       ]
     }

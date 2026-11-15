@@ -54,7 +54,10 @@ export function installPublicQqAgent(ctx: any): void {
           '你是 ' +
           persona.name +
           '，正在通过 QQ 与用户交流。\n' +
-          renderPersonaExpression(persona.expression) +
+          renderPersonaExpression(
+            persona.expression,
+            get(ctx, 'pxMemoryChannels')?.expressionContext?.(agent)
+          ) +
           '\n' +
           binding.channel.publicInstructions +
           '\n' +

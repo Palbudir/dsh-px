@@ -34,6 +34,10 @@ export interface NativeWork {
   source: 'live' | 'stored'
   goal: NativeValue<NativeGoal>
   team: NativeValue<NativeTeam>
+  jobs: NativeValue<{
+    rows: Array<{ id: string; kind: string; status: string; label: string; startedAt: number }>
+    truncated: boolean
+  }>
 }
 interface StoredCut {
   header: { id: string; parentSession?: string }
@@ -203,11 +207,33 @@ export async function readNativeWork(host: any, sessionId: string, suppliedAgent
     sessionId,
     source: agent ? 'live' : 'stored',
     goal: unavailable('原生目标服务未启用'),
-    team: unavailable('智能体团队未启用')
+    team: unavailable('智能体团队未启用'),
+    jobs: unavailable('尚未观察到当前会话的原生作业服务')
   }
   if (agent) {
     const goals = service(host, 'goals'),
       teams = service(host, 'agentTeams')
+    const jobs = service(agent.ctx ?? host, 'jobs')
+    if (jobs?.list) {
+      try {
+        const owned = jobs.list(sessionId).filter((job: any) => job.owner === sessionId)
+        result.jobs = {
+          status: 'available',
+          value: {
+            rows: owned.slice(-50).map((job: any) => ({
+              id: job.id,
+              kind: job.kind,
+              status: job.status,
+              label: job.label,
+              startedAt: job.startedAt
+            })),
+            truncated: owned.length > 50
+          }
+        }
+      } catch (error) {
+        result.jobs = failure(error)
+      }
+    }
     if (goals?.get) {
       try {
         result.goal = { status: 'available', value: goalValue(goals.get(agent), true) }

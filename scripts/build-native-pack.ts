@@ -16,6 +16,7 @@ import { buildDistribution } from './pack-distribution'
 import { stageComputerDriver } from './stage-computer-driver'
 import { validCommunityList, type CommunityBundle } from '../src/shared/distribution'
 import { stageQqCommunity } from './stage-qq-community'
+import { stageImCommunity } from './stage-im-community'
 
 const root = repoRoot()
 const sourceCommit = execFileSync('git', ['rev-parse', 'HEAD'], {
@@ -161,6 +162,8 @@ const community = await Promise.all(
     if ('sha512-' + createHash('sha512').update(archive).digest('base64') !== entry.integrity)
       throw Error(`Community archive integrity mismatch: ${entry.name}`)
     if (entry.compatibility !== undefined) {
+      if (entry.name === '@xmanrui/dsh-im' && entry.compatibility === 'im-mode-v1')
+        return stageImCommunity(archive, join(output, 'im-community-source'))
       if (entry.name !== 'dsh-onebot-qq' || entry.compatibility !== 'qq-v1')
         throw Error('Unknown community compatibility adapter')
       return stageQqCommunity(archive, join(output, 'qq-community-source'))

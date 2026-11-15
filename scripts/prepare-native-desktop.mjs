@@ -9,6 +9,13 @@ import { releaseAssetNames } from './release-version.mjs'
 import { nsisAppGuid } from './nsis-guid.mjs'
 import { validDistribution, compositionMembers, componentFile } from '../src/shared/distribution.ts'
 import { patchNativeModelGuard, patchNativeCompactionBudget } from '../src/shared/native-model-guard.ts'
+import { patchNativeSkillCatalog } from '../src/shared/native-skill-catalog.ts'
+import { patchNativeHistoryAuthorization } from '../src/shared/native-history-authorization.ts'
+import {
+  patchNativePersonaController,
+  patchNativePersonaSessionClient,
+  patchNativePersonaWorkspaceClient
+} from '../src/shared/native-persona-navigation.ts'
 import { DESKTOP_PNPM_ENTRY } from '../src/shared/native-desktop-runtime.ts'
 import { applyRuntimeDependencyOverrides } from './native-runtime-dependencies.mjs'
 const root = fileURLToPath(new URL('../', import.meta.url))
@@ -166,14 +173,45 @@ const runtimeInventory = JSON.parse(readFileSync(join(nativeRuntime, 'desktop-ru
 const modelControllerRelative = 'node_modules/@deepseek-ai/dsh-api-session-controller/lib/index.js'
 writeFileSync(
   join(pxRuntime, modelControllerRelative),
-  patchNativeModelGuard(readFileSync(join(nativeRuntime, modelControllerRelative), 'utf8'))
+  patchNativePersonaController(
+    patchNativeModelGuard(readFileSync(join(nativeRuntime, modelControllerRelative), 'utf8'))
+  )
+)
+const personaSessionClientRelative = 'node_modules/@deepseek-ai/dsh-api-session-controller/lib/client.js'
+const personaWorkspaceClientRelative = 'node_modules/@deepseek-ai/dsh-client-ui-workspace/lib/client.js'
+writeFileSync(
+  join(pxRuntime, personaSessionClientRelative),
+  patchNativePersonaSessionClient(readFileSync(join(nativeRuntime, personaSessionClientRelative), 'utf8'))
+)
+writeFileSync(
+  join(pxRuntime, personaWorkspaceClientRelative),
+  patchNativePersonaWorkspaceClient(readFileSync(join(nativeRuntime, personaWorkspaceClientRelative), 'utf8'))
 )
 const compactionRelative = 'node_modules/@deepseek-ai/dsh-compaction-basic/lib/index.js'
 writeFileSync(
   join(pxRuntime, compactionRelative),
   patchNativeCompactionBudget(readFileSync(join(nativeRuntime, compactionRelative), 'utf8'))
 )
-for (const path of [hostRelative, helperRelative, modelControllerRelative, compactionRelative]) {
+const skillClientRelative = 'node_modules/@deepseek-ai/dsh-client-ui-skill/lib/client.js'
+writeFileSync(
+  join(pxRuntime, skillClientRelative),
+  patchNativeSkillCatalog(readFileSync(join(nativeRuntime, skillClientRelative), 'utf8'))
+)
+const historyToolsRelative = 'node_modules/@deepseek-ai/dsh-tool-session-query/lib/index.js'
+writeFileSync(
+  join(pxRuntime, historyToolsRelative),
+  patchNativeHistoryAuthorization(readFileSync(join(nativeRuntime, historyToolsRelative), 'utf8'))
+)
+for (const path of [
+  hostRelative,
+  helperRelative,
+  modelControllerRelative,
+  personaSessionClientRelative,
+  personaWorkspaceClientRelative,
+  compactionRelative,
+  skillClientRelative,
+  historyToolsRelative
+]) {
   const bytes = readFileSync(join(pxRuntime, path)),
     record = {
       path,

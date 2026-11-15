@@ -22,8 +22,29 @@ interface View {
   }
   status: {
     driverLoaded: boolean
+    desktop?: {
+      foreground?: {
+        sessionId: string
+        generation: string
+        expiresAt: number
+        activeCalls: number
+        releasing: boolean
+      } | null
+      active: { sessionId?: string; operation: string; since: number } | null
+      queued: Array<{ sessionId?: string }>
+    }
     browserOpen: boolean
     browserHeldElsewhere: boolean
+    browsers?: Array<{
+      sessionId: string
+      generation: string
+      mode: string
+      phase: string
+      activeCalls: number
+      title?: string
+      persona?: string
+      error?: string
+    }>
     edgeExtension: boolean
     platform: string
   }
@@ -229,17 +250,76 @@ function ComputerPanel({ sessionId, visible }: { sessionId: string; visible: boo
                 停止并暂停本会话
               </button>
             )}
-            {view.status.browserHeldElsewhere && (
-              <button
-                style={controlStyle}
-                disabled={busy}
-                onClick={() => void act({ action: 'release-browser' })}
-              >
-                释放被其他会话占用的浏览器
-              </button>
-            )}
           </div>
           {view.session.paused && <p role="status">已暂停：agent 在本会话中的电脑和浏览器操作都会被拒绝。</p>}
+          {view.status.desktop?.active && (
+            <p role="status">
+              {view.status.desktop.active.sessionId === sessionId ? '当前会话' : '其他会话'}正在使用桌面驱动；
+              另有 {view.status.desktop.queued.length} 项调用排队。取消排队不会中断正在操作的会话。
+            </p>
+          )}
+          {view.status.desktop?.foreground && (
+            <div className="px-card" role="status">
+              <strong>前台键鼠占用</strong>
+              <p>
+                {view.status.desktop.foreground.sessionId === sessionId ? '当前会话' : '其他会话'}
+                {view.status.desktop.foreground.releasing
+                  ? '正在释放；等待已发出的动作结束。'
+                  : '保留连续操作；到期或本轮结束后释放。'}{' '}
+                截止 {new Date(view.status.desktop.foreground.expiresAt).toLocaleTimeString()}。
+                后台查看与独立浏览器不受此占用限制。
+              </p>
+              <button
+                style={controlStyle}
+                disabled={busy || view.status.desktop.foreground.releasing}
+                onClick={() =>
+                  void act({
+                    action: 'release-foreground',
+                    owner: view.status.desktop!.foreground!.sessionId,
+                    generation: view.status.desktop!.foreground!.generation
+                  })
+                }
+              >
+                停止占用并暂停其电脑操作
+              </button>
+            </div>
+          )}
+          {!!view.status.browsers?.length && (
+            <div className="px-card">
+              <strong>浏览器占用</strong>
+              <ul>
+                {view.status.browsers.map((owner) => (
+                  <li key={owner.generation}>
+                    {owner.persona ? `${owner.persona} · ` : ''}
+                    {owner.title ?? (owner.sessionId === sessionId ? '当前会话' : '其他会话')}
+                    {' · '}
+                    {BROWSER_LABEL[owner.mode] ?? owner.mode}
+                    {' · '}
+                    {{
+                      opening: '正在连接',
+                      ready: owner.activeCalls ? '正在操作' : '保持连接',
+                      closing: '正在释放',
+                      'close-failed': '释放失败'
+                    }[owner.phase] ?? owner.phase}{' '}
+                    <button
+                      style={controlStyle}
+                      disabled={busy || owner.phase === 'closing'}
+                      onClick={() =>
+                        void act({
+                          action: 'release-browser',
+                          owner: owner.sessionId,
+                          generation: owner.generation
+                        })
+                      }
+                    >
+                      {owner.phase === 'close-failed' ? '重试释放' : '释放此连接'}
+                    </button>
+                    {owner.error && <p role="alert">{owner.error}</p>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
           {!!view.session.foreground?.length && (
             <div className="px-card">
               <strong>本会话可前台控制的窗口</strong>

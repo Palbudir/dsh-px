@@ -17,6 +17,7 @@ import {
 } from './policy'
 import { ComputerUseRefusal, UNTRUSTED, type Image } from './runtime'
 import { boundedInputPlan } from './bounded-input'
+import { ForegroundResource } from './foreground-resource'
 
 /** The subset of `@trycua/cua-driver` this module uses. */
 export interface DriverLike {
@@ -41,10 +42,17 @@ export interface DesktopCaller {
 
 /** Serializes every driver call; desktop input from two sessions must not interleave. */
 export class DesktopDriver {
+  readonly foreground = new ForegroundResource()
+  private inputRevision = 0
+  private lastInputOwner?: string
+  private readonly observations = new Map<string, number>()
+  private readonly needsObservation = new Set<string>()
   private driver: Promise<DriverLike> | undefined
   private tail: Promise<unknown> = Promise.resolve()
   private epoch = 0
   private scopeEpochs = new Map<string, number>()
+  private readonly queued = new Map<symbol, { scope?: string; name: string; at: number }>()
+  private active?: { token: symbol; scope?: string; name: string; at: number }
   constructor(private readonly load: LoadDriver) {}
 
   call(
@@ -53,29 +61,98 @@ export class DesktopDriver {
     signal: AbortSignal,
     scope?: string
   ): Promise<DriverResult> {
+    if (signal.aborted) return Promise.reject(signal.reason ?? Error('桌面操作已取消'))
+    // The validated bounded-input plan omits delivery_mode on the wire, but always uses foreground input.
+    const foreground =
+      args.delivery_mode === 'foreground' ||
+      ['bring_to_front', 'invoke_menu', 'launch_app', 'bounded_input'].includes(name)
+    const reservation = foreground && scope ? this.foreground.reserve(scope) : undefined
     const epoch = this.epoch
     const scopeEpoch = scope ? (this.scopeEpochs.get(scope) ?? 0) : 0
+    const token = Symbol('desktop-call')
+    this.queued.set(token, { scope, name, at: Date.now() })
+    let rejectQueued!: (reason: unknown) => void
+    const cancelled = new Promise<never>((_, reject) => {
+      rejectQueued = reject
+    })
+    const abortQueued = () => {
+      if (!this.queued.delete(token)) return
+      if (reservation) this.foreground.cancelOwner(reservation.sessionId, reservation.generation)
+      signal.removeEventListener('abort', abortQueued)
+      rejectQueued(signal.reason ?? Error('排队中的桌面操作已取消，未发送'))
+    }
+    signal.addEventListener('abort', abortQueued, { once: true })
     const run = this.tail.then(async () => {
+      this.queued.delete(token)
+      signal.removeEventListener('abort', abortQueued)
       signal.throwIfAborted()
       if (epoch !== this.epoch) throw new Error('驱动已关闭，已排队的动作未执行；请重新观察后发起')
       if (scope && name !== '__px_close_scope' && scopeEpoch !== (this.scopeEpochs.get(scope) ?? 0))
         throw new Error('本会话的控制已结束或恢复，原排队动作未执行；请重新观察后发起')
-      this.driver ??= this.load().catch((error) => {
-        this.driver = undefined
-        throw new Error(`无法加载 Cua Driver：${error instanceof Error ? error.message : String(error)}`)
-      })
-      const driver = await this.driver
-      // Cua keeps explicit input-session tombstones across SDK connections. Reconnecting alone
-      // cannot reuse the ended px-* label, including for the first read after a panel resume.
-      const currentArgs =
-        scopeEpoch > 0 && typeof args.session === 'string'
-          ? { ...args, session: `${args.session}-r${scopeEpoch}` }
-          : args
-      const raw = await driver.callTool(name, JSON.stringify(currentArgs), { signal, scope })
-      return JSON.parse(raw.rawJson) as DriverResult
+      this.active = { token, scope, name, at: Date.now() }
+      let entered = false
+      try {
+        if (reservation) {
+          this.foreground.enter(reservation.sessionId, reservation.generation)
+          entered = true
+          if (
+            this.lastInputOwner &&
+            this.lastInputOwner !== scope &&
+            this.observations.get(scope!) !== this.inputRevision
+          )
+            this.needsObservation.add(scope!)
+          if (!['bring_to_front', 'launch_app'].includes(name) && this.needsObservation.has(scope!))
+            throw new ComputerUseRefusal('其他活动已使用前台；请重新观察窗口，不复用旧截图或元素编号')
+        }
+        this.driver ??= this.load().catch((error) => {
+          this.driver = undefined
+          throw new Error(`无法加载 Cua Driver：${error instanceof Error ? error.message : String(error)}`)
+        })
+        const driver = await this.driver
+        signal.throwIfAborted()
+        if (reservation) {
+          this.foreground.assertCurrent(reservation.sessionId, reservation.generation)
+          for (const observer of this.observations.keys())
+            if (observer !== scope) this.needsObservation.add(observer)
+          this.inputRevision++
+          this.lastInputOwner = scope
+        }
+        // Cua keeps explicit input-session tombstones across SDK connections. Reconnecting alone
+        // cannot reuse the ended px-* label, including for the first read after a panel resume.
+        const currentArgs =
+          scopeEpoch > 0 && typeof args.session === 'string'
+            ? { ...args, session: `${args.session}-r${scopeEpoch}` }
+            : args
+        const raw = await driver.callTool(name, JSON.stringify(currentArgs), { signal, scope })
+        const result = JSON.parse(raw.rawJson) as DriverResult
+        if (scope && name === 'get_window_state' && !result.isError) {
+          this.observations.set(scope, this.inputRevision)
+          this.needsObservation.delete(scope)
+        }
+        return result
+      } finally {
+        if (entered && reservation) this.foreground.leave(reservation.sessionId, reservation.generation)
+        if (signal.aborted && reservation)
+          this.foreground.cancelOwner(reservation.sessionId, reservation.generation)
+        if (this.active?.token === token) this.active = undefined
+      }
     })
     this.tail = run.catch(() => undefined)
-    return run
+    return Promise.race([run, cancelled])
+  }
+
+  occupancy() {
+    return {
+      foreground: this.foreground.snapshot(),
+      active: this.active
+        ? { sessionId: this.active.scope, operation: this.active.name, since: this.active.at }
+        : null,
+      queued: [...this.queued.values()].map((row) => ({
+        sessionId: row.scope,
+        operation: row.name,
+        since: row.at
+      }))
+    }
   }
 
   get loaded(): boolean {
@@ -85,6 +162,9 @@ export class DesktopDriver {
     return { call: (name, args, signal) => this.call(name, args, signal, scope) }
   }
   async releaseSession(scope: string): Promise<void> {
+    this.foreground.cancelOwner(scope)
+    this.observations.delete(scope)
+    this.needsObservation.delete(scope)
     // Invalidate queued work before closing the old connection. Only an explicit release/resume
     // advances this identity; an expired call is never automatically retried or revived.
     this.scopeEpochs.set(scope, (this.scopeEpochs.get(scope) ?? 0) + 1)
@@ -92,6 +172,9 @@ export class DesktopDriver {
   }
 
   async close(): Promise<void> {
+    this.foreground.reset()
+    this.observations.clear()
+    this.needsObservation.clear()
     const pending = this.driver
     const calls = this.tail
     this.epoch++

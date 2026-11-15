@@ -3,6 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { createHash } from 'node:crypto'
 import { qqId, QqError } from './policy'
+import { parsePersonaRoutes, type QqPersonaRouteState } from './persona-routes'
 import {
   parseAttention,
   validAttentionChat,
@@ -80,6 +81,25 @@ export class QqAttentionInbox {
   close(): void {
     this.db.close()
   }
+  personaRoutes(): QqPersonaRouteState {
+    const row = this.db.prepare('SELECT value FROM inbox_meta WHERE key=?').get('persona-routes')
+    return parsePersonaRoutes(row ? JSON.parse(String(row.value)) : undefined)
+  }
+  savePersonaRoutes(expectedRevision: number, state: QqPersonaRouteState): void {
+    const next = parsePersonaRoutes(state)
+    this.db.exec('BEGIN IMMEDIATE')
+    try {
+      if (this.personaRoutes().revision !== expectedRevision || next.revision !== expectedRevision + 1)
+        throw new QqError('QQ 人格路由已变化，请刷新后重试', 409)
+      this.db
+        .prepare('INSERT OR REPLACE INTO inbox_meta(key,value) VALUES (?,?)')
+        .run('persona-routes', JSON.stringify(next))
+      this.db.exec('COMMIT')
+    } catch (error) {
+      this.db.exec('ROLLBACK')
+      throw error
+    }
+  }
   preferences(fallback: QqAttentionSettings): { revision: number; settings: QqAttentionSettings } {
     const row = this.db.prepare('SELECT value FROM inbox_meta WHERE key=?').get('attention')
     if (!row) return { revision: 0, settings: parseAttention(fallback) }
@@ -110,6 +130,24 @@ export class QqAttentionInbox {
       .prepare('SELECT DISTINCT chat FROM messages')
       .all()
       .map((row) => String(row.chat))
+  }
+  routePendingCount(chatId: string): number {
+    if (!validAttentionChat(chatId)) throw new QqError('QQ 聊天标识无效')
+    return Number(
+      this.db
+        .prepare(
+          "SELECT count(*) AS count FROM messages WHERE chat=? AND phase IN ('received','dispatching','admitted','uncertain')"
+        )
+        .get(chatId)?.count ?? 0
+    )
+  }
+  stopBeforeRouteChange(chatId: string): void {
+    if (!validAttentionChat(chatId)) throw new QqError('QQ 聊天标识无效')
+    this.db
+      .prepare(
+        "UPDATE messages SET phase='cancelled' WHERE chat=? AND phase IN ('received','dispatching','admitted','uncertain')"
+      )
+      .run(chatId)
   }
   setLabels(kind: 'group' | 'private', rows: readonly any[]): void {
     this.db.exec('BEGIN IMMEDIATE')

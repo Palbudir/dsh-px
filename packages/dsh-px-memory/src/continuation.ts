@@ -1,6 +1,7 @@
 import { MemoryError, type MemoryStore, type Handoff } from './store'
 import { historyRecord, service, type HistoryEvent, type HistoryRecord } from './history'
 import { conversationalSource } from '../../shared/channel-source'
+import { creationSessionId, ownedCreationRequest, createOwnedNativeSession } from './owned-session'
 
 /** Collapse retries while a native creation/selection is in flight; persisted bindings handle later retries. */
 export function continuationRequests() {
@@ -43,7 +44,11 @@ export function handoffFrom(events: readonly HistoryEvent[], sessionId: string):
     if (['tool/call', 'tool/ptc-dispatch-start'].includes(e.type) && typeof d.name === 'string')
       calls.set(d.callId ?? d.subCallId, d.name)
     const row = historyRecord(e, (id: string) => calls.get(id))
-    if (row && ['user', 'assistant', 'ledger', 'native-state'].includes(row.kind)) rows.push(row)
+    if (
+      row &&
+      ['user', 'assistant', 'ledger', 'native-state', 'peer', 'peer-reply', 'coordination'].includes(row.kind)
+    )
+      rows.push(row)
   }
   const last = (kind: string, n: number) =>
     rows
@@ -62,7 +67,9 @@ export function handoffFrom(events: readonly HistoryEvent[], sessionId: string):
     latestNativeStates: last('native-state', 3),
     ledger: last('ledger', 1),
     requests: last('user', 2),
-    reply: last('assistant', 1)
+    reply: last('assistant', 1),
+    peerAdvice: [...last('peer', 1), ...last('peer-reply', 1)],
+    coordinationReceipts: last('coordination', 2)
   }
   let summary = JSON.stringify(excerpt)
   while (summary.length > 12000) {
@@ -70,7 +77,9 @@ export function handoffFrom(events: readonly HistoryEvent[], sessionId: string):
       ...excerpt.latestNativeStates,
       ...excerpt.ledger,
       ...excerpt.requests,
-      ...excerpt.reply
+      ...excerpt.reply,
+      ...excerpt.peerAdvice,
+      ...excerpt.coordinationReceipts
     ].sort((a, b) => b.text.length - a.text.length)[0]
     largest.text = largest.text.slice(0, Math.floor(largest.text.length / 2))
     largest.truncated = true
@@ -85,11 +94,23 @@ export async function createPersonaSession(
   args: any,
   signal?: AbortSignal
 ): Promise<string> {
-  if (
-    typeof args.requestId !== 'string' ||
-    !/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(args.requestId)
+  signal?.throwIfAborted()
+  const id = creationSessionId(args.requestId)
+  return ownedCreationRequest(
+    store,
+    id,
+    JSON.stringify(['continuation', sourceId, args.personaId, args.handoff]),
+    () => createPersonaAttempt(host, store, sourceId, args, id, signal)
   )
-    throw new MemoryError('缺少有效的新会话请求标识')
+}
+async function createPersonaAttempt(
+  host: any,
+  store: MemoryStore,
+  sourceId: string,
+  args: any,
+  id: string,
+  signal?: AbortSignal
+): Promise<string> {
   if (typeof args.personaId !== 'string') throw new MemoryError('请选择人格')
   if (typeof args.handoff !== 'boolean') throw new MemoryError('请选择新建或接续方式')
   const controller = service(host, 'sessionController')
@@ -97,7 +118,6 @@ export async function createPersonaSession(
   const state = store.read(),
     persona = state.personas.find((p) => p.id === args.personaId && !p.archived)
   if (!persona) throw new MemoryError('人格不存在或已归档')
-  const id = 'session-' + args.requestId
   const existing = state.bindings[id]
   if (
     existing &&
@@ -122,23 +142,18 @@ export async function createPersonaSession(
         task: { ...sourceChannel.task, rootSessionId: id }
       }
     : sourceChannel
-  store.bind(id, {
-    personaId: persona.id,
-    locked: !!handoff,
-    handoff,
-    pending: true,
-    createdFrom: sourceId,
-    channel
-  })
-  // Explicit IDs make retry after an uncertain HTTP response adopt the same native Session.
   const workspace = service(host, 'workspaceRegistry')
     ?.list?.()
     .find((w: any) => w.sessionIds?.includes(sourceId))
-  await controller.create({
-    sessionId: id,
-    ...(workspace ? { workspaceId: workspace.id } : { cwd: source.meta.cwd }),
-    agentPreset: source.meta.agentPreset
+  return createOwnedNativeSession(host, store, id, {
+    creation: {
+      kind: 'continuation',
+      cwd: source.meta.cwd,
+      workspaceId: workspace?.id,
+      agentPreset: source.meta.agentPreset,
+      complete: false
+    },
+    binding: { personaId: persona.id, locked: true, handoff, createdFrom: sourceId, channel },
+    signal
   })
-  store.bind(id, { personaId: persona.id, locked: !!handoff })
-  return id
 }

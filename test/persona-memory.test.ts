@@ -138,6 +138,7 @@ test('native prompt context fixes identity before first request and refreshes pr
     },
     inject: (names: string[], cb: any) => {
       if (names.every((name) => host[name] !== undefined)) cb(host)
+      return { dispose: async () => {} }
     }
   }
   apply(host)
@@ -183,8 +184,9 @@ test('native prompt context fixes identity before first request and refreshes pr
     }
   })
   const publicAgent = { session: { id: 'public-channel' } }
-  assert.match(guards[0]({ agent: publicAgent, name: 'write' }), /没有本机执行/)
-  assert.match(guards[0]({ agent: publicAgent, name: 'qq_task' }), /没有私有任务授权/)
+  // This fixture loads memory alone: no channel producer has registered its execution policy.
+  assert.match(guards[0]({ agent: publicAgent, name: 'write' }), /执行策略未就绪/)
+  assert.match(guards[0]({ agent: publicAgent, name: 'qq_task' }), /执行策略未就绪/)
   const assemble = hooks.get('system-prompt/assemble')![0]
   await assert.rejects(
     assemble({}, { agent: publicAgent }, async () => ({ sections: [] })),
@@ -222,6 +224,7 @@ test('HTTP memory saves preserve UTF-8 split across network chunks and reject st
     sessionController: { inspect: async () => ({ meta: { cwd: dir } }) },
     inject: (names: string[], cb: any) => {
       if (names.includes('webServer')) cb(host)
+      return { dispose: async () => {} }
     }
   }
   apply(host)

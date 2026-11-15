@@ -7,6 +7,7 @@ import { requestJson } from '../../shared/client-http'
 import { createCapabilities, pageCarrier } from '../../shared/client-capabilities'
 import { installHtmlPreview } from './html-preview'
 import { installContextModelSelect } from './context-model-select'
+import { ChannelsPanel, type ChannelNavigation } from './channels-panel'
 
 export const inject = ['slots', 'locale']
 const prefix = '/dsh-px-workbench'
@@ -348,6 +349,38 @@ export function apply(
   installHtmlPreview(ctx)
   installContextModelSelect(ctx)
   const capabilities = createCapabilities<Record<string, boolean>>({})
+  const channelNavigation = createCapabilities<ChannelNavigation>({})
+  ctx.inject(['uiWorkspace', 'sessions'], (host: any) => {
+    const openSession = async (id: string) => {
+      await host.sessions.refresh()
+      host.uiWorkspace.openSession(id)
+    }
+    channelNavigation.set({ openSession })
+    host.effect(
+      () => () => {
+        if (channelNavigation.getSnapshot().openSession === openSession)
+          channelNavigation.set({ openSession: undefined })
+      },
+      'channels: native session navigation'
+    )
+  })
+  ctx.inject(['pluginNavigation'], (host: any) => {
+    const openPlugin = (name: string) => host.pluginNavigation.openBundle(name)
+    channelNavigation.set({ openPlugin })
+    host.effect(
+      () => () => {
+        if (channelNavigation.getSnapshot().openPlugin === openPlugin)
+          channelNavigation.set({ openPlugin: undefined })
+      },
+      'channels: native plugin settings'
+    )
+  })
+  ctx.slots.inject('settings.section', () =>
+    ctx.slots.register(
+      { name: 'settings.section', id: 'dsh-px-channels', order: 24, label: '渠道与活动' },
+      () => <ChannelsPanel navigation={channelNavigation} />
+    )
+  )
   for (const name of Object.keys(dependencyLabels))
     ctx.inject([name], (host) => {
       capabilities.set({ [name]: true })

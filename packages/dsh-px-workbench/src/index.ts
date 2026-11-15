@@ -8,6 +8,10 @@ import { readJsonBody } from './http'
 import { registerActivity } from './activity'
 import { installFileEditing } from './file-edit'
 import { installContextPolicy, modelCapacity, ownRequestContext } from './context-policy'
+import { installPublicChannelAgent } from './channel-public-agent'
+import { registerChannels } from './channels'
+import { AudiencePolicies } from '../../shared/audience-policy'
+import { registerPersonaMail } from './persona-mail-service'
 
 export const name = 'dsh-px-workbench'
 export const inject: string[] = []
@@ -18,8 +22,27 @@ function json(res: HostResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
-export function apply(ctx: HostPluginContext): void {
+export async function apply(
+  ctx: HostPluginContext,
+  config: { publicChannel?: boolean; channelSettings?: boolean } = {}
+): Promise<void> {
+  if (config.channelSettings === true) {
+    const owner = (ctx as any).root ?? ctx
+    const notify = () => {
+      owner.emit('px/channels-settings')
+    }
+    notify()
+    ctx.effect?.(() => notify, 'channels: configuration change signal')
+    return
+  }
+  if (config.publicChannel === true) {
+    await ctx.inject(['tools', 'systemPrompt'], (host: any) => installPublicChannelAgent(host))
+    return
+  }
   installFileEditing(ctx)
+  ;(ctx as any).provide('pxAudiencePolicies', new AudiencePolicies())
+  registerChannels(ctx)
+  registerPersonaMail(ctx)
   installContextPolicy(ctx)
   const activity = registerActivity(ctx)
   // dsh profile launchers provide `profileContext` (name, dir); it names the profile whose manifest we report.

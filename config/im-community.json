@@ -1,0 +1,20 @@
+{
+  "name": "@xmanrui/dsh-im",
+  "version": "5.6.0",
+  "url": "https://registry.npmjs.org/@xmanrui/dsh-im/-/dsh-im-5.6.0.tgz",
+  "integrity": "sha512-YSpRGQ2QhH94JP3byUtGJacGcXW+iLzy5lz+Dkv5QLySPVCGawkxNuCq/gX8NpWrrEQXc04tMUfVZxfpmuwo+w==",
+  "license": "MIT",
+  "source": "https://github.com/xmanrui/dsh-im",
+  "derivedVersion": "5.6.0-px.1",
+  "compatibility": "im-mode-v1",
+  "files": {
+    "src/channels/feishu/multi-bot-controller.mjs": "8090e833592d7e8549a63e3902879d7450243152d31679ff2ee3e28b36c21674",
+    "src/channels/feishu/external-consumer.mjs": "3b74646d7f74fad9aea283c79fc6347952dc7d190925d4c09ecf22d00863de33",
+    "plugin-src/host/delivery-adapter.mjs": "9825c39eb8a798349de22a6d82e99feca194578eb32a37c914617171f7eaadcd",
+    "plugin-src/host/delivery-service.mjs": "df3fe814f364224295b9e9d93cdd1c3f1ad5422816aa7573b68254ef3c3fe4f4",
+    "plugin-src/host/index.mjs": "951abed064debfbe0b1d1c5612f5fda47b242af5b42c6b4348022893268c279f",
+    "lib/index.js": "609211f3953bcd87cc4519fbabca6715de1d530e13b98219a6f4a8fedafae72a",
+    "plugin-src/host/channels/feishu/rpc.mjs": "82b68793b94997d7ccf1968e8df441e6880cd965982cf396329b91a6d62ed4c2",
+    "plugin-src/client/channels/feishu/index.js": "668b908c3db6b607b50cd895691ffdd66f786d6976ee2909b51f8a6885e4f00e"
+  }
+}

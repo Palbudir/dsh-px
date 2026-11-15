@@ -11,6 +11,7 @@ import { installPublicQqAgent } from './public-agent'
 import { QqReceipts } from './receipts'
 import qqCommunity from '../../../config/qq-community.json'
 import { QqAttentionInbox } from './attention-inbox'
+import { QQ_CONVERSATION_TOOLS } from '../../shared/channel-source'
 
 export const name = 'dsh-px-qq'
 export const inject: string[] = []
@@ -27,7 +28,8 @@ export async function apply(ctx: any, config: { publicAgent?: boolean } = {}): P
       'connection',
       'webServer',
       'pxMemoryChannels',
-      'pxContextPolicy'
+      'pxContextPolicy',
+      'pxAudiencePolicies'
     ],
     (host: any) => activateHost(host)
   )
@@ -38,6 +40,24 @@ async function activateHost(ctx: any): Promise<void> {
   const settings = new NativeQqSettings(ctx.configEditor)
   const receipts = new QqReceipts(join(home, 'storages', name, 'receipts.json'))
   let current: QqSessionPolicy | undefined
+  ctx.effect(
+    () =>
+      ctx.pxAudiencePolicies.register('qq', {
+        section: 'px-qq-public-persona',
+        check: (exec: any, binding: any) => {
+          if (binding.channel.task) {
+            if (!current?.canRunGroupTask(exec.agent?.session.id))
+              return '群任务授权不可用，请检查 QQ 接入与授权成员'
+            return
+          }
+          if (!['qq_public_knowledge', 'qq_task', ...QQ_CONVERSATION_TOOLS].includes(exec.name))
+            return '公共 QQ 会话没有本机执行或私有信息权限'
+          if (exec.name === 'qq_task' && !current?.canDelegate(exec, binding.channel))
+            return '当前 QQ 请求没有私有任务授权'
+        }
+      }),
+    'qq: public execution policy'
+  )
   ctx.on('agent/created', ({ agent }: any) => {
     current?.created(agent)
   })
@@ -93,6 +113,7 @@ async function activateHost(ctx: any): Promise<void> {
             config: { prefix: 'Follow the configured persona and the current conversation context.' }
           },
           { id: 'time-context', name: '@deepseek-ai/dsh-time-context' },
+          { id: 'persona-mail-jobs', name: '@deepseek-ai/dsh-tool-jobs' },
           {
             id: 'compaction',
             name: 'cordis:group',
@@ -150,7 +171,13 @@ async function activateHost(ctx: any): Promise<void> {
           join(home, 'storages', name, 'inbox-' + configuration.accountId + '.sqlite'),
           configuration.accountId
         )
-        const policy = new QqSessionPolicy(ctx, configuration, receipts, inbox)
+        let policy: QqSessionPolicy
+        try {
+          policy = new QqSessionPolicy(ctx, configuration, receipts, inbox)
+        } catch (error) {
+          inbox.close()
+          throw error
+        }
         created = policy
         current = policy
         owner.effect(
@@ -293,6 +320,7 @@ async function activateHost(ctx: any): Promise<void> {
       active: busyAgents(config.settings.accountId).length,
       pendingInteractions: current?.pendingInteractions() ?? [],
       attention: current?.attentionSnapshot(),
+      routing: current?.routingSnapshot(),
       connection: !componentEnabled
         ? { state: 'offline', message: 'QQ 社区组件已停用。请在“插件”页面重新启用配套的 dsh-onebot-qq。' }
         : compatible
@@ -352,6 +380,14 @@ async function activateHost(ctx: any): Promise<void> {
               if (input.accountId !== state.settings.accountId)
                 throw new QqError('QQ 账号已变化，请刷新后重试', 409)
               current.saveAttention(input.revision, input.settings)
+              return send(200, await snapshot())
+            }
+            if (input.action === 'persona-route' || input.action === 'persona-route-status') {
+              if (!current || input.accountId !== state.settings.accountId)
+                throw new QqError('QQ 账号已变化或未开启，请刷新', 409)
+              if (input.action === 'persona-route-status')
+                return send(200, current.personaRouteStatus(input.chatId))
+              await current.changePersonaRoute(input)
               return send(200, await snapshot())
             }
             if (input.action === 'attention-observer') {
@@ -420,7 +456,8 @@ async function activateHost(ctx: any): Promise<void> {
               if (!current) throw new QqError('QQ 接入未开启', 409)
               await current.retryPersistence()
               return send(200, {
-                message: '接续记录已保存。未受理的消息请重新发送；已执行的任务不会自动重跑。'
+                message:
+                  '接续记录已保存。保留的新消息将按当前模式处理；结果不确定的旧请求不会重跑，未完成的人格切换仍需恢复。'
               })
             }
             if (input.action === 'stop') {
